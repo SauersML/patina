@@ -60,8 +60,11 @@ where
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1240.0, 940.0])
-            .with_min_inner_size([1000.0, 760.0]),
+            .with_inner_size([1380.0, 865.0])
+            .with_min_inner_size([1180.0, 780.0])
+            .with_titlebar_shown(false)
+            .with_title_shown(false)
+            .with_fullsize_content_view(true),
         ..Default::default()
     };
 

@@ -246,22 +246,22 @@ fn fbm(p: vec2<f32>) -> f32 {
 // this IS the glass blur, computed in closed form.
 fn sky(w: vec2<f32>, t: f32, blur: f32) -> vec3<f32> {
   var col = mix(
-    vec3<f32>(0.30, 0.56, 0.84),
-    vec3<f32>(0.79, 0.92, 0.96),
+    vec3<f32>(0.22, 0.50, 0.83),
+    vec3<f32>(0.72, 0.90, 0.95),
     pow(clamp(w.y, 0.0, 1.0), 1.25)
   );
   // Sun bloom, breathing
   let sun_pos = vec2<f32>(0.20 + 0.015 * sin(t * 0.11), 0.14 + 0.010 * sin(t * 0.07 + 1.7));
   let sr = 0.26 * (1.0 + blur * 1.4) * (1.0 + 0.03 * sin(t * 0.23));
   let sd = (w - sun_pos) / sr;
-  col = col + vec3<f32>(1.00, 0.95, 0.80) * exp(-dot(sd, sd)) * 0.55;
+  col = col + vec3<f32>(1.00, 0.95, 0.78) * exp(-dot(sd, sd)) * 0.75;
   // Aqua counter-glow low right
   let gd = (w - vec2<f32>(0.86, 0.80)) / (0.45 * (1.0 + blur));
-  col = col + vec3<f32>(0.30, 0.80, 0.70) * exp(-dot(gd, gd)) * 0.12;
+  col = col + vec3<f32>(0.28, 0.82, 0.72) * exp(-dot(gd, gd)) * 0.20;
   // Drifting cloud wisps (detail dies under blur)
   let cl = fbm(w * vec2<f32>(3.0, 6.5) + vec2<f32>(t * 0.012, 0.0));
   let clouds = smoothstep(0.52, 0.80, cl) * (1.0 - blur * 0.6);
-  col = mix(col, vec3<f32>(1.0, 1.0, 1.0), clouds * 0.18);
+  col = mix(col, vec3<f32>(1.0, 1.0, 1.0), clouds * 0.24);
   // Green horizon glow
   col = col + vec3<f32>(0.25, 0.52, 0.22) * 0.12 * smoothstep(0.84, 1.0, w.y);
   return col;
@@ -295,7 +295,7 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
 
   var col = sky(w, u.time, 1.0);
   // Frosted white glass
-  col = mix(col, vec3<f32>(1.0, 1.0, 1.0), 0.52);
+  col = mix(col, vec3<f32>(1.0, 1.0, 1.0), 0.44);
   col = col + vec3<f32>(-0.005, 0.006, 0.014);
   // Frost grain
   col = col + (vnoise(p * 1.9) - 0.5) * 0.018;

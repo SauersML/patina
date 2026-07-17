@@ -444,7 +444,7 @@ pub fn render_knob(size: usize) -> ColorImage {
                 let angle = dy.atan2(dx);
                 let streak = vnoise(angle * 60.0, d * 8.0, 29) * 0.10;
                 let lit = (0.5 - dy * 0.45).clamp(0.1, 0.9);
-                let base = 0.10 + lit * 0.13 + streak;
+                let base = 0.14 + lit * 0.17 + streak;
                 r = base * 0.98;
                 g = base * 1.02;
                 b = base * 1.10;
@@ -459,21 +459,21 @@ pub fn render_knob(size: usize) -> ColorImage {
                 let nd = d / ring_inner;
                 let nz = (1.0 - nd * nd).sqrt();
                 let lambert = (dx / ring_inner * l.0 + dy / ring_inner * l.1 + nz * l.2).max(0.0);
-                let base = 0.055 + lambert * 0.15;
+                let base = 0.085 + lambert * 0.22;
                 r = base * 0.94;
                 g = base * 1.02;
                 b = base * 1.14;
                 // Gloss lobe
                 let sx = dx / ring_inner + 0.36;
                 let sy = dy / ring_inner + 0.46;
-                let spec = (-(sx * sx + sy * sy) * 10.0).exp();
-                r += spec * 0.38;
-                g += spec * 0.41;
-                b += spec * 0.44;
+                let spec = (-(sx * sx + sy * sy) * 7.0).exp();
+                r += spec * 0.55;
+                g += spec * 0.58;
+                b += spec * 0.62;
                 // Aqua bounce along the lower inside rim
                 let rim = (nd - 0.66).max(0.0) / 0.34;
                 let below = (dy + 0.15).max(0.0);
-                let bounce = rim * below * 0.17;
+                let bounce = rim * below * 0.26;
                 g += bounce * 0.75;
                 b += bounce;
             }

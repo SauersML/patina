@@ -271,7 +271,7 @@ fn knob(
     logarithmic: bool,
     fmt: impl Fn(f32) -> String,
 ) -> bool {
-    let (rect, response) = ui.allocate_exact_size(vec2(70.0, 102.0), Sense::click_and_drag());
+    let (rect, response) = ui.allocate_exact_size(vec2(63.0, 88.0), Sense::click_and_drag());
     let mut changed = false;
 
     let to_t = |v: f32| -> f32 {
@@ -315,7 +315,7 @@ fn knob(
     let engaged = response.hovered() || response.dragged();
 
     let painter = ui.painter();
-    let center = pos2(rect.center().x, rect.top() + 50.0);
+    let center = pos2(rect.center().x, rect.top() + 42.0);
     let start = 135.0_f32.to_radians();
     let sweep = 270.0_f32.to_radians();
     let t = to_t(*value);
@@ -332,7 +332,7 @@ fn knob(
     for i in 0..=10 {
         let a = start + sweep * i as f32 / 10.0;
         let dir = vec2(a.cos(), a.sin());
-        let (r0, r1) = if i % 5 == 0 { (23.0, 27.5) } else { (23.0, 25.5) };
+        let (r0, r1) = if i % 5 == 0 { (21.0, 25.5) } else { (21.0, 23.5) };
         painter.line_segment(
             [center + dir * r0, center + dir * r1],
             Stroke::new(1.0, HAIRLINE_HI),
@@ -340,7 +340,7 @@ fn knob(
     }
 
     // Value arc — from 12 o'clock for bipolar ranges, from min otherwise
-    let arc_r = 20.0;
+    let arc_r = 18.0;
     let t_origin = if min < 0.0 { to_t(0.0) } else { 0.0 };
     let (a0, a1) = (t_origin.min(t), t_origin.max(t));
     if a1 - a0 > 0.004 {
@@ -366,13 +366,13 @@ fn knob(
 
     // Cap: soft under-shadow, then the sphere-shaded gloss sprite
     painter.circle_filled(
-        center + vec2(0.0, 1.6),
-        15.8,
+        center + vec2(0.0, 1.4),
+        14.2,
         Color32::from_rgba_unmultiplied(0, 0, 0, 100),
     );
     let knob_tex = KNOB_TEX_ID.load(AtomicOrdering::Relaxed);
     if knob_tex > 0 {
-        let cap = Rect::from_center_size(center, Vec2::splat(31.0));
+        let cap = Rect::from_center_size(center, Vec2::splat(28.0));
         let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
         let tex_id = egui::TextureId::Managed(knob_tex - 1);
         painter.image(tex_id, cap, uv, Color32::WHITE);
@@ -596,28 +596,30 @@ fn card<R>(
     let bg_idx = ui.painter().add(Shape::Noop);
     let inner = egui::Frame::NONE
         .inner_margin(egui::Margin {
-            left: 16,
-            right: 16,
-            top: 12,
-            bottom: 14,
+            left: 14,
+            right: 14,
+            top: 9,
+            bottom: 10,
         })
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(legend(title));
-                let (rule, _) =
-                    ui.allocate_exact_size(vec2(ui.available_width(), 10.0), Sense::hover());
-                ui.painter().line_segment(
-                    [
-                        pos2(rule.left() + 4.0, rule.center().y),
-                        pos2(rule.right(), rule.center().y),
-                    ],
-                    Stroke::new(1.0, HAIRLINE),
-                );
-            });
+            // The card sizes to its CONTENT; never allocate available_width
+            // here (unbounded inside horizontal rows — it inflates the card
+            // and shoves siblings off-screen). The rule is drawn after
+            // layout, from the real rect.
+            let legend_rect = ui.label(legend(title)).rect;
             ui.add_space(8.0);
             add_contents(ui);
+            legend_rect
         });
     let rect = inner.response.rect;
+    let legend_rect = inner.inner;
+    ui.painter().line_segment(
+        [
+            pos2(legend_rect.right() + 8.0, legend_rect.center().y),
+            pos2(rect.right() - 16.0, legend_rect.center().y),
+        ],
+        Stroke::new(1.0, HAIRLINE),
+    );
     if GPU_ON.load(AtomicOrdering::Relaxed) {
         // Living glass: record the rect; next frame's background pass
         // paints the pane underneath everything.
@@ -663,7 +665,7 @@ fn card<R>(
 
 /// Vertical hairline between subgroups inside a card.
 fn vseparator(ui: &mut egui::Ui, height: f32) {
-    let (rect, _) = ui.allocate_exact_size(vec2(17.0, height), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(9.0, height), Sense::hover());
     ui.painter().line_segment(
         [
             pos2(rect.center().x, rect.top() + 2.0),
@@ -988,7 +990,12 @@ impl SynthUI {
         egui::TopBottomPanel::top("header")
             .frame(
                 egui::Frame::NONE
-                    .inner_margin(egui::Margin::symmetric(20, 12)),
+                    .inner_margin(egui::Margin {
+                        left: 86,
+                        right: 20,
+                        top: 12,
+                        bottom: 10,
+                    }),
             )
             .show(ctx, |ui| self.draw_header(ui));
 
@@ -1041,17 +1048,19 @@ impl SynthUI {
                 bottom: 8,
             }))
             .show(ctx, |ui| {
-                ui.spacing_mut().item_spacing = vec2(12.0, 12.0);
+                ui.spacing_mut().item_spacing = vec2(11.0, 10.0);
                 ui.horizontal(|ui| {
                     self.draw_oscillator_card(ui, tex.as_mut());
                     self.draw_envelope_card(ui, tex.as_mut());
-                    self.draw_filter_card(ui, tex.as_mut());
                 });
                 ui.horizontal(|ui| {
+                    self.draw_filter_card(ui, tex.as_mut());
                     self.draw_filter_env_card(ui, tex.as_mut());
-                    self.draw_lfo_card(ui, tex.as_mut());
                 });
-                self.draw_effects_card(ui, tex.as_mut());
+                ui.horizontal(|ui| {
+                    self.draw_lfo_card(ui, tex.as_mut());
+                    self.draw_effects_card(ui, tex.as_mut());
+                });
                 self.draw_scope(ui);
             });
         self.textures = tex;
@@ -1343,7 +1352,7 @@ impl SynthUI {
     /// signal itself, trigger-stabilized on a rising zero crossing.
     fn draw_scope(&self, ui: &mut egui::Ui) {
         let width = ui.available_width();
-        let (rect, _) = ui.allocate_exact_size(vec2(width, 64.0), Sense::hover());
+        let (rect, _) = ui.allocate_exact_size(vec2(width, 58.0), Sense::hover());
         let painter = ui.painter();
         painter.rect_filled(rect, CornerRadius::same(10), INSET);
         painter.rect_stroke(rect, CornerRadius::same(10), Stroke::new(1.0, HAIRLINE), egui::StrokeKind::Inside);
@@ -1420,7 +1429,7 @@ impl SynthUI {
     fn draw_keyboard(&mut self, ui: &mut egui::Ui) {
         let available_width = ui.available_width();
         let white_key_width = available_width / (7.0 * OCTAVES as f32);
-        let white_key_height = 126.0;
+        let white_key_height = 118.0;
         let black_key_width = white_key_width * 0.6;
         let black_key_height = white_key_height * 0.6;
 
