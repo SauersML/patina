@@ -8,7 +8,7 @@ use crate::noise::NoiseSource;
 use crate::spring::SpringReverb;
 use crate::lfo::Lfo;
 use crate::substrate::{SlewLimiter, Substrate};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 /// Capacitive trace-to-trace coupling between adjacent voice cards. The
 /// coupling differentiates (it is a capacitor), so the bleed is presence-
@@ -181,6 +181,8 @@ pub struct VoiceManager {
     pedal_down: bool,
     sustained: [bool; 128],
     note_counter: u64,
+    /// Per-song-channel parameter snapshots (the per-track patches).
+    channel_params: HashMap<u16, ParamValues>,
     pub params: ParamValues,
     pub scope: VecDeque<f32>,
     gain: f32, // smoothed master gain
@@ -215,6 +217,7 @@ impl VoiceManager {
             pedal_down: false,
             sustained: [false; 128],
             note_counter: 0,
+            channel_params: HashMap::new(),
             params,
             scope: VecDeque::with_capacity(SCOPE_LEN),
             gain: params.volume,
@@ -247,6 +250,35 @@ impl VoiceManager {
     }
 
     pub fn note_on(&mut self, note: u8, velocity: f32) {
+        self.note_on_channel(note, velocity, 0);
+    }
+
+    /// Store a per-channel parameter snapshot; voices triggered on that
+    /// channel are configured from it (the song engine's per-track patches).
+    pub fn set_channel_params(&mut self, channel: u16, p: ParamValues) {
+        self.channel_params.insert(channel, p);
+    }
+
+    /// Update one parameter on a channel and re-assert it on that
+    /// channel's sounding voices — per-track automation. Bus-level
+    /// parameters (effects, LFO, noise) fall through to the global path.
+    pub fn set_channel_param(&mut self, channel: u16, param: crate::song::Param, value: f32) {
+        if channel == 0 {
+            param.apply(self, value);
+            return;
+        }
+        let mut p = self.channel_params.get(&channel).copied().unwrap_or(self.params);
+        if param.apply_to_params(&mut p, value) {
+            self.channel_params.insert(channel, p);
+            for voice in self.voices.iter_mut().filter(|v| v.channel() == channel) {
+                voice.apply_params(&p);
+            }
+        } else {
+            param.apply(self, value);
+        }
+    }
+
+    pub fn note_on_channel(&mut self, note: u8, velocity: f32, channel: u16) {
         self.note_counter += 1;
         let age = self.note_counter;
         // A fresh press owns the note again; it is no longer the pedal's
@@ -256,8 +288,21 @@ impl VoiceManager {
         let glide_from = self.last_note_cv;
         self.last_note_cv = Some((note as f32 - 69.0) / 12.0);
 
-        // Retrigger if this note is already held
-        if let Some(voice) = self.voices.iter_mut().find(|v| v.is_held() && v.note == Some(note)) {
+        let chan_params = if channel > 0 {
+            self.channel_params.get(&channel).copied()
+        } else {
+            None
+        };
+
+        // Retrigger if this note is already held on this channel
+        if let Some(voice) = self
+            .voices
+            .iter_mut()
+            .find(|v| v.is_held() && v.note == Some(note) && v.channel() == channel)
+        {
+            if let Some(p) = &chan_params {
+                voice.apply_params(p);
+            }
             voice.trigger(note, velocity, age, glide_from);
             return;
         }
@@ -285,7 +330,35 @@ impl VoiceManager {
             });
 
         if let Some(i) = index {
+            self.voices[i].set_channel(channel);
+            if let Some(p) = &chan_params {
+                self.voices[i].apply_params(p);
+            } else if channel == 0 {
+                // Panel voices follow the live global params; a voice
+                // previously claimed by a song channel comes home here
+                let p = self.params;
+                self.voices[i].apply_params(&p);
+            }
             self.voices[i].trigger(note, velocity, age, glide_from);
+        }
+    }
+
+    /// Release a note on one specific channel only.
+    pub fn note_off_channel(&mut self, note: u8, channel: u16) {
+        if self.pedal_down {
+            if self
+                .voices
+                .iter()
+                .any(|v| v.is_held() && v.note == Some(note) && v.channel() == channel)
+            {
+                self.sustained[note as usize] = true;
+            }
+            return;
+        }
+        for voice in self.voices.iter_mut() {
+            if voice.is_held() && voice.note == Some(note) && voice.channel() == channel {
+                voice.release();
+            }
         }
     }
 
@@ -466,6 +539,9 @@ impl VoiceManager {
 
     pub fn set_pulse_width(&mut self, width: f32) {
         self.params.pulse_width = width.clamp(0.05, 0.95);
+        for voice in self.voices.iter_mut().filter(|v| v.channel() == 0) {
+            voice.set_pulse_width(self.params.pulse_width);
+        }
     }
 
     pub fn set_sub(&mut self, level: f32) {
@@ -612,7 +688,9 @@ impl VoiceManager {
             self.bend_ratio
         };
         let lfo_cutoff_oct = lfo * self.params.lfo_filter;
-        let pulse_width = self.params.pulse_width + lfo * self.params.lfo_pwm;
+        // Each voice holds its own base width (per-channel patches); only
+        // the shared LFO's swing travels from here
+        let pw_offset = lfo * self.params.lfo_pwm;
 
         // The shared chassis: rail sag/ripple driven by last sample's summed
         // current draw, warm-up heat — read by every voice this sample
@@ -638,7 +716,7 @@ impl VoiceManager {
                 noise,
                 pitch_mult,
                 lfo_cutoff_oct,
-                pulse_width,
+                pw_offset,
                 substrate,
                 bleed,
             );
@@ -824,6 +902,53 @@ mod tests {
         assert!(
             (early_f as f32) < late_f as f32 * 0.85,
             "glide should start near the old pitch: early={early_f}, late={late_f} crossings"
+        );
+    }
+
+    /// Channel isolation: a dark channel patch and the bright panel must
+    /// coexist — the channel's voice keeps its own filter while panel
+    /// voices follow the global params.
+    #[test]
+    fn channel_patches_isolate_voices() {
+        let sr = 44100.0;
+        let brightness_of = |use_channel: bool| -> f32 {
+            let mut vm = VoiceManager::new(sr, 8);
+            vm.warm_up();
+            vm.set_waveform(Waveform::Sawtooth);
+            vm.set_filter_cutoff(12000.0);
+            vm.set_reverb_wet(0.0);
+            vm.set_attack(0.005);
+            vm.set_sustain(1.0);
+            let mut dark = vm.params;
+            dark.cutoff = 300.0;
+            vm.set_channel_params(1, dark);
+            if use_channel {
+                vm.note_on_channel(69, 0.9, 1);
+            } else {
+                vm.note_on_channel(69, 0.9, 0);
+            }
+            let n = sr as usize / 2;
+            let mut out = Vec::with_capacity(n);
+            for _ in 0..n {
+                out.push(vm.render_next().0);
+            }
+            let goertzel = |freq: f32| -> f32 {
+                let (mut re, mut im) = (0.0f32, 0.0f32);
+                for (i, &s) in out[n / 2..].iter().enumerate() {
+                    let a = std::f32::consts::TAU * freq * i as f32 / sr;
+                    re += s * a.cos();
+                    im += s * a.sin();
+                }
+                (re * re + im * im).sqrt()
+            };
+            // 7th harmonic of A440: passes a 12 kHz filter, dies at 300 Hz
+            goertzel(7.0 * 440.0) / goertzel(440.0).max(1e-9)
+        };
+        let panel = brightness_of(false);
+        let channel = brightness_of(true);
+        assert!(
+            channel < 0.25 * panel,
+            "channel-1 voice should be far darker than the panel voice: channel {channel:.4}, panel {panel:.4}"
         );
     }
 

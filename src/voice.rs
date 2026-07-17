@@ -105,6 +105,12 @@ pub struct Voice {
     /// its capacitively-coupled (differentiated) bleed.
     prev_prefilter: f32,
     prefilter_delta: f32,
+    /// Which song channel configured this voice (0 = the live panel).
+    channel: u16,
+    /// This voice's base pulse width; the manager passes only the LFO's
+    /// PWM offset, so different channels can hold different widths.
+    pulse_width: f32,
+    sample_rate: f32,
 }
 
 impl Voice {
@@ -151,6 +157,9 @@ impl Voice {
                 Oscillator::new(sample_rate, 440.0, seed.wrapping_add(211)),
             ],
             circuit: CircuitModel::Moog,
+            channel: 0,
+            pulse_width: 0.5,
+            sample_rate,
             envelope: Envelope::new(sample_rate),
             filter_env,
             filter: LadderFilter::new(sample_rate, seed),
@@ -257,6 +266,59 @@ impl Voice {
         self.filter_env.set_circuit(model);
     }
 
+    pub fn channel(&self) -> u16 {
+        self.channel
+    }
+
+    pub fn set_channel(&mut self, channel: u16) {
+        self.channel = channel;
+    }
+
+    pub fn set_pulse_width(&mut self, width: f32) {
+        self.pulse_width = width.clamp(0.05, 0.95);
+    }
+
+    /// Configure this voice from a full parameter snapshot — the song
+    /// engine's per-track patches. Only voice-level parameters apply;
+    /// bus effects, the LFO, and the noise source stay shared.
+    pub fn apply_params(&mut self, p: &crate::voice_manager::ParamValues) {
+        self.set_waveform(p.waveform);
+        self.set_osc_waveform(1, p.osc2_wave);
+        self.set_osc_waveform(2, p.osc3_wave);
+        self.set_osc_pitch(1, p.osc2_pitch);
+        self.set_osc_pitch(2, p.osc3_pitch);
+        self.set_osc_level(1, p.osc2_level);
+        self.set_osc_level(2, p.osc3_level);
+        self.set_detune(p.detune);
+        self.set_sub_level(p.sub);
+        self.set_circuit(p.circuit);
+        self.set_key_track(p.key_track);
+        self.set_fm_amount(p.osc_fm);
+        self.set_sync(p.sync);
+        self.set_ring(p.ring);
+        self.set_filter_env_amount(p.filter_env_amount);
+        self.set_pulse_width(p.pulse_width);
+        self.envelope.set_attack(p.attack);
+        self.envelope.set_decay(p.decay);
+        self.envelope.set_sustain(p.sustain);
+        self.envelope.set_release(p.release);
+        self.filter_env.set_attack(p.filter_attack);
+        self.filter_env.set_decay(p.filter_decay);
+        self.filter_env.set_sustain(p.filter_sustain);
+        self.filter_env.set_release(p.filter_release);
+        self.filter.set_cutoff(p.cutoff);
+        self.filter.set_resonance(p.resonance);
+        self.filter.set_drive(p.drive);
+        self.filter.set_saturation(p.saturation);
+        self.hpf.set_cutoff(p.hpf_cutoff);
+        let k = if p.glide < 1e-3 {
+            1.0
+        } else {
+            1.0 - (-3.0 / (p.glide * self.sample_rate)).exp()
+        };
+        self.set_glide_coef(k);
+    }
+
     pub fn set_key_track(&mut self, amount: f32) {
         self.key_track = amount.clamp(0.0, 1.0);
     }
@@ -330,19 +392,21 @@ impl Voice {
         self.prefilter_delta
     }
 
-    /// `pitch_mult`, `lfo_cutoff_oct`, and `pulse_width` carry the global
-    /// LFO modulation — one LFO drives every voice together. `substrate` is
-    /// the shared chassis state (rail sag, ripple, heat), and `bleed` the
+    /// `pitch_mult`, `lfo_cutoff_oct`, and `pw_offset` carry the global
+    /// LFO modulation — one LFO drives every voice together (`pw_offset`
+    /// rides on this voice's own base pulse width). `substrate` is the
+    /// shared chassis state (rail sag, ripple, heat), and `bleed` the
     /// neighboring card's capacitively coupled signal.
     pub fn render_next(
         &mut self,
         noise: f32,
         pitch_mult: f32,
         lfo_cutoff_oct: f32,
-        pulse_width: f32,
+        pw_offset: f32,
         substrate: SubstrateState,
         bleed: f32,
     ) -> (f32, f32) {
+        let pulse_width = (self.pulse_width + pw_offset).clamp(0.05, 0.95);
         let amp_env = self.envelope.next_sample();
         let filter_env = self.filter_env.next_sample();
 

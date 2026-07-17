@@ -6,11 +6,11 @@
 use std::fs::File;
 use std::io::{BufWriter, Result, Write};
 
-pub fn render_to_wav(events: &[crate::song::SongEvent], path: &str) -> Result<()> {
+pub fn render_to_wav(song: &crate::song::Song, path: &str) -> Result<()> {
     let sample_rate = 48000.0f32;
-    println!("Rendering {} events...", events.len());
+    println!("Rendering {} events...", song.events.len());
     let start = std::time::Instant::now();
-    let mut frames = crate::song::render_offline(events, sample_rate);
+    let mut frames = crate::song::render_offline(song, sample_rate);
 
     // Master to -1 dBFS peak: the engine's gain staging is patch-dependent,
     // and a bounce should use the medium's headroom

@@ -55,7 +55,7 @@ use parking_lot::Mutex;
 
 use crate::chorus::ChorusMode;
 use crate::oscillator::Waveform;
-use crate::voice_manager::VoiceManager;
+use crate::voice_manager::{ParamValues, VoiceManager};
 
 // Automation curves are sampled at this many points per beat
 const AUTOMATION_STEPS_PER_BEAT: f64 = 32.0;
@@ -372,6 +372,77 @@ impl Param {
             Param::TapeAge => vm.set_tape_age(value),
         }
     }
+
+    /// Write a VOICE-LEVEL parameter into a snapshot (per-track patches).
+    /// Returns false for bus-level parameters — effects, LFO, noise,
+    /// volume, performance controllers — which are shared by nature and
+    /// fall through to the global path.
+    pub(crate) fn apply_to_params(self, p: &mut ParamValues, value: f32) -> bool {
+        match self {
+            Param::WaveformSel => p.waveform = waveform_from_value(value),
+            Param::Detune => p.detune = value,
+            Param::Cutoff => p.cutoff = value,
+            Param::Resonance => p.resonance = value,
+            Param::Drive => p.drive = value,
+            Param::Saturation => p.saturation = value,
+            Param::Attack => p.attack = value,
+            Param::Decay => p.decay = value,
+            Param::Sustain => p.sustain = value,
+            Param::Release => p.release = value,
+            Param::HpfCutoff => p.hpf_cutoff = value,
+            Param::Glide => p.glide = value.clamp(0.0, 5.0),
+            Param::SubLevel => p.sub = value,
+            Param::Osc2Wave => p.osc2_wave = waveform_from_value(value),
+            Param::Osc2Pitch => p.osc2_pitch = value,
+            Param::Osc2Level => p.osc2_level = value,
+            Param::Osc3Wave => p.osc3_wave = waveform_from_value(value),
+            Param::Osc3Pitch => p.osc3_pitch = value,
+            Param::Osc3Level => p.osc3_level = value,
+            Param::CircuitSel => {
+                p.circuit = if value.round() as i32 >= 1 {
+                    crate::oscillator::CircuitModel::Arp
+                } else {
+                    crate::oscillator::CircuitModel::Moog
+                }
+            }
+            Param::KeyTrack => p.key_track = value,
+            Param::OscFm => p.osc_fm = value,
+            Param::SyncSel => p.sync = value.round() as i32 >= 1,
+            Param::RingAmount => p.ring = value,
+            Param::PulseWidth => p.pulse_width = value.clamp(0.05, 0.95),
+            Param::FilterEnvAmount => p.filter_env_amount = value,
+            Param::FilterAttack => p.filter_attack = value,
+            Param::FilterDecay => p.filter_decay = value,
+            Param::FilterSustain => p.filter_sustain = value,
+            Param::FilterRelease => p.filter_release = value,
+            _ => return false,
+        }
+        true
+    }
+}
+
+/// Parse patch-file text (`param value` lines) into a parameter snapshot.
+/// Bus-level lines are ignored — a channel patch describes a voice, not
+/// the shared effects.
+pub fn params_from_patch(text: &str) -> Result<ParamValues, String> {
+    let mut p = ParamValues::default();
+    for (no, raw) in text.lines().enumerate() {
+        let line = strip_comment(raw).trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut it = line.split_whitespace();
+        let name = it.next().unwrap();
+        let value: f32 = it
+            .next()
+            .ok_or_else(|| format!("patch line {}: '{}' has no value", no + 1, name))?
+            .parse()
+            .map_err(|_| format!("patch line {}: bad value for '{}'", no + 1, name))?;
+        let param = Param::from_name(name)
+            .ok_or_else(|| format!("patch line {}: unknown parameter '{}'", no + 1, name))?;
+        param.apply_to_params(&mut p, value);
+    }
+    Ok(p)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -416,9 +487,9 @@ impl Shape {
 
 #[derive(Debug)]
 pub enum EventKind {
-    NoteOn { note: u8, velocity: f32 },
-    NoteOff { note: u8 },
-    Param { param: Param, value: f32 },
+    NoteOn { note: u8, velocity: f32, channel: u16 },
+    NoteOff { note: u8, channel: u16 },
+    Param { param: Param, value: f32, channel: u16 },
 }
 
 pub struct SongEvent {
@@ -426,19 +497,44 @@ pub struct SongEvent {
     kind: EventKind,
 }
 
-pub fn load_song(path: &str) -> Result<Vec<SongEvent>, String> {
+/// A parsed song: the timed events plus each patch channel's parameter
+/// snapshot (channel N+1 = channels[N]; channel 0 is the live panel).
+pub struct Song {
+    pub events: Vec<SongEvent>,
+    pub channels: Vec<ParamValues>,
+}
+
+pub fn load_song(path: &str) -> Result<Song, String> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| format!("could not read song file '{}': {}", path, e))?;
     parse_song(&text)
 }
 
+fn dispatch(vm: &mut VoiceManager, kind: &EventKind) {
+    match *kind {
+        EventKind::NoteOn { note, velocity, channel } => {
+            vm.note_on_channel(note, velocity, channel)
+        }
+        EventKind::NoteOff { note, channel } => vm.note_off_channel(note, channel),
+        EventKind::Param { param, value, channel } => vm.set_channel_param(channel, param, value),
+    }
+}
+
+fn register_channels(vm: &mut VoiceManager, song: &Song) {
+    for (i, p) in song.channels.iter().enumerate() {
+        vm.set_channel_params((i + 1) as u16, *p);
+    }
+}
+
 /// Render a song offline, as fast as the CPU allows: same events, same
 /// engine, no audio device. Returns interleaved-by-frame stereo samples,
 /// with a few seconds of tail for reverb and tape print-through to ring out.
-pub fn render_offline(events: &[SongEvent], sample_rate: f32) -> Vec<(f32, f32)> {
+pub fn render_offline(song: &Song, sample_rate: f32) -> Vec<(f32, f32)> {
     let mut vm = VoiceManager::new(sample_rate, 8);
     // A bounce records a warmed-up instrument, not a cold power-on
     vm.warm_up();
+    register_channels(&mut vm, song);
+    let events = &song.events;
     let end = events.last().map(|e| e.time).unwrap_or(0.0) + 4.0;
     let total = (end * sample_rate as f64) as usize;
     let mut out = Vec::with_capacity(total);
@@ -446,11 +542,7 @@ pub fn render_offline(events: &[SongEvent], sample_rate: f32) -> Vec<(f32, f32)>
     for n in 0..total {
         let t = n as f64 / sample_rate as f64;
         while next < events.len() && events[next].time <= t {
-            match events[next].kind {
-                EventKind::NoteOn { note, velocity } => vm.note_on(note, velocity),
-                EventKind::NoteOff { note } => vm.note_off(note),
-                EventKind::Param { param, value } => param.apply(&mut vm, value),
-            }
+            dispatch(&mut vm, &events[next].kind);
             next += 1;
         }
         out.push(vm.render_next());
@@ -458,24 +550,20 @@ pub fn render_offline(events: &[SongEvent], sample_rate: f32) -> Vec<(f32, f32)>
     out
 }
 
-pub fn spawn_player(events: Vec<SongEvent>, voice_manager: Arc<Mutex<VoiceManager>>) {
+pub fn spawn_player(song: Song, voice_manager: Arc<Mutex<VoiceManager>>) {
     thread::spawn(move || {
         // Let the audio stream and window settle before the downbeat
         thread::sleep(Duration::from_millis(1200));
-        println!("Song: playing {} events", events.len());
+        println!("Song: playing {} events", song.events.len());
+        register_channels(&mut voice_manager.lock(), &song);
 
         let start = Instant::now();
-        for event in &events {
+        for event in &song.events {
             let target = Duration::from_secs_f64(event.time);
             if let Some(wait) = target.checked_sub(start.elapsed()) {
                 thread::sleep(wait);
             }
-            let mut vm = voice_manager.lock();
-            match event.kind {
-                EventKind::NoteOn { note, velocity } => vm.note_on(note, velocity),
-                EventKind::NoteOff { note } => vm.note_off(note),
-                EventKind::Param { param, value } => param.apply(&mut vm, value),
-            }
+            dispatch(&mut voice_manager.lock(), &event.kind);
         }
         println!("Song: finished");
     });
@@ -483,17 +571,20 @@ pub fn spawn_player(events: Vec<SongEvent>, voice_manager: Arc<Mutex<VoiceManage
 
 enum TrackMode {
     None,
-    Notes { vel: f32, len: f64 },
-    Automation { param: Param, current: Option<f32> },
+    Notes { vel: f32, len: f64, channel: u16 },
+    Automation { param: Param, current: Option<f32>, channel: u16 },
 }
 
 // (beats, order-rank, kind); rank makes offs < params < ons at equal times
 type RawEvent = (f64, u8, EventKind);
 
-fn parse_song(text: &str) -> Result<Vec<SongEvent>, String> {
+fn parse_song(text: &str) -> Result<Song, String> {
     let mut bpm = 120.0_f64;
     let mut gate = 0.9_f64;
     let mut events: Vec<RawEvent> = Vec::new();
+    // Per-track patches: channel N+1 = channels[N]; channel 0 = the panel
+    let mut channels: Vec<ParamValues> = Vec::new();
+    let mut track_channels: Vec<(String, u16)> = Vec::new();
 
     let mut mode = TrackMode::None;
     let mut track_beat = 0.0_f64;
@@ -519,35 +610,68 @@ fn parse_song(text: &str) -> Result<Vec<SongEvent>, String> {
             }
             "track" => {
                 track_beat = 0.0;
+                let name = line
+                    .split_whitespace()
+                    .nth(1)
+                    .ok_or_else(|| err("track needs a name".into()))?
+                    .to_string();
                 let mut vel = 0.8_f32;
                 let mut len = 1.0_f64;
+                let mut channel = 0u16;
                 for opt in line.split_whitespace().skip(2) {
                     if let Some(v) = opt.strip_prefix("vel=") {
                         vel = v.parse::<f32>().map_err(|_| err(format!("invalid vel '{}'", v)))?;
                     } else if let Some(v) = opt.strip_prefix("len=") {
                         len = v.parse::<f64>().map_err(|_| err(format!("invalid len '{}'", v)))?;
+                    } else if let Some(v) = opt.strip_prefix("patch=") {
+                        // A private patch for this track: the file's
+                        // voice-level parameters become this channel
+                        let path = format!("patches/{}.patch", v);
+                        let text = std::fs::read_to_string(&path)
+                            .map_err(|e| err(format!("patch '{}': {}", path, e)))?;
+                        let p = params_from_patch(&text).map_err(err)?;
+                        channels.push(p);
+                        channel = channels.len() as u16;
                     } else {
                         return Err(err(format!("unknown track option '{}'", opt)));
                     }
                 }
-                mode = TrackMode::Notes { vel, len };
+                track_channels.push((name, channel));
+                mode = TrackMode::Notes { vel, len, channel };
             }
             "automate" => {
                 let name = line
                     .split_whitespace()
                     .nth(1)
                     .ok_or_else(|| err("automate needs a parameter name".into()))?;
-                let param = Param::from_name(name)
-                    .ok_or_else(|| err(format!("unknown parameter '{}'", name)))?;
+                // `automate lead.cutoff` targets the named track's channel
+                let (channel, pname) = match name.split_once('.') {
+                    Some((track, pname)) => {
+                        let ch = track_channels
+                            .iter()
+                            .find(|(t, _)| t == track)
+                            .map(|(_, c)| *c)
+                            .ok_or_else(|| {
+                                err(format!(
+                                    "automate '{}': no track named '{}' defined above",
+                                    name, track
+                                ))
+                            })?;
+                        (ch, pname)
+                    }
+                    None => (0u16, name),
+                };
+                let param = Param::from_name(pname)
+                    .ok_or_else(|| err(format!("unknown parameter '{}'", pname)))?;
                 track_beat = 0.0;
-                mode = TrackMode::Automation { param, current: None };
+                mode = TrackMode::Automation { param, current: None, channel };
             }
             _ => match &mut mode {
                 TrackMode::None => {
                     return Err(err("event tokens before any 'track' or 'automate' line".into()));
                 }
-                TrackMode::Notes { vel, len } => {
-                    let (vel, len) = (*vel, *len);
+                TrackMode::Notes { vel, len, channel } => {
+                    let (vel, len, channel) = (*vel, *len, *channel);
                     for token in tokenize(line).map_err(err)? {
                         if token == "|" {
                             continue;
@@ -556,14 +680,18 @@ fn parse_song(text: &str) -> Result<Vec<SongEvent>, String> {
                             .map_err(|m| err(format!("token '{}': {}", token, m)))?;
                         let off_beat = track_beat + dur * gate;
                         for &note in &notes {
-                            events.push((track_beat, 2, EventKind::NoteOn { note, velocity: vel }));
-                            events.push((off_beat, 0, EventKind::NoteOff { note }));
+                            events.push((
+                                track_beat,
+                                2,
+                                EventKind::NoteOn { note, velocity: vel, channel },
+                            ));
+                            events.push((off_beat, 0, EventKind::NoteOff { note, channel }));
                         }
                         track_beat += dur;
                     }
                 }
-                TrackMode::Automation { param, current } => {
-                    let param = *param;
+                TrackMode::Automation { param, current, channel } => {
+                    let (param, channel) = (*param, *channel);
                     for token in tokenize(line).map_err(err)? {
                         if token == "|" {
                             continue;
@@ -573,7 +701,11 @@ fn parse_song(text: &str) -> Result<Vec<SongEvent>, String> {
                         match seg {
                             AutoToken::Hold(dur) => track_beat += dur,
                             AutoToken::Set(value) => {
-                                events.push((track_beat, 1, EventKind::Param { param, value }));
+                                events.push((
+                                    track_beat,
+                                    1,
+                                    EventKind::Param { param, value, channel },
+                                ));
                                 *current = Some(value);
                             }
                             AutoToken::Ramp { to, dur, shape } => {
@@ -583,7 +715,7 @@ fn parse_song(text: &str) -> Result<Vec<SongEvent>, String> {
                                         token
                                     ))
                                 })?;
-                                emit_ramp(&mut events, param, from, to, track_beat, dur, shape);
+                                emit_ramp(&mut events, param, channel, from, to, track_beat, dur, shape);
                                 *current = Some(to);
                                 track_beat += dur;
                             }
@@ -605,15 +737,19 @@ fn parse_song(text: &str) -> Result<Vec<SongEvent>, String> {
     });
 
     let secs_per_beat = 60.0 / bpm;
-    Ok(events
-        .into_iter()
-        .map(|(beats, _, kind)| SongEvent { time: beats * secs_per_beat, kind })
-        .collect())
+    Ok(Song {
+        events: events
+            .into_iter()
+            .map(|(beats, _, kind)| SongEvent { time: beats * secs_per_beat, kind })
+            .collect(),
+        channels,
+    })
 }
 
 fn emit_ramp(
     events: &mut Vec<RawEvent>,
     param: Param,
+    channel: u16,
     from: f32,
     to: f32,
     start_beat: f64,
@@ -621,14 +757,14 @@ fn emit_ramp(
     shape: Shape,
 ) {
     if matches!(shape, Shape::Step) || from == to {
-        events.push((start_beat + dur, 1, EventKind::Param { param, value: to }));
+        events.push((start_beat + dur, 1, EventKind::Param { param, value: to, channel }));
         return;
     }
     let steps = ((dur * AUTOMATION_STEPS_PER_BEAT).ceil() as usize).clamp(1, 4096);
     for k in 1..=steps {
         let t = k as f64 / steps as f64;
         let value = shape.interpolate(from, to, t as f32);
-        events.push((start_beat + dur * t, 1, EventKind::Param { param, value }));
+        events.push((start_beat + dur * t, 1, EventKind::Param { param, value, channel }));
     }
 }
 
@@ -831,7 +967,7 @@ mod tests {
 
     #[test]
     fn full_song() {
-        let events = parse_song("bpm 120\ntrack a vel=0.9\nC4 E4:1 | R:2 [C3 G3]:2\n").unwrap();
+        let events = parse_song("bpm 120\ntrack a vel=0.9\nC4 E4:1 | R:2 [C3 G3]:2\n").unwrap().events;
         // 4 sounding notes -> 8 events (on + off each)
         assert_eq!(events.len(), 8);
         assert_eq!(events[0].time, 0.0);
@@ -846,12 +982,13 @@ mod tests {
 
     #[test]
     fn automation() {
-        let events =
-            parse_song("bpm 60\ntrack a\nC4:8\nautomate cutoff\n400 R:2 8000:4@exp\n").unwrap();
+        let events = parse_song("bpm 60\ntrack a\nC4:8\nautomate cutoff\n400 R:2 8000:4@exp\n")
+            .unwrap()
+            .events;
         let params: Vec<(f64, f32)> = events
             .iter()
             .filter_map(|e| match e.kind {
-                EventKind::Param { param: Param::Cutoff, value } => Some((e.time, value)),
+                EventKind::Param { param: Param::Cutoff, value, .. } => Some((e.time, value)),
                 _ => None,
             })
             .collect();
@@ -884,7 +1021,7 @@ mod tests {
             include_str!("../songs/tide-engine.song"),
             include_str!("../songs/polaris.song"),
         ] {
-            let events = parse_song(text).unwrap();
+            let events = parse_song(text).unwrap().events;
             assert!(!events.is_empty());
             for pair in events.windows(2) {
                 assert!(pair[0].time <= pair[1].time);
@@ -897,12 +1034,49 @@ mod tests {
         // F#4 must not be truncated as a comment; trailing comments after
         // whitespace still work
         let events =
-            parse_song("bpm 120\ntrack a\nF#4 [G2 F#3]:2 # a comment\n").unwrap();
+            parse_song("bpm 120\ntrack a\nF#4 [G2 F#3]:2 # a comment\n").unwrap().events;
         let ons = events
             .iter()
             .filter(|e| matches!(e.kind, EventKind::NoteOn { .. }))
             .count();
         assert_eq!(ons, 3);
+    }
+
+    /// Per-track patches: `patch=` gives the track its own channel with a
+    /// parameter snapshot, and `automate <track>.<param>` targets it.
+    #[test]
+    fn per_track_patches_and_dotted_automation() {
+        let song = parse_song(
+            "bpm 120\n\
+             track lead vel=0.9 patch=init\n\
+             C5:2\n\
+             track pad\n\
+             [C3 G3]:4\n\
+             automate lead.cutoff\n\
+             400 4000:2@exp\n\
+             automate cutoff\n\
+             2000\n",
+        )
+        .unwrap();
+        assert_eq!(song.channels.len(), 1, "one patch track -> one channel");
+        // lead notes carry channel 1, pad notes channel 0
+        let lead_on = song.events.iter().any(|e| {
+            matches!(e.kind, EventKind::NoteOn { note: 72, channel: 1, .. })
+        });
+        let pad_on = song.events.iter().any(|e| {
+            matches!(e.kind, EventKind::NoteOn { note: 48, channel: 0, .. })
+        });
+        assert!(lead_on && pad_on);
+        // dotted automation tagged to channel 1, plain to channel 0
+        let tagged = song.events.iter().any(|e| {
+            matches!(e.kind, EventKind::Param { param: Param::Cutoff, channel: 1, .. })
+        });
+        let global = song.events.iter().any(|e| {
+            matches!(e.kind, EventKind::Param { param: Param::Cutoff, channel: 0, .. })
+        });
+        assert!(tagged && global);
+        // unknown track name in dotted automation is an error
+        assert!(parse_song("track a\nC4\nautomate ghost.cutoff\n400\n").is_err());
     }
 
     #[test]
