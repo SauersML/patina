@@ -1,118 +1,98 @@
-# Sun, Remembered — for the afternoons that only exist on tape now.
-# D mixolydian at 98: the seventh never resolves, the wow never settles.
-# A round bass keeps walking; a melody keeps almost saying it; high
-# sines answer from somewhere behind the trees. At the end the tape
-# ages faster than the song, which is how memory actually works.
+# Sun, Remembered — second draft, with separate instruments.
+#
+# The chords are a lament in major clothing: the bass walks DOWN
+# (D - C - B - A) while the pads' top voice climbs UP (A4 - B4 - D5)
+# and then sighs back (C5). Contrary motion, so the progression feels
+# like it is opening and closing at the same time.
+#
+# The hook commits: leap up a fourth, knock twice on the same D, climb
+# to F#. Same rhythmic cell a third higher in bar 3 (a sequence, so the
+# ear can sing along the second time), peak placed 3/4 through, and
+# each statement ends differently — question, answer, resolution. The
+# final statement raises the peak to A5 and walks all the way home.
+#
+# Automation is orchestration here, not decoration: the lead's filter
+# breathes with its phrases, the pads arc over the whole song, the
+# tape AGE jumps at section boundaries like splices in a home movie,
+# and only in the breakdown does the wow rise and the hiss breathe in.
 
 bpm 98
 gate 0.9
 
-automate waveform
-3
-automate osc2_wave
-0
-automate osc2_pitch
-12
-automate osc2_level
-0.3
-automate osc3_wave
-0
-automate osc3_pitch
--12
-automate osc3_level
-0.55
-automate detune
-9
-automate sub
-0.35
-automate circuit
-0
-automate key_track
-0.6
-automate glide
-0.04
-automate attack
-0.05
-automate decay
-0.5
-automate sustain
-0.7
-automate release
-0.6
-automate filter_env
-1.0
-automate filter_attack
-0.01
-automate filter_decay
-0.35
-automate filter_sustain
-0.45
-automate filter_release
-0.5
-automate resonance
-0.7
-automate drive
-1.3
-automate hpf
-25
 automate lfo_rate
-0.27
+0.3
 automate lfo_shape
 0.5
 automate lfo_pitch
 4
-automate lfo_filter
-0.08
+automate lfo_pwm
+0.06
 automate chorus_mode
 2
 automate chorus_depth
 0.35
 automate spring
-0.12
+0.1
 automate reverb_decay
-0.7
+0.72
 automate tape_flutter
-0.14
+0.12
 automate tape_drive
-0.22
+0.2
 
-track pads vel=0.5 len=1.0
+track pads vel=0.52 patch=sunpads
 [D3 A3]:8
-[D3 F#4 A4]:4 [C3 E4 G4]:4 [G2 B3 D4]:4 [A2 C4 E4]:4
-[D3 F#4 A4 C5]:4 [C3 E4 G4 B4]:4 [G2 B3 D4 F#4]:4 [A2 C4 E4 G4]:4
-[D3 F#4 A4 C5]:4 [C3 E4 G4 B4]:4 [G2 B3 D4 F#4]:4 [A2 C4 E4 G4]:4
-[D3 F#4 A4 C5]:4 [C3 E4 G4 B4]:4 [G2 B3 D4 F#4]:4 [A2 C4 E4 G4]:4
-[D2 A2 D3 F#4]:8
+[D3 F#4 A4]:4 [C3 E4 G4 B4]:4 [B2 D4 G4 D5]:4 [A2 E4 G4 C5]:4
+[D3 F#4 A4]:4 [C3 E4 G4 B4]:4 [B2 D4 G4 D5]:4 [A2 E4 G4 C5]:4
+[D3 F#4 A4]:4 [C3 E4 G4 B4]:4 [B2 D4 G4 D5]:4 [A2 E4 G4 C5]:4
+[D3 G4 A4]:4 [C3 G4 B4]:4
+[D3 F#4 A4]:4 [C3 E4 G4 B4]:4 [B2 D4 G4 D5]:4 [A2 E4 G4 C5]:4
+[D2 A3 F#4]:10
 
-track bass vel=0.72 len=0.5
-R:8
-D2:1.5 D2:0.5 R:0.5 D2:0.5 A2:1 | C2:1.5 C2:0.5 R:0.5 C2:0.5 G2:1 | G1:1.5 G2:0.5 R:0.5 G2:0.5 D2:1 | A1:1.5 A2:0.5 R:0.5 A2:0.5 E2:1
-D2:1.5 D2:0.5 R:0.5 D2:0.5 A2:1 | C2:1.5 C2:0.5 R:0.5 C2:0.5 G2:1 | G1:1.5 G2:0.5 R:0.5 G2:0.5 D2:1 | A1:1.5 A2:0.5 R:0.5 A2:0.5 E2:1
-D2:1.5 D2:0.5 R:0.5 D2:0.5 A2:1 | C2:1.5 C2:0.5 R:0.5 C2:0.5 G2:1 | G1:1.5 G2:0.5 R:0.5 G2:0.5 D2:1 | A1:1.5 A2:0.5 R:0.5 A2:0.5 E2:1
-D2:1.5 D2:0.5 R:0.5 D2:0.5 A2:1 | C2:1.5 C2:0.5 R:0.5 C2:0.5 G2:1 | G1:1.5 G2:0.5 R:0.5 G2:0.5 D2:1 | A1:1.5 A2:0.5 R:0.5 A2:0.5 E2:1
-D2:8
+track bass vel=0.78 patch=sunbass
+R:7 A1:0.5 C2:0.5
+D2:1.5 D2:0.5 R:0.5 D2:0.5 A2:1 | C2:1.5 C2:0.5 R:0.5 C2:0.5 G2:1 | B1:1.5 B1:0.5 R:0.5 B1:0.5 D2:1 | A1:1.5 A1:0.5 B1:1 C2:1
+D2:1.5 D2:0.5 R:0.5 D2:0.5 A2:1 | C2:1.5 C2:0.5 R:0.5 C2:0.5 G2:1 | B1:1.5 B1:0.5 R:0.5 B1:0.5 D2:1 | A1:1.5 A1:0.5 B1:1 C2:1
+D2:1.5 D2:0.5 R:0.5 D2:0.5 A2:1 | C2:1.5 C2:0.5 R:0.5 C2:0.5 G2:1 | B1:1.5 B1:0.5 R:0.5 B1:0.5 D2:1 | A1:1.5 A1:0.5 B1:1 C2:1
+R:4 D2:0.5 R:1.5 D2:0.5 R:1.5
+D2:1.5 D2:0.5 R:0.5 D2:0.5 A2:1 | C2:1.5 C2:0.5 R:0.5 C2:0.5 G2:1 | B1:1.5 B1:0.5 R:0.5 B1:0.5 D2:1 | A1:1.5 A1:0.5 B1:1 C2:1
+D2:2 D1:8
 
-track lead vel=0.68 len=0.92
+track lead vel=0.7 patch=sunlead
 R:24
-F#5:1.5 E5:0.5 D5:1 A4:1 | C5:1.5 D5:0.5 E5:2 | D5:1 B4:1 G4:1.5 A4:0.5 | A4:3 R:1
-F#5:1.5 E5:0.5 D5:1 C5:1 | E5:1.5 D5:0.5 C5:1 D5:1 | B4:1 D5:1 F#5:1.5 E5:0.5 | E5:2 D5:2
-R:1 F#5:1 E5:1 D5:1 | C5:2 R:2 | R:2 B4:1 A4:1 | D5:4
-F#5:6 R:2
-
-track shimmer vel=0.33 len=0.5
-R:40
-R:2.5 A5:0.5 R:1 | R:3 F#5:0.5 R:0.5 | R:2.5 D6:0.5 R:1 | R:4
-R:3 E6:0.5 R:0.5 | R:3.5 D6:0.5 | R:3 A5:0.5 R:0.5 | R:4
+A4:0.5 D5:1 D5:0.5 E5:0.5 F#5:1.5 | E5:0.75 D5:0.25 B4:3 | B4:0.5 D5:1 D5:0.5 E5:0.5 G5:1.5 | E5:0.75 D5:0.25 C5:1 A4:2
+A4:0.5 D5:1 D5:0.5 E5:0.5 F#5:1.5 | E5:0.75 D5:0.25 B4:3 | B4:0.5 D5:1 D5:0.5 E5:0.5 G5:1.5 | E5:0.5 F#5:0.5 E5:1 D5:2
 R:8
+A4:0.5 D5:1 D5:0.5 E5:0.5 F#5:1.5 | E5:0.75 D5:0.25 B4:3 | B4:0.5 D5:1 D5:0.5 E5:0.5 A5:1.5 | G5:0.75 F#5:0.25 E5:1 D5:2
+F#5:2 E5:2 D5:5 R:1
 
-automate cutoff
-1400 R:8 2200:16@smooth 3200:8@smooth R:8 3600:8@smooth R:8 1500:8@smooth 900:8@exp
+track bells vel=0.4 patch=sunbell
+R:40
+R:3.5 A5:0.5 | R:3 F#5:0.5 R:0.5 | R:3.5 D6:0.5 | R:2 E5:0.5 D5:0.5 R:1
+F#5:1 R:3 D5:1 R:3
+R:3.5 A5:0.5 | R:3 F#5:0.5 R:0.5 | R:3.5 E6:0.5 | R:2 A5:0.5 F#5:0.5 R:1
+R:2 [F#5 A5]:6 R:2
+
+automate lead.cutoff
+2200 R:24 3800:8@smooth 2600:8@smooth 4200:8@smooth 2800:8@smooth R:8 4800:8@smooth 3000:8@smooth R:10
+
+automate lead.pulse_width
+0.34 R:24 0.42:16@smooth 0.36:16@smooth R:8 0.46:16@smooth R:10
+
+automate pads.cutoff
+1100 2000:24@smooth R:16 2400:16@smooth 1500:8@smooth 2600:16@smooth 800:10@exp
+
+automate bass.cutoff
+600 R:24 750:32@lin R:8 850:16@lin 500:10@smooth
 
 automate reverb_wet
-0.38 R:56 0.6:16@smooth
+0.32 R:52 0.55:8@smooth 0.4:2@smooth R:16 0.7:12@smooth
 
 automate tape_wow
-0.3 R:64 0.5:16@lin
+0.26 R:56 0.42:8@smooth 0.3:2 R:14 0.5:10@lin
 
 automate tape_age
-0.5 R:56 0.72:24@lin
+0.42 R:24 0.5:0.1@step R:15.9 0.55:0.1@step R:15.9 0.62:0.1@step R:7.9 0.58:0.1@step R:15.9 0.75:9.9@lin
+
+automate noise
+0 R:56 0.02:8@smooth 0:2 R:24
