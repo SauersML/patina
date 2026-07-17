@@ -67,6 +67,8 @@ pub struct SynthUI {
     filter_resonance: f32,
     filter_drive: f32,
     filter_saturation: f32,
+    hpf_cutoff: f32,
+    fuzz: f32,
     detune: f32,
     fenv_amount: f32,
     fenv_attack: f32,
@@ -584,6 +586,8 @@ impl SynthUI {
             filter_resonance: 0.0,
             filter_drive: 1.0,
             filter_saturation: 1.0,
+            hpf_cutoff: 16.0,
+            fuzz: 0.0,
             detune: 7.0,
             fenv_amount: 0.0,
             fenv_attack: 0.005,
@@ -630,6 +634,8 @@ impl SynthUI {
         vm.set_filter_resonance(self.filter_resonance);
         vm.set_filter_drive(self.filter_drive);
         vm.set_filter_saturation(self.filter_saturation);
+        vm.set_hpf_cutoff(self.hpf_cutoff);
+        vm.set_fuzz(self.fuzz);
         vm.set_reverb_decay(self.reverb_decay);
         vm.set_reverb_wet(self.reverb_wet);
         vm.set_chorus_mode(self.chorus_mode);
@@ -715,10 +721,10 @@ impl SynthUI {
     /// on the background layer beneath the transparent panels.
     fn paint_backdrop(&self, ctx: &egui::Context) {
         let rect = ctx.screen_rect();
-        let painter = ctx.layer_painter(egui::LayerId::new(
-            egui::Order::Background,
-            egui::Id::new("patina-backdrop"),
-        ));
+        // Paint onto the panels' own layer, before the panels run, so the
+        // gradient sits under their (transparent) frames — a separate
+        // Background-order layer would draw over the panel content.
+        let painter = ctx.layer_painter(egui::LayerId::background());
         painter.add(gradient_quad(rect, BG_TOP, BG_BOTTOM));
         let shade = Color32::from_rgba_premultiplied(0, 0, 0, 70);
         let clear = Color32::from_rgba_premultiplied(0, 0, 0, 0);
@@ -759,6 +765,8 @@ impl SynthUI {
             self.filter_resonance = p.resonance;
             self.filter_drive = p.drive;
             self.filter_saturation = p.saturation;
+            self.hpf_cutoff = p.hpf_cutoff;
+            self.fuzz = p.fuzz;
             self.detune = p.detune;
             self.fenv_amount = p.filter_env_amount;
             self.fenv_attack = p.filter_attack;
@@ -1105,6 +1113,9 @@ impl SynthUI {
                 if knob(ui, "SATURATE", &mut self.filter_saturation, 0.0, 2.0, 1.0, false, fmt_x) {
                     self.voice_manager.lock().set_filter_saturation(self.filter_saturation);
                 }
+                if knob(ui, "HIGH-PASS", &mut self.hpf_cutoff, 16.0, 8000.0, 16.0, true, fmt_hz) {
+                    self.voice_manager.lock().set_hpf_cutoff(self.hpf_cutoff);
+                }
             });
         });
     }
@@ -1112,6 +1123,7 @@ impl SynthUI {
     fn draw_effects_section(&mut self, ui: &mut egui::Ui) {
         let led = self.chorus_mode != ChorusMode::Off
             || self.reverb_wet > 0.01
+            || self.fuzz > 0.01
             || self.tape_wow > 0.01
             || self.tape_flutter > 0.01
             || self.tape_drive > 0.01
@@ -1159,6 +1171,16 @@ impl SynthUI {
                         }
                         if knob(ui, "MIX", &mut self.reverb_wet, 0.0, 1.0, 0.5, false, fmt_pct) {
                             self.voice_manager.lock().set_reverb_wet(self.reverb_wet);
+                        }
+                    });
+                });
+                ui.separator();
+                ui.vertical(|ui| {
+                    ui.label(mini_header("FUZZ"));
+                    ui.add_space(28.0);
+                    ui.horizontal(|ui| {
+                        if knob(ui, "GERMANIUM", &mut self.fuzz, 0.0, 1.0, 0.0, false, fmt_pct) {
+                            self.voice_manager.lock().set_fuzz(self.fuzz);
                         }
                     });
                 });

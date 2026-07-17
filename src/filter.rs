@@ -22,6 +22,8 @@
 
 use std::f32::consts::TAU;
 
+use crate::adaa::AdaaTanh;
+
 const THERMAL: f32 = 0.4;
 
 pub struct LadderFilter {
@@ -40,6 +42,7 @@ pub struct LadderFilter {
     mismatch: [f32; 4],
     thermal_drift: f32,
     rng: u32,
+    sat_adaa: AdaaTanh,
 }
 
 #[inline]
@@ -88,6 +91,7 @@ impl LadderFilter {
             mismatch,
             thermal_drift: 0.0,
             rng,
+            sat_adaa: AdaaTanh::new(),
         }
     }
 
@@ -167,9 +171,11 @@ impl LadderFilter {
         // Drive make-up gain so the knob adds grit, not just volume
         out /= self.drive.sqrt().max(0.5);
 
-        // Output saturation stage: transparent at 0, tape-ish squash at 2
+        // Output saturation stage: transparent at 0, tape-ish squash at 2.
+        // Antiderivative-antialiased tanh (Paschou et al. 2017) keeps the
+        // added harmonics from folding back into the audio band.
         if self.saturation > 0.02 {
-            out = fast_tanh(out * self.saturation) / self.saturation;
+            out = self.sat_adaa.process(out * self.saturation) / self.saturation;
         }
         out
     }

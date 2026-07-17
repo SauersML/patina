@@ -91,6 +91,15 @@ automate reverb_wet
 automate reverb_decay
 0.5 R:48 0.9:4@smooth R:12
 
+# --- germanium fuzz kicks in for the octave-up section, backs off for
+# the breakdown, then bites the final drone ---
+automate fuzz
+0 R:31 0.55:1@smooth R:14 0.15:2@smooth R:12 0.5:4@smooth
+
+# High-pass sweep thins the breakdown before the drop back to full weight
+automate hpf
+16 R:48 350:4@exp 16:4@exp R:8
+
 # --- master bus: a hot, slightly worn cassette ---
 automate tape_drive
 0.4

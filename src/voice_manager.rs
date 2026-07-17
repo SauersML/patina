@@ -3,6 +3,7 @@ use crate::reverb::Reverb;
 use crate::chorus::{Chorus, ChorusMode};
 use crate::oscillator::Waveform;
 use crate::tape::Tape;
+use crate::fuzz::Fuzz;
 use std::collections::VecDeque;
 
 /// Samples kept for the UI oscilloscope display.
@@ -20,6 +21,8 @@ pub struct ParamValues {
     pub resonance: f32,
     pub drive: f32,
     pub saturation: f32,
+    pub hpf_cutoff: f32,
+    pub fuzz: f32,
     pub attack: f32,
     pub decay: f32,
     pub sustain: f32,
@@ -50,6 +53,8 @@ impl Default for ParamValues {
             resonance: 0.0,
             drive: 1.0,
             saturation: 1.0,
+            hpf_cutoff: 16.0,
+            fuzz: 0.0,
             attack: 0.1,
             decay: 0.1,
             sustain: 0.7,
@@ -97,6 +102,7 @@ pub struct VoiceManager {
     reverb: Reverb,
     chorus: Chorus,
     tape: Tape,
+    fuzz: Fuzz,
     note_counter: u64,
     pub params: ParamValues,
     pub scope: VecDeque<f32>,
@@ -115,6 +121,7 @@ impl VoiceManager {
             reverb: Reverb::new(sample_rate),
             chorus: Chorus::new(sample_rate),
             tape: Tape::new(sample_rate),
+            fuzz: Fuzz::new(),
             note_counter: 0,
             params,
             scope: VecDeque::with_capacity(SCOPE_LEN),
@@ -292,6 +299,18 @@ impl VoiceManager {
         }
     }
 
+    pub fn set_hpf_cutoff(&mut self, cutoff: f32) {
+        self.params.hpf_cutoff = cutoff.clamp(16.0, 8000.0);
+        for voice in &mut self.voices {
+            voice.hpf.set_cutoff(self.params.hpf_cutoff);
+        }
+    }
+
+    pub fn set_fuzz(&mut self, amount: f32) {
+        self.params.fuzz = amount.clamp(0.0, 1.0);
+        self.fuzz.set_amount(self.params.fuzz);
+    }
+
     pub fn render_next(&mut self) -> (f32, f32) {
         let mut left = 0.0;
         let mut right = 0.0;
@@ -309,8 +328,10 @@ impl VoiceManager {
         left *= g;
         right *= g;
 
-        // Reverb and chorus each handle their own dry/wet mix internally;
-        // tape sits last, as if the whole mix were bounced to cassette
+        // Fuzz first (a pedal in front of everything), then reverb and
+        // chorus with their own internal dry/wet; tape sits last, as if the
+        // whole mix were bounced to cassette
+        let (left, right) = self.fuzz.process(left, right);
         let (left, right) = self.reverb.process(left, right);
         let (left, right) = self.chorus.process(left, right);
         let (left, right) = self.tape.process(left, right);

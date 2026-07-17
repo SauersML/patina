@@ -33,7 +33,8 @@
 //   frequencies), log (fast start), smooth (S-curve), step (jump at the end).
 //
 // Automatable parameters: volume, waveform (0=sine 1=square 2=saw 3=tri,
-// use plain sets), detune, cutoff, resonance, drive, saturation, attack,
+// use plain sets), detune, cutoff, resonance, drive, saturation, hpf
+// (high-pass cutoff Hz, 16 = off), fuzz (0..1 germanium fuzz), attack,
 // decay, sustain, release, filter_env (octaves, -5..+5), filter_attack,
 // filter_decay, filter_sustain, filter_release, reverb_decay, reverb_wet,
 // chorus_mode (0=off..4=IV, use plain sets), chorus_rate, chorus_depth,
@@ -65,6 +66,8 @@ pub enum Param {
     Decay,
     Sustain,
     Release,
+    HpfCutoff,
+    FuzzAmount,
     FilterEnvAmount,
     FilterAttack,
     FilterDecay,
@@ -95,6 +98,8 @@ impl Param {
             "decay" => Param::Decay,
             "sustain" => Param::Sustain,
             "release" => Param::Release,
+            "hpf" => Param::HpfCutoff,
+            "fuzz" => Param::FuzzAmount,
             "filter_env" => Param::FilterEnvAmount,
             "filter_attack" => Param::FilterAttack,
             "filter_decay" => Param::FilterDecay,
@@ -134,6 +139,8 @@ impl Param {
             Param::Decay => vm.set_decay(value),
             Param::Sustain => vm.set_sustain(value),
             Param::Release => vm.set_release(value),
+            Param::HpfCutoff => vm.set_hpf_cutoff(value),
+            Param::FuzzAmount => vm.set_fuzz(value),
             Param::FilterEnvAmount => vm.set_filter_env_amount(value),
             Param::FilterAttack => vm.set_filter_attack(value),
             Param::FilterDecay => vm.set_filter_decay(value),

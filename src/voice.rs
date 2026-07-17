@@ -1,6 +1,7 @@
 use crate::oscillator::{Oscillator, Waveform};
 use crate::envelope::Envelope;
 use crate::filter::LadderFilter;
+use crate::hpf::HighPassLadder;
 
 /// Fixed keyboard tracking: how much the filter follows note pitch, in
 /// octaves of cutoff per octave of pitch.
@@ -22,6 +23,7 @@ pub struct Voice {
     pub envelope: Envelope,
     pub filter_env: Envelope,
     pub filter: LadderFilter,
+    pub hpf: HighPassLadder,
     pub note: Option<u8>,
     velocity: f32,
     age: u64,
@@ -77,6 +79,7 @@ impl Voice {
             envelope: Envelope::new(sample_rate),
             filter_env,
             filter: LadderFilter::new(sample_rate, seed),
+            hpf: HighPassLadder::new(sample_rate),
             note: None,
             velocity: 0.0,
             age: 0,
@@ -164,7 +167,7 @@ impl Voice {
         let mod_oct = filter_env * self.filter_env_amount + key_oct + vel_oct;
         let cutoff_mult = mod_oct.exp2();
 
-        let filtered = self.filter.process(osc, cutoff_mult);
+        let filtered = self.hpf.process(self.filter.process(osc, cutoff_mult));
 
         // Gentle velocity curve on amplitude
         let vel_amp = 0.3 + 0.7 * self.velocity * self.velocity;
