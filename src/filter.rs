@@ -395,9 +395,14 @@ impl LadderFilter {
 
         match self.model {
             CircuitModel::Moog => {
-                // Regeneration: knob k, unit trim, and the threshold placed
-                // below knob max per the service manual (SCHEMATIC)
-                let k = self.resonance * self.res_cal * 1.12;
+                // Regeneration pot R22 is 50K REVERSE-AUDIO (dwg #1149):
+                // feedback rises fast in the first half of travel and
+                // creeps at the top. Scaled so the oscillation threshold
+                // (k=4) lands at knob 3/4 — the service manual's
+                // "regeneration 7-8 of 10" falls out of the taper instead
+                // of being pasted on (SCHEMATIC)
+                let x = self.resonance * 0.25;
+                let k = 4.267 * self.res_cal * (1.0 - (1.0 - x) * (1.0 - x));
 
                 // Program volts through the input attenuator; drive is the
                 // attenuator's setting (more drive = more ladder current)
@@ -433,10 +438,12 @@ impl LadderFilter {
                 out
             }
             CircuitModel::Arp => {
-                // "When the Q is at maximum, the VCF will oscillate" —
-                // threshold k=4 lands just inside the knob's travel. The
-                // margin is trimmed (service manual 'VCF cal') so the
-                // oscillation settles at the spec'd 13-14 V p-p, not more
+                // The 2600's resonance slider is 100K LINEAR (panel silk):
+                // k rises evenly along the whole travel, reaching the
+                // oscillation threshold only at the top — "when the Q is
+                // at maximum, the VCF will oscillate". The margin is
+                // trimmed (service manual 'VCF cal') so the oscillation
+                // settles at the spec'd 13-14 V p-p, not more (SCHEMATIC)
                 let k = self.resonance * self.res_cal * 1.02;
 
                 let vin = input * ARP_ATTEN * self.drive;
@@ -558,8 +565,9 @@ mod tests {
             400.0,
             0.25,
         );
-        // knob -> k includes the 1.12 threshold placement and unit trim
-        let k = knob * 1.12;
+        // knob -> k through the reverse-audio taper of R22
+        let x = knob * 0.25;
+        let k = 4.267 * (1.0 - (1.0 - x) * (1.0 - x));
         let expected = (1.0 + 0.3 * knob) / (1.0 + k); // make-up * ODE loss
         let measured = gk / g0;
         assert!(
@@ -626,6 +634,80 @@ mod tests {
         assert!(
             tail > 0.01,
             "filter should self-oscillate at resonance 4, tail peak = {tail}"
+        );
+    }
+
+    /// The reverse-audio regeneration pot puts the ladder's oscillation
+    /// threshold at knob ~3/4 ("regeneration 7-8 of 10"), NOT at the top:
+    /// knob 3.4/4 must scream, knob 2/4 must not.
+    #[test]
+    fn moog_oscillation_threshold_sits_at_seven_of_ten() {
+        let sr = 44100.0;
+        let tail_at = |knob: f32| -> f32 {
+            let mut f = LadderFilter::new(sr, 7);
+            f.set_cutoff(1500.0);
+            f.set_resonance(knob);
+            for _ in 0..8000 {
+                f.process(0.0, 1.0);
+            }
+            f.process(2.5, 1.0);
+            let mut tail = 0.0f32;
+            for i in 0..44100 {
+                let y = f.process(0.0, 1.0);
+                if i > 44100 - 4410 {
+                    tail = tail.max(y.abs());
+                }
+            }
+            tail
+        };
+        let above = tail_at(3.4);
+        let below = tail_at(2.0);
+        assert!(
+            above > 0.05 && below < 0.01,
+            "oscillation should start near knob 3/4: at 3.4 tail={above:.4}, at 2.0 tail={below:.4}"
+        );
+    }
+
+    /// Resonance at the bottom of the range separates the circuits: the
+    /// Moog's regeneration is AC-coupled (2.5 uF, ~25 Hz corner) so the
+    /// loop cannot sustain oscillation at a 20 Hz cutoff; the ARP's
+    /// DC-coupled feedback self-oscillates all the way down (the manual's
+    /// own checkout produces a 10 Hz sine).
+    #[test]
+    fn low_cutoff_resonance_separates_the_circuits() {
+        let sr = 44100.0;
+        let tail_of = |model: CircuitModel| -> f32 {
+            let mut f = LadderFilter::new(sr, 7);
+            f.set_model(model);
+            f.set_cutoff(20.0);
+            f.set_resonance(4.0);
+            for _ in 0..12000 {
+                f.process(0.0, 1.0);
+            }
+            // Prime the loop with a driven 20 Hz burst (growth from a
+            // one-sample ping is far too slow at this cutoff), then let
+            // go: a sustaining loop holds the amplitude, a lossy one
+            // rings down
+            for i in 0..44100 {
+                let x = 4.0 * (TAU * 20.0 * i as f32 / sr).sin();
+                f.process(x, 1.0);
+            }
+            let mut tail = 0.0f32;
+            let n = 3 * 44100; // a 20 Hz cycle is 2205 samples
+            for i in 0..n {
+                let y = f.process(0.0, 1.0);
+                assert!(y.is_finite());
+                if i > n - 8820 {
+                    tail = tail.max(y.abs());
+                }
+            }
+            tail
+        };
+        let arp = tail_of(CircuitModel::Arp);
+        let moog = tail_of(CircuitModel::Moog);
+        assert!(
+            arp > 1.0 && moog < 0.25 * arp,
+            "at 20 Hz cutoff the ARP should oscillate and the Moog's AC-coupled loop should not: arp {arp:.3} V, moog {moog:.3} V"
         );
     }
 
