@@ -1881,7 +1881,7 @@ impl SynthUI {
                 && !self.pressed_keys.contains_key(&key)
             {
                 if let Some(note) = self.key_to_note(key) {
-                    self.play_note(note);
+                    self.play_note(note, 0.85);
                     self.pressed_keys.insert(key, note);
                 }
             }
@@ -1911,17 +1911,29 @@ impl SynthUI {
         }
     }
 
-    /// Change octave, releasing any held notes first so nothing gets stuck
-    /// (note-off would otherwise map to a different MIDI note).
+    /// Change octave like a performance switch: notes you are holding
+    /// jump to the new register instead of dying (they could never
+    /// re-trigger while held — egui ignores OS key repeats).
     fn shift_octave(&mut self, delta: i32) {
-        let held: Vec<u8> = self.pressed_keys.drain().map(|(_, note)| note).collect();
-        for note in held {
-            self.stop_note(note);
+        let new_octave = (self.current_octave + delta).clamp(0, 8);
+        if new_octave == self.current_octave {
+            return;
         }
+        let semis = (new_octave - self.current_octave) * 12;
+        {
+            let mut vm = self.voice_manager.lock();
+            for note in self.pressed_keys.values_mut() {
+                let moved = (*note as i32 + semis).clamp(0, 127) as u8;
+                vm.note_off(*note);
+                vm.note_on(moved, 0.9);
+                *note = moved;
+            }
+        }
+        // The mouse note re-triggers naturally next frame from the pointer
         if let Some(note) = self.active_mouse_note.take() {
             self.stop_note(note);
         }
-        self.current_octave = (self.current_octave + delta).clamp(0, 8);
+        self.current_octave = new_octave;
         self.voice_manager
             .lock()
             .set_ui_octave(self.current_octave as f32);
@@ -1937,7 +1949,12 @@ impl SynthUI {
                         if let Some(old_note) = self.active_mouse_note.take() {
                             self.stop_note(old_note);
                         }
-                        self.play_note(note);
+                        // Strike position is velocity: the base of the key
+                        // plays hard, the top plays soft — like a real key
+                        // has leverage
+                        let depth = ((pos.y - rect.top()) / rect.height()).clamp(0.0, 1.0);
+                        let velocity = 0.45 + 0.55 * depth;
+                        self.play_note(note, velocity);
                         self.active_mouse_note = Some(note);
                     }
                 }
@@ -1970,8 +1987,8 @@ impl SynthUI {
         }
     }
 
-    fn play_note(&mut self, note: u8) {
-        self.voice_manager.lock().note_on(note, 0.9);
+    fn play_note(&mut self, note: u8, velocity: f32) {
+        self.voice_manager.lock().note_on(note, velocity);
     }
 
     fn stop_note(&mut self, note: u8) {
