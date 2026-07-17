@@ -44,6 +44,10 @@ format for programmatic playback and parameter automation.
    cargo run --release -- --play songs/nightdrive.song
    ```
 
+## 🎚️ Patches
+
+The strip at the top of the panel holds the factory bank (US 3,981,218 style — one click retunes every block at once, live, even under held notes): **Init · Velvet · Acid · Pluck · Ghost · Fathom · Cry · Cathedral**. `SAVE` snapshots your current knobs to `patches/user-N.patch` — plain text, same parameter names as song automation, edit at will.
+
 ## 🎛️ Usage
 
 Once Patina is running, you'll see the GUI with various controls:

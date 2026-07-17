@@ -188,6 +188,7 @@ pub struct SynthUI {
     fenv_sustain: f32,
     fenv_release: f32,
     active_mouse_note: Option<u8>,
+    active_patch: Option<usize>,
     voice_manager: Arc<Mutex<VoiceManager>>,
     chorus_rate: f32,
     chorus_depth: f32,
@@ -708,6 +709,7 @@ impl SynthUI {
             fenv_sustain: 0.0,
             fenv_release: 0.3,
             active_mouse_note: None,
+            active_patch: None,
             chorus_rate: 0.5,
             chorus_depth: 0.3,
             chorus_mode: ChorusMode::Off,
@@ -1049,6 +1051,7 @@ impl SynthUI {
             }))
             .show(ctx, |ui| {
                 ui.spacing_mut().item_spacing = vec2(11.0, 10.0);
+                self.draw_preset_strip(ui);
                 ui.horizontal(|ui| {
                     self.draw_oscillator_card(ui, tex.as_mut());
                     self.draw_envelope_card(ui, tex.as_mut());
@@ -1064,6 +1067,92 @@ impl SynthUI {
                 self.draw_scope(ui);
             });
         self.textures = tex;
+    }
+
+    /// Preset strip, in the spirit of the Minitmoog's preset panel
+    /// (US 3,981,218): one click retunes every functional block at once.
+    /// Patches apply live, so you can morph a held chord between them.
+    fn draw_preset_strip(&mut self, ui: &mut egui::Ui) {
+        let height = 30.0;
+        let (bar, _) =
+            ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+        let painter = ui.painter();
+        painter.rect_filled(bar, CornerRadius::same(8), INSET);
+
+        painter.text(
+            pos2(bar.left() + 12.0, bar.center().y),
+            Align2::LEFT_CENTER,
+            tracked("patch"),
+            FontId::proportional(9.0),
+            TXT_LOW,
+        );
+
+        let mut x = bar.left() + 72.0;
+        for (i, (name, text)) in crate::patch::FACTORY.iter().enumerate() {
+            let w = 22.0 + name.len() as f32 * 7.2;
+            let cell = Rect::from_min_size(pos2(x, bar.top() + 4.0), vec2(w, height - 8.0));
+            let response = ui.interact(cell, ui.id().with(("preset", i)), Sense::click());
+            let selected = self.active_patch == Some(i);
+            if response.clicked() && !selected {
+                if crate::patch::apply(&mut self.voice_manager.lock(), text).is_ok() {
+                    self.active_patch = Some(i);
+                }
+            }
+            if selected {
+                gloss_fill(&painter, cell, 6.0);
+            }
+            let color = if selected {
+                CYAN_BRIGHT
+            } else if response.hovered() {
+                TXT
+            } else {
+                TXT_MID
+            };
+            painter.text(
+                cell.center(),
+                Align2::CENTER_CENTER,
+                *name,
+                FontId::proportional(10.5),
+                color,
+            );
+            x += w + 5.0;
+        }
+
+        // SAVE: snapshot the current knobs to patches/user-N.patch
+        let w = 54.0;
+        let cell = Rect::from_min_size(
+            pos2(bar.right() - w - 6.0, bar.top() + 4.0),
+            vec2(w, height - 8.0),
+        );
+        let response = ui.interact(cell, ui.id().with("preset-save"), Sense::click());
+        if response.clicked() {
+            let params = self.voice_manager.lock().params;
+            match crate::patch::save_user_patch(&params) {
+                Ok(path) => println!("Saved patch to {path}"),
+                Err(e) => eprintln!("Could not save patch: {e}"),
+            }
+        }
+        let color = if response.hovered() { AMBER_HI } else { AMBER };
+        painter.rect_stroke(
+            cell,
+            CornerRadius::same(6),
+            Stroke::new(1.0, color),
+            egui::StrokeKind::Inside,
+        );
+        painter.text(
+            cell.center(),
+            Align2::CENTER_CENTER,
+            tracked("save"),
+            FontId::proportional(9.5),
+            color,
+        );
+
+        painter.rect_stroke(
+            bar,
+            CornerRadius::same(8),
+            Stroke::new(1.0, HAIRLINE),
+            egui::StrokeKind::Inside,
+        );
     }
 
     /// Wordmark on the walnut top rail, octave stepper right.
