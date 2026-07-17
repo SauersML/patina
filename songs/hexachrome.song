@@ -11,6 +11,14 @@ gate 0.92
 automate waveform
 3
 
+# Dual-spring reverb instead of dry air, and a breath of shared
+# transistor noise under everything
+automate spring
+0.35
+
+automate noise
+0.05
+
 # Dm9-ish -> Bbmaj7 -> Gm7 -> A7sus, hazy seventies-documentary changes
 track pads vel=0.6
 [D3 A3 C4 E4]:8 [Bb2 F3 A3 D4]:8 [G2 D3 F3 Bb3]:8 [A2 E3 G3 C4]:8

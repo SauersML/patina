@@ -2,10 +2,13 @@ use std::f32::consts::PI;
 use reverb::Reverb as SecondReverb;
 
 pub struct Reverb {
-    early_reflections: EarlyReflections,
-    late_reflections: LateReflections,
-    modulation: Modulation,
-    eq: Equalizer,
+    // One instance of every stage per channel: pushing left and right
+    // through shared filter state interleaves the two signals and corrupts
+    // both (see the same note in chorus.rs)
+    early_reflections: [EarlyReflections; 2],
+    late_reflections: [LateReflections; 2],
+    modulation: [Modulation; 2],
+    eq: [Equalizer; 2],
     wet: f32,
     dry: f32,
     second_reverb: SecondReverb,
@@ -135,10 +138,19 @@ impl Reverb {
         second_reverb.diffusion(0.7, 0.7, 0.7, 0.7);  // Set diffusion to smooth out distinct echoes
 
         Self {
-            early_reflections: EarlyReflections::new(sample_rate),
-            late_reflections: LateReflections::new(sample_rate, num_channels),
-            modulation: Modulation::new(sample_rate, num_channels),
-            eq: Equalizer::new(sample_rate),
+            early_reflections: [
+                EarlyReflections::new(sample_rate),
+                EarlyReflections::new(sample_rate),
+            ],
+            late_reflections: [
+                LateReflections::new(sample_rate, num_channels),
+                LateReflections::new(sample_rate, num_channels),
+            ],
+            modulation: [
+                Modulation::new(sample_rate, num_channels),
+                Modulation::new(sample_rate, num_channels),
+            ],
+            eq: [Equalizer::new(sample_rate), Equalizer::new(sample_rate)],
             wet: 0.7,
             dry: 0.3,
             second_reverb,
@@ -146,35 +158,30 @@ impl Reverb {
     }
 
     pub fn process(&mut self, input_left: f32, input_right: f32) -> (f32, f32) {
-        // Process early reflections
-        let early_left = self.early_reflections.process(input_left);
-        let early_right = self.early_reflections.process(input_right);
+        let mut wet = [input_left, input_right];
+        for (ch, sample) in wet.iter_mut().enumerate() {
+            let early = self.early_reflections[ch].process(*sample);
+            let late = self.late_reflections[ch].process(early);
+            let modulated = self.modulation[ch].process(late);
+            *sample = self.eq[ch].process(modulated);
+        }
 
-        // Process late reflections
-        let late_left = self.late_reflections.process(early_left);
-        let late_right = self.late_reflections.process(early_right);
+        // The plate takes dry mono input once per sample frame and returns
+        // the averaged wet stereo taps
+        let plate = self
+            .second_reverb
+            .calc_sample((wet[0] + wet[1]) * 0.5, 0.6);
 
-        // Apply modulation
-        let mod_left = self.modulation.process(late_left);
-        let mod_right = self.modulation.process(late_right);
-
-        // Apply equalization
-        let eq_left = self.eq.process(mod_left);
-        let eq_right = self.eq.process(mod_right);
-
-        // Process through second reverb
-        let second_left = self.second_reverb.calc_sample(eq_left, 0.6);
-        let second_right = self.second_reverb.calc_sample(eq_right, 0.6);
-
-        // Mix dry and wet signals
-        let output_left = input_left * self.dry + (eq_left * 0.5 + second_left * 0.5) * self.wet;
-        let output_right = input_right * self.dry + (eq_right * 0.5 + second_right * 0.5) * self.wet;
+        let output_left = input_left * self.dry + (wet[0] * 0.5 + plate * 0.5) * self.wet;
+        let output_right = input_right * self.dry + (wet[1] * 0.5 + plate * 0.5) * self.wet;
 
         (output_left, output_right)
     }
 
     pub fn set_decay(&mut self, decay: f32) {
-        self.late_reflections.decay = decay.clamp(0.0, 0.98);
+        for late in &mut self.late_reflections {
+            late.decay = decay.clamp(0.0, 0.98);
+        }
         self.second_reverb.decay(decay);
     }
 
@@ -368,5 +375,40 @@ impl Biquad {
         let a2 = 1.0 - alpha;
 
         Self::from_coeffs(b0, b1, b2, a0, a1, a2)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transparent_at_zero_wet() {
+        let mut reverb = Reverb::new(48000.0);
+        reverb.set_wet(0.0);
+        for n in 0..4800 {
+            let x = (n as f32 * 0.05).sin() * 0.5;
+            let (l, r) = reverb.process(x, -x);
+            assert_eq!(l, x);
+            assert_eq!(r, -x);
+        }
+    }
+
+    /// Identical inputs must produce identical outputs. When the channels
+    /// shared one set of filter states this failed immediately (each call
+    /// interleaved into the other's history).
+    #[test]
+    fn identical_inputs_stay_identical() {
+        let mut reverb = Reverb::new(48000.0);
+        reverb.set_wet(1.0);
+        for n in 0..48000 {
+            let x = (2.0 * PI * 220.0 * n as f32 / 48000.0).sin() * 0.3;
+            let (l, r) = reverb.process(x, x);
+            assert!(l.is_finite() && r.is_finite());
+            assert!(
+                (l - r).abs() < 1e-6,
+                "channels diverged at sample {n}: {l} vs {r}"
+            );
+        }
     }
 }

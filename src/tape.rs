@@ -76,12 +76,15 @@ const N_LAYERS: usize = 3;
 const LAYER_DEPTH_UM: [f32; N_LAYERS] = [0.4, 1.7, 3.5];
 /// Head-field decay into the coating: H(d) = H0 / (1 + d / FIELD_DEPTH_UM).
 const FIELD_DEPTH_UM: f32 = 1.2;
-/// Internal AC bias oscillator (real decks: 60-105 kHz; representable here
-/// at the 8x internal rate and fully removed by the decimation cascade).
-const BIAS_FREQ_HZ: f32 = 50000.0;
+/// AC bias runs BIAS-COHERENTLY: exactly one bias cycle per output sample
+/// (bias frequency = the output sample rate, e.g. 48 kHz — a legitimate
+/// cassette bias). The hysteresis loop turns the bias into a harmonic-rich
+/// magnetization wave whose components alias at the oversampled rate; with
+/// a coherent bias every one of those aliases lands on DC or the Nyquist
+/// edge — nothing in the audio band, by construction instead of by filter.
 const BIAS_AMP: f32 = 0.30;
 /// Barkhausen noise scale: particle-avalanche noise per unit sqrt(|dM|).
-const BARKHAUSEN: f32 = 0.006;
+const BARKHAUSEN: f32 = 0.0002;
 
 // --- Playback ---
 /// Playback head gap length, um.
@@ -124,9 +127,7 @@ pub struct Tape {
     makeup: f32,
 
     // The oxide
-    bias_cos: f32,
-    bias_sin: f32,
-    bias_rot: (f32, f32),
+    bias_table: [f32; OS],
     up1: [Halfband; 2],
     up2: [Halfband; 2],
     up3: [Halfband; 2],
@@ -164,8 +165,10 @@ impl Tape {
     pub fn new(sample_rate: f32) -> Self {
         let size = (sample_rate * CENTER_DELAY_S * 2.0) as usize + 8;
         let print_len = (sample_rate * PRINT_DELAY_S) as usize + 1;
-        let os_rate = sample_rate * OS as f32;
-        let w = 2.0 * PI * BIAS_FREQ_HZ / os_rate;
+        let mut bias_table = [0.0f32; OS];
+        for (i, b) in bias_table.iter_mut().enumerate() {
+            *b = BIAS_AMP * (2.0 * PI * i as f32 / OS as f32).sin();
+        }
 
         // Gap loss as flux averaging over the gap transit time. The transit
         // is ~1.2 samples at 48 kHz, so a fractional two-tap boxcar realizes
@@ -186,7 +189,7 @@ impl Tape {
             })
             .sum::<f32>()
             / N_LAYERS as f32;
-        let boost = (1.0 / response_10k.max(1e-3)).sqrt();
+        let boost = 1.0 / response_10k.max(1e-3);
         let hp_mag_10k = {
             let r = 10000.0f32 / 4000.0;
             r / (1.0 + r * r).sqrt()
@@ -215,9 +218,7 @@ impl Tape {
             thickness_gain,
             field_scale: 0.0,
             makeup: 1.0,
-            bias_cos: 1.0,
-            bias_sin: 0.0,
-            bias_rot: (w.cos(), w.sin()),
+            bias_table,
             up1: [Halfband::new(); 2],
             up2: [Halfband::new(); 2],
             up3: [Halfband::new(); 2],
@@ -270,7 +271,7 @@ impl Tape {
     }
 
     fn update_drive(&mut self) {
-        self.field_scale = 0.05 + 0.22 * self.drive;
+        self.field_scale = 0.05 + 0.5 * self.drive;
 
         // Self-alignment, step 2: record a small 1 kHz tone through the full
         // biased multi-layer magnetic path and set makeup gain from what
@@ -381,17 +382,7 @@ impl Tape {
             }
         }
 
-        // --- Bias oscillator: one strip of tape, one bias field ---
-        let mut bias_sub = [0.0f32; OS];
-        for b in bias_sub.iter_mut() {
-            let (c, s) = (self.bias_cos, self.bias_sin);
-            self.bias_cos = c * self.bias_rot.0 - s * self.bias_rot.1;
-            self.bias_sin = s * self.bias_rot.0 + c * self.bias_rot.1;
-            let g = 1.5 - 0.5 * (self.bias_cos * self.bias_cos + self.bias_sin * self.bias_sin);
-            self.bias_cos *= g;
-            self.bias_sin *= g;
-            *b = self.bias_sin * BIAS_AMP;
-        }
+        let bias_sub = self.bias_table;
 
         let mut out = [left, right];
         for (ch, sample) in out.iter_mut().enumerate() {
@@ -513,9 +504,6 @@ impl Tape {
 /// magnetic path and return the makeup gain that brings it back to unity.
 fn calibrate_makeup(field_scale: f32, sample_rate: f32) -> f32 {
     let os_rate = sample_rate * OS as f32;
-    let w = 2.0 * PI * BIAS_FREQ_HZ / os_rate;
-    let rot = (w.cos(), w.sin());
-    let (mut bc, mut bs) = (1.0f32, 0.0f32);
     let mut ja = [JilesAtherton::new(); N_LAYERS];
 
     let period = (os_rate / 1000.0) as usize;
@@ -523,11 +511,9 @@ fn calibrate_makeup(field_scale: f32, sample_rate: f32) -> f32 {
     let (mut re, mut im) = (0.0f64, 0.0f64);
     let mut count = 0usize;
     for n in 0..total {
-        let c = bc * rot.0 - bs * rot.1;
-        bs = bs * rot.0 + bc * rot.1;
-        bc = c;
+        let bias = BIAS_AMP * (2.0 * PI * (n % OS) as f32 / OS as f32).sin();
         let phase = 2.0 * PI * (n % period) as f32 / period as f32;
-        let h_surface = 0.1 * phase.sin() * field_scale + bs * BIAS_AMP;
+        let h_surface = 0.1 * phase.sin() * field_scale + bias;
         let mut acc = 0.0;
         for l in 0..N_LAYERS {
             let depth_factor = 1.0 / (1.0 + LAYER_DEPTH_UM[l] / FIELD_DEPTH_UM);
@@ -663,10 +649,10 @@ fn langevin_pair(x: f32) -> (f32, f32) {
 /// whose nonlinearity limits the amplitude. Output is the position error of
 /// the tape at the head, in normalized units.
 struct ScrapeOscillator {
-    u: f32, // displacement
+    u: f32, // displacement (normalized so u and w share a scale)
     w: f32, // velocity, normalized to tape speed
     dt: f32,
-    w0_sq: f32,
+    w0: f32,
     friction_at_rest: f32,
 }
 
@@ -678,12 +664,11 @@ const SCRAPE_DAMPING: f32 = 400.0;
 
 impl ScrapeOscillator {
     fn new(sample_rate: f32) -> Self {
-        let w0 = 2.0 * PI * SCRAPE_HZ;
         Self {
             u: 0.0,
             w: 0.0,
             dt: 1.0 / sample_rate,
-            w0_sq: w0 * w0,
+            w0: 2.0 * PI * SCRAPE_HZ,
             friction_at_rest: MU_DELTA * (-1.0 / STRIBECK_V).exp(),
         }
     }
@@ -693,12 +678,13 @@ impl ScrapeOscillator {
         let v_rel = (1.0 + self.w).max(0.0);
         let friction = MU_DELTA * (-v_rel / STRIBECK_V).exp() - self.friction_at_rest;
         let seed: f32 = rand::thread_rng().gen_range(-1.0f32..1.0) * 1e-3;
-        // Semi-implicit Euler: stable for the ~3.4 kHz resonance at audio rates
+        // Semi-implicit Euler in normalized coordinates (u' = w0*w,
+        // w' = -w0*u - ...): stable for a ~3.4 kHz resonance at audio rates
         self.w += self.dt
-            * (-self.w0_sq * self.u - SCRAPE_FORCE * friction - SCRAPE_DAMPING * self.w)
+            * (-self.w0 * self.u - SCRAPE_FORCE * friction - SCRAPE_DAMPING * self.w)
             + seed;
         self.w = self.w.clamp(-0.9, 0.9);
-        self.u = (self.u + self.dt * self.w * self.w0_sq.sqrt()).clamp(-3.0, 3.0);
+        self.u = (self.u + self.dt * self.w0 * self.w).clamp(-3.0, 3.0);
         self.u
     }
 }
@@ -744,6 +730,8 @@ impl Halfband {
     }
 
     /// One low-rate sample in, two high-rate samples out.
+    /// H(z) = (A(z^2) + z^-1 B(z^2)) / 2: even outputs from the direct
+    /// branch, odd outputs from the delayed branch.
     #[inline]
     fn up(&mut self, x: f32) -> (f32, f32) {
         let mut p = x;
@@ -754,17 +742,18 @@ impl Halfband {
         for s in &mut self.b {
             q = s.process(q);
         }
-        (q, p)
+        (p, q)
     }
 
-    /// Two high-rate samples in, one low-rate sample out.
+    /// Two high-rate samples in (x0 earlier, x1 later), one low-rate sample
+    /// out. The z^-1 on the B branch means it takes the earlier sample.
     #[inline]
     fn down(&mut self, x0: f32, x1: f32) -> f32 {
-        let mut p = x0;
+        let mut p = x1;
         for s in &mut self.a {
             p = s.process(p);
         }
-        let mut q = x1;
+        let mut q = x0;
         for s in &mut self.b {
             q = s.process(q);
         }
@@ -781,8 +770,12 @@ fn one_pole_alpha(sample_rate: f32, cutoff: f32) -> f32 {
 }
 
 fn read_fractional(buffer: &[f32], write: usize, delay: f32, size: usize) -> f32 {
-    let read = (write as f32 - delay + size as f32) as usize % size;
-    let frac = delay.fract();
+    // The newest sample sits at write-1. Interpolate at the true fractional
+    // position (frac of the position, not of the delay — using delay.fract()
+    // mirrors the sub-sample offset and clicks at every integer crossing).
+    let pos = write as f32 - 1.0 - delay + 2.0 * size as f32;
+    let read = pos as usize % size;
+    let frac = pos.fract();
     cubic_interpolate(
         &[
             buffer[(read + size - 1) % size],
@@ -937,11 +930,12 @@ mod tests {
     }
 
     /// Project a signal onto harmonics 1..=n_harm of f0 and return
-    /// (fundamental rms, residual rms after removing all n_harm harmonics).
-    fn harmonic_split(signal: &[f32], f0: f32, n_harm: usize) -> (f32, f32) {
+    /// (fundamental rms, harmonic-distortion rms, residual noise rms).
+    fn harmonic_split(signal: &[f32], f0: f32, n_harm: usize) -> (f32, f32, f32) {
         let n = signal.len();
         let mut residual: Vec<f32> = signal.to_vec();
         let mut fundamental_rms = 0.0f32;
+        let mut harmonic_power = 0.0f64;
         for k in 1..=n_harm {
             let wk = 2.0 * PI * f0 * k as f32 / FS;
             let (mut re, mut im) = (0.0f64, 0.0f64);
@@ -957,16 +951,71 @@ mod tests {
             }
             if k == 1 {
                 fundamental_rms = ((a * a + b * b) / 2.0).sqrt();
+            } else {
+                harmonic_power += ((a * a + b * b) / 2.0) as f64;
             }
         }
         let res_rms =
             (residual.iter().map(|x| (x * x) as f64).sum::<f64>() / n as f64).sqrt() as f32;
-        (fundamental_rms, res_rms)
+        (fundamental_rms, harmonic_power.sqrt() as f32, res_rms)
     }
 
     fn rms(signal: &[f32]) -> f32 {
         (signal.iter().map(|x| (x * x) as f64).sum::<f64>() / signal.len() as f64).sqrt()
             as f32
+    }
+
+    /// Correlate `signal` against a sine at `freq` (rate `fs`) and return
+    /// the component's amplitude.
+    fn tone_amplitude(signal: &[f32], freq: f32, fs: f32) -> f32 {
+        let w = 2.0 * PI * freq / fs;
+        let (mut re, mut im) = (0.0f64, 0.0f64);
+        for (i, &x) in signal.iter().enumerate() {
+            re += (x * (w * i as f32).sin()) as f64;
+            im += (x * (w * i as f32).cos()) as f64;
+        }
+        let n = signal.len() as f64;
+        (2.0 * (re * re + im * im).sqrt() / n) as f32
+    }
+
+    #[test]
+    fn halfband_decimator_passes_band_and_rejects_aliases() {
+        // 96 kHz -> 48 kHz. A 5 kHz tone must survive at unity; a 30 kHz
+        // tone would alias to 18 kHz and must be crushed.
+        let run = |freq: f32| {
+            let mut hb = Halfband::new();
+            let n = 16384;
+            let mut out = Vec::with_capacity(n / 2);
+            for i in 0..n / 2 {
+                let x0 = (2.0 * PI * freq * (2 * i) as f32 / 96000.0).sin();
+                let x1 = (2.0 * PI * freq * (2 * i + 1) as f32 / 96000.0).sin();
+                out.push(hb.down(x0, x1));
+            }
+            out
+        };
+        let pass = tone_amplitude(&run(5000.0)[512..], 5000.0, 48000.0);
+        let alias = tone_amplitude(&run(30000.0)[512..], 18000.0, 48000.0);
+        assert!((0.9..1.1).contains(&pass), "passband gain {}", pass);
+        assert!(alias < 0.01, "alias must be rejected, leaked {}", alias);
+    }
+
+    #[test]
+    fn halfband_interpolator_rejects_images() {
+        // 48 kHz -> 96 kHz. A 1 kHz tone must survive; its image at 47 kHz
+        // must be crushed.
+        let mut hb = Halfband::new();
+        let n = 16384;
+        let mut out = Vec::with_capacity(n * 2);
+        for i in 0..n {
+            let x = (2.0 * PI * 1000.0 * i as f32 / 48000.0).sin();
+            let (y0, y1) = hb.up(x);
+            out.push(y0);
+            out.push(y1);
+        }
+        let pass = tone_amplitude(&out[1024..], 1000.0, 96000.0);
+        let image = tone_amplitude(&out[1024..], 47000.0, 96000.0);
+        assert!((0.9..1.1).contains(&pass), "passband gain {}", pass);
+        assert!(image < 0.01, "image must be rejected, leaked {}", image);
     }
 
     #[test]
@@ -1009,8 +1058,8 @@ mod tests {
                     out.push(l);
                 }
             }
-            let (fund, resid) = harmonic_split(&out, 1000.0, 20);
-            resid / fund.max(1e-9)
+            let (fund, harm, _) = harmonic_split(&out, 1000.0, 20);
+            harm / fund.max(1e-9)
         };
         let clean = thd_at(0.3, 0.5);
         let slammed = thd_at(1.0, 0.9);
@@ -1078,7 +1127,7 @@ mod tests {
                     out.push(l);
                 }
             }
-            let (_, resid) = harmonic_split(&out, 1000.0, 23);
+            let (_, _, resid) = harmonic_split(&out, 1000.0, 23);
             resid
         };
         let silent_floor = residual(false);
@@ -1166,7 +1215,9 @@ mod tests {
                 / periods.len() as f32;
             var.sqrt()
         };
-        assert!(period_spread(1.0) > 2.0 * period_spread(0.0));
+        let s1 = period_spread(1.0);
+        let s0 = period_spread(0.0);
+        assert!(s1 > 2.0 * s0, "wow must wander the pitch: {} vs {}", s1, s0);
     }
 
     #[test]
@@ -1265,6 +1316,13 @@ mod tests {
         assert!(acc.is_finite());
         let elapsed = start.elapsed().as_secs_f32();
         let audio_time = n as f32 / FS;
+        println!(
+            "ferric engine: {:.1}x realtime ({} ch pairs, {}x OS, {} layers)",
+            audio_time / elapsed,
+            2,
+            OS,
+            N_LAYERS
+        );
         if !cfg!(debug_assertions) {
             assert!(
                 elapsed < audio_time * 0.5,

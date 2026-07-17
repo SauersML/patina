@@ -7,6 +7,8 @@ mod filter;
 mod hpf;
 mod adaa;
 mod fuzz;
+mod noise;
+mod spring;
 mod reverb;
 mod chorus;
 mod tape;
@@ -126,39 +128,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (SampleFormat::I16, 44100),
     ];
     
-    // Find the best config
+    // Walk the preference list in order (outer loop) so the MOST preferred
+    // format wins, not just the first device config that matches any of them
     let mut selected_config = None;
-    let mut fallback_config = None;
-
-    // First try to find one of our preferred configs
-    for supported_config in device.supported_output_configs().expect("error querying configs") {
-        // Save the first config as a fallback
-        if fallback_config.is_none() {
-            fallback_config = Some(supported_config.clone());
-        }
-        
-        let format = supported_config.sample_format();
-        let min_rate = supported_config.min_sample_rate().0;
-        let max_rate = supported_config.max_sample_rate().0;
-        
-        // Check if this config matches any of our preferred formats
-        for &(preferred_format, preferred_rate) in &preferred_formats {
-            if format == preferred_format && 
-               min_rate <= preferred_rate && max_rate >= preferred_rate {
-                // Found a match with one of our preferred configs
-                selected_config = Some(supported_config.with_sample_rate(cpal::SampleRate(preferred_rate)));
-                break;
+    'search: for &(preferred_format, preferred_rate) in &preferred_formats {
+        for supported_config in device.supported_output_configs().expect("error querying configs") {
+            if supported_config.sample_format() == preferred_format
+                && supported_config.min_sample_rate().0 <= preferred_rate
+                && supported_config.max_sample_rate().0 >= preferred_rate
+            {
+                selected_config =
+                    Some(supported_config.with_sample_rate(cpal::SampleRate(preferred_rate)));
+                break 'search;
             }
         }
-        
-        if selected_config.is_some() {
-            break;
-        }
     }
-    
-    // Use fallback if no preferred config found
+
+    // Use the device's first config if no preferred one is available
     let supported_config = selected_config.unwrap_or_else(|| {
-        fallback_config.expect("no supported config found").with_max_sample_rate()
+        device
+            .supported_output_configs()
+            .expect("error querying configs")
+            .next()
+            .expect("no supported config found")
+            .with_max_sample_rate()
     });
     
     println!("Selected output config: {:?}", supported_config);

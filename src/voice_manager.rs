@@ -4,6 +4,8 @@ use crate::chorus::{Chorus, ChorusMode};
 use crate::oscillator::Waveform;
 use crate::tape::Tape;
 use crate::fuzz::Fuzz;
+use crate::noise::NoiseSource;
+use crate::spring::SpringReverb;
 use std::collections::VecDeque;
 
 /// Samples kept for the UI oscilloscope display.
@@ -23,6 +25,8 @@ pub struct ParamValues {
     pub saturation: f32,
     pub hpf_cutoff: f32,
     pub fuzz: f32,
+    pub noise: f32,
+    pub spring: f32,
     pub attack: f32,
     pub decay: f32,
     pub sustain: f32,
@@ -55,6 +59,8 @@ impl Default for ParamValues {
             saturation: 1.0,
             hpf_cutoff: 16.0,
             fuzz: 0.0,
+            noise: 0.0,
+            spring: 0.0,
             attack: 0.1,
             decay: 0.1,
             sustain: 0.7,
@@ -103,6 +109,9 @@ pub struct VoiceManager {
     chorus: Chorus,
     tape: Tape,
     fuzz: Fuzz,
+    noise_source: NoiseSource,
+    noise_gain: f32, // smoothed
+    spring: SpringReverb,
     note_counter: u64,
     pub params: ParamValues,
     pub scope: VecDeque<f32>,
@@ -122,6 +131,9 @@ impl VoiceManager {
             chorus: Chorus::new(sample_rate),
             tape: Tape::new(sample_rate),
             fuzz: Fuzz::new(),
+            noise_source: NoiseSource::new(),
+            noise_gain: 0.0,
+            spring: SpringReverb::new(sample_rate),
             note_counter: 0,
             params,
             scope: VecDeque::with_capacity(SCOPE_LEN),
@@ -311,12 +323,31 @@ impl VoiceManager {
         self.fuzz.set_amount(self.params.fuzz);
     }
 
+    pub fn set_noise(&mut self, level: f32) {
+        self.params.noise = level.clamp(0.0, 1.0);
+    }
+
+    pub fn set_spring(&mut self, wet: f32) {
+        self.params.spring = wet.clamp(0.0, 1.0);
+        self.spring.set_wet(self.params.spring);
+    }
+
     pub fn render_next(&mut self) -> (f32, f32) {
+        // One shared noise generator distributed to every active voice
+        // (903A / Juno-106 architecture) — filtered per voice, gated by
+        // each voice's envelope, but a single correlated source
+        self.noise_gain += (self.params.noise - self.noise_gain) * 0.001;
+        let noise = if self.noise_gain > 1e-4 {
+            self.noise_source.next() * self.noise_gain * 0.8
+        } else {
+            0.0
+        };
+
         let mut left = 0.0;
         let mut right = 0.0;
         for voice in &mut self.voices {
             if voice.is_active() {
-                let (l, r) = voice.render_next();
+                let (l, r) = voice.render_next(noise);
                 left += l;
                 right += r;
             }
@@ -332,6 +363,7 @@ impl VoiceManager {
         // chorus with their own internal dry/wet; tape sits last, as if the
         // whole mix were bounced to cassette
         let (left, right) = self.fuzz.process(left, right);
+        let (left, right) = self.spring.process(left, right);
         let (left, right) = self.reverb.process(left, right);
         let (left, right) = self.chorus.process(left, right);
         let (left, right) = self.tape.process(left, right);

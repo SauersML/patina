@@ -34,8 +34,7 @@ pub enum ChorusMode {
 
 struct LowPassFilter {
     prev: f32,
-    cutoff: f32,
-    resonance: f32,
+    alpha: f32,
 }
 
 struct HighPassFilter {
@@ -83,9 +82,9 @@ impl Chorus {
             rate: 0.5,
             depth: 0.5,
             voices: vec![
-                Voice::new(0.513, 0.515, 0.7),
-                Voice::new(0.75, 0.753, 0.6),
-                Voice::new(0.95, 0.953, 0.5),
+                Voice::new(0.513, 0.515, 0.007),
+                Voice::new(0.75, 0.753, 0.006),
+                Voice::new(0.95, 0.953, 0.005),
             ],
             wet_dry_mix: 0.5,
         }
@@ -102,7 +101,9 @@ impl Chorus {
     pub fn set_depth(&mut self, depth: f32) {
         self.depth = depth.clamp(0.0, 1.0);
         for voice in &mut self.voices {
-            voice.depth = self.depth * (0.9 + rand::thread_rng().gen::<f32>() * 0.2);
+            // Knob is 0..1; voice depth is the LFO delay swing in seconds.
+            // Full depth = 10 ms, matching the scale of the mode presets.
+            voice.depth = self.depth * 0.010 * (0.9 + rand::thread_rng().gen::<f32>() * 0.2);
         }
     }
 
@@ -195,14 +196,23 @@ impl Chorus {
             let lfo_right = ((2.0 * PI * voice.phase_right).sin() * 0.5 + 0.51) * 0.5 +
                             ((2.0 * PI * voice.phase_right * 1.1).sin() * 0.5 + 0.5) * 0.5;
 
-            let delay_left = (voice.smooth_depth * self.sample_rate * lfo_left).min(self.size as f32 - 1.0);
-            let delay_right = (voice.smooth_depth * self.sample_rate * lfo_right).min(self.size as f32 - 1.0);
+            let max_delay = self.size as f32 - 3.0;
+            let delay_left =
+                (voice.smooth_depth * self.sample_rate * lfo_left).clamp(1.0, max_delay);
+            let delay_right =
+                (voice.smooth_depth * self.sample_rate * lfo_right).clamp(1.0, max_delay);
 
-            let index_left = (self.index as f32 - delay_left + self.size as f32) as usize % self.size;
-            let index_right = (self.index as f32 - delay_right + self.size as f32) as usize % self.size;
+            // The newest sample sits at index-1 (the write pointer has
+            // already advanced). Interpolate at the true fractional position
+            // so a sweeping delay never jumps at integer boundaries.
+            let pos_left = self.index as f32 - 1.0 - delay_left + 2.0 * self.size as f32;
+            let pos_right = self.index as f32 - 1.0 - delay_right + 2.0 * self.size as f32;
 
-            let frac_left = delay_left.fract();
-            let frac_right = delay_right.fract();
+            let index_left = pos_left as usize % self.size;
+            let index_right = pos_right as usize % self.size;
+
+            let frac_left = pos_left.fract();
+            let frac_right = pos_right.fract();
 
             let sample_left = cubic_interpolate(&[
                 self.buffer_left[(index_left + self.size - 1) % self.size],
@@ -245,19 +255,16 @@ fn cubic_interpolate(y: &[f32; 4], mu: f32) -> f32 {
 
 impl LowPassFilter {
     fn new(sample_rate: f32) -> Self {
+        // BBD-style darkening of the wet path: one pole at 8 kHz
         Self {
             prev: 0.0,
-            cutoff: 8000.0 / sample_rate,
-            resonance: 0.5,
+            alpha: 1.0 - (-2.0 * PI * 8000.0 / sample_rate).exp(),
         }
     }
 
     fn process(&mut self, input: f32) -> f32 {
-        let alpha = self.cutoff / (self.cutoff + 1.0);
-        let resonance_factor = self.resonance.clamp(0.0, 0.99);
-        let output = self.prev + alpha * (input - self.prev + resonance_factor * (self.prev - input));
-        self.prev = output;
-        output
+        self.prev += self.alpha * (input - self.prev);
+        self.prev
     }
 }
 
@@ -318,5 +325,40 @@ impl Voice {
             depth,
             smooth_depth: depth,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn off_is_transparent() {
+        let mut chorus = Chorus::new(48000.0);
+        chorus.set_mode(ChorusMode::Off);
+        for n in 0..1000 {
+            let x = (n as f32 * 0.03).sin() * 0.8;
+            let (l, r) = chorus.process(x, x);
+            assert_eq!(l, x);
+            assert_eq!(r, x);
+        }
+    }
+
+    /// The depth knob is 0..1 and must map to a few milliseconds of LFO
+    /// swing, never past the delay buffer (it used to be taken as seconds).
+    #[test]
+    fn full_depth_stays_bounded() {
+        let mut chorus = Chorus::new(48000.0);
+        chorus.set_mode(ChorusMode::IV);
+        chorus.set_rate(6.0);
+        chorus.set_depth(1.0);
+        let mut peak = 0.0f32;
+        for n in 0..96000 {
+            let x = (2.0 * PI * 440.0 * n as f32 / 48000.0).sin() * 0.5;
+            let (l, r) = chorus.process(x, x);
+            assert!(l.is_finite() && r.is_finite());
+            peak = peak.max(l.abs()).max(r.abs());
+        }
+        assert!(peak > 0.1 && peak <= 1.0, "peak out of range: {peak}");
     }
 }

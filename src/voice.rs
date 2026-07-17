@@ -35,6 +35,11 @@ pub struct Voice {
     /// the matched-transistor expo converters are never perfectly trimmed,
     /// so intervals stretch differently on every voice and chords bloom.
     voct_error: [f32; 3],
+    /// Shared drift: the three oscillators sit on one controller and supply,
+    /// so most of their movement is common (a serviced 901 bank beats no
+    /// faster than once per two seconds), with small residue per core.
+    common_drift: f32,
+    drift_rng: u32,
 }
 
 impl Voice {
@@ -88,6 +93,8 @@ impl Voice {
             pan_r: theta.sin(),
             filter_env_amount: 0.0,
             voct_error,
+            common_drift: 0.0,
+            drift_rng: seed.wrapping_mul(0x27D4_EB2F) | 1,
         };
         voice.set_detune(7.0);
         voice
@@ -151,14 +158,23 @@ impl Voice {
         self.held || !self.envelope.is_idle()
     }
 
-    pub fn render_next(&mut self) -> (f32, f32) {
+    pub fn render_next(&mut self, noise: f32) -> (f32, f32) {
         let amp_env = self.envelope.next_sample();
         let filter_env = self.filter_env.next_sample();
 
-        let osc = (self.oscs[0].next_sample()
-            + self.oscs[1].next_sample()
-            + self.oscs[2].next_sample())
-            * (1.0 / 3.0);
+        // Voice-shared drift walk (common controller and supply), roughly
+        // twice the size of each core's individual residue
+        self.drift_rng ^= self.drift_rng << 13;
+        self.drift_rng ^= self.drift_rng >> 17;
+        self.drift_rng ^= self.drift_rng << 5;
+        let r = (self.drift_rng >> 8) as f32 / (1u32 << 24) as f32 - 0.5;
+        self.common_drift = (self.common_drift + r * 2.4e-5) * 0.9995;
+
+        let osc = (self.oscs[0].next_sample(self.common_drift)
+            + self.oscs[1].next_sample(self.common_drift)
+            + self.oscs[2].next_sample(self.common_drift))
+            * (1.0 / 3.0)
+            + noise;
 
         // Cutoff modulation in octaves: filter envelope, key tracking, velocity
         let note = self.note.unwrap_or(60) as f32;
