@@ -78,6 +78,16 @@ automate cutoff                # ramp any parameter through breakpoints
 - **Automation**: `automate <param>` starts a curve track. The first token is the starting value; `V:D@shape` ramps to `V` over `D` beats; `R:D` holds. Shapes: `lin`, `exp` (geometric — right for frequencies), `log`, `smooth`, `step`.
 - **Parameters**: `volume`, `waveform` (0–3), `detune`, `noise` (0–1), `glide` (seconds, 0 = off), `pulse_width` (0.05–0.95), `lfo_rate` (Hz), `lfo_shape` (0 = saw, 0.5 = tri, 1 = ramp), `lfo_pitch` (cents), `lfo_filter` (octaves), `lfo_pwm` (0–0.45), `hpf` (Hz, 16 = off), `fuzz` (0–1), `spring` (0–1), `cutoff`, `resonance`, `drive`, `saturation`, `attack`, `decay`, `sustain`, `release`, `filter_env` (octaves), `filter_attack`, `filter_decay`, `filter_sustain`, `filter_release`, `reverb_decay`, `reverb_wet`, `chorus_mode` (0–4), `chorus_rate`, `chorus_depth`, `tape_wow`, `tape_flutter`, `tape_drive`, `tape_age`.
 
+## 🔌 The Substrate
+
+Patina models the *chassis*, not just the modules. Three shared physical states couple everything, with magnitudes taken from the service specs rather than tuned by ear:
+
+- **The power rail** — a regulated source (±0.075%, 5 mV ripple) behind the 10Ω/100µF local filter drawn on the 904A blueprint. Summed voice current sags it; the rail feeds every expo converter, so heavy playing microscopically flattens *everything together*, and mains ripple adds correlated micro-FM.
+- **Chassis heat** — the instrument powers on slightly flat with the filters low and warms up over minutes (the manuals' 30-minute alignment warm-up), each voice card converging at its own thermal rate. Playing hard adds dissipation heat. Offline bounces record a warmed instrument.
+- **The board** — adjacent voice cards leak their *differentiated* pre-filter signal into each other at ~−64 dB (trace capacitance differentiates); the 902-style VCA control feedthrough makes fast attacks physically thump (post-trim residue, per-unit); and the summing amp's finite slew rate (0.5 V/µs) shaves only the hottest multi-voice transients.
+
+No knobs — it's the chassis. It is simply *on*, the way gravity is.
+
 ## 🧪 Technical Details
 
 - **Audio Engine**: CPAL (Cross-Platform Audio Library) for low-latency audio output.

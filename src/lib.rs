@@ -21,6 +21,7 @@ pub mod render;
 pub mod reverb;
 pub mod song;
 pub mod spring;
+pub mod substrate;
 pub mod tape;
 pub mod voice;
 pub mod voice_manager;

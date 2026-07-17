@@ -228,7 +228,11 @@ fn tracked(text: &str) -> String {
 }
 
 fn legend(text: &str) -> RichText {
-    RichText::new(tracked(text)).size(9.5).color(TXT_LOW)
+    RichText::new(tracked(text)).size(10.0).color(TXT_MID)
+}
+
+fn sublegend(text: &str) -> RichText {
+    RichText::new(tracked(text)).size(8.5).color(TXT_LOW)
 }
 
 fn fmt_hz(v: f32) -> String {
@@ -593,6 +597,7 @@ fn card<R>(
     ui: &mut egui::Ui,
     title: &str,
     tex: Option<&mut Textures>,
+    fill_width: Option<f32>,
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
 ) {
     let bg_idx = ui.painter().add(Shape::Noop);
@@ -604,24 +609,17 @@ fn card<R>(
             bottom: 10,
         })
         .show(ui, |ui| {
-            // The card sizes to its CONTENT; never allocate available_width
-            // here (unbounded inside horizontal rows — it inflates the card
-            // and shoves siblings off-screen). The rule is drawn after
-            // layout, from the real rect.
-            let legend_rect = ui.label(legend(title)).rect;
+            // The card sizes to its content — measured widths only, never
+            // available_width (unbounded inside rows in egui 0.31). A row's
+            // LAST card passes the measured remainder to run flush right.
+            if let Some(w) = fill_width {
+                ui.set_min_width((w - 28.0).max(60.0));
+            }
+            ui.label(legend(title));
             ui.add_space(8.0);
             add_contents(ui);
-            legend_rect
         });
     let rect = inner.response.rect;
-    let legend_rect = inner.inner;
-    ui.painter().line_segment(
-        [
-            pos2(legend_rect.right() + 8.0, legend_rect.center().y),
-            pos2(rect.right() - 16.0, legend_rect.center().y),
-        ],
-        Stroke::new(1.0, HAIRLINE),
-    );
     if GPU_ON.load(AtomicOrdering::Relaxed) {
         // Living glass: record the rect; next frame's background pass
         // paints the pane underneath everything.
@@ -1056,17 +1054,21 @@ impl SynthUI {
             .show(ctx, |ui| {
                 ui.spacing_mut().item_spacing = vec2(11.0, 10.0);
                 self.draw_preset_strip(ui);
-                ui.horizontal(|ui| {
-                    self.draw_oscillator_card(ui, tex.as_mut());
-                    self.draw_envelope_card(ui, tex.as_mut());
+                let top = egui::Layout::left_to_right(egui::Align::TOP);
+                ui.with_layout(top, |ui| {
+                    self.draw_oscillator_card(ui, tex.as_mut(), None);
+                    let rest = ui.available_width();
+                    self.draw_envelope_card(ui, tex.as_mut(), Some(rest));
                 });
-                ui.horizontal(|ui| {
-                    self.draw_filter_card(ui, tex.as_mut());
-                    self.draw_filter_env_card(ui, tex.as_mut());
+                ui.with_layout(top, |ui| {
+                    self.draw_filter_card(ui, tex.as_mut(), None);
+                    let rest = ui.available_width();
+                    self.draw_filter_env_card(ui, tex.as_mut(), Some(rest));
                 });
-                ui.horizontal(|ui| {
-                    self.draw_lfo_card(ui, tex.as_mut());
-                    self.draw_effects_card(ui, tex.as_mut());
+                ui.with_layout(top, |ui| {
+                    self.draw_lfo_card(ui, tex.as_mut(), None);
+                    let rest = ui.available_width();
+                    self.draw_effects_card(ui, tex.as_mut(), Some(rest));
                 });
                 self.draw_scope(ui);
             });
@@ -1198,7 +1200,12 @@ impl SynthUI {
             });
         });
         ui.add_space(10.0);
-        let rail = ui.min_rect().expand2(vec2(20.0, 12.0));
+        let screen = ui.ctx().screen_rect();
+        let core = ui.min_rect().expand2(vec2(0.0, 12.0));
+        let rail = Rect::from_min_max(
+            pos2(screen.left(), core.top().min(screen.top())),
+            pos2(screen.right(), core.bottom()),
+        );
         if let Some(tex) = &self.textures {
             let uv_w = (rail.width() / 1024.0).clamp(0.35, 1.0);
             ui.painter().set(
@@ -1219,8 +1226,8 @@ impl SynthUI {
         }
     }
 
-    fn draw_oscillator_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>) {
-        card(ui, "Oscillator", tex, |ui| {
+    fn draw_oscillator_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>, fill: Option<f32>) {
+        card(ui, "Oscillator", tex, fill, |ui| {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.add_space(10.0);
@@ -1258,8 +1265,8 @@ impl SynthUI {
         });
     }
 
-    fn draw_envelope_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>) {
-        card(ui, "Envelope", tex, |ui| {
+    fn draw_envelope_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>, fill: Option<f32>) {
+        card(ui, "Envelope", tex, fill, |ui| {
             ui.horizontal(|ui| {
                 if knob(ui, "Attack", &mut self.attack, 0.01, 2.0, 0.1, true, fmt_time) {
                     self.voice_manager.lock().set_attack(self.attack);
@@ -1277,8 +1284,8 @@ impl SynthUI {
         });
     }
 
-    fn draw_filter_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>) {
-        card(ui, "Filter", tex, |ui| {
+    fn draw_filter_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>, fill: Option<f32>) {
+        card(ui, "Filter", tex, fill, |ui| {
             ui.horizontal(|ui| {
                 if knob(ui, "Cutoff", &mut self.filter_cutoff, 20.0, 20000.0, 15000.0, true, fmt_hz) {
                     self.voice_manager.lock().set_filter_cutoff(self.filter_cutoff);
@@ -1299,8 +1306,8 @@ impl SynthUI {
         });
     }
 
-    fn draw_filter_env_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>) {
-        card(ui, "Filter Envelope", tex, |ui| {
+    fn draw_filter_env_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>, fill: Option<f32>) {
+        card(ui, "Filter Envelope", tex, fill, |ui| {
             ui.horizontal(|ui| {
                 if knob(ui, "Amount", &mut self.fenv_amount, -5.0, 5.0, 0.0, false, |v| {
                     format!("{:+.1} oct", v)
@@ -1323,8 +1330,8 @@ impl SynthUI {
         });
     }
 
-    fn draw_lfo_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>) {
-        card(ui, "LFO", tex, |ui| {
+    fn draw_lfo_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>, fill: Option<f32>) {
+        card(ui, "LFO", tex, fill, |ui| {
             ui.horizontal(|ui| {
                 if knob(ui, "Rate", &mut self.lfo_rate, 0.1, 30.0, 1.0, true, |v| {
                     format!("{:.2} Hz", v)
@@ -1361,11 +1368,11 @@ impl SynthUI {
         });
     }
 
-    fn draw_effects_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>) {
-        card(ui, "Effects", tex, |ui| {
+    fn draw_effects_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>, fill: Option<f32>) {
+        card(ui, "Effects", tex, fill, |ui| {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
-                    ui.label(legend("Chorus"));
+                    ui.label(sublegend("Chorus"));
                     ui.add_space(4.0);
                     let modes = ["OFF", "I", "II", "III", "IV"];
                     let selected = match self.chorus_mode {
@@ -1399,7 +1406,7 @@ impl SynthUI {
                 });
                 vseparator(ui, 150.0);
                 ui.vertical(|ui| {
-                    ui.label(legend("Reverb"));
+                    ui.label(sublegend("Reverb"));
                     ui.add_space(34.0);
                     ui.horizontal(|ui| {
                         if knob(ui, "Decay", &mut self.reverb_decay, 0.0, 0.99, 0.5, false, fmt_pct) {
@@ -1415,7 +1422,7 @@ impl SynthUI {
                 });
                 vseparator(ui, 150.0);
                 ui.vertical(|ui| {
-                    ui.label(legend("Tape"));
+                    ui.label(sublegend("Tape"));
                     ui.add_space(34.0);
                     ui.horizontal(|ui| {
                         if knob(ui, "Wow", &mut self.tape_wow, 0.0, 1.0, 0.0, false, fmt_pct) {
@@ -1434,7 +1441,7 @@ impl SynthUI {
                 });
                 vseparator(ui, 150.0);
                 ui.vertical(|ui| {
-                    ui.label(legend("Fuzz"));
+                    ui.label(sublegend("Fuzz"));
                     ui.add_space(34.0);
                     if knob(ui, "Germanium", &mut self.fuzz, 0.0, 1.0, 0.0, false, fmt_pct) {
                         self.voice_manager.lock().set_fuzz(self.fuzz);
@@ -1448,7 +1455,8 @@ impl SynthUI {
     /// signal itself, trigger-stabilized on a rising zero crossing.
     fn draw_scope(&self, ui: &mut egui::Ui) {
         let width = ui.available_width();
-        let (rect, _) = ui.allocate_exact_size(vec2(width, 58.0), Sense::hover());
+        let height = ui.available_height().clamp(58.0, 220.0);
+        let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
         let painter = ui.painter();
         painter.rect_filled(rect, CornerRadius::same(10), INSET);
         painter.rect_stroke(rect, CornerRadius::same(10), Stroke::new(1.0, HAIRLINE), egui::StrokeKind::Inside);

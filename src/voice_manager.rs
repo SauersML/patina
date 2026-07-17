@@ -7,7 +7,13 @@ use crate::fuzz::Fuzz;
 use crate::noise::NoiseSource;
 use crate::spring::SpringReverb;
 use crate::lfo::Lfo;
+use crate::substrate::{SlewLimiter, Substrate};
 use std::collections::VecDeque;
+
+/// Capacitive trace-to-trace coupling between adjacent voice cards. The
+/// coupling differentiates (it is a capacitor), so the bleed is presence-
+/// tilted; this coefficient puts it around -64 dB.
+const CROSSTALK: f32 = 0.0008;
 
 /// Samples kept for the UI oscilloscope display.
 const SCOPE_LEN: usize = 2048;
@@ -130,6 +136,10 @@ pub struct VoiceManager {
     noise_gain: f32, // smoothed
     spring: SpringReverb,
     lfo: Lfo,
+    substrate: Substrate,
+    prev_current: f32,
+    slew_left: SlewLimiter,
+    slew_right: SlewLimiter,
     sample_rate: f32,
     /// CV (octaves from A440) of the most recently triggered note — the
     /// "hold capacitor" that glide charges from (US 3,991,645).
@@ -165,6 +175,10 @@ impl VoiceManager {
             noise_gain: 0.0,
             spring: SpringReverb::new(sample_rate),
             lfo: Lfo::new(sample_rate),
+            substrate: Substrate::new(sample_rate),
+            prev_current: 0.0,
+            slew_left: SlewLimiter::new(sample_rate),
+            slew_right: SlewLimiter::new(sample_rate),
             sample_rate,
             last_note_cv: None,
             bend_target: 1.0,
@@ -179,6 +193,11 @@ impl VoiceManager {
             dc_left: DcBlocker::new(),
             dc_right: DcBlocker::new(),
         }
+    }
+
+    /// Skip the chassis warm-up (offline bounces record a warmed instrument).
+    pub fn warm_up(&mut self) {
+        self.substrate.force_warm();
     }
 
     /// Marks which MIDI notes are currently held, for the UI keyboard display.
@@ -485,17 +504,46 @@ impl VoiceManager {
         let lfo_cutoff_oct = lfo * self.params.lfo_filter;
         let pulse_width = self.params.pulse_width + lfo * self.params.lfo_pwm;
 
+        // The shared chassis: rail sag/ripple driven by last sample's summed
+        // current draw, warm-up heat — read by every voice this sample
+        let substrate = self.substrate.step(self.prev_current);
+
+        // Each card's neighbor bleed (capacitive: the neighbor's
+        // differentiated pre-filter node from last sample)
+        let mut deltas = [0.0f32; 16];
+        let n = self.voices.len().min(16);
+        for (i, voice) in self.voices.iter().enumerate().take(16) {
+            if voice.is_active() {
+                deltas[i] = voice.prefilter_delta();
+            }
+        }
+
         let mut left = 0.0;
         let mut right = 0.0;
-        for voice in &mut self.voices {
+        for (i, voice) in self.voices.iter_mut().enumerate() {
             if voice.is_active() {
-                let (l, r) = voice.render_next(noise, pitch_mult, lfo_cutoff_oct, pulse_width);
+                let bleed = deltas[(i + n - 1) % n.max(1)] * CROSSTALK;
+                let (l, r) = voice.render_next(
+                    noise,
+                    pitch_mult,
+                    lfo_cutoff_oct,
+                    pulse_width,
+                    substrate,
+                    bleed,
+                );
                 left += l;
                 right += r;
             }
         }
+        // What the supply just delivered — next sample's rail load
+        self.prev_current = left.abs() + right.abs();
 
         // Smoothed master gain: fixed headroom, no zipper on volume automation
+        // The summing amp sees the full multi-voice swing; its finite slew
+        // rate shaves only the hottest, fastest edges (transient
+        // intermodulation) — then the master gain scales the result
+        left = self.slew_left.process(left);
+        right = self.slew_right.process(right);
         self.gain += (self.params.volume - self.gain) * 0.0008;
         let g = self.gain * 0.7;
         left *= g;

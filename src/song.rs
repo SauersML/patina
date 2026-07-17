@@ -266,6 +266,8 @@ pub fn load_song(path: &str) -> Result<Vec<SongEvent>, String> {
 /// with a few seconds of tail for reverb and tape print-through to ring out.
 pub fn render_offline(events: &[SongEvent], sample_rate: f32) -> Vec<(f32, f32)> {
     let mut vm = VoiceManager::new(sample_rate, 8);
+    // A bounce records a warmed-up instrument, not a cold power-on
+    vm.warm_up();
     let end = events.last().map(|e| e.time).unwrap_or(0.0) + 4.0;
     let total = (end * sample_rate as f64) as usize;
     let mut out = Vec::with_capacity(total);

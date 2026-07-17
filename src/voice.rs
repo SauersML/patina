@@ -2,6 +2,7 @@ use crate::oscillator::{Oscillator, Waveform};
 use crate::envelope::Envelope;
 use crate::filter::LadderFilter;
 use crate::hpf::HighPassLadder;
+use crate::substrate::SubstrateState;
 
 /// Fixed keyboard tracking: how much the filter follows note pitch, in
 /// octaves of cutoff per octave of pitch.
@@ -50,6 +51,17 @@ pub struct Voice {
     /// Juno-style sub-oscillator level: the first oscillator's divide-by-two
     /// square, mixed in before the filter.
     sub_level: f32,
+    /// This card's sensitivity to the shared chassis state (rail and heat):
+    /// every board reacts to the same environment, each by its own amount.
+    substrate_sens: f32,
+    /// 902-style VCA control feedthrough, post-trim residue: the envelope's
+    /// edge couples into the audio — the "thump" of a fast hardware attack.
+    vca_feedthrough: f32,
+    prev_env: f32,
+    /// Pre-filter node history, exposed so the neighbor card can pick up
+    /// its capacitively-coupled (differentiated) bleed.
+    prev_prefilter: f32,
+    prefilter_delta: f32,
 }
 
 impl Voice {
@@ -84,6 +96,8 @@ impl Voice {
             (rand01() - 0.5) * 3.0,
             (rand01() - 0.5) * 3.0,
         ];
+        let substrate_sens = 0.8 + rand01() * 0.4;
+        let vca_feedthrough = rand01() * 0.35;
 
         let mut voice = Self {
             oscs: [
@@ -108,6 +122,11 @@ impl Voice {
             glide_offset: 0.0,
             glide_k: 1.0,
             sub_level: 0.0,
+            substrate_sens,
+            vca_feedthrough,
+            prev_env: 0.0,
+            prev_prefilter: 0.0,
+            prefilter_delta: 0.0,
         };
         voice.set_detune(7.0);
         voice
@@ -192,14 +211,24 @@ impl Voice {
         self.held || !self.envelope.is_idle()
     }
 
+    /// The change of this card's pre-filter node last sample — what the
+    /// neighbor's trace capacitance picks up.
+    pub fn prefilter_delta(&self) -> f32 {
+        self.prefilter_delta
+    }
+
     /// `pitch_mult`, `lfo_cutoff_oct`, and `pulse_width` carry the global
-    /// LFO modulation — one LFO drives every voice together.
+    /// LFO modulation — one LFO drives every voice together. `substrate` is
+    /// the shared chassis state (rail sag, ripple, heat), and `bleed` the
+    /// neighboring card's capacitively coupled signal.
     pub fn render_next(
         &mut self,
         noise: f32,
         pitch_mult: f32,
         lfo_cutoff_oct: f32,
         pulse_width: f32,
+        substrate: SubstrateState,
+        bleed: f32,
     ) -> (f32, f32) {
         let amp_env = self.envelope.next_sample();
         let filter_env = self.filter_env.next_sample();
@@ -220,26 +249,42 @@ impl Voice {
         } else {
             pitch_mult
         };
+        // Chassis coupling: this card's share of rail sag/ripple and heat
+        let pitch_mult =
+            pitch_mult * (1.0 + (substrate.pitch_mult - 1.0) * self.substrate_sens);
 
         let osc = (self.oscs[0].next_sample(self.common_drift, pitch_mult, pulse_width)
             + self.oscs[1].next_sample(self.common_drift, pitch_mult, pulse_width)
             + self.oscs[2].next_sample(self.common_drift, pitch_mult, pulse_width))
             * (1.0 / 3.0)
             + self.oscs[0].sub() * self.sub_level * 0.9
-            + noise;
+            + noise
+            + bleed;
+
+        // Remember the pre-filter node for the neighbor's trace capacitance
+        self.prefilter_delta = osc - self.prev_prefilter;
+        self.prev_prefilter = osc;
 
         // Cutoff modulation in octaves: filter envelope, key tracking, velocity
         let note = self.note.unwrap_or(60) as f32;
         let key_oct = (note - 60.0) / 12.0 * KEY_TRACK;
         let vel_oct = (self.velocity - 0.5) * VEL_TRACK;
-        let mod_oct = filter_env * self.filter_env_amount + key_oct + vel_oct + lfo_cutoff_oct;
+        let mod_oct = filter_env * self.filter_env_amount
+            + key_oct
+            + vel_oct
+            + lfo_cutoff_oct
+            + substrate.cutoff_oct * self.substrate_sens;
         let cutoff_mult = mod_oct.exp2();
 
         let filtered = self.hpf.process(self.filter.process(osc, cutoff_mult));
 
         // Gentle velocity curve on amplitude
         let vel_amp = 0.3 + 0.7 * self.velocity * self.velocity;
-        let sample = filtered * amp_env * vel_amp;
+        // 902 control feedthrough: the envelope's edge couples into the
+        // audio path (post-trim residue) — fast attacks thump, physically
+        let feedthrough = (amp_env - self.prev_env) * self.vca_feedthrough;
+        self.prev_env = amp_env;
+        let sample = filtered * amp_env * vel_amp + feedthrough;
 
         (sample * self.pan_l, sample * self.pan_r)
     }
