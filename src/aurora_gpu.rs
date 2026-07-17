@@ -242,28 +242,61 @@ fn fbm(p: vec2<f32>) -> f32 {
   return v;
 }
 
+// One drifting soap bubble: thin-film rim, faint fill, a specular bead.
+// `blur` softens and widens it — the frosted panes diffuse what floats by.
+fn bubble(w: vec2<f32>, c: vec2<f32>, r: f32, t: f32, blur: f32) -> vec3<f32> {
+  let d = length(w - c) / r;
+  let soft = 0.06 + blur * 0.55;
+  let rimw = 0.10 + blur * 0.40;
+  let ring = smoothstep(1.0 - rimw - soft, 1.0 - rimw, d) * (1.0 - smoothstep(1.0, 1.0 + soft, d));
+  // Thin-film iridescence around the rim
+  let ang = atan2(w.y - c.y, w.x - c.x);
+  let film = vec3<f32>(
+    0.75 + 0.25 * sin(ang * 3.0 + t * 0.3),
+    0.85 + 0.15 * sin(ang * 3.0 + 2.1 + t * 0.3),
+    0.95
+  );
+  var glow = film * ring * (0.38 - blur * 0.20);
+  // Interior lens brightening + specular bead upper-left
+  glow = glow + vec3<f32>(1.0, 1.0, 1.0) * (1.0 - smoothstep(0.0, 1.0, d)) * 0.035;
+  let bead = (w - c) / r + vec2<f32>(0.38, 0.42);
+  glow = glow + vec3<f32>(1.0, 1.0, 1.0) * exp(-dot(bead, bead) * (60.0 - blur * 45.0)) * (0.5 - blur * 0.3);
+  return glow;
+}
+
 // The Frutiger Aero sky. `blur` widens every light source analytically —
 // this IS the glass blur, computed in closed form.
 fn sky(w: vec2<f32>, t: f32, blur: f32) -> vec3<f32> {
   var col = mix(
-    vec3<f32>(0.22, 0.50, 0.83),
-    vec3<f32>(0.72, 0.90, 0.95),
+    vec3<f32>(0.20, 0.48, 0.82),
+    vec3<f32>(0.70, 0.90, 0.95),
     pow(clamp(w.y, 0.0, 1.0), 1.25)
   );
   // Sun bloom, breathing
   let sun_pos = vec2<f32>(0.20 + 0.015 * sin(t * 0.11), 0.14 + 0.010 * sin(t * 0.07 + 1.7));
   let sr = 0.26 * (1.0 + blur * 1.4) * (1.0 + 0.03 * sin(t * 0.23));
   let sd = (w - sun_pos) / sr;
-  col = col + vec3<f32>(1.00, 0.95, 0.78) * exp(-dot(sd, sd)) * 0.75;
+  col = col + vec3<f32>(1.00, 0.97, 0.88) * exp(-dot(sd, sd)) * 0.72;
+  // Sun rays: gentle radial spokes, erased by the frost
+  let sv = w - sun_pos;
+  let ray = max(cos(atan2(sv.y, sv.x) * 9.0 - t * 0.05), 0.0);
+  col = col + vec3<f32>(1.0, 0.98, 0.90) * ray * ray * exp(-length(sv) * 2.6) * 0.10 * (1.0 - blur);
   // Aqua counter-glow low right
   let gd = (w - vec2<f32>(0.86, 0.80)) / (0.45 * (1.0 + blur));
   col = col + vec3<f32>(0.28, 0.82, 0.72) * exp(-dot(gd, gd)) * 0.20;
-  // Drifting cloud wisps (detail dies under blur)
-  let cl = fbm(w * vec2<f32>(3.0, 6.5) + vec2<f32>(t * 0.012, 0.0));
-  let clouds = smoothstep(0.52, 0.80, cl) * (1.0 - blur * 0.6);
-  col = mix(col, vec3<f32>(1.0, 1.0, 1.0), clouds * 0.24);
+  // Clouds at two scales: broad masses and crisp streaks; detail dies
+  // under blur, which is what makes the frost legible
+  let cl1 = fbm(w * vec2<f32>(2.6, 5.5) + vec2<f32>(t * 0.010, 0.0));
+  let cl2 = fbm(w * vec2<f32>(7.0, 15.0) + vec2<f32>(t * 0.022, 3.7));
+  let broad = smoothstep(0.50, 0.80, cl1) * (1.0 - blur * 0.55);
+  let crisp = smoothstep(0.55, 0.78, cl2) * (1.0 - blur * 0.95);
+  col = mix(col, vec3<f32>(1.0, 1.0, 1.0), broad * 0.28 + crisp * 0.14);
   // Green horizon glow
   col = col + vec3<f32>(0.25, 0.52, 0.22) * 0.12 * smoothstep(0.84, 1.0, w.y);
+  // Aero bubbles drifting upward, wrapping around
+  col = col + bubble(w, vec2<f32>(0.70 + 0.03 * sin(t * 0.10), fract(0.90 - t * 0.0045)), 0.055, t, blur);
+  col = col + bubble(w, vec2<f32>(0.34 + 0.02 * sin(t * 0.13 + 2.0), fract(0.55 - t * 0.0032)), 0.034, t, blur);
+  col = col + bubble(w, vec2<f32>(0.91 + 0.02 * sin(t * 0.08 + 4.0), fract(0.30 - t * 0.0055)), 0.042, t, blur);
   return col;
 }
 

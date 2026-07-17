@@ -41,10 +41,10 @@ const WELL_TXT: Color32 = Color32::from_rgb(0x7f, 0x96, 0xa0);
 const WELL_TXT_HOVER: Color32 = Color32::from_rgb(0xc6, 0xd8, 0xde);
 const WELL_LINE: Color32 = Color32::from_rgba_premultiplied(0xff, 0xff, 0xff, 22);
 
-const AMBER: Color32 = Color32::from_rgb(0xd8, 0x87, 0x1f);
-const AMBER_HI: Color32 = Color32::from_rgb(0xf6, 0xa5, 0x1f);
-const AMBER_DEEP: Color32 = Color32::from_rgb(0xb0, 0x6f, 0x1a);
-const AMBER_INK: Color32 = Color32::from_rgb(0x4f, 0x34, 0x07);
+const AMBER: Color32 = Color32::from_rgb(0x12, 0x9e, 0xc0);
+const AMBER_HI: Color32 = Color32::from_rgb(0x1e, 0xc2, 0xe8);
+const AMBER_DEEP: Color32 = Color32::from_rgb(0x0d, 0x7c, 0x98);
+const AMBER_INK: Color32 = Color32::from_rgb(0x05, 0x33, 0x40);
 
 const CYAN: Color32 = Color32::from_rgb(0x35, 0xdf, 0xf5);
 
@@ -76,15 +76,9 @@ struct Textures {
     backdrop: TextureHandle,
     backdrop_rgb: Vec<[f32; 3]>,
     backdrop_size: [usize; 2],
-    wood: TextureHandle,
-    knob: TextureHandle,
     /// Baked frosted-glass panels, keyed by rounded screen rect.
     frost: HashMap<(i32, i32, i32, i32), TextureHandle>,
 }
-
-/// The knob sprite's texture id (+1, 0 = unset), so the knob widget can use
-/// it without threading a handle through every call site.
-static KNOB_TEX_ID: AtomicU64 = AtomicU64::new(0);
 
 
 /// A quad whose top and bottom edges carry different vertex colors — the
@@ -98,6 +92,25 @@ fn gradient_quad(rect: Rect, top: Color32, bottom: Color32) -> Shape {
     mesh.add_triangle(0, 1, 2);
     mesh.add_triangle(2, 1, 3);
     Shape::mesh(mesh)
+}
+
+
+/// Graphite chrome rail: the same dark-device family as the wells and
+/// scope, replacing the walnut (blue + orange + brown never resolved).
+fn rail_shapes(rect: Rect) -> Vec<Shape> {
+    vec![
+        Shape::rect_filled(rect, CornerRadius::ZERO, Color32::from_rgb(0x14, 0x19, 0x1f)),
+        gradient_quad(
+            Rect::from_min_max(rect.min, pos2(rect.right(), rect.top() + rect.height() * 0.5)),
+            Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 16),
+            Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 0),
+        ),
+        gradient_quad(
+            Rect::from_min_max(pos2(rect.left(), rect.bottom() - 14.0), rect.max),
+            Color32::from_rgba_unmultiplied(0x00, 0x00, 0x00, 0),
+            Color32::from_rgba_unmultiplied(0x00, 0x00, 0x00, 90),
+        ),
+    ]
 }
 
 /// Frosted glass panel: stacked soft shadow, translucent cool fill, a light
@@ -317,7 +330,9 @@ fn knob(
         }
     }
 
-    let response = response.on_hover_cursor(CursorIcon::ResizeVertical);
+    let response = response
+        .on_hover_cursor(CursorIcon::ResizeVertical)
+        .on_hover_text("drag or scroll · ⇧ fine · double-click resets");
     let engaged = response.hovered() || response.dragged();
 
     let painter = ui.painter();
@@ -370,38 +385,30 @@ fn knob(
         if engaged { AMBER_HI } else { AMBER },
     );
 
-    // Cap: soft under-shadow, then the sphere-shaded gloss sprite
-    painter.circle_filled(
-        center + vec2(0.0, 1.4),
-        14.2,
-        Color32::from_rgba_unmultiplied(0, 0, 0, 100),
-    );
-    let knob_tex = KNOB_TEX_ID.load(AtomicOrdering::Relaxed);
-    if knob_tex > 0 {
-        let cap = Rect::from_center_size(center, Vec2::splat(28.0));
-        let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-        let tex_id = egui::TextureId::Managed(knob_tex - 1);
-        painter.image(tex_id, cap, uv, Color32::WHITE);
-        if engaged {
-            // Second translucent pass lifts the whole cap
-            painter.image(tex_id, cap, uv, Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 70));
-        }
+    // Committed 2D: a flat disc; the arc, ticks, and pointer carry it
+    let disc = if engaged {
+        Color32::from_rgb(0x28, 0x33, 0x3d)
     } else {
-        painter.circle_filled(center, 15.0, Color32::from_rgb(0x1a, 0x1c, 0x21));
-    }
-    if engaged {
-        painter.circle_stroke(
-            center,
-            17.0,
-            Stroke::new(1.5, Color32::from_rgba_unmultiplied(0x6f, 0xe3, 0xf2, 90)),
-        );
-    }
+        Color32::from_rgb(0x20, 0x29, 0x31)
+    };
+    painter.circle_filled(center, 14.0, disc);
+    painter.circle_stroke(
+        center,
+        14.0,
+        if engaged {
+            Stroke::new(1.2, Color32::from_rgba_unmultiplied(0x1e, 0xc2, 0xe8, 150))
+        } else {
+            Stroke::new(1.0, HAIRLINE_HI)
+        },
+    );
 
-    // Pointer — painted indicator line, like an engraved knob skirt
     let dir = vec2(end_angle.cos(), end_angle.sin());
     painter.line_segment(
-        [center + dir * 5.0, center + dir * 13.5],
-        Stroke::new(2.0, TXT),
+        [center + dir * 5.0, center + dir * 12.5],
+        Stroke::new(
+            2.0,
+            if engaged { AMBER_HI } else { Color32::from_rgb(0xee, 0xf4, 0xf6) },
+        ),
     );
 
     painter.text(
@@ -820,25 +827,10 @@ impl SynthUI {
                     panel_render::backdrop_image(8, 8, &rgb),
                     TextureOptions::LINEAR,
                 );
-                let wood = ctx.load_texture(
-                    "patina-wood",
-                    panel_render::render_wood(1024, 128),
-                    TextureOptions::LINEAR,
-                );
-                let knob = ctx.load_texture(
-                    "patina-knob",
-                    panel_render::render_knob(128),
-                    TextureOptions::LINEAR,
-                );
-                if let egui::TextureId::Managed(id) = knob.id() {
-                    KNOB_TEX_ID.store(id + 1, AtomicOrdering::Relaxed);
-                }
                 self.textures = Some(Textures {
                     backdrop,
                     backdrop_rgb: rgb,
                     backdrop_size: [8, 8],
-                    wood,
-                    knob,
                     frost: HashMap::new(),
                 });
             }
@@ -876,30 +868,10 @@ impl SynthUI {
             panel_render::backdrop_image(size[0], size[1], &rgb),
             TextureOptions::LINEAR,
         );
-        let (wood, knob) = if let Some(t) = self.textures.take() {
-            (t.wood, t.knob)
-        } else {
-            let wood = ctx.load_texture(
-                "patina-wood",
-                panel_render::render_wood(1024, 128),
-                TextureOptions::LINEAR,
-            );
-            let knob = ctx.load_texture(
-                "patina-knob",
-                panel_render::render_knob(128),
-                TextureOptions::LINEAR,
-            );
-            if let egui::TextureId::Managed(id) = knob.id() {
-                KNOB_TEX_ID.store(id + 1, AtomicOrdering::Relaxed);
-            }
-            (wood, knob)
-        };
         self.textures = Some(Textures {
             backdrop,
             backdrop_rgb: rgb,
             backdrop_size: size,
-            wood,
-            knob,
             frost: HashMap::new(),
         });
     }
@@ -1011,36 +983,23 @@ impl SynthUI {
                 bottom: 10,
             }))
             .show(ctx, |ui| {
-                // Walnut shelf under the keys, painted after layout
-                let bg_idx = ui.painter().add(Shape::Noop);
+                // Graphite shelf under the keys, painted after layout with
+                // an unclipped painter so it reaches the window edges
+                let screen = ui.ctx().screen_rect();
+                let painter = ui.painter().with_clip_rect(screen);
+                let bg_idx = painter.add(Shape::Noop);
                 self.draw_keyboard(ui);
-                ui.add_space(7.0);
-                ui.vertical_centered(|ui| {
-                    ui.label(
-                        RichText::new("Z–M  ·  Q–U  play      ↑ ↓  octave      drag / scroll knobs  ·  ⇧ fine  ·  double-click reset")
-                            .size(9.5)
-                            .color(Color32::from_rgba_unmultiplied(0xf0, 0xe4, 0xcd, 150)),
-                    );
-                });
-                let shelf = ui.min_rect().expand2(vec2(20.0, 9.5));
-                if let Some(tex) = &self.textures {
-                    let uv_w = (shelf.width() / 1024.0).clamp(0.35, 1.0);
-                    ui.painter().set(
-                        bg_idx,
-                        Shape::Vec(vec![
-                            Shape::image(
-                                tex.wood.id(),
-                                shelf,
-                                Rect::from_min_max(pos2(0.0, 0.0), pos2(uv_w, 1.0)),
-                                Color32::WHITE,
-                            ),
-                            Shape::line_segment(
-                                [shelf.left_top(), shelf.right_top()],
-                                Stroke::new(1.5, Color32::from_rgba_unmultiplied(0, 0, 0, 150)),
-                            ),
-                        ]),
-                    );
-                }
+                let core = ui.min_rect();
+                let shelf = Rect::from_min_max(
+                    pos2(screen.left(), core.top() - 9.5),
+                    pos2(screen.right(), screen.bottom()),
+                );
+                let mut shapes = rail_shapes(shelf);
+                shapes.push(Shape::line_segment(
+                    [shelf.left_top(), shelf.right_top()],
+                    Stroke::new(1.5, Color32::from_rgba_unmultiplied(0, 0, 0, 150)),
+                ));
+                painter.set(bg_idx, Shape::Vec(shapes));
             });
 
         let mut tex = self.textures.take();
@@ -1163,19 +1122,16 @@ impl SynthUI {
 
     /// Wordmark on the walnut top rail, octave stepper right.
     fn draw_header(&mut self, ui: &mut egui::Ui) {
-        let bg_idx = ui.painter().add(Shape::Noop);
+        let bg_idx = ui
+            .painter()
+            .with_clip_rect(ui.ctx().screen_rect())
+            .add(Shape::Noop);
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new(tracked("Patina"))
                     .size(14.0)
                     .strong()
-                    .color(IVORY),
-            );
-            ui.add_space(2.0);
-            ui.label(
-                RichText::new(tracked("polyphonic synthesizer"))
-                    .size(8.5)
-                    .color(Color32::from_rgba_unmultiplied(0xf0, 0xe4, 0xcd, 130)),
+                    .color(Color32::from_rgb(0xe8, 0xf2, 0xf5)),
             );
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1203,27 +1159,17 @@ impl SynthUI {
         let screen = ui.ctx().screen_rect();
         let core = ui.min_rect().expand2(vec2(0.0, 12.0));
         let rail = Rect::from_min_max(
-            pos2(screen.left(), core.top().min(screen.top())),
+            pos2(screen.left(), screen.top()),
             pos2(screen.right(), core.bottom()),
         );
-        if let Some(tex) = &self.textures {
-            let uv_w = (rail.width() / 1024.0).clamp(0.35, 1.0);
-            ui.painter().set(
-                bg_idx,
-                Shape::Vec(vec![
-                    Shape::image(
-                        tex.wood.id(),
-                        rail,
-                        Rect::from_min_max(pos2(0.0, 0.0), pos2(uv_w, 1.0)),
-                        Color32::WHITE,
-                    ),
-                    Shape::line_segment(
-                        [rail.left_bottom(), rail.right_bottom()],
-                        Stroke::new(1.5, Color32::from_rgba_unmultiplied(0, 0, 0, 160)),
-                    ),
-                ]),
-            );
-        }
+        let mut shapes = rail_shapes(rail);
+        shapes.push(Shape::line_segment(
+            [rail.left_bottom(), rail.right_bottom()],
+            Stroke::new(1.5, Color32::from_rgba_unmultiplied(0, 0, 0, 160)),
+        ));
+        ui.painter()
+            .with_clip_rect(screen)
+            .set(bg_idx, Shape::Vec(shapes));
     }
 
     fn draw_oscillator_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>, fill: Option<f32>) {
@@ -1455,7 +1401,7 @@ impl SynthUI {
     /// signal itself, trigger-stabilized on a rising zero crossing.
     fn draw_scope(&self, ui: &mut egui::Ui) {
         let width = ui.available_width();
-        let height = ui.available_height().clamp(58.0, 220.0);
+        let height = ui.available_height().clamp(58.0, 170.0);
         let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
         let painter = ui.painter();
         painter.rect_filled(rect, CornerRadius::same(10), INSET);
