@@ -1,88 +1,88 @@
-# Night Drive — a little synthwave piece for Patina
-# Am — F — C — G, three passes: bass+arp alone, then the lead joins.
-# Lush patch: wide unison detune, Juno chorus II, plucky filter envelope,
-# and a worn cassette master for the retro haze.
-# Play with:  patina --play songs/nightdrive.song
+# Ferris Wheel — a fairground waltz. Oom-pah-pah below, a music box
+# above, and halfway around the wheel the whole fairground lifts a minor
+# third — then eases back down to earth and the lights come on.
 
 bpm 100
-gate 0.85
+gate 0.8
 
-# --- patch setup at t=0 ---
-automate detune
+automate waveform
+1
+automate pulse_width
+0.3
+automate lfo_rate
+0.5
+automate lfo_pwm
+0.25
+automate osc2_wave
+0
+automate osc2_pitch
 12
-
+automate osc2_level
+0.4
+automate detune
+8
 automate attack
-0.008
-
+0.006
 automate decay
-0.3
-
+0.5
 automate sustain
-0.6
-
+0.5
 automate release
-0.3
-
+0.45
 automate filter_env
-1.6
-
+1.8
 automate filter_attack
-0.005
-
+0.002
 automate filter_decay
-0.35
-
+0.4
 automate filter_sustain
-0.2
-
+0.3
 automate filter_release
 0.4
-
+automate cutoff
+3200
+automate resonance
+0.8
 automate chorus_mode
-2 R:44 4 R:8
-
+2
 automate chorus_depth
 0.4
-
-# --- master bus: gentle, slightly wobbly cassette ---
-automate tape_wow
-0.25
-
-automate tape_flutter
-0.1
-
-automate tape_drive
-0.3
-
-automate tape_age
-0.25
-
-track bass vel=0.8
-A2:4 F2:4 C3:4 G2:4
-A2:4 F2:4 C3:4 G2:4
-A2:4 F2:4 C3:4 G2:4
-
-track arp vel=0.5 len=0.5
-A3 C4 E4 A4 E4 C4 E4 C4 | F3 A3 C4 F4 C4 A3 C4 A3 | C4 E4 G4 E4 C4 E4 G4 E4 | G3 B3 D4 G4 D4 B3 D4 B3
-A3 C4 E4 A4 E4 C4 E4 C4 | F3 A3 C4 F4 C4 A3 C4 A3 | C4 E4 G4 E4 C4 E4 G4 E4 | G3 B3 D4 G4 D4 B3 D4 B3
-A3 C4 E4 A4 E4 C4 E4 C4 | F3 A3 C4 F4 C4 A3 C4 A3 | C4 E4 G4 E4 C4 E4 G4 E4 | G3 B3 D4 G4 D4 B3 D4 B3
-
-track lead vel=0.9 len=0.5
-R:16
-E5:1 D5 C5 D5:1 E5:1 | C5:1 A4 C5 D5:1 C5:1 | E5:1 G5:1 E5:1 D5 C5 | D5:1 B4:1 D5 E5:1.5
-E5:1 D5 C5 D5:1 E5:1 | C5:1 A4 C5 D5:1 C5:1 | E5:1 G5:1 E5:1 D5 C5 | D5:1 B4:1 D5 E5:1.5
-
-track pad vel=0.7
-R:48 [A2 A3 E4 A4 C5 E5]:5
-
-# The classic move: open the ladder filter over the first pass,
-# breathe with the melody, then sweep down into the closing chord.
-automate cutoff
-600 4500:16@exp | R:24 6000:4@smooth | 6000:1 700:7@exp
-
-automate resonance
-0.3 1.0:16@lin R:24 | 0.4:8@smooth
-
-# Drench the ending in reverb as the filter closes
+automate reverb_decay
+0.55
 automate reverb_wet
-0.4 R:44 0.85:8@smooth
+0.35
+automate tape_wow
+0.1
+automate tape_flutter
+0.06
+automate tape_age
+0.2
+
+track oompah vel=0.62 len=0.85
+C3:1 [E4 G4]:1 [E4 G4]:1 | A2:1 [E4 A4]:1 [E4 A4]:1 | F2:1 [F4 A4]:1 [F4 A4]:1 | G2:1 [F4 G4 B4]:1 [F4 G4 B4]:1
+C3:1 [E4 G4]:1 [E4 G4]:1 | A2:1 [E4 A4]:1 [E4 A4]:1 | F2:1 [F4 A4]:1 [F4 A4]:1 | G2:1 [F4 G4 B4]:1 [F4 G4 B4]:1
+Eb3:1 [G4 Bb4]:1 [G4 Bb4]:1 | C3:1 [G4 C5]:1 [G4 C5]:1 | Ab2:1 [Ab4 C5]:1 [Ab4 C5]:1 | Bb2:1 [Ab4 Bb4 D5]:1 [Ab4 Bb4 D5]:1
+C3:1 [E4 G4]:1 [E4 G4]:1 | A2:1 [E4 A4]:1 [E4 A4]:1 | F2:1 [F4 A4]:1 [F4 A4]:1 | G2:1 [F4 G4 B4]:1 [F4 G4 B4]:1
+C3:1 [E4 G4]:1 [E4 G4]:1 | C3:3
+
+track musicbox vel=0.8 len=0.8
+R:12
+E5:0.5 G5:0.5 C6:1 G5:1 | E5:0.5 A5:0.5 C6:1.5 A5:0.5 | F5:0.5 A5:0.5 C6:1 A5:1 | D5:0.5 G5:0.5 B5:1.5 G5:0.5
+G5:0.5 Bb5:0.5 Eb6:1 Bb5:1 | G5:0.5 C6:0.5 Eb6:1.5 C6:0.5 | Ab5:0.5 C6:0.5 Eb6:1 C6:1 | F5:0.5 Bb5:0.5 D6:1.5 Bb5:0.5
+C6:0.5 B5:0.5 A5:1 G5:1 | A5:0.5 G5:0.5 E5:1.5 C5:0.5 | F5:0.5 E5:0.5 D5:1 F5:1 | E5:1 D5:1 C5:1
+[C5 E5 G5 C6]:6
+
+track sparkle vel=0.35 len=0.4
+R:24
+C6:0.5 R:2.5 E6:0.5 R:2.5 | G6:0.5 R:2.5 C6:0.5 R:2.5
+R:12
+E6:0.5 R:2.5 G6:0.5 R:2.5 | C7:0.5 R:5.5
+
+automate cutoff
+3200 R:12 5200:12@smooth | 6500:12@smooth | 4200:12@smooth 1100:12@exp
+
+automate reverb_wet
+0.35 R:36 0.75:15@smooth
+
+automate tape_wow
+0.1 R:44 0.35:7@lin
