@@ -51,6 +51,7 @@ impl HighPassLadder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::f32::consts::TAU;
 
     #[test]
     fn passes_highs_blocks_lows() {

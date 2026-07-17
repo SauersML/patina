@@ -51,10 +51,14 @@ mod tests {
     #[test]
     fn matches_tanh_for_slow_signals() {
         let mut adaa = AdaaTanh::new();
-        // A slow ramp: ADAA should track plain tanh very closely
+        // A slow ramp: after the first sample (startup transient from the
+        // zero-initialized state), ADAA should track plain tanh closely
         for n in 0..1000 {
             let x = -2.0 + 4.0 * n as f32 / 1000.0;
             let y = adaa.process(x);
+            if n == 0 {
+                continue;
+            }
             // Compare against tanh at the half-sample-delayed point
             let x_mid = x - 0.002;
             assert!(
