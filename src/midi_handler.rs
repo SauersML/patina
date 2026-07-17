@@ -84,7 +84,7 @@ impl MidiHandler {
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```text
     /// let (mut midi_handler, midi_receiver) = MidiHandler::new().unwrap()
     /// ```
     pub fn new() -> Result<(Self, Receiver<MidiEvent>), Box<dyn Error>> {
@@ -143,7 +143,7 @@ impl MidiHandler {
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```text
     /// let voice_manager = Arc::new(Mutex::new(VoiceManager::new(sample_rate, 8)));
     /// midi_handler.set_voice_manager(Arc::clone(&voice_manager));
     /// ```
@@ -167,7 +167,7 @@ impl MidiHandler {
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```text
     /// midi_handler.scan_devices().unwrap();
     /// let devices = midi_handler.get_devices();
     /// for (index, name) in devices {
@@ -213,7 +213,7 @@ impl MidiHandler {
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```text
     /// for (index, name) in midi_handler.get_devices() {
     ///     println!("{}: {}", index, name);
     /// }
@@ -253,7 +253,7 @@ impl MidiHandler {
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```text
     /// midi_handler.scan_devices().unwrap();
     /// if !midi_handler.get_devices().is_empty() {
     ///     midi_handler.connect_to_device(0).unwrap(); // Connect to the first device
@@ -363,7 +363,7 @@ impl MidiHandler {
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```text
     /// midi_handler.disconnect();
     /// ```
     pub fn disconnect(&mut self) {
@@ -397,7 +397,7 @@ impl MidiHandler {
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```text
     /// // In your audio processing callback:
     /// midi_handler.process_events(&mut voice_manager).unwrap();
     /// ```
@@ -427,7 +427,7 @@ impl MidiHandler {
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```text
     /// if midi_handler.is_connected() {
     ///     println!("Connected to a MIDI device");
     /// } else {

@@ -27,7 +27,7 @@ app = [
 ]
 # The CLAP/VST3 plugin (host provides audio, MIDI, and parameter UI):
 #   cargo xtask bundle patina --release --no-default-features --features plugin
-plugin = ["dep:nih_plug"]
+plugin = ["dep:nice-plug"]
 
 [dependencies]
 parking_lot = "0.12.1"
@@ -41,7 +41,7 @@ midir = { version = "0.10.1", optional = true }
 midly = { version = "0.5.3", optional = true }
 crossbeam-channel = { version = "0.5.14", optional = true }
 
-nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", optional = true }
+nice-plug = { version = "0.1.10", optional = true }
 
 # The tape engine runs 8x-oversampled hysteresis; keep debug builds realtime
 [profile.dev]

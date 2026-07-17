@@ -1,11 +1,19 @@
-// CLAP / VST3 plugin front end (nih-plug). The host owns audio, MIDI, and
+// CLAP / VST3 plugin front end (nice-plug). The host owns audio, MIDI, and
 // parameter automation; everything else is the same VoiceManager the
 // standalone app drives.
+//
+// SINGLE SOURCE OF TRUTH: every float parameter the plugin exposes is one
+// line in `float_specs()` — id, display name, range, default, formatting,
+// and the VoiceManager setter it drives. The host parameter list, default
+// values, state save/restore, and per-block application are all derived
+// from that table. Adding an engine knob = one engine setter + one line
+// here. (The two selector params, waveform and chorus mode, are typed
+// enums and live alongside the table.)
 //
 // Bundle with:
 //   cargo xtask bundle patina --release --no-default-features --features plugin
 
-use nih_plug::prelude::*;
+use nice_plug::prelude::*;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
@@ -14,6 +22,126 @@ use crate::oscillator::Waveform;
 use crate::voice_manager::VoiceManager;
 
 const NUM_VOICES: usize = 8;
+
+// ---------------------------------------------------------------------------
+// The parameter table
+// ---------------------------------------------------------------------------
+
+/// One host-facing float parameter: its identity, its control, and the
+/// engine setter it drives.
+struct FloatSpec {
+    id: &'static str,
+    param: FloatParam,
+    apply: fn(&mut VoiceManager, f32),
+    /// Guarded setters are only called when the value changes — they swap
+    /// voice banks, re-randomize offsets, or re-run self-calibration.
+    guarded: bool,
+}
+
+fn spec(
+    id: &'static str,
+    param: FloatParam,
+    apply: fn(&mut VoiceManager, f32),
+) -> FloatSpec {
+    FloatSpec { id, param, apply, guarded: false }
+}
+
+fn guarded(
+    id: &'static str,
+    param: FloatParam,
+    apply: fn(&mut VoiceManager, f32),
+) -> FloatSpec {
+    FloatSpec { id, param, apply, guarded: true }
+}
+
+fn pct(name: &'static str, default: f32) -> FloatParam {
+    FloatParam::new(name, default, FloatRange::Linear { min: 0.0, max: 1.0 })
+        .with_value_to_string(formatters::v2s_f32_percentage(0))
+        .with_string_to_value(formatters::s2v_f32_percentage())
+        .with_unit(" %")
+}
+
+fn seconds(name: &'static str, default: f32, min: f32, max: f32) -> FloatParam {
+    FloatParam::new(
+        name,
+        default,
+        FloatRange::Skewed { min, max, factor: FloatRange::skew_factor(-2.0) },
+    )
+    .with_unit(" s")
+    .with_value_to_string(formatters::v2s_f32_rounded(3))
+}
+
+fn hz(name: &'static str, default: f32, min: f32, max: f32) -> FloatParam {
+    FloatParam::new(
+        name,
+        default,
+        FloatRange::Skewed { min, max, factor: FloatRange::skew_factor(-2.0) },
+    )
+    .with_value_to_string(formatters::v2s_f32_hz_then_khz(1))
+    .with_string_to_value(formatters::s2v_f32_hz_then_khz())
+}
+
+fn plain(name: &'static str, default: f32, min: f32, max: f32, unit: &'static str) -> FloatParam {
+    FloatParam::new(name, default, FloatRange::Linear { min, max })
+        .with_unit(unit)
+        .with_value_to_string(formatters::v2s_f32_rounded(2))
+}
+
+/// THE table. Order here is the order hosts display parameters in.
+/// Ranges and defaults mirror the engine's own clamps and ParamValues.
+#[rustfmt::skip]
+fn float_specs() -> Vec<FloatSpec> {
+    vec![
+        // Oscillator
+        spec("volume",   pct("Volume", 0.5),                                    |vm, v| vm.set_volume(v)),
+        spec("detune",   plain("Detune", 7.0, 0.0, 30.0, " ct"),                |vm, v| vm.set_detune(v)),
+        spec("pw",       pct("Pulse Width", 0.5).with_unit(""),                 |vm, v| vm.set_pulse_width(v)),
+        spec("noise",    pct("Noise", 0.0),                                     |vm, v| vm.set_noise(v)),
+
+        // LFO
+        spec("lforate",  hz("LFO Rate", 1.0, 0.1, 30.0),                        |vm, v| vm.set_lfo_rate(v)),
+        spec("lfoshape", pct("LFO Shape", 0.5),                                 |vm, v| vm.set_lfo_shape(v)),
+        spec("lfopitch", plain("LFO > Pitch", 0.0, 0.0, 200.0, " ct"),          |vm, v| vm.set_lfo_pitch(v)),
+        spec("lfofilt",  plain("LFO > Filter", 0.0, 0.0, 4.0, " oct"),          |vm, v| vm.set_lfo_filter(v)),
+        spec("lfopwm",   plain("LFO > PWM", 0.0, 0.0, 0.45, ""),                |vm, v| vm.set_lfo_pwm(v)),
+
+        // Amplitude envelope
+        spec("attack",   seconds("Attack", 0.1, 0.01, 2.0),                     |vm, v| vm.set_attack(v)),
+        spec("decay",    seconds("Decay", 0.1, 0.01, 2.0),                      |vm, v| vm.set_decay(v)),
+        spec("sustain",  pct("Sustain", 0.7),                                   |vm, v| vm.set_sustain(v)),
+        spec("release",  seconds("Release", 0.2, 0.01, 2.0),                    |vm, v| vm.set_release(v)),
+
+        // Filter
+        spec("cutoff",   hz("Cutoff", 15000.0, 20.0, 20000.0),                  |vm, v| vm.set_filter_cutoff(v)),
+        spec("reso",     plain("Resonance", 0.0, 0.0, 4.0, ""),                 |vm, v| vm.set_filter_resonance(v)),
+        spec("drive",    plain("Drive", 1.0, 0.1, 5.0, ""),                     |vm, v| vm.set_filter_drive(v)),
+        spec("sat",      plain("Saturation", 1.0, 0.0, 2.0, ""),                |vm, v| vm.set_filter_saturation(v)),
+        spec("hpf",      hz("High-Pass", 16.0, 16.0, 8000.0),                   |vm, v| vm.set_hpf_cutoff(v)),
+
+        // Filter envelope
+        spec("fenvamt",  plain("Filter Env", 0.0, -5.0, 5.0, " oct"),           |vm, v| vm.set_filter_env_amount(v)),
+        spec("fenvatk",  seconds("Filter Attack", 0.005, 0.001, 2.0),           |vm, v| vm.set_filter_attack(v)),
+        spec("fenvdec",  seconds("Filter Decay", 0.3, 0.01, 2.0),               |vm, v| vm.set_filter_decay(v)),
+        spec("fenvsus",  pct("Filter Sustain", 0.0),                            |vm, v| vm.set_filter_sustain(v)),
+        spec("fenvrel",  seconds("Filter Release", 0.3, 0.01, 2.0),             |vm, v| vm.set_filter_release(v)),
+
+        // Effects
+        spec("fuzz",     pct("Fuzz", 0.0),                                      |vm, v| vm.set_fuzz(v)),
+        spec("spring",   pct("Spring Reverb", 0.0),                             |vm, v| vm.set_spring(v)),
+        spec("rvbdecay", pct("Reverb Decay", 0.5).with_unit(""),                |vm, v| vm.set_reverb_decay(v)),
+        spec("rvbwet",   pct("Reverb Mix", 0.5),                                |vm, v| vm.set_reverb_wet(v)),
+        guarded("chrate",  hz("Chorus Rate", 0.5, 0.1, 10.0),                   |vm, v| vm.set_chorus_rate(v)),
+        guarded("chdepth", pct("Chorus Depth", 0.3),                            |vm, v| vm.set_chorus_depth(v)),
+        spec("tpwow",    pct("Tape Wow", 0.0),                                  |vm, v| vm.set_tape_wow(v)),
+        spec("tpflut",   pct("Tape Flutter", 0.0),                              |vm, v| vm.set_tape_flutter(v)),
+        guarded("tpdrive", pct("Tape Drive", 0.0),                              |vm, v| vm.set_tape_drive(v)),
+        guarded("tpage",   pct("Tape Age", 0.0),                                |vm, v| vm.set_tape_age(v)),
+    ]
+}
+
+// ---------------------------------------------------------------------------
+// Selector (enum) parameters
+// ---------------------------------------------------------------------------
 
 #[derive(Enum, PartialEq, Clone, Copy)]
 enum WaveformParam {
@@ -55,290 +183,69 @@ impl ChorusModeParam {
     }
 }
 
-#[derive(Params)]
+// ---------------------------------------------------------------------------
+// Params object built from the table
+// ---------------------------------------------------------------------------
+
 struct PatinaParams {
-    // Oscillator
-    #[id = "waveform"]
     waveform: EnumParam<WaveformParam>,
-    #[id = "volume"]
-    volume: FloatParam,
-    #[id = "detune"]
-    detune: FloatParam,
-    #[id = "pw"]
-    pulse_width: FloatParam,
-    #[id = "noise"]
-    noise: FloatParam,
-
-    // LFO
-    #[id = "lforate"]
-    lfo_rate: FloatParam,
-    #[id = "lfoshape"]
-    lfo_shape: FloatParam,
-    #[id = "lfopitch"]
-    lfo_pitch: FloatParam,
-    #[id = "lfofilt"]
-    lfo_filter: FloatParam,
-    #[id = "lfopwm"]
-    lfo_pwm: FloatParam,
-
-    // Amplitude envelope
-    #[id = "attack"]
-    attack: FloatParam,
-    #[id = "decay"]
-    decay: FloatParam,
-    #[id = "sustain"]
-    sustain: FloatParam,
-    #[id = "release"]
-    release: FloatParam,
-
-    // Filter
-    #[id = "cutoff"]
-    cutoff: FloatParam,
-    #[id = "reso"]
-    resonance: FloatParam,
-    #[id = "drive"]
-    drive: FloatParam,
-    #[id = "sat"]
-    saturation: FloatParam,
-    #[id = "hpf"]
-    hpf_cutoff: FloatParam,
-
-    // Filter envelope
-    #[id = "fenvamt"]
-    fenv_amount: FloatParam,
-    #[id = "fenvatk"]
-    fenv_attack: FloatParam,
-    #[id = "fenvdec"]
-    fenv_decay: FloatParam,
-    #[id = "fenvsus"]
-    fenv_sustain: FloatParam,
-    #[id = "fenvrel"]
-    fenv_release: FloatParam,
-
-    // Effects
-    #[id = "fuzz"]
-    fuzz: FloatParam,
-    #[id = "spring"]
-    spring: FloatParam,
-    #[id = "rvbdecay"]
-    reverb_decay: FloatParam,
-    #[id = "rvbwet"]
-    reverb_wet: FloatParam,
-    #[id = "chmode"]
     chorus_mode: EnumParam<ChorusModeParam>,
-    #[id = "chrate"]
-    chorus_rate: FloatParam,
-    #[id = "chdepth"]
-    chorus_depth: FloatParam,
-    #[id = "tpwow"]
-    tape_wow: FloatParam,
-    #[id = "tpflut"]
-    tape_flutter: FloatParam,
-    #[id = "tpdrive"]
-    tape_drive: FloatParam,
-    #[id = "tpage"]
-    tape_age: FloatParam,
-}
-
-fn pct(name: &str, default: f32) -> FloatParam {
-    FloatParam::new(name, default, FloatRange::Linear { min: 0.0, max: 1.0 })
-        .with_unit(" %")
-        .with_value_to_string(formatters::v2s_f32_percentage(0))
-        .with_string_to_value(formatters::s2v_f32_percentage())
-}
-
-fn seconds(name: &str, default: f32, min: f32, max: f32) -> FloatParam {
-    FloatParam::new(
-        name,
-        default,
-        FloatRange::Skewed {
-            min,
-            max,
-            factor: FloatRange::skew_factor(-2.0),
-        },
-    )
-    .with_unit(" s")
-    .with_value_to_string(formatters::v2s_f32_rounded(3))
+    floats: Vec<FloatSpec>,
 }
 
 impl Default for PatinaParams {
     fn default() -> Self {
         Self {
             waveform: EnumParam::new("Waveform", WaveformParam::Sawtooth),
-            volume: pct("Volume", 0.5),
-            detune: FloatParam::new("Detune", 7.0, FloatRange::Linear { min: 0.0, max: 30.0 })
-                .with_unit(" ct")
-                .with_value_to_string(formatters::v2s_f32_rounded(1)),
-            pulse_width: FloatParam::new(
-                "Pulse Width",
-                0.5,
-                FloatRange::Linear { min: 0.05, max: 0.95 },
-            )
-            .with_value_to_string(formatters::v2s_f32_percentage(0)),
-            noise: pct("Noise", 0.0),
-
-            lfo_rate: FloatParam::new(
-                "LFO Rate",
-                1.0,
-                FloatRange::Skewed {
-                    min: 0.1,
-                    max: 30.0,
-                    factor: FloatRange::skew_factor(-2.0),
-                },
-            )
-            .with_unit(" Hz")
-            .with_value_to_string(formatters::v2s_f32_rounded(2)),
-            lfo_shape: pct("LFO Shape", 0.5),
-            lfo_pitch: FloatParam::new(
-                "LFO > Pitch",
-                0.0,
-                FloatRange::Skewed {
-                    min: 0.0,
-                    max: 200.0,
-                    factor: FloatRange::skew_factor(-1.0),
-                },
-            )
-            .with_unit(" ct")
-            .with_value_to_string(formatters::v2s_f32_rounded(1)),
-            lfo_filter: FloatParam::new(
-                "LFO > Filter",
-                0.0,
-                FloatRange::Linear { min: 0.0, max: 4.0 },
-            )
-            .with_unit(" oct")
-            .with_value_to_string(formatters::v2s_f32_rounded(2)),
-            lfo_pwm: FloatParam::new(
-                "LFO > PWM",
-                0.0,
-                FloatRange::Linear { min: 0.0, max: 0.45 },
-            )
-            .with_value_to_string(formatters::v2s_f32_rounded(2)),
-
-            attack: seconds("Attack", 0.1, 0.01, 2.0),
-            decay: seconds("Decay", 0.1, 0.01, 2.0),
-            sustain: pct("Sustain", 0.7),
-            release: seconds("Release", 0.2, 0.01, 2.0),
-
-            cutoff: FloatParam::new(
-                "Cutoff",
-                15000.0,
-                FloatRange::Skewed {
-                    min: 20.0,
-                    max: 20000.0,
-                    factor: FloatRange::skew_factor(-2.0),
-                },
-            )
-            .with_unit(" Hz")
-            .with_value_to_string(formatters::v2s_f32_hz_then_khz(1))
-            .with_string_to_value(formatters::s2v_f32_hz_then_khz()),
-            resonance: FloatParam::new(
-                "Resonance",
-                0.0,
-                FloatRange::Linear { min: 0.0, max: 4.0 },
-            )
-            .with_value_to_string(formatters::v2s_f32_rounded(2)),
-            drive: FloatParam::new("Drive", 1.0, FloatRange::Linear { min: 0.1, max: 5.0 })
-                .with_value_to_string(formatters::v2s_f32_rounded(2)),
-            saturation: FloatParam::new(
-                "Saturation",
-                1.0,
-                FloatRange::Linear { min: 0.0, max: 2.0 },
-            )
-            .with_value_to_string(formatters::v2s_f32_rounded(2)),
-            hpf_cutoff: FloatParam::new(
-                "High-Pass",
-                16.0,
-                FloatRange::Skewed {
-                    min: 16.0,
-                    max: 8000.0,
-                    factor: FloatRange::skew_factor(-2.0),
-                },
-            )
-            .with_unit(" Hz")
-            .with_value_to_string(formatters::v2s_f32_hz_then_khz(1))
-            .with_string_to_value(formatters::s2v_f32_hz_then_khz()),
-
-            fenv_amount: FloatParam::new(
-                "Filter Env",
-                0.0,
-                FloatRange::Linear { min: -5.0, max: 5.0 },
-            )
-            .with_unit(" oct")
-            .with_value_to_string(formatters::v2s_f32_rounded(2)),
-            fenv_attack: seconds("Filter Attack", 0.005, 0.001, 2.0),
-            fenv_decay: seconds("Filter Decay", 0.3, 0.01, 2.0),
-            fenv_sustain: pct("Filter Sustain", 0.0),
-            fenv_release: seconds("Filter Release", 0.3, 0.01, 2.0),
-
-            fuzz: pct("Fuzz", 0.0),
-            spring: pct("Spring Reverb", 0.0),
-            reverb_decay: FloatParam::new(
-                "Reverb Decay",
-                0.5,
-                FloatRange::Linear { min: 0.0, max: 0.99 },
-            )
-            .with_value_to_string(formatters::v2s_f32_percentage(0)),
-            reverb_wet: pct("Reverb Mix", 0.5),
             chorus_mode: EnumParam::new("Chorus Mode", ChorusModeParam::Off),
-            chorus_rate: FloatParam::new(
-                "Chorus Rate",
-                0.5,
-                FloatRange::Skewed {
-                    min: 0.1,
-                    max: 10.0,
-                    factor: FloatRange::skew_factor(-2.0),
-                },
-            )
-            .with_unit(" Hz")
-            .with_value_to_string(formatters::v2s_f32_rounded(2)),
-            chorus_depth: pct("Chorus Depth", 0.3),
-            tape_wow: pct("Tape Wow", 0.0),
-            tape_flutter: pct("Tape Flutter", 0.0),
-            tape_drive: pct("Tape Drive", 0.0),
-            tape_age: pct("Tape Age", 0.0),
+            floats: float_specs(),
         }
     }
 }
 
-/// Last-applied values for the setters that are NOT safe or cheap to call
-/// redundantly every block (voice replacement, RNG, or self-calibration).
-struct Applied {
-    waveform: Waveform,
-    chorus_mode: ChorusMode,
-    chorus_rate: f32,
-    chorus_depth: f32,
-    tape_drive: f32,
-    tape_age: f32,
-}
-
-impl Default for Applied {
-    fn default() -> Self {
-        // Matches a freshly constructed VoiceManager
-        Self {
-            waveform: Waveform::Sawtooth,
-            chorus_mode: ChorusMode::Off,
-            chorus_rate: 0.5,
-            chorus_depth: 0.3,
-            tape_drive: 0.0,
-            tape_age: 0.0,
+// SAFETY (per the trait contract): the returned pointers stay valid for as
+// long as this object lives, which the wrapper guarantees by holding the
+// same Arc the plugin returns from `params()`.
+unsafe impl Params for PatinaParams {
+    fn param_map(&self) -> Vec<(String, ParamPtr, String)> {
+        let mut map = vec![("waveform".to_string(), self.waveform.as_ptr(), String::new())];
+        for float_spec in &self.floats {
+            // The chorus selector belongs right before the chorus knobs
+            if float_spec.id == "chrate" {
+                map.push(("chmode".to_string(), self.chorus_mode.as_ptr(), String::new()));
+            }
+            map.push((float_spec.id.to_string(), float_spec.param.as_ptr(), String::new()));
         }
+        map
     }
 }
+
+// ---------------------------------------------------------------------------
+// The plugin
+// ---------------------------------------------------------------------------
 
 pub struct PatinaPlugin {
     params: Arc<PatinaParams>,
     vm: VoiceManager,
     sample_rate: f32,
-    applied: Applied,
+    /// Last value pushed through each guarded setter (indexed like
+    /// `params.floats`); NaN forces the first application.
+    applied_floats: Vec<f32>,
+    applied_waveform: Option<Waveform>,
+    applied_chorus_mode: Option<ChorusMode>,
 }
 
 impl Default for PatinaPlugin {
     fn default() -> Self {
+        let params = Arc::new(PatinaParams::default());
+        let applied_floats = vec![f32::NAN; params.floats.len()];
         Self {
-            params: Arc::new(PatinaParams::default()),
+            params,
             vm: VoiceManager::new(44100.0, NUM_VOICES),
             sample_rate: 44100.0,
-            applied: Applied::default(),
+            applied_floats,
+            applied_waveform: None,
+            applied_chorus_mode: None,
         }
     }
 }
@@ -346,87 +253,35 @@ impl Default for PatinaPlugin {
 impl PatinaPlugin {
     fn rebuild_engine(&mut self) {
         self.vm = VoiceManager::new(self.sample_rate, NUM_VOICES);
-        self.applied = Applied::default();
+        self.applied_floats.fill(f32::NAN);
+        self.applied_waveform = None;
+        self.applied_chorus_mode = None;
         self.apply_params();
     }
 
-    /// Push host parameter values into the engine. Cheap, slewed setters are
-    /// applied unconditionally each block; the guarded ones only on change.
+    /// Push host parameter values into the engine, straight from the table.
     fn apply_params(&mut self) {
         let params = Arc::clone(&self.params);
-        let p = params.as_ref();
-        let vm = &mut self.vm;
 
-        vm.set_volume(p.volume.value());
-        vm.set_detune(p.detune.value());
-        vm.set_pulse_width(p.pulse_width.value());
-        vm.set_noise(p.noise.value());
-
-        vm.set_lfo_rate(p.lfo_rate.value());
-        vm.set_lfo_shape(p.lfo_shape.value());
-        vm.set_lfo_pitch(p.lfo_pitch.value());
-        vm.set_lfo_filter(p.lfo_filter.value());
-        vm.set_lfo_pwm(p.lfo_pwm.value());
-
-        vm.set_attack(p.attack.value());
-        vm.set_decay(p.decay.value());
-        vm.set_sustain(p.sustain.value());
-        vm.set_release(p.release.value());
-
-        vm.set_filter_cutoff(p.cutoff.value());
-        vm.set_filter_resonance(p.resonance.value());
-        vm.set_filter_drive(p.drive.value());
-        vm.set_filter_saturation(p.saturation.value());
-        vm.set_hpf_cutoff(p.hpf_cutoff.value());
-
-        vm.set_filter_env_amount(p.fenv_amount.value());
-        vm.set_filter_attack(p.fenv_attack.value());
-        vm.set_filter_decay(p.fenv_decay.value());
-        vm.set_filter_sustain(p.fenv_sustain.value());
-        vm.set_filter_release(p.fenv_release.value());
-
-        vm.set_fuzz(p.fuzz.value());
-        vm.set_spring(p.spring.value());
-        vm.set_reverb_decay(p.reverb_decay.value());
-        vm.set_reverb_wet(p.reverb_wet.value());
-        vm.set_tape_wow(p.tape_wow.value());
-        vm.set_tape_flutter(p.tape_flutter.value());
-
-        let waveform = p.waveform.value().to_engine();
-        if waveform != self.applied.waveform {
-            vm.set_waveform(waveform);
-            self.applied.waveform = waveform;
+        for (float_spec, last) in params.floats.iter().zip(self.applied_floats.iter_mut()) {
+            let value = float_spec.param.value();
+            if !float_spec.guarded || value != *last {
+                (float_spec.apply)(&mut self.vm, value);
+                *last = value;
+            }
         }
 
-        // Chorus mode swaps the voice bank; rate/depth re-randomize per-voice
-        // offsets — only touch them when the value actually moved
-        let chorus_mode = p.chorus_mode.value().to_engine();
-        if chorus_mode != self.applied.chorus_mode {
-            vm.set_chorus_mode(chorus_mode);
-            self.applied.chorus_mode = chorus_mode;
-        }
-        let chorus_rate = p.chorus_rate.value();
-        if chorus_rate != self.applied.chorus_rate {
-            vm.set_chorus_rate(chorus_rate);
-            self.applied.chorus_rate = chorus_rate;
-        }
-        let chorus_depth = p.chorus_depth.value();
-        if chorus_depth != self.applied.chorus_depth {
-            vm.set_chorus_depth(chorus_depth);
-            self.applied.chorus_depth = chorus_depth;
+        let waveform = params.waveform.value().to_engine();
+        if self.applied_waveform != Some(waveform) {
+            self.vm.set_waveform(waveform);
+            self.applied_waveform = Some(waveform);
         }
 
-        // Tape drive re-runs the deck's self-calibration; age reschedules
-        // dropouts — change-only as well
-        let tape_drive = p.tape_drive.value();
-        if tape_drive != self.applied.tape_drive {
-            vm.set_tape_drive(tape_drive);
-            self.applied.tape_drive = tape_drive;
-        }
-        let tape_age = p.tape_age.value();
-        if tape_age != self.applied.tape_age {
-            vm.set_tape_age(tape_age);
-            self.applied.tape_age = tape_age;
+        // Swaps the chorus voice bank — strictly change-only
+        let chorus_mode = params.chorus_mode.value().to_engine();
+        if self.applied_chorus_mode != Some(chorus_mode) {
+            self.vm.set_chorus_mode(chorus_mode);
+            self.applied_chorus_mode = Some(chorus_mode);
         }
     }
 }
@@ -532,5 +387,5 @@ impl Vst3Plugin for PatinaPlugin {
         &[Vst3SubCategory::Instrument, Vst3SubCategory::Synth];
 }
 
-nih_export_clap!(PatinaPlugin);
-nih_export_vst3!(PatinaPlugin);
+nice_export_clap!(PatinaPlugin);
+nice_export_vst3!(PatinaPlugin);

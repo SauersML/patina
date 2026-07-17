@@ -1,22 +1,3 @@
-mod envelope;
-mod oscillator;
-mod panel_render;
-mod ui;
-mod voice;
-mod voice_manager;
-mod filter;
-mod hpf;
-mod adaa;
-mod fuzz;
-mod noise;
-mod spring;
-mod lfo;
-mod reverb;
-mod chorus;
-mod tape;
-mod midi_handler;
-mod song;
-
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Sample, SampleFormat, SizedSample};
 use dasp_sample::FromSample;
@@ -24,9 +5,10 @@ use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use parking_lot::Mutex;
 use eframe::egui;
 
-use crate::voice_manager::VoiceManager;
-use crate::ui::SynthUI;
-use crate::midi_handler::MidiHandler;
+use patina::midi_handler::MidiHandler;
+use patina::song;
+use patina::ui::SynthUI;
+use patina::voice_manager::VoiceManager;
 
 impl eframe::App for SynthApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {

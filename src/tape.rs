@@ -12,11 +12,18 @@
 //                  squeal, not filtered noise. One modulated delay shared by
 //                  both channels; azimuth error skews the right channel.
 //
-//   RECORD HEAD    the program is pre-emphasized (120 us curve plus a
-//                  thickness-compensation shelf the deck derives from its own
-//                  tape geometry, like a real alignment), upsampled 8x
-//                  through polyphase half-band allpass cascades, and summed
-//                  with an explicit 50 kHz AC bias oscillator.
+//   RECORD HEAD    the program passes an EXACTLY-reciprocal 120 us emphasis
+//                  shelf (its inverse sits in the playback amp, so the pair
+//                  cancels to numerical precision — in-band coloration is
+//                  physics, never filters), then two record-EQ trimmers whose
+//                  gains the deck solves from its own layer geometry at
+//                  construction, like a technician with two trim pots. Then
+//                  8x upsampling through polyphase half-band allpass
+//                  cascades, and an explicit AC bias oscillator running
+//                  BIAS-COHERENTLY: exactly one bias cycle per output sample,
+//                  so every bias harmonic that the hysteresis generates
+//                  aliases onto DC or Nyquist — nothing lands in the audio
+//                  band, by construction instead of by filter.
 //
 //   THE OXIDE      simulated as N depth sublayers, each with its own
 //                  Jiles-Atherton hysteresis state (differential
