@@ -10,6 +10,8 @@ osc3_level 0.7
 circuit 0
 key_track 0.4
 osc_fm 0
+sync 0
+ring 0
 detune 7
 noise 0
 glide 0

@@ -80,6 +80,14 @@ pub struct Voice {
     /// space — the source of the growl).
     fm_amount: f32,
     prev_osc2: f32,
+    /// Hard sync, 2600-style: VCO1 masters VCO2's ramp reset.
+    sync_on: bool,
+    /// Ring modulator: (o1 * o2) / PROGRAM_V, the ARP manual's literal
+    /// transfer ("the product of the two input voltages divided by 5"),
+    /// crossfaded into the filter input. Carrier leakage is this unit's
+    /// residual after the < 10 mV null trim.
+    ring_amount: f32,
+    ring_leak: (f32, f32),
     /// Post-filter DC block (ARP R162 "eliminates the DC from the output";
     /// Moog dwg #1149 shows 2.5 uF output coupling). Needed because the
     /// unipolar/asymmetric pulses legitimately push DC through the ladder.
@@ -132,6 +140,8 @@ impl Voice {
         ];
         let substrate_sens = 0.8 + rand01() * 0.4;
         let vca_feedthrough = rand01() * 0.35;
+        // Ring-mod null trim residue: < 10 mV at 5 V program level
+        let ring_leak = (rand01() * 0.002, rand01() * 0.002);
 
         let mut voice = Self {
             oscs: [
@@ -162,6 +172,9 @@ impl Voice {
             key_track: 0.4,
             fm_amount: 0.0,
             prev_osc2: 0.0,
+            sync_on: false,
+            ring_amount: 0.0,
+            ring_leak,
             dc_x1: 0.0,
             dc_y1: 0.0,
             substrate_sens,
@@ -241,6 +254,14 @@ impl Voice {
 
     pub fn set_fm_amount(&mut self, amount: f32) {
         self.fm_amount = amount.clamp(0.0, 1.0);
+    }
+
+    pub fn set_sync(&mut self, on: bool) {
+        self.sync_on = on;
+    }
+
+    pub fn set_ring(&mut self, amount: f32) {
+        self.ring_amount = amount.clamp(0.0, 1.0);
     }
 
     /// `glide_from_cv` is the most recently played note's CV in octaves
@@ -339,23 +360,33 @@ impl Voice {
         // The voice's coupling graph is acyclic (every stage buffered, as
         // the schematics show), so integrating stages in topological order
         // with midpoint-averaged couplings IS the coherent-system solve.
-        // Osc 2 steps first; the FM coupling into osc 1's rate uses the
-        // MIDPOINT of osc 2's step (average of its old and new output) —
-        // the correct one-way ODE coupling, no artificial unit delay.
-        let o2 = self.oscs[1].next_sample(self.common_drift, pitch_mult, pulse_width);
-        let o2_norm = (o2 / (0.9 * PROGRAM_V)).clamp(-1.0, 1.0);
+        // Osc 1 steps first (its wrap this sample masters osc 2's sync);
+        // the FM coupling into osc 1 therefore uses osc 2's previous
+        // sample — the one-sample transport of the sync/FM pair, chosen so
+        // the sync reset lands at its exact sub-sample position.
         let fm_mult = if self.fm_amount > 1e-4 {
-            (self.fm_amount * (o2_norm + self.prev_osc2) * 0.5 * 2.0).exp2()
+            (self.fm_amount * self.prev_osc2 * 2.0).exp2()
         } else {
             1.0
         };
-        self.prev_osc2 = o2_norm;
-        let o1 = self.oscs[0].next_sample(self.common_drift, pitch_mult * fm_mult, pulse_width);
-        let o3 = self.oscs[2].next_sample(self.common_drift, pitch_mult, pulse_width);
+        let o1 = self.oscs[0].next_sample(self.common_drift, pitch_mult * fm_mult, pulse_width, None);
+        let sync = if self.sync_on { self.oscs[0].wrap_frac() } else { None };
+        let o2 = self.oscs[1].next_sample(self.common_drift, pitch_mult, pulse_width, sync);
+        let o3 = self.oscs[2].next_sample(self.common_drift, pitch_mult, pulse_width, None);
+        self.prev_osc2 = (o2 / (0.9 * PROGRAM_V)).clamp(-1.0, 1.0);
+
+        // Ring modulator (ARP: "the product of the two input voltages
+        // divided by 5" — PROGRAM_V, since we carry volts), with this
+        // unit's carrier leakage after the null trim
+        let mut osc_mix = o1 + o2 * self.osc_level[0] + o3 * self.osc_level[1];
+        if self.ring_amount > 1e-4 {
+            let ring = o1 * o2 / PROGRAM_V + self.ring_leak.0 * o1 + self.ring_leak.1 * o2;
+            osc_mix = osc_mix * (1.0 - self.ring_amount) + ring * 2.4 * self.ring_amount;
+        }
 
         // Volts everywhere: the mixer sums program-level signals into the
         // VCF's summing junction
-        let osc = (o1 + o2 * self.osc_level[0] + o3 * self.osc_level[1]) * MIXER_GAIN
+        let osc = osc_mix * MIXER_GAIN
             + self.oscs[0].sub() * self.sub_level * 0.9
             + noise
             + bleed;

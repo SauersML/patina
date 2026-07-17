@@ -75,6 +75,9 @@ pub struct Oscillator {
     /// construction — its phase advances at exactly half the core rate.
     sub_phase: f64,
     last_sub: f32,
+    /// If this core wrapped during the last step: fraction of the sample
+    /// period elapsed SINCE the wrap (for slaving another core to it).
+    last_wrap_frac: Option<f32>,
 }
 
 #[inline]
@@ -115,8 +118,15 @@ impl Oscillator {
             skew,
             sub_phase: 0.0,
             last_sub: 0.0,
+            last_wrap_frac: None,
             curvature,
         }
+    }
+
+    /// Fraction of the last sample period since this core's ramp wrapped,
+    /// if it did — the sync signal a slave oscillator locks to.
+    pub fn wrap_frac(&self) -> Option<f32> {
+        self.last_wrap_frac
     }
 
     /// `common_drift` is the voice-shared component (the oscillators sit on
@@ -126,7 +136,18 @@ impl Oscillator {
     /// space, so it is exponential — a frequency ratio, not added hertz).
     /// `pulse_width` is the comparator threshold; this unit's duty error
     /// rides on top of it.
-    pub fn next_sample(&mut self, common_drift: f32, pitch_mult: f32, pulse_width: f32) -> f32 {
+    /// `sync`: if Some(frac), the master core wrapped `frac` of a sample
+    /// period ago — hard-reset this core's ramp at that exact sub-sample
+    /// position (the 2600's VCO1->VCO2 sync). The reset discontinuity is
+    /// bandlimited with a polyBLEP scaled to the TRUE mid-ramp jump height;
+    /// unscaled corrections are the classic source of sync aliasing.
+    pub fn next_sample(
+        &mut self,
+        common_drift: f32,
+        pitch_mult: f32,
+        pulse_width: f32,
+        sync: Option<f32>,
+    ) -> f32 {
         let frequency = f32::from_bits(self.frequency.load(Ordering::Relaxed));
 
         // Small individual drift; the larger, shared component comes in from
@@ -138,7 +159,24 @@ impl Oscillator {
 
         let dt = detuned_frequency as f64 / self.sample_rate as f64;
         self.phase += dt;
-        self.phase %= 1.0;
+        if self.phase >= 1.0 {
+            self.phase -= 1.0;
+            self.last_wrap_frac = Some((self.phase / dt.max(1e-12)) as f32);
+        } else {
+            self.last_wrap_frac = None;
+        }
+
+        // Hard sync: reset the ramp at the master's wrap position. The
+        // pre-reset phase p_d sets the actual jump height for bandlimiting.
+        let mut sync_p_d: Option<f32> = None;
+        if let Some(frac) = sync {
+            let dtf = dt as f32;
+            let new_phase = (frac * dtf).clamp(0.0, 0.999_99);
+            let p_d = ((self.phase as f32) - new_phase).rem_euclid(1.0);
+            self.phase = new_phase as f64;
+            self.last_wrap_frac = Some(frac);
+            sync_p_d = Some(p_d);
+        }
 
         // Sub square at half rate, sharing the core's increment so it can
         // never drift against it; bandlimited with its own polyBLEP
@@ -153,14 +191,34 @@ impl Oscillator {
         }
 
         let t = self.phase as f32;
+        // Sync corrections: the standard wrap polyBLEP assumes a full-height
+        // jump; a sync reset from mid-ramp p_d jumps only part way, so the
+        // saw's correction is rescaled and a jump-free pulse reset has its
+        // spurious correction cancelled. (Tri/sine sync rides the plain
+        // reset — mild, and those shapes are rarely synced.)
+        let dtf = (dt as f32).max(1e-9);
+        let sync_fix = match (sync_p_d, self.waveform) {
+            (Some(p_d), Waveform::Sawtooth) => (1.0 - p_d) * self.polyblep(t, dtf),
+            (Some(p_d), Waveform::Square) if p_d < self.duty => {
+                // No physical jump (hi -> hi): cancel the wrap-edge blep
+                let (hi, lo) = match self.model {
+                    CircuitModel::Moog => (1.0f32, -0.92f32),
+                    CircuitModel::Arp => (1.0f32, 0.0f32),
+                };
+                (hi - lo) * 0.5 * self.polyblep(t, dtf)
+            }
+            _ => 0.0,
+        };
         let raw_sample = match self.waveform {
             Waveform::Sawtooth => {
                 // Integrator sag: quadratic bow (DC-corrected: mean of s^2
                 // over a saw cycle is 1/3)
-                let s = self.polyblep_saw(t, detuned_frequency);
+                let s = self.polyblep_saw(t, detuned_frequency) + sync_fix;
                 AMP_SAW * (s + self.curvature * (s * s - 1.0 / 3.0))
             }
-            Waveform::Square => AMP_PULSE * self.polyblep_pulse(t, detuned_frequency),
+            Waveform::Square => {
+                AMP_PULSE * (self.polyblep_pulse(t, detuned_frequency) + sync_fix)
+            }
             Waveform::Triangle => {
                 AMP_TRI * self.fold_triangle(self.polyblep_triangle(t, detuned_frequency))
             }
@@ -323,7 +381,7 @@ mod tests {
         osc.set_waveform(waveform);
         let mut peak = 0.0f32;
         for _ in 0..44100 {
-            peak = peak.max(osc.next_sample(0.0, 1.0, 0.5).abs());
+            peak = peak.max(osc.next_sample(0.0, 1.0, 0.5, None).abs());
         }
         peak
     }
@@ -352,7 +410,7 @@ mod tests {
         // Collect one steady period and correlate against a pure sinusoid
         let mut samples = Vec::new();
         for _ in 0..4410 {
-            samples.push(osc.next_sample(0.0, 1.0, 0.5));
+            samples.push(osc.next_sample(0.0, 1.0, 0.5, None));
         }
         let period = &samples[4310..4410];
         // Fundamental amplitude via DFT bin
@@ -386,7 +444,7 @@ mod tests {
         let mut prev_sub = 0.0f32;
         let mut prev_phase_sample = -1.0f32;
         for _ in 0..44100 {
-            let s = osc.next_sample(0.0, 1.0, 0.5);
+            let s = osc.next_sample(0.0, 1.0, 0.5, None);
             // Core wrap: the saw jumps down by ~10 V (bandlimited over a
             // couple of samples, so demand more than half the swing)
             if prev_phase_sample - s > 5.0 {
@@ -411,6 +469,46 @@ mod tests {
         );
     }
 
+    /// Hard sync locks the slave's periodicity to the master: with sync,
+    /// the slave's waveform must repeat at the MASTER's period even though
+    /// its own rate is a non-integer multiple.
+    #[test]
+    fn hard_sync_locks_to_master_period() {
+        let sr = 44100.0;
+        let f_master = 441.0; // exactly 100 samples per period
+        let run = |use_sync: bool| -> f32 {
+            let mut master = Oscillator::new(sr, f_master, 2);
+            let mut slave = Oscillator::new(sr, f_master * 1.37, 9);
+            master.set_waveform(Waveform::Sawtooth);
+            slave.set_waveform(Waveform::Sawtooth);
+            let mut out = Vec::with_capacity(8820);
+            for _ in 0..8820 {
+                master.next_sample(0.0, 1.0, 0.5, None);
+                let s = if use_sync { master.wrap_frac() } else { None };
+                out.push(slave.next_sample(0.0, 1.0, 0.5, s));
+            }
+            // Mismatch of the waveform against itself one master period on
+            let period = 100usize;
+            let mut err = 0.0f32;
+            let mut norm = 1e-9f32;
+            for n in 4410..(8820 - period) {
+                err += (out[n] - out[n + period]).abs();
+                norm += out[n].abs();
+            }
+            err / norm
+        };
+        let synced = run(true);
+        let free = run(false);
+        assert!(
+            synced < 0.1,
+            "synced slave should repeat at the master period, mismatch {synced}"
+        );
+        assert!(
+            free > 0.3,
+            "free-running slave at ratio 1.37 should not, mismatch {free}"
+        );
+    }
+
     /// PWM moves the DC operating point in both circuit models: the Moog
     /// pulse is bipolar-asymmetric (rail-limited), the ARP pulse is fully
     /// unipolar (rectified), so its mean IS the duty cycle.
@@ -423,7 +521,7 @@ mod tests {
             let mut sum = 0.0f32;
             let n = 44100;
             for _ in 0..n {
-                sum += osc.next_sample(0.0, 1.0, width);
+                sum += osc.next_sample(0.0, 1.0, width, None);
             }
             sum / n as f32
         };

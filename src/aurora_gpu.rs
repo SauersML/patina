@@ -262,32 +262,30 @@ fn fbm(p: vec2<f32>) -> f32 {
   return v;
 }
 
-// A drifting orb of light: everything is a Gaussian — a soft luminous
-// shell whose density peaks near (not at) the boundary, an interior haze,
-// and a wide specular bloom. No hard edges anywhere; the form breathes,
-// and its radius wobbles slowly so the silhouette never reads as a circle.
+// A wisp of drifting light: two overlapping anisotropic Gaussians whose
+// axes slowly rotate — a soft, boundary-less glow that never reads as a
+// circle or a loop. Pure light, no silhouette.
 fn bubble(w: vec2<f32>, c: vec2<f32>, r: f32, t: f32, blur: f32) -> vec3<f32> {
   let v = w - c;
-  let ang = atan2(v.y, v.x);
-  // Organic silhouette: radius modulated around the circumference
-  let wob = 1.0 + 0.10 * sin(ang * 2.0 + t * 0.21) + 0.05 * sin(ang * 5.0 - t * 0.13);
-  let d = length(v) / (r * wob);
-  // Gaussian shell centred just inside the boundary; blur fattens it
-  let shell_w = 0.16 + blur * 0.55;
-  let shell = exp(-(d - 0.86) * (d - 0.86) / (shell_w * shell_w));
-  // Thin-film tint drifting around the shell
-  let film = vec3<f32>(
-    0.72 + 0.24 * sin(ang * 3.0 + t * 0.3),
-    0.84 + 0.16 * sin(ang * 3.0 + 2.1 + t * 0.3),
-    0.96
+  // Slowly-rotating stretched frame
+  let a1 = t * 0.05;
+  let e1 = vec2<f32>(
+    (v.x * cos(a1) - v.y * sin(a1)) / (r * 2.4),
+    (v.x * sin(a1) + v.y * cos(a1)) / (r * 1.1)
   );
-  var glow = film * shell * (0.26 - blur * 0.13) * (0.75 + u.energy * 0.55);
-  // Interior haze, densest at the middle, vanishing before the shell
-  glow = glow + vec3<f32>(0.85, 0.94, 1.0) * exp(-d * d * 2.2) * 0.055;
-  // Broad specular bloom toward the sun, upper-left
-  let bead = v / (r * wob) + vec2<f32>(0.34, 0.38);
-  glow = glow + vec3<f32>(1.0, 1.0, 1.0) * exp(-dot(bead, bead) * (14.0 - blur * 9.0)) * (0.28 - blur * 0.16);
-  return glow;
+  let a2 = -t * 0.037 + 1.9;
+  let off = vec2<f32>(r * 0.7 * sin(t * 0.043), r * 0.5 * cos(t * 0.031));
+  let v2 = v - off;
+  let e2 = vec2<f32>(
+    (v2.x * cos(a2) - v2.y * sin(a2)) / (r * 1.5),
+    (v2.x * sin(a2) + v2.y * cos(a2)) / (r * 2.6)
+  );
+  let g1 = exp(-dot(e1, e1));
+  let g2 = exp(-dot(e2, e2));
+  // Cool-to-warm tint breathing between the two lobes
+  let tint = mix(vec3<f32>(0.80, 0.93, 1.00), vec3<f32>(0.95, 0.97, 0.90),
+                 0.5 + 0.5 * sin(t * 0.09));
+  return tint * (g1 * 0.10 + g2 * 0.07) * (0.7 + u.energy * 0.6) * (1.0 - blur * 0.35);
 }
 
 // Domain-warped cloud density: fbm displaced by fbm gives billowing
@@ -369,9 +367,11 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
   let lp = in.uv * u.rect_size - vec2<f32>(pad, pad);
   let sdf = panel_sdf(lp, inner, u.corner);
 
-  // Two-lobe penumbra: contact-sharp plus distance-soft, like an area light
+  // Contact shadow only: fully decayed within ~8px, so the gaps between
+  // cards stay sky instead of pooling into a dark slab with hard edges
   let dsh = max(sdf, 0.0);
-  let sh = (0.20 * exp(-dsh * 0.30) + 0.11 * exp(-dsh * 0.055)) * step(0.0, sdf);
+  let win = 1.0 - smoothstep(2.0, 9.0, dsh);
+  let sh = 0.16 * exp(-dsh * 0.40) * step(0.0, sdf) * win;
 
   // Slab geometry: flat interior, beveled rim. Normal from the SDF gradient.
   let eps = 1.5;
@@ -398,7 +398,7 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
   ) * 7.0;
   let c0 = sky((p + ofs) / u.screen, u.time, 1.0);
   let c1 = sky((p + ofs + j) / u.screen, u.time, 1.0);
-  var col = c0 * 0.6 + c1 * 0.4;
+  var col = (c0 * 0.6 + c1 * 0.4) * 1.06;
 
   // Beer-Lambert: extinction along the refracted path (cool-tinted glass);
   // longer oblique paths through the bevel tint denser
@@ -418,7 +418,7 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
   col = col + vec3<f32>(1.0, 0.97, 0.88) * spec * (0.10 + fres * 6.0);
 
   // Diffuse scattering lift — the milkiness of etched glass
-  col = mix(col, vec3<f32>(1.0, 1.0, 1.0), 0.35);
+  col = mix(col, vec3<f32>(1.0, 1.0, 1.0), 0.22);
   col = col + (hash2(p) - 0.5) * 0.012;
 
   // Contact occlusion where the pane seats into its shadow

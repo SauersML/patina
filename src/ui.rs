@@ -198,6 +198,8 @@ pub struct SynthUI {
     circuit: CircuitModel,
     key_track: f32,
     osc_fm: f32,
+    sync: bool,
+    ring: f32,
     pulse_width: f32,
     lfo_rate: f32,
     lfo_shape: f32,
@@ -539,20 +541,22 @@ fn waveform_selector(ui: &mut egui::Ui, id: &str, selected: &mut Waveform) -> bo
 
 /// Segmented text selector; returns the newly selected index if it changed.
 fn segmented(ui: &mut egui::Ui, id: &str, labels: &[&str], selected: usize) -> Option<usize> {
-    let cell = vec2(34.0, 24.0);
-    let (rect, _) = ui.allocate_exact_size(
-        vec2(cell.x * labels.len() as f32, cell.y),
-        Sense::hover(),
-    );
+    // Cells size to their text so long labels (MOOG) never overflow
+    let widths: Vec<f32> = labels
+        .iter()
+        .map(|l| (l.len() as f32 * 9.0 + 26.0).max(36.0))
+        .collect();
+    let cell_h = 24.0;
+    let total: f32 = widths.iter().sum();
+    let (rect, _) = ui.allocate_exact_size(vec2(total, cell_h), Sense::hover());
     let painter = ui.painter();
     painter.rect_filled(rect, CornerRadius::same(7), INSET);
 
     let mut result = None;
+    let mut cx = rect.left();
     for (i, label) in labels.iter().enumerate() {
-        let cell_rect = Rect::from_min_size(
-            pos2(rect.left() + cell.x * i as f32, rect.top()),
-            cell,
-        );
+        let cell_rect = Rect::from_min_size(pos2(cx, rect.top()), vec2(widths[i], cell_h));
+        cx += widths[i];
         let response = ui.interact(cell_rect, ui.id().with((id, i)), Sense::click());
         let is_selected = i == selected;
         if response.clicked() && !is_selected {
@@ -721,6 +725,8 @@ impl SynthUI {
             circuit: CircuitModel::Moog,
             key_track: 0.4,
             osc_fm: 0.0,
+            sync: false,
+            ring: 0.0,
             pulse_width: 0.5,
             lfo_rate: 1.0,
             lfo_shape: 0.5,
@@ -798,6 +804,8 @@ impl SynthUI {
         vm.set_circuit(self.circuit);
         vm.set_key_track(self.key_track);
         vm.set_osc_fm(self.osc_fm);
+        vm.set_sync(self.sync);
+        vm.set_ring(self.ring);
         vm.set_pulse_width(self.pulse_width);
         vm.set_lfo_rate(self.lfo_rate);
         vm.set_lfo_shape(self.lfo_shape);
@@ -949,6 +957,8 @@ impl SynthUI {
             self.circuit = p.circuit;
             self.key_track = p.key_track;
             self.osc_fm = p.osc_fm;
+            self.sync = p.sync;
+            self.ring = p.ring;
             self.pulse_width = p.pulse_width;
             self.lfo_rate = p.lfo_rate;
             self.lfo_shape = p.lfo_shape;
@@ -1273,16 +1283,19 @@ impl SynthUI {
                         (&mut self.osc3_wave, &mut self.osc3_pitch, &mut self.osc3_level)
                     };
                     let id = if which == 1 { "osc2wave" } else { "osc3wave" };
-                    if waveform_selector(ui, id, wave) {
-                        self.voice_manager.lock().set_osc_wave(which, *wave);
+                    ui.vertical(|ui| {
+                        ui.add_space(10.0);
+                        if waveform_selector(ui, id, wave) {
+                            self.voice_manager.lock().set_osc_wave(which, *wave);
+                        }
+                    });
+                    if knob(ui, "Level", level, 0.0, 1.0, 0.72, false, fmt_pct) {
+                        self.voice_manager.lock().set_osc_level(which, *level);
                     }
                     if knob(ui, "Pitch", pitch, -24.0, 24.0, if which == 1 { 0.0 } else { -12.0 }, false, |v| {
                         format!("{v:+.0} st")
                     }) {
                         self.voice_manager.lock().set_osc_pitch(which, *pitch);
-                    }
-                    if knob(ui, "Level", level, 0.0, 1.0, 0.72, false, fmt_pct) {
-                        self.voice_manager.lock().set_osc_level(which, *level);
                     }
                     if which == 1 {
                         ui.add_space(10.0);
@@ -1297,6 +1310,15 @@ impl SynthUI {
                 }
                 if knob(ui, "FM", &mut self.osc_fm, 0.0, 1.0, 0.0, false, fmt_pct) {
                     self.voice_manager.lock().set_osc_fm(self.osc_fm);
+                }
+                if knob(ui, "Ring", &mut self.ring, 0.0, 1.0, 0.0, false, fmt_pct) {
+                    self.voice_manager.lock().set_ring(self.ring);
+                }
+                if let Some(i) =
+                    segmented(ui, "sync", &["FREE", "SYNC"], if self.sync { 1 } else { 0 })
+                {
+                    self.sync = i == 1;
+                    self.voice_manager.lock().set_sync(self.sync);
                 }
             });
         });

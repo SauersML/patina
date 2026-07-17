@@ -14,13 +14,13 @@ use crate::oscillator::Waveform;
 /// The factory bank, embedded so the binary is self-contained.
 pub const FACTORY: &[(&str, &str)] = &[
     ("Init", include_str!("../patches/init.patch")),
-    ("Velvet", include_str!("../patches/velvet-strings.patch")),
-    ("Acid", include_str!("../patches/acid-bath.patch")),
-    ("Pluck", include_str!("../patches/night-pluck.patch")),
-    ("Ghost", include_str!("../patches/tape-ghost.patch")),
+    ("Glasswing", include_str!("../patches/velvet-strings.patch")),
+    ("Rust Engine", include_str!("../patches/acid-bath.patch")),
+    ("Peppermint", include_str!("../patches/night-pluck.patch")),
+    ("Sea of Dials", include_str!("../patches/tape-ghost.patch")),
     ("Fathom", include_str!("../patches/fathom-bass.patch")),
-    ("Cry", include_str!("../patches/germanium-cry.patch")),
-    ("Cathedral", include_str!("../patches/cathedral.patch")),
+    ("Tears", include_str!("../patches/germanium-cry.patch")),
+    ("Moths", include_str!("../patches/cathedral.patch")),
 ];
 
 /// A `#` starts a comment at line start or after whitespace (same rule as
@@ -77,7 +77,7 @@ pub fn serialize(p: &ParamValues) -> String {
         "# Patina patch\n\
          volume {}\nwaveform {}\nosc2_wave {}\nosc2_pitch {}\nosc2_level {}\n\
          osc3_wave {}\nosc3_pitch {}\nosc3_level {}\n\
-         circuit {}\nkey_track {}\nosc_fm {}\n\
+         circuit {}\nkey_track {}\nosc_fm {}\nsync {}\nring {}\n\
          detune {}\nnoise {}\nglide {}\nsub {}\npulse_width {}\n\
          lfo_rate {}\nlfo_shape {}\nlfo_pitch {}\nlfo_filter {}\nlfo_pwm {}\n\
          cutoff {}\nresonance {}\ndrive {}\nsaturation {}\nhpf {}\n\
@@ -90,6 +90,7 @@ pub fn serialize(p: &ParamValues) -> String {
         osc3_wave, p.osc3_pitch, p.osc3_level,
         if p.circuit == crate::oscillator::CircuitModel::Arp { 1 } else { 0 },
         p.key_track, p.osc_fm,
+        if p.sync { 1 } else { 0 }, p.ring,
         p.detune, p.noise, p.glide, p.sub, p.pulse_width,
         p.lfo_rate, p.lfo_shape, p.lfo_pitch, p.lfo_filter, p.lfo_pwm,
         p.cutoff, p.resonance, p.drive, p.saturation, p.hpf_cutoff,

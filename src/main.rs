@@ -109,6 +109,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .position(|a| a == "--play")
         .and_then(|i| args.get(i + 1))
         .cloned();
+    // No --play given: put the needle down somewhere new each launch
+    let song_path = song_path.or_else(|| {
+        let mut songs: Vec<String> = std::fs::read_dir("songs")
+            .ok()?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path().to_string_lossy().into_owned())
+            .filter(|p| p.ends_with(".song"))
+            .collect();
+        if songs.is_empty() {
+            return None;
+        }
+        songs.sort();
+        let pick = rand::random::<u32>() as usize % songs.len();
+        println!("Song: shuffling to {}", songs[pick]);
+        Some(songs.remove(pick))
+    });
     let song_path = song_path.as_deref();
 
     // Offline bounce: no window, no audio device, exits when the file is done

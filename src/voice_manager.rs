@@ -47,6 +47,8 @@ pub struct ParamValues {
     pub circuit: CircuitModel,
     pub key_track: f32,
     pub osc_fm: f32,
+    pub sync: bool,
+    pub ring: f32,
     pub pulse_width: f32,
     pub lfo_rate: f32,
     pub lfo_shape: f32,
@@ -98,6 +100,8 @@ impl Default for ParamValues {
             circuit: CircuitModel::Moog,
             key_track: 0.4,
             osc_fm: 0.0,
+            sync: false,
+            ring: 0.0,
             pulse_width: 0.5,
             lfo_rate: 1.0,
             lfo_shape: 0.5,
@@ -523,6 +527,20 @@ impl VoiceManager {
         }
     }
 
+    pub fn set_sync(&mut self, on: bool) {
+        self.params.sync = on;
+        for voice in &mut self.voices {
+            voice.set_sync(on);
+        }
+    }
+
+    pub fn set_ring(&mut self, amount: f32) {
+        self.params.ring = amount.clamp(0.0, 1.0);
+        for voice in &mut self.voices {
+            voice.set_ring(self.params.ring);
+        }
+    }
+
     pub fn set_glide(&mut self, seconds: f32) {
         // Range per the Polymoog factory spec: full glide is 3.75-8.75 s
         // across the keyboard, so the knob reaches well past 2 s
@@ -798,6 +816,47 @@ mod tests {
         assert!(
             (early_f as f32) < late_f as f32 * 0.85,
             "glide should start near the old pitch: early={early_f}, late={late_f} crossings"
+        );
+    }
+
+    /// The ring modulator multiplies the two oscillators: sine carriers at
+    /// f1 and f2 must yield sum and difference tones with the carriers
+    /// suppressed (ARP: nulls trimmed below 10 mV of a 5 V program level).
+    #[test]
+    fn ring_produces_sidebands_and_suppresses_carriers() {
+        let sr = 44100.0;
+        let mut vm = VoiceManager::new(sr, 8);
+        vm.warm_up();
+        vm.set_waveform(Waveform::Sine);
+        vm.set_detune(0.0);
+        vm.set_ring(1.0);
+        vm.set_osc_pitch(1, 7.02); // ~perfect fifth: f2 = 1.5 f1
+        vm.set_attack(0.005);
+        vm.set_sustain(1.0);
+        vm.set_reverb_wet(0.0);
+        vm.note_on(69, 0.9); // f1 = 440, f2 ~= 660
+        let n = sr as usize;
+        let mut out = Vec::with_capacity(n);
+        for _ in 0..n {
+            out.push(vm.render_next().0);
+        }
+        let goertzel = |freq: f32| -> f32 {
+            let (mut re, mut im) = (0.0f32, 0.0f32);
+            for (i, &s) in out[n / 2..].iter().enumerate() {
+                let a = std::f32::consts::TAU * freq * i as f32 / sr;
+                re += s * a.cos();
+                im += s * a.sin();
+            }
+            (re * re + im * im).sqrt()
+        };
+        let sum_tone = goertzel(440.0 + 660.5);
+        let diff_tone = goertzel(660.5 - 440.0);
+        let carrier1 = goertzel(440.0);
+        let sidebands = sum_tone.max(diff_tone);
+        assert!(
+            sidebands > 3.0 * carrier1,
+            "ring should make sidebands dominate the carrier: sum={sum_tone:.1}, \
+             diff={diff_tone:.1}, carrier={carrier1:.1}"
         );
     }
 
