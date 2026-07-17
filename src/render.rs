@@ -10,7 +10,21 @@ pub fn render_to_wav(events: &[crate::song::SongEvent], path: &str) -> Result<()
     let sample_rate = 48000.0f32;
     println!("Rendering {} events...", events.len());
     let start = std::time::Instant::now();
-    let frames = crate::song::render_offline(events, sample_rate);
+    let mut frames = crate::song::render_offline(events, sample_rate);
+
+    // Master to -1 dBFS peak: the engine's gain staging is patch-dependent,
+    // and a bounce should use the medium's headroom
+    let peak = frames
+        .iter()
+        .fold(0.0f32, |a, &(l, r)| a.max(l.abs()).max(r.abs()));
+    if peak > 1e-6 {
+        let gain = 0.891 / peak; // -1 dBFS
+        for (l, r) in &mut frames {
+            *l *= gain;
+            *r *= gain;
+        }
+        println!("Normalized: peak {:.3} -> -1 dBFS ({:+.1} dB)", peak, 20.0 * gain.log10());
+    }
     let audio_seconds = frames.len() as f32 / sample_rate;
     println!(
         "Rendered {:.1}s of audio in {:.2}s ({:.1}x realtime)",
