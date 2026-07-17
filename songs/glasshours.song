@@ -1,0 +1,68 @@
+# Glass Hours — two voices only: a pad that breathes and a lead that
+# sings above it. Aphex's Rhubarb side fused with Boards of Canada's
+# dorian sunlight. Everything in tune; the unease is harmonic —
+# A minor keeps borrowing light it can't keep (the D major bar, the
+# lydian F# over G), and near the end a single Bb leans on the melody
+# like a hand on the shoulder, then resolves.
+#
+# A section: Am7 - Fmaj7 - C - G, the melody arching to C6 and D6.
+# B section: Am7 - D - C - G(lyd), the lead climbing to F#6 and G6 —
+# the glow. Return, and the shadow: Bb5 falling to A5. Coda on Aadd9.
+
+bpm 88
+gate 0.92
+
+automate lfo_rate
+4.2
+automate lfo_pitch
+4
+automate lfo_shape
+0.5
+automate chorus_mode
+2
+automate chorus_depth
+0.3
+automate spring
+0.08
+automate reverb_decay
+0.85
+automate tape_wow
+0.2
+automate tape_flutter
+0.1
+automate tape_drive
+0.18
+automate tape_age
+0.5
+
+track pad vel=0.55 patch=dreampad
+[A2 E3 C4]:8 [A2 G3 C4 E4]:8
+[A2 G3 C4 E4]:8 [F2 E3 A3 C4]:8 [C3 G3 B3 E4]:8 [G2 D3 B3 D4]:8
+[A2 G3 C4 E4]:8 [D3 F#3 A3 D4]:8 [C3 G3 B3 E4]:8 [G2 D3 B3 F#4]:8
+[A2 G3 C4 E4]:8 [F2 E3 A3 C4]:8 [C3 G3 B3 E4]:8 [G2 D3 B3 D4]:8
+[A2 E3 A3 B3 E4]:12
+
+track lead vel=0.62 patch=glasslead
+R:16
+E5:1.5 G5:0.5 A5:2 | B5:1 A5:1 G5:1 E5:1
+C6:1.5 B5:0.5 A5:1 G5:1 | A5:4
+G5:1.5 E5:0.5 G5:1 A5:1 | B5:2 C6:1 D6:1
+D6:1.5 B5:0.5 A5:1 G5:1 | E5:3 R:1
+A5:1 C6:1 E6:2 | D6:1.5 C6:0.5 B5:2
+A5:1 D6:1 F#6:2 | E6:1.5 D6:0.5 A5:2
+G5:1 B5:1 E6:2 | D6:1.5 B5:0.5 C6:2
+B5:1 D6:1 F#6:1 G6:1 | F#6:1.5 D6:0.5 B5:2
+E5:1.5 G5:0.5 A5:2 | B5:1 A5:1 G5:1 E5:1
+C6:1.5 B5:0.5 A5:1 G5:1 | A5:4
+G5:1.5 E5:0.5 G5:1 A5:1 | B5:2 C6:1 D6:1
+Bb5:1.5 A5:2.5 | G5:1 E5:2 R:1
+R:2 E6:2 C6:2 B5:2 A5:4
+
+automate pad.cutoff
+1300 R:16 2000:32@smooth 2600:16@smooth 2200:16@smooth R:32 900:12@exp
+
+automate lead.cutoff
+3200 R:24 4200:8@smooth 3400:8@smooth 4200:8@smooth 5200:16@smooth 4400:16@smooth 3800:24@smooth R:8 R:12
+
+automate reverb_wet
+0.45 R:48 0.58:16@smooth 0.48:16@smooth R:32 0.72:12@smooth
