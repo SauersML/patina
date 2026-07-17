@@ -29,6 +29,7 @@ pub struct ParamValues {
     pub noise: f32,
     pub spring: f32,
     pub glide: f32, // portamento time in seconds, 0 = off
+    pub sub: f32,   // sub-oscillator level, 0..1
     pub pulse_width: f32,
     pub lfo_rate: f32,
     pub lfo_shape: f32,
@@ -70,6 +71,7 @@ impl Default for ParamValues {
             noise: 0.0,
             spring: 0.0,
             glide: 0.0,
+            sub: 0.0,
             pulse_width: 0.5,
             lfo_rate: 1.0,
             lfo_shape: 0.5,
@@ -412,6 +414,13 @@ impl VoiceManager {
 
     pub fn set_pulse_width(&mut self, width: f32) {
         self.params.pulse_width = width.clamp(0.05, 0.95);
+    }
+
+    pub fn set_sub(&mut self, level: f32) {
+        self.params.sub = level.clamp(0.0, 1.0);
+        for voice in &mut self.voices {
+            voice.set_sub_level(self.params.sub);
+        }
     }
 
     pub fn set_glide(&mut self, seconds: f32) {

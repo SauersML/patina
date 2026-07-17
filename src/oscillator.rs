@@ -46,6 +46,11 @@ pub struct Oscillator {
     duty_error: f32,
     /// Waveshaper asymmetry for the triangle fold / sine rounding.
     skew: f32,
+    /// Sub-oscillator, per the Juno-106's MC5534 ("divided by two
+    /// rectangular"): a square one octave down, phase-locked to the core by
+    /// construction — its phase advances at exactly half the core rate.
+    sub_phase: f64,
+    last_sub: f32,
 }
 
 #[inline]
@@ -82,6 +87,8 @@ impl Oscillator {
             duty: 0.5 + duty_error,
             duty_error,
             skew,
+            sub_phase: 0.0,
+            last_sub: 0.0,
         }
     }
 
@@ -102,8 +109,21 @@ impl Oscillator {
             frequency * self.freq_mult * (1.0 + self.drift + common_drift) * pitch_mult;
         self.duty = (pulse_width + self.duty_error).clamp(0.03, 0.97);
 
-        self.phase += detuned_frequency as f64 / self.sample_rate as f64;
+        let dt = detuned_frequency as f64 / self.sample_rate as f64;
+        self.phase += dt;
         self.phase %= 1.0;
+
+        // Sub square at half rate, sharing the core's increment so it can
+        // never drift against it; bandlimited with its own polyBLEP
+        self.sub_phase += dt * 0.5;
+        self.sub_phase %= 1.0;
+        {
+            let ts = self.sub_phase as f32;
+            let dts = (dt * 0.5) as f32;
+            let naive = if ts < 0.5 { 1.0 } else { -1.0 };
+            self.last_sub =
+                naive - self.polyblep(ts, dts) + self.polyblep((ts + 0.5) % 1.0, dts);
+        }
 
         let t = self.phase as f32;
         let raw_sample = match self.waveform {
@@ -216,6 +236,11 @@ impl Oscillator {
         }
     }
 
+    /// The sub square computed during the last `next_sample` call.
+    pub fn sub(&self) -> f32 {
+        self.last_sub
+    }
+
     pub fn set_frequency(&self, frequency: f32) {
         self.frequency.store(frequency.to_bits(), Ordering::Relaxed);
     }
@@ -290,6 +315,42 @@ mod tests {
         assert!(
             thd > 0.005 && thd < 0.12,
             "transistor sine should have a few percent THD, got {thd}"
+        );
+    }
+
+    /// The sub square runs at exactly half the core frequency and never
+    /// drifts against it (shared phase increment).
+    #[test]
+    fn sub_is_locked_one_octave_down() {
+        let sr = 44100.0;
+        let mut osc = Oscillator::new(sr, 441.0, 5);
+        osc.set_waveform(Waveform::Sawtooth);
+        let mut core_wraps = 0;
+        let mut sub_rises = 0;
+        let mut prev_sub = 0.0f32;
+        let mut prev_phase_sample = -1.0f32;
+        for _ in 0..44100 {
+            let s = osc.next_sample(0.0, 1.0, 0.5);
+            // Core wrap: the saw jumps down by ~2
+            if prev_phase_sample - s > 1.0 {
+                core_wraps += 1;
+            }
+            prev_phase_sample = s;
+            let sub = osc.sub();
+            if prev_sub < 0.0 && sub > 0.0 {
+                sub_rises += 1;
+            }
+            prev_sub = sub;
+        }
+        // 441 Hz core (bandlimited jumps blur the wrap detector a little);
+        // the sub must sit at 220.5 Hz -> ~220 rising edges in one second
+        assert!(
+            (380..=480).contains(&core_wraps),
+            "core wraps {core_wraps}"
+        );
+        assert!(
+            (210..=231).contains(&sub_rises),
+            "sub should run at ~220 Hz: got {sub_rises} rises"
         );
     }
 

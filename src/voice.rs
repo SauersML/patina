@@ -47,6 +47,9 @@ pub struct Voice {
     /// per-sample RC coefficient (1.0 = instant).
     glide_offset: f32,
     glide_k: f32,
+    /// Juno-style sub-oscillator level: the first oscillator's divide-by-two
+    /// square, mixed in before the filter.
+    sub_level: f32,
 }
 
 impl Voice {
@@ -104,6 +107,7 @@ impl Voice {
             drift_rng: seed.wrapping_mul(0x27D4_EB2F) | 1,
             glide_offset: 0.0,
             glide_k: 1.0,
+            sub_level: 0.0,
         };
         voice.set_detune(7.0);
         voice
@@ -131,6 +135,10 @@ impl Voice {
 
     pub fn set_glide_coef(&mut self, k: f32) {
         self.glide_k = k.clamp(1e-5, 1.0);
+    }
+
+    pub fn set_sub_level(&mut self, level: f32) {
+        self.sub_level = level.clamp(0.0, 1.0);
     }
 
     /// `glide_from_cv` is the most recently played note's CV in octaves
@@ -217,6 +225,7 @@ impl Voice {
             + self.oscs[1].next_sample(self.common_drift, pitch_mult, pulse_width)
             + self.oscs[2].next_sample(self.common_drift, pitch_mult, pulse_width))
             * (1.0 / 3.0)
+            + self.oscs[0].sub() * self.sub_level * 0.9
             + noise;
 
         // Cutoff modulation in octaves: filter envelope, key tracking, velocity

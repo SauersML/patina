@@ -4,6 +4,7 @@ waveform 2
 detune 3
 noise 0
 glide 0.05
+sub 0
 pulse_width 0.5
 lfo_rate 1
 lfo_shape 0.5

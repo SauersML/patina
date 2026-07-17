@@ -36,7 +36,8 @@
 // use plain sets), detune, cutoff, resonance, drive, saturation, hpf
 // (high-pass cutoff Hz, 16 = off), fuzz (0..1 germanium fuzz), noise
 // (0..1 shared noise into the voices), spring (0..1 spring reverb wet),
-// glide (portamento seconds, 0 = off), pulse_width (0.05..0.95), lfo_rate (Hz), lfo_shape (0=saw 0.5=tri
+// glide (portamento seconds, 0 = off), sub (0..1 octave-down square),
+// pulse_width (0.05..0.95), lfo_rate (Hz), lfo_shape (0=saw 0.5=tri
 // 1=ramp), lfo_pitch (vibrato cents), lfo_filter (octaves), lfo_pwm
 // (width swing 0..0.45), attack,
 // decay, sustain, release, filter_env (octaves, -5..+5), filter_attack,
@@ -75,6 +76,7 @@ pub enum Param {
     NoiseLevel,
     SpringWet,
     Glide,
+    SubLevel,
     PulseWidth,
     LfoRate,
     LfoShape,
@@ -116,6 +118,7 @@ impl Param {
             "noise" => Param::NoiseLevel,
             "spring" => Param::SpringWet,
             "glide" => Param::Glide,
+            "sub" => Param::SubLevel,
             "pulse_width" => Param::PulseWidth,
             "lfo_rate" => Param::LfoRate,
             "lfo_shape" => Param::LfoShape,
@@ -166,6 +169,7 @@ impl Param {
             Param::NoiseLevel => vm.set_noise(value),
             Param::SpringWet => vm.set_spring(value),
             Param::Glide => vm.set_glide(value),
+            Param::SubLevel => vm.set_sub(value),
             Param::PulseWidth => vm.set_pulse_width(value),
             Param::LfoRate => vm.set_lfo_rate(value),
             Param::LfoShape => vm.set_lfo_shape(value),
