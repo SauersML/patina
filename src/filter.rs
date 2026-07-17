@@ -47,10 +47,13 @@ use crate::adaa::AdaaTanh;
 
 /// Thermal voltage at room temperature, volts.
 const VT: f32 = 0.02585;
-/// Full-scale (+/-1.0) program level maps to this many volts at the ladder
-/// input with drive = 1. Chosen so A*Vin = 0.4 at full scale — the drive
-/// voicing the instrument's patches were built around. (CHOICE)
-const V_REF: f32 = 2.0 * VT * 0.4;
+/// The input attenuation stage: program level (10 V p-p) is dropped to
+/// ladder operating level before the differential pairs. The literature
+/// had to fit this empirically too ("preceded by a passive attenuation
+/// stage... the attenuation value was chosen empirically" — Paschou et
+/// al.); ours is voiced so a full 5 V swing lands at tanh argument 0.4
+/// with drive = 1, the operating point the patches were built around.
+const INPUT_ATTEN: f32 = 0.4 * 2.0 * VT / crate::oscillator::PROGRAM_V;
 /// Newton-Raphson stopping tolerance on the residual, volts.
 const NEWTON_TOL: f32 = 1e-6;
 const NEWTON_MAX_ITERS: usize = 8;
@@ -264,7 +267,9 @@ impl LadderFilter {
         let k = self.resonance * self.res_cal * 1.12;
 
         // FS -> volts; midpoint averages this sample's input with the last
-        let vin = input * V_REF * self.drive;
+        // Program volts through the input attenuator; drive is the
+        // attenuator's setting (more drive = more signal reaches the ladder)
+        let vin = input * INPUT_ATTEN * self.drive;
         let vin_avg_a = (vin + self.vin_prev) * 0.5 / (2.0 * VT);
         self.vin_prev = vin;
 
@@ -277,7 +282,10 @@ impl LadderFilter {
 
         // Output: -V4, back to FS. sqrt(drive) make-up keeps the drive knob
         // about grit rather than volume (CHOICE)
-        let mut out = -self.v[3] / (V_REF * self.drive.sqrt().max(0.5));
+        // Output buffer restores program level: unity through-gain at
+        // resonance minimum, per the 904A calibration ("output amplitude
+        // equals the VCO1 input amplitude")
+        let mut out = -self.v[3] / (INPUT_ATTEN * self.drive.sqrt().max(0.5));
 
         // Partial make-up for the exact 1/(1+k) passband loss. The hardware
         // does NOT do this — players ride the volume; this keeps patches
@@ -327,8 +335,8 @@ mod tests {
             f.set_resonance(0.0);
             f.set_drive(0.2); // small signal: linear regime
         };
-        let g_fc = gain_at(cfg, 1000.0, 0.1);
-        let g_pass = gain_at(cfg, 62.5, 0.1);
+        let g_fc = gain_at(cfg, 1000.0, 0.5);
+        let g_pass = gain_at(cfg, 62.5, 0.5);
         let db = 20.0 * (g_fc / g_pass).log10();
         assert!(
             (-13.5..=-10.5).contains(&db),
@@ -345,8 +353,8 @@ mod tests {
             f.set_resonance(0.0);
             f.set_drive(0.2);
         };
-        let g2 = gain_at(cfg, 2000.0, 0.1);
-        let g4 = gain_at(cfg, 4000.0, 0.1);
+        let g2 = gain_at(cfg, 2000.0, 0.5);
+        let g4 = gain_at(cfg, 4000.0, 0.5);
         let ratio = g4 / g2;
         assert!(
             (0.05..=0.13).contains(&ratio),
@@ -369,7 +377,7 @@ mod tests {
                 f.set_drive(0.2);
             },
             400.0,
-            0.05,
+            0.25,
         );
         let gk = gain_at(
             |f| {
@@ -378,7 +386,7 @@ mod tests {
                 f.set_drive(0.2);
             },
             400.0,
-            0.05,
+            0.25,
         );
         // knob -> k includes the 1.12 threshold placement and unit trim
         let k = knob * 1.12;
@@ -405,7 +413,7 @@ mod tests {
         let n = sr as usize;
         let mut out = Vec::with_capacity(n);
         for i in 0..n {
-            let x = 0.9 * (TAU * f0 * i as f32 / sr).sin();
+            let x = 4.5 * (TAU * f0 * i as f32 / sr).sin();
             out.push(f.process(x, 1.0));
         }
         let goertzel = |freq: f32| -> f32 {
@@ -436,7 +444,7 @@ mod tests {
         for _ in 0..8000 {
             filter.process(0.0, 1.0);
         }
-        filter.process(0.5, 1.0);
+        filter.process(2.5, 1.0);
         let mut tail = 0.0f32;
         for i in 0..44100 {
             let y = filter.process(0.0, 1.0);
@@ -487,7 +495,7 @@ mod tests {
             f.set_cutoff(cut);
             f.set_resonance(res);
             for i in 0..22050 {
-                let x = 0.95 * (TAU * 220.0 * i as f32 / sr).sin();
+                let x = 4.75 * (TAU * 220.0 * i as f32 / sr).sin();
                 f.process(x, 1.0);
             }
             worst = worst.max(f.take_max_iters());

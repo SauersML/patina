@@ -1,4 +1,4 @@
-use crate::oscillator::{CircuitModel, Oscillator, Waveform};
+use crate::oscillator::{CircuitModel, Oscillator, Waveform, PROGRAM_V};
 use crate::envelope::Envelope;
 use crate::filter::LadderFilter;
 use crate::hpf::HighPassLadder;
@@ -18,10 +18,11 @@ const RESET_TIME: f32 = 1.5e-6;
 /// silence between notes is not a thing hardware does.
 const VCA_FLOOR: f32 = 1e-3;
 
-/// Sum scale into the ladder: deliberately hotter than 1/3-normalization.
-/// Three oscillators up SHOULD push the filter into its tanh curvature —
-/// the ARP 2600 manual lists "VCF OVERDRIVEN" under NO PROBLEM.
-const OSC_SUM_SCALE: f32 = 0.45;
+/// Mixer gain into the VCF's summing junction (dimensionless; the signals
+/// are volts). Deliberately hot: three oscillators up SHOULD push the
+/// ladder into its tanh curvature — the ARP 2600 manual lists "VCF
+/// OVERDRIVEN" under NO PROBLEM.
+const MIXER_GAIN: f32 = 0.45;
 
 /// Exponential-converter calibration reference (~C4). V/oct scaling error
 /// accumulates in cents per octave away from this point.
@@ -332,20 +333,26 @@ impl Voice {
         let pitch_mult =
             pitch_mult * (1.0 + (substrate.pitch_mult - 1.0) * self.substrate_sens);
 
-        // Osc 2 renders first; its previous sample FMs osc 1 through the
-        // exponential converter (the 2600's prewired routing) — at zero
-        // amount the exp2 is skipped entirely
+        // The voice's coupling graph is acyclic (every stage buffered, as
+        // the schematics show), so integrating stages in topological order
+        // with midpoint-averaged couplings IS the coherent-system solve.
+        // Osc 2 steps first; the FM coupling into osc 1's rate uses the
+        // MIDPOINT of osc 2's step (average of its old and new output) —
+        // the correct one-way ODE coupling, no artificial unit delay.
         let o2 = self.oscs[1].next_sample(self.common_drift, pitch_mult, pulse_width);
+        let o2_norm = (o2 / (0.9 * PROGRAM_V)).clamp(-1.0, 1.0);
         let fm_mult = if self.fm_amount > 1e-4 {
-            (self.fm_amount * self.prev_osc2 * 2.0).exp2()
+            (self.fm_amount * (o2_norm + self.prev_osc2) * 0.5 * 2.0).exp2()
         } else {
             1.0
         };
-        self.prev_osc2 = (o2 * 0.7).clamp(-1.0, 1.0);
+        self.prev_osc2 = o2_norm;
         let o1 = self.oscs[0].next_sample(self.common_drift, pitch_mult * fm_mult, pulse_width);
         let o3 = self.oscs[2].next_sample(self.common_drift, pitch_mult, pulse_width);
 
-        let osc = (o1 + o2 * self.osc_level[0] + o3 * self.osc_level[1]) * OSC_SUM_SCALE
+        // Volts everywhere: the mixer sums program-level signals into the
+        // VCF's summing junction
+        let osc = (o1 + o2 * self.osc_level[0] + o3 * self.osc_level[1]) * MIXER_GAIN
             + self.oscs[0].sub() * self.sub_level * 0.9
             + noise
             + bleed;
@@ -380,7 +387,7 @@ impl Voice {
         let vel_amp = 0.3 + 0.7 * self.velocity * self.velocity;
         // 902 control feedthrough: the envelope's edge couples into the
         // audio path (post-trim residue) — fast attacks thump, physically
-        let feedthrough = (amp_env - self.prev_env) * self.vca_feedthrough;
+        let feedthrough = (amp_env - self.prev_env) * self.vca_feedthrough * PROGRAM_V;
         self.prev_env = amp_env;
         // The VCA never fully closes: the -60 dB floor keeps the
         // free-running oscillators faintly alive between notes

@@ -39,11 +39,16 @@ pub enum CircuitModel {
     Arp,
 }
 
-// Peak-amplitude ratios from the 901B service targets, saw = 1.0
-const AMP_SAW: f32 = 1.0;
-const AMP_SINE: f32 = 0.82;
-const AMP_TRI: f32 = 1.3;
-const AMP_PULSE: f32 = 1.38;
+// The oscillator speaks VOLTS. Both service manuals put program level at
+// 10 V peak-to-peak ("R50 and R51 reduce the amplitude of the pulse wave to
+// about 10 volts, peak to peak"; "most oscillator waveforms are
+// approximately 10 V p-p"), so the saw is +/-5 V and the other waves carry
+// the 901-B alignment ratios relative to it.
+pub const PROGRAM_V: f32 = 5.0;
+const AMP_SAW: f32 = PROGRAM_V;
+const AMP_SINE: f32 = 0.82 * PROGRAM_V;
+const AMP_TRI: f32 = 1.3 * PROGRAM_V;
+const AMP_PULSE: f32 = 1.38 * PROGRAM_V;
 
 pub struct Oscillator {
     phase: f64,
@@ -143,8 +148,8 @@ impl Oscillator {
             let ts = self.sub_phase as f32;
             let dts = (dt * 0.5) as f32;
             let naive = if ts < 0.5 { 1.0 } else { -1.0 };
-            self.last_sub =
-                naive - self.polyblep(ts, dts) + self.polyblep((ts + 0.5) % 1.0, dts);
+            self.last_sub = PROGRAM_V
+                * (naive - self.polyblep(ts, dts) + self.polyblep((ts + 0.5) % 1.0, dts));
         }
 
         let t = self.phase as f32;
@@ -273,17 +278,17 @@ impl Oscillator {
     }
 
     fn soft_clip(&self, x: f32) -> f32 {
-        // 901-C output stage (drawing #1126): the push-pull pair runs between
-        // +12 and -6 rails, so positive swings have roughly twice the
-        // headroom of negative ones — hard-driven waves flatten their lower
-        // lobe first, adding gentle even harmonics. Cubic knees per side,
-        // transparent at the alignment levels.
+        // 901-C output stage (drawing #1126), now in volts: the push-pull
+        // pair runs between +12 and -6 rails, so positive swings have about
+        // twice the headroom of negative ones — hard-driven waves flatten
+        // their lower lobe first (gentle even harmonics). Cubic knees per
+        // side, transparent at the 10 V p-p alignment levels.
         if x >= 0.0 {
-            let x = x.min(2.4);
-            x * (1.0 - x * x / 17.28)
+            let x = x.min(12.0);
+            x * (1.0 - x * x / 432.0)
         } else {
-            let x = x.max(-1.9);
-            x * (1.0 - x * x / 10.83)
+            let x = x.max(-9.5);
+            x * (1.0 - x * x / 270.75)
         }
     }
 

@@ -153,10 +153,11 @@ impl SlewLimiter {
     pub fn new(sample_rate: f32) -> Self {
         Self {
             state: 0.0,
-            // The 1458's 0.5 V/us at 10 V full scale, in FS per sample.
-            // At audio sample rates this only engages on multi-voice
-            // summed transients — exactly when hardware TIM appears.
-            max_step: 50_000.0 / sample_rate,
+            // The 1458's 0.5 V/us, literally: 500,000 volts per second.
+            // The bus carries real volts, so no unit conversion is needed;
+            // at audio rates this engages only on hot multi-voice summed
+            // transients — exactly when hardware TIM appears.
+            max_step: 500_000.0 / sample_rate,
         }
     }
 
@@ -228,19 +229,20 @@ mod tests {
     fn slew_limiter_bounds_edges_but_passes_audio() {
         let sr = 44100.0;
         let mut slew = SlewLimiter::new(sr);
-        // A hot multi-voice summed transient cannot arrive in one sample...
-        let y = slew.process(3.0);
-        assert!(y < 3.0 && y > 0.0);
-        // ...but ordinary audio-rate content passes unchanged
+        // A hot multi-voice summed transient (volts) cannot arrive in one
+        // sample...
+        let y = slew.process(20.0);
+        assert!(y < 20.0 && y > 0.0);
+        // ...but ordinary program-level audio passes unchanged
         let mut slew = SlewLimiter::new(sr);
         let mut max_err = 0.0f32;
         for n in 0..4410 {
-            let x = (TAU * 5000.0 * n as f32 / sr).sin() * 0.8;
+            let x = (TAU * 5000.0 * n as f32 / sr).sin() * 8.0;
             let y = slew.process(x);
             if n > 10 {
                 max_err = max_err.max((y - x).abs());
             }
         }
-        assert!(max_err < 1e-3, "5 kHz sine should pass cleanly, err={max_err}");
+        assert!(max_err < 1e-2, "5 kHz sine should pass cleanly, err={max_err}");
     }
 }

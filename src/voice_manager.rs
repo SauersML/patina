@@ -1,7 +1,7 @@
 use crate::voice::Voice;
 use crate::reverb::Reverb;
 use crate::chorus::{Chorus, ChorusMode};
-use crate::oscillator::{CircuitModel, Waveform};
+use crate::oscillator::{CircuitModel, Waveform, PROGRAM_V};
 use crate::tape::Tape;
 use crate::fuzz::Fuzz;
 use crate::noise::NoiseSource;
@@ -564,7 +564,8 @@ impl VoiceManager {
         // each voice's envelope, but a single correlated source
         self.noise_gain += (self.params.noise - self.noise_gain) * 0.001;
         let noise = if self.noise_gain > 1e-4 {
-            self.noise_source.next() * self.noise_gain * 0.8
+            // ARP spec: noise is ~20 V p-p at full level, twice program
+            self.noise_source.next() * self.noise_gain * 0.8 * PROGRAM_V
         } else {
             0.0
         };
@@ -617,16 +618,18 @@ impl VoiceManager {
             right += r;
         }
         // What the supply just delivered — next sample's rail load
-        self.prev_current = left.abs() + right.abs();
+        // (normalized back from volts so the substrate scale is unchanged)
+        self.prev_current = (left.abs() + right.abs()) / PROGRAM_V;
 
         // Smoothed master gain: fixed headroom, no zipper on volume automation
-        // The summing amp sees the full multi-voice swing; its finite slew
-        // rate shaves only the hottest, fastest edges (transient
-        // intermodulation) — then the master gain scales the result
+        // The summing amp sees the full multi-voice swing IN VOLTS; its
+        // finite slew rate shaves only the hottest, fastest edges
+        // (transient intermodulation). Volts convert to sample units here,
+        // once, at the bus — nowhere else.
         left = self.slew_left.process(left);
         right = self.slew_right.process(right);
         self.gain += (self.params.volume - self.gain) * 0.0008;
-        let g = self.gain * 0.7;
+        let g = self.gain * 0.7 / PROGRAM_V;
         left *= g;
         right *= g;
 

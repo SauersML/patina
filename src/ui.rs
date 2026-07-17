@@ -304,7 +304,7 @@ fn knob(
     logarithmic: bool,
     fmt: impl Fn(f32) -> String,
 ) -> bool {
-    let (rect, response) = ui.allocate_exact_size(vec2(63.0, 88.0), Sense::click_and_drag());
+    let (rect, response) = ui.allocate_exact_size(vec2(59.0, 88.0), Sense::click_and_drag());
     let mut changed = false;
 
     let to_t = |v: f32| -> f32 {
@@ -480,7 +480,8 @@ fn wave_glyph(painter: &egui::Painter, rect: Rect, waveform: Waveform, color: Co
 }
 
 /// Segmented waveform selector: one hairline container, four cells.
-fn waveform_selector(ui: &mut egui::Ui, selected: &mut Waveform) -> bool {
+/// `id` distinguishes the three oscillator sections' selectors.
+fn waveform_selector(ui: &mut egui::Ui, id: &str, selected: &mut Waveform) -> bool {
     const OPTIONS: [Waveform; 4] = [
         Waveform::Sine,
         Waveform::Triangle,
@@ -503,7 +504,7 @@ fn waveform_selector(ui: &mut egui::Ui, selected: &mut Waveform) -> bool {
         );
         let response = ui.interact(
             cell_rect,
-            ui.id().with(("wave", i)),
+            ui.id().with((id, "wave", i)),
             Sense::click(),
         );
         let is_selected = *selected == *wf;
@@ -624,8 +625,8 @@ fn card<R>(
     let bg_idx = ui.painter().add(Shape::Noop);
     let inner = egui::Frame::NONE
         .inner_margin(egui::Margin {
-            left: 14,
-            right: 14,
+            left: 12,
+            right: 12,
             top: 9,
             bottom: 10,
         })
@@ -1064,12 +1065,10 @@ impl SynthUI {
                 ui.spacing_mut().item_spacing = vec2(11.0, 10.0);
                 self.draw_preset_strip(ui);
                 let top = egui::Layout::left_to_right(egui::Align::TOP);
+                let full = ui.available_width();
+                self.draw_oscillator_card(ui, tex.as_mut(), Some(full + 28.0));
                 ui.with_layout(top, |ui| {
-                    self.draw_oscillator_card(ui, tex.as_mut(), None);
-                    let rest = ui.available_width();
-                    self.draw_envelope_card(ui, tex.as_mut(), Some(rest));
-                });
-                ui.with_layout(top, |ui| {
+                    self.draw_envelope_card(ui, tex.as_mut(), None);
                     self.draw_filter_card(ui, tex.as_mut(), None);
                     let rest = ui.available_width();
                     self.draw_filter_env_card(ui, tex.as_mut(), Some(rest));
@@ -1221,9 +1220,10 @@ impl SynthUI {
     fn draw_oscillator_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>, fill: Option<f32>) {
         card(ui, "Oscillator", tex, fill, |ui| {
             ui.horizontal(|ui| {
+                ui.label(legend("osc 1"));
                 ui.vertical(|ui| {
                     ui.add_space(10.0);
-                    if waveform_selector(ui, &mut self.waveform) {
+                    if waveform_selector(ui, "osc1wave", &mut self.waveform) {
                         self.voice_manager.lock().set_waveform(self.waveform);
                     }
                 });
@@ -1259,16 +1259,6 @@ impl SynthUI {
             // not three clones
             ui.add_space(2.0);
             ui.horizontal(|ui| {
-                // Which hardware's converter circuits shape the waves
-                let circ_sel = if self.circuit == CircuitModel::Arp { 1 } else { 0 };
-                if let Some(i) = segmented(ui, "circuit", &["MOOG", "ARP"], circ_sel) {
-                    self.circuit = if i == 1 { CircuitModel::Arp } else { CircuitModel::Moog };
-                    self.voice_manager.lock().set_circuit(self.circuit);
-                }
-                if knob(ui, "FM", &mut self.osc_fm, 0.0, 1.0, 0.0, false, fmt_pct) {
-                    self.voice_manager.lock().set_osc_fm(self.osc_fm);
-                }
-                ui.add_space(6.0);
                 for which in 1..=2usize {
                     ui.label(legend(if which == 1 { "osc 2" } else { "osc 3" }));
                     let (wave, pitch, level) = if which == 1 {
@@ -1276,20 +1266,8 @@ impl SynthUI {
                     } else {
                         (&mut self.osc3_wave, &mut self.osc3_pitch, &mut self.osc3_level)
                     };
-                    let selected = match *wave {
-                        Waveform::Sine => 0,
-                        Waveform::Square => 1,
-                        Waveform::Sawtooth => 2,
-                        Waveform::Triangle => 3,
-                    };
                     let id = if which == 1 { "osc2wave" } else { "osc3wave" };
-                    if let Some(i) = segmented(ui, id, &["SIN", "SQR", "SAW", "TRI"], selected) {
-                        *wave = [
-                            Waveform::Sine,
-                            Waveform::Square,
-                            Waveform::Sawtooth,
-                            Waveform::Triangle,
-                        ][i];
+                    if waveform_selector(ui, id, wave) {
                         self.voice_manager.lock().set_osc_wave(which, *wave);
                     }
                     if knob(ui, "Pitch", pitch, -24.0, 24.0, if which == 1 { 0.0 } else { -12.0 }, false, |v| {
@@ -1303,6 +1281,16 @@ impl SynthUI {
                     if which == 1 {
                         ui.add_space(10.0);
                     }
+                }
+                ui.add_space(10.0);
+                ui.label(legend("circuit"));
+                let circ_sel = if self.circuit == CircuitModel::Arp { 1 } else { 0 };
+                if let Some(i) = segmented(ui, "circuit", &["MOOG", "ARP"], circ_sel) {
+                    self.circuit = if i == 1 { CircuitModel::Arp } else { CircuitModel::Moog };
+                    self.voice_manager.lock().set_circuit(self.circuit);
+                }
+                if knob(ui, "FM", &mut self.osc_fm, 0.0, 1.0, 0.0, false, fmt_pct) {
+                    self.voice_manager.lock().set_osc_fm(self.osc_fm);
                 }
             });
         });
@@ -1353,7 +1341,7 @@ impl SynthUI {
     }
 
     fn draw_filter_env_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>, fill: Option<f32>) {
-        card(ui, "Filter Envelope", tex, fill, |ui| {
+        card(ui, "Filter Env", tex, fill, |ui| {
             ui.horizontal(|ui| {
                 if knob(ui, "Amount", &mut self.fenv_amount, -5.0, 5.0, 0.0, false, |v| {
                     format!("{:+.1} oct", v)
@@ -1665,7 +1653,7 @@ impl SynthUI {
                         painter.rect_filled(
                             key_rect.expand(2.0),
                             rounding,
-                            Color32::from_rgba_premultiplied(0xe0, 0xa1, 0x54, 40),
+                            Color32::from_rgba_unmultiplied(0x2b, 0xc6, 0xe6, 50),
                         );
                     }
                     let hovered = hovered_note == Some(note) && !pressed;
