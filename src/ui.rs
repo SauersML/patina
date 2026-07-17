@@ -980,6 +980,7 @@ impl SynthUI {
             self.tape_flutter = p.tape_flutter;
             self.tape_drive = p.tape_drive;
             self.tape_age = p.tape_age;
+            self.current_octave = p.ui_octave.round() as i32;
             self.notes_active = vm.held_note_states().iter().any(|&held| held);
 
             // The sky listens, slowly: loudness and filter openness ease in
@@ -1921,6 +1922,9 @@ impl SynthUI {
             self.stop_note(note);
         }
         self.current_octave = (self.current_octave + delta).clamp(0, 8);
+        self.voice_manager
+            .lock()
+            .set_ui_octave(self.current_octave as f32);
     }
 
     fn handle_mouse_input(&mut self, ui: &egui::Ui, rect: Rect, response: &egui::Response) {

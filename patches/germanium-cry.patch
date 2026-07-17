@@ -1,5 +1,6 @@
 # Germanium Tears — a weeping fuzz lead: triangle voice with real vibrato,
 # gliding between notes, crying through a transistor and a spring
+octave 5
 volume 0.6
 waveform 3
 osc2_wave 3

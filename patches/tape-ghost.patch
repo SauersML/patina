@@ -1,5 +1,6 @@
 # Sea of Dials — a haunted telephone choir: pure sine stack drifting on
 # dying tape, every note arriving seasick through the exchange
+octave 4
 volume 0.58
 waveform 0
 osc2_wave 0

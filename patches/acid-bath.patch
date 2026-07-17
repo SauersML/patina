@@ -1,5 +1,6 @@
 # Rust Engine — industrial FM growl: sub-octave saw driving cross-mod
 # through the ARP ladder, germanium grit, tape half-dead. A machine idling.
+octave 3
 volume 0.6
 waveform 2
 osc2_wave 1

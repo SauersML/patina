@@ -74,16 +74,37 @@ R R [A3 C4 E4] R R R [A3 C4 E4] R R [G3 B3 D4] R R R R [A3 C4 E4] R
 R R [A3 C4 E4] R R R [A3 C4 E4] R R [G3 B3 D4] R R R R [A3 C4 E4] R
 
 automate cutoff
-300 2600:32@exp | 400:1 3600:31@exp | 500:1 5000:14@exp 300:2@smooth
+300 1400:8@exp 700:4@smooth 2600:12@exp 900:8@smooth | 3400:8@exp 1200:4@smooth 4200:12@exp 1500:8@smooth | 5000:8@exp 2200:8@smooth 600:2@exp
 
 automate resonance
-1.2 2.2:32@lin | 2.8:16@lin R:16 | 3.4:12@lin 1.0:4@smooth
+1.2 2.0:16@lin 1.5:8@smooth 2.4:8@lin | 2.9:16@lin 2.2:8@smooth 3.3:8@lin | 3.6:12@lin 1.0:4@smooth
+
+automate glide
+0 R:32 0.09 R:30 0
+
+automate filter_decay
+0.16 R:32 0.24:16@lin 0.3:16@lin R:16
+
+automate filter_env
+3.0 R:32 3.8:1 R:29 2.4:2
 
 automate fuzz
 0 R:32 0.55:1 R:29 0:2
 
-automate lfo_rate
-5 R:48 9:16@lin
+automate hpf
+40 R:44 300:4@exp 40:1 R:15
 
-automate lfo_filter
-0 R:48 0.8:14@lin 0:2
+automate sub
+0.4 R:48 0.7:1 R:15
+
+automate drive
+1.6 2.6:48@lin 3.4:14@lin 1.2:2@smooth
+
+automate tape_drive
+0.35 R:32 0.55:1 R:29 0.3:2
+
+automate spring
+0.25 R:32 0.45:1 R:31
+
+automate reverb_wet
+0.12 R:60 0.5:3@smooth 0.1:1

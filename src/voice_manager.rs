@@ -67,6 +67,9 @@ pub struct ParamValues {
     pub reverb_decay: f32,
     pub reverb_wet: f32,
     pub chorus_mode: ChorusMode,
+    /// Keyboard register the UI should sit at; patches set it so a bass
+    /// preset arrives with the keys already down where it lives.
+    pub ui_octave: f32,
     pub chorus_rate: f32,
     pub chorus_depth: f32,
     pub tape_wow: f32,
@@ -120,6 +123,7 @@ impl Default for ParamValues {
             reverb_decay: 0.5,
             reverb_wet: 0.5,
             chorus_mode: ChorusMode::Off,
+            ui_octave: 4.0,
             chorus_rate: 0.5,
             chorus_depth: 0.3,
             tape_wow: 0.0,
@@ -525,6 +529,10 @@ impl VoiceManager {
         for voice in &mut self.voices {
             voice.set_fm_amount(self.params.osc_fm);
         }
+    }
+
+    pub fn set_ui_octave(&mut self, oct: f32) {
+        self.params.ui_octave = oct.clamp(0.0, 8.0);
     }
 
     pub fn set_sync(&mut self, on: bool) {

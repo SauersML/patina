@@ -1,5 +1,6 @@
 # Fathom — benthic pressure bass: a sine two octaves down under a saw,
 # the filter tracking the key so every note keeps its darkness honest
+octave 2
 volume 0.66
 waveform 2
 osc2_wave 1

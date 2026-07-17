@@ -1,5 +1,6 @@
 # Glasswing — a butterfly made of PWM glass: breathing pulse-width shimmer,
 # a whisper of fifth above, chorus III widening it into stained light
+octave 4
 volume 0.55
 waveform 1
 osc2_wave 2

@@ -84,13 +84,34 @@ D2:6 G2:6 A2:6 E2:6
 D2:12
 
 automate cutoff
-900 3200:24@smooth | 5200:12@smooth | R:6 1400:6@exp | 700:6@smooth
+900 2200:12@smooth 3600:12@smooth | 5200:12@smooth 4200:6@smooth 5600:6@smooth | 1400:6@exp 700:6@smooth
+
+automate lfo_pwm
+0.15 0.38:24@smooth R:12 | 0.45:6@smooth 0.2:12@smooth
+
+automate detune
+6 14:36@lin R:6 | 8:12@smooth
+
+automate osc3_level
+0.35 R:24 0.65:12@smooth | 0.4:18@smooth
 
 automate resonance
-0.4 R:36 0.9:6@lin 0.4:6@lin
+0.4 R:12 0.8:12@smooth 0.5:12@smooth | 1.0:6@smooth 0.4:12@smooth
+
+automate chorus_depth
+0.35 R:24 0.55:12@smooth | 0.4:18@smooth
+
+automate reverb_decay
+0.75 R:36 0.9:18@smooth
 
 automate reverb_wet
 0.5 R:36 0.85:12@smooth
 
+automate tape_age
+0.15 R:42 0.5:12@lin
+
 automate tape_wow
-0.12 R:42 0.4:6@lin
+0.1 R:42 0.35:12@lin
+
+automate spring
+0.1 R:24 0.3:6@smooth 0.12:6@smooth R:18

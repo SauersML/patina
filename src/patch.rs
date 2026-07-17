@@ -21,6 +21,9 @@ pub const FACTORY: &[(&str, &str)] = &[
     ("Fathom", include_str!("../patches/fathom-bass.patch")),
     ("Tears", include_str!("../patches/germanium-cry.patch")),
     ("Moths", include_str!("../patches/cathedral.patch")),
+    ("Anemone", include_str!("../patches/glass-anemone.patch")),
+    ("Thunder", include_str!("../patches/thunder-organ.patch")),
+    ("Choir", include_str!("../patches/cassette-choir.patch")),
 ];
 
 /// A `#` starts a comment at line start or after whitespace (same rule as

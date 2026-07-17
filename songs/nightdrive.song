@@ -40,49 +40,37 @@ automate filter_sustain
 automate filter_release
 0.4
 automate cutoff
-3200
-automate resonance
-0.8
-automate chorus_mode
-2
+3200 5200:24@smooth | 7200:6@smooth R:6 | 5200:12@smooth 2600:6@smooth 900:6@exp
+
+automate detune
+8 R:24 13:2@smooth R:10 8:2@smooth R:16
+
+automate lfo_rate
+0.5 R:24 1.4:12@smooth 0.6:12@smooth R:6
+
+automate lfo_pwm
+0.25 R:24 0.4:12@smooth 0.25:12@smooth R:6
+
 automate chorus_depth
-0.4
+0.4 R:24 0.6:12@smooth 0.4:12@smooth R:6
+
+automate osc2_level
+0.4 R:24 0.55:12@smooth 0.4:12@smooth R:6
+
+automate resonance
+0.8 R:24 1.3:12@smooth 0.8:12@smooth R:6
+
+automate reverb_wet
+0.35 R:36 0.6:12@smooth 0.8:6@smooth
+
 automate reverb_decay
-0.55
-automate reverb_wet
-0.35
+0.55 R:44 0.85:10@smooth
+
 automate tape_wow
-0.1
+0.1 R:44 0.4:10@lin
+
 automate tape_flutter
-0.06
-automate tape_age
-0.2
+0.06 R:44 0.2:10@lin
 
-track oompah vel=0.62 len=0.85
-C3:1 [E4 G4]:1 [E4 G4]:1 | A2:1 [E4 A4]:1 [E4 A4]:1 | F2:1 [F4 A4]:1 [F4 A4]:1 | G2:1 [F4 G4 B4]:1 [F4 G4 B4]:1
-C3:1 [E4 G4]:1 [E4 G4]:1 | A2:1 [E4 A4]:1 [E4 A4]:1 | F2:1 [F4 A4]:1 [F4 A4]:1 | G2:1 [F4 G4 B4]:1 [F4 G4 B4]:1
-Eb3:1 [G4 Bb4]:1 [G4 Bb4]:1 | C3:1 [G4 C5]:1 [G4 C5]:1 | Ab2:1 [Ab4 C5]:1 [Ab4 C5]:1 | Bb2:1 [Ab4 Bb4 D5]:1 [Ab4 Bb4 D5]:1
-C3:1 [E4 G4]:1 [E4 G4]:1 | A2:1 [E4 A4]:1 [E4 A4]:1 | F2:1 [F4 A4]:1 [F4 A4]:1 | G2:1 [F4 G4 B4]:1 [F4 G4 B4]:1
-C3:1 [E4 G4]:1 [E4 G4]:1 | C3:3
-
-track musicbox vel=0.8 len=0.8
-R:12
-E5:0.5 G5:0.5 C6:1 G5:1 | E5:0.5 A5:0.5 C6:1.5 A5:0.5 | F5:0.5 A5:0.5 C6:1 A5:1 | D5:0.5 G5:0.5 B5:1.5 G5:0.5
-G5:0.5 Bb5:0.5 Eb6:1 Bb5:1 | G5:0.5 C6:0.5 Eb6:1.5 C6:0.5 | Ab5:0.5 C6:0.5 Eb6:1 C6:1 | F5:0.5 Bb5:0.5 D6:1.5 Bb5:0.5
-C6:0.5 B5:0.5 A5:1 G5:1 | A5:0.5 G5:0.5 E5:1.5 C5:0.5 | F5:0.5 E5:0.5 D5:1 F5:1 | E5:1 D5:1 C5:1
-[C5 E5 G5 C6]:6
-
-track sparkle vel=0.35 len=0.4
-R:24
-C6:0.5 R:2.5 E6:0.5 R:2.5 | G6:0.5 R:2.5 C6:0.5 R:2.5
-R:12
-E6:0.5 R:2.5 G6:0.5 R:2.5 | C7:0.5 R:5.5
-
-automate cutoff
-3200 R:12 5200:12@smooth | 6500:12@smooth | 4200:12@smooth 1100:12@exp
-
-automate reverb_wet
-0.35 R:36 0.75:15@smooth
-
-automate tape_wow
-0.1 R:44 0.35:7@lin
+automate filter_env
+1.8 R:48 0.8:6@smooth

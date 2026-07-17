@@ -1,5 +1,6 @@
 # Cathedral of Moths — a swell that darkens as it blooms: negative filter
 # envelope closing the light while infinite reverb holds the dust aloft
+octave 3
 volume 0.52
 waveform 2
 osc2_wave 1
