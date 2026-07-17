@@ -338,10 +338,23 @@ impl MidiHandler {
                                     });
                                 }
                             },
-                            // Other message types can be handled here in the future
-                            // For example:
-                            // MidiMessage::Controller { controller, value } => { ... }
-                            // MidiMessage::PitchBend { bend } => { ... }
+                            // Pitch wheel: midly gives -1..1, standard range +/-2 semitones
+                            MidiMessage::PitchBend { bend } => {
+                                if let Some(vm) = &voice_manager {
+                                    vm.lock().set_pitch_bend(bend.as_f32() * 2.0);
+                                }
+                            },
+                            MidiMessage::Controller { controller, value } => {
+                                if let Some(vm) = &voice_manager {
+                                    match controller.as_int() {
+                                        // CC1: mod wheel -> performance vibrato
+                                        1 => vm.lock().set_mod_wheel(value.as_int() as f32 / 127.0),
+                                        // CC64: sustain (damper) pedal
+                                        64 => vm.lock().set_sustain_pedal(value.as_int() >= 64),
+                                        _ => {}
+                                    }
+                                }
+                            },
                             _ => {} // Ignore other message types for now
                         }
                     }

@@ -97,6 +97,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .cloned();
     let song_path = song_path.as_deref();
 
+    // Offline bounce: no window, no audio device, exits when the file is done
+    let render_path = args
+        .iter()
+        .position(|a| a == "--render")
+        .and_then(|i| args.get(i + 1))
+        .cloned();
+    if let Some(out) = render_path.as_deref() {
+        let song = song_path.ok_or("--render requires --play <song.song>")?;
+        let events = song::load_song(song)?;
+        patina::render::render_to_wav(&events, out)?;
+        return Ok(());
+    }
+
     let host = cpal::default_host();
     let device = host.default_output_device().expect("no output device available");
 

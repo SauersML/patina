@@ -28,6 +28,7 @@ pub struct ParamValues {
     pub fuzz: f32,
     pub noise: f32,
     pub spring: f32,
+    pub glide: f32, // portamento time in seconds, 0 = off
     pub pulse_width: f32,
     pub lfo_rate: f32,
     pub lfo_shape: f32,
@@ -68,6 +69,7 @@ impl Default for ParamValues {
             fuzz: 0.0,
             noise: 0.0,
             spring: 0.0,
+            glide: 0.0,
             pulse_width: 0.5,
             lfo_rate: 1.0,
             lfo_shape: 0.5,
@@ -126,6 +128,18 @@ pub struct VoiceManager {
     noise_gain: f32, // smoothed
     spring: SpringReverb,
     lfo: Lfo,
+    sample_rate: f32,
+    /// CV (octaves from A440) of the most recently triggered note — the
+    /// "hold capacitor" that glide charges from (US 3,991,645).
+    last_note_cv: Option<f32>,
+    // Performance controllers (live playing state, not patch parameters):
+    // pitch bend as a slewed frequency ratio, mod wheel adding vibrato
+    // depth, and the sustain pedal with its held-note bookkeeping
+    bend_target: f32,
+    bend_ratio: f32,
+    mod_wheel: f32,
+    pedal_down: bool,
+    sustained: [bool; 128],
     note_counter: u64,
     pub params: ParamValues,
     pub scope: VecDeque<f32>,
@@ -149,6 +163,13 @@ impl VoiceManager {
             noise_gain: 0.0,
             spring: SpringReverb::new(sample_rate),
             lfo: Lfo::new(sample_rate),
+            sample_rate,
+            last_note_cv: None,
+            bend_target: 1.0,
+            bend_ratio: 1.0,
+            mod_wheel: 0.0,
+            pedal_down: false,
+            sustained: [false; 128],
             note_counter: 0,
             params,
             scope: VecDeque::with_capacity(SCOPE_LEN),
@@ -174,10 +195,16 @@ impl VoiceManager {
     pub fn note_on(&mut self, note: u8, velocity: f32) {
         self.note_counter += 1;
         let age = self.note_counter;
+        // A fresh press owns the note again; it is no longer the pedal's
+        self.sustained[note as usize] = false;
+
+        // Glide starts from the most recently played note, mono-synth style
+        let glide_from = self.last_note_cv;
+        self.last_note_cv = Some((note as f32 - 69.0) / 12.0);
 
         // Retrigger if this note is already held
         if let Some(voice) = self.voices.iter_mut().find(|v| v.is_held() && v.note == Some(note)) {
-            voice.trigger(note, velocity, age);
+            voice.trigger(note, velocity, age, glide_from);
             return;
         }
 
@@ -204,15 +231,51 @@ impl VoiceManager {
             });
 
         if let Some(i) = index {
-            self.voices[i].trigger(note, velocity, age);
+            self.voices[i].trigger(note, velocity, age, glide_from);
         }
     }
 
     pub fn note_off(&mut self, note: u8) {
+        // While the sustain pedal is down, released keys keep ringing; the
+        // release is deferred until the pedal lifts
+        if self.pedal_down {
+            if self.voices.iter().any(|v| v.is_held() && v.note == Some(note)) {
+                self.sustained[note as usize] = true;
+            }
+            return;
+        }
         for voice in self.voices.iter_mut() {
             if voice.is_held() && voice.note == Some(note) {
                 voice.release();
             }
+        }
+    }
+
+    /// Pitch bend in semitones (a wheel typically spans +/-2). Slewed in
+    /// render_next so stepped MIDI bend values never zipper.
+    pub fn set_pitch_bend(&mut self, semitones: f32) {
+        self.bend_target = (semitones.clamp(-24.0, 24.0) / 12.0).exp2();
+    }
+
+    /// Mod wheel (CC1, 0..1): performance vibrato on top of the LFO>Pitch
+    /// knob — full wheel adds 75 cents of swing.
+    pub fn set_mod_wheel(&mut self, value: f32) {
+        self.mod_wheel = value.clamp(0.0, 1.0);
+    }
+
+    /// Sustain pedal (CC64). On lift, every note released under the pedal
+    /// is let go at once.
+    pub fn set_sustain_pedal(&mut self, down: bool) {
+        self.pedal_down = down;
+        if !down {
+            for voice in self.voices.iter_mut() {
+                if let Some(note) = voice.note {
+                    if voice.is_held() && self.sustained[note as usize] {
+                        voice.release();
+                    }
+                }
+            }
+            self.sustained = [false; 128];
         }
     }
 
@@ -351,6 +414,19 @@ impl VoiceManager {
         self.params.pulse_width = width.clamp(0.05, 0.95);
     }
 
+    pub fn set_glide(&mut self, seconds: f32) {
+        self.params.glide = seconds.clamp(0.0, 2.0);
+        // RC coefficient: reach ~95% of the interval in `glide` seconds
+        let k = if self.params.glide < 1e-3 {
+            1.0
+        } else {
+            1.0 - (-3.0 / (self.params.glide * self.sample_rate)).exp()
+        };
+        for voice in &mut self.voices {
+            voice.set_glide_coef(k);
+        }
+    }
+
     pub fn set_lfo_rate(&mut self, rate: f32) {
         self.params.lfo_rate = rate.clamp(0.1, 30.0);
         self.lfo.set_rate(self.params.lfo_rate);
@@ -388,10 +464,14 @@ impl VoiceManager {
         // (an exponential frequency ratio), filter in octaves, PWM on the
         // pulse comparator threshold
         let lfo = self.lfo.next();
-        let pitch_mult = if self.params.lfo_pitch > 0.01 {
-            (lfo * self.params.lfo_pitch / 1200.0).exp2()
+        // Pitch bend slews (~ms scale) toward its target; mod wheel adds
+        // performance vibrato on top of the patch's own LFO>Pitch depth
+        self.bend_ratio += (self.bend_target - self.bend_ratio) * 0.002;
+        let vibrato_cents = self.params.lfo_pitch + self.mod_wheel * 75.0;
+        let pitch_mult = if vibrato_cents > 0.01 {
+            (lfo * vibrato_cents / 1200.0).exp2() * self.bend_ratio
         } else {
-            1.0
+            self.bend_ratio
         };
         let lfo_cutoff_oct = lfo * self.params.lfo_filter;
         let pulse_width = self.params.pulse_width + lfo * self.params.lfo_pwm;
@@ -516,6 +596,57 @@ mod tests {
         assert!(tail < 0.02, "output should decay after release, tail={}", tail);
     }
 
+    /// US 3,991,645: glide lags the CV before the expo converter, so a new
+    /// note starts at the previous note's pitch and settles exponentially.
+    #[test]
+    fn glide_swoops_from_previous_note() {
+        let sr = 44100.0;
+        let count_crossings = |samples: &[f32]| -> usize {
+            samples
+                .windows(2)
+                .filter(|w| w[0] <= 0.0 && w[1] > 0.0)
+                .count()
+        };
+        let mut vm = VoiceManager::new(sr, 8);
+        vm.set_glide(0.3);
+        // Sine, zero detune, no reverb: exactly one rising crossing per cycle
+        vm.set_waveform(Waveform::Sine);
+        vm.set_detune(0.0);
+        vm.set_attack(0.003);
+        vm.set_sustain(1.0);
+        vm.set_release(0.01);
+        vm.set_reverb_wet(0.0);
+
+        // Establish the "previous note", then let it fully die away so the
+        // measurement hears only the gliding voice
+        vm.note_on(57, 0.9);
+        for _ in 0..22050 {
+            vm.render_next();
+        }
+        vm.note_off(57);
+        for _ in 0..8820 {
+            vm.render_next();
+        }
+        vm.note_on(69, 0.9);
+
+        let mut early = Vec::with_capacity(4410);
+        let mut late = Vec::with_capacity(4410);
+        for i in 0..(sr as usize) {
+            let (l, _) = vm.render_next();
+            if i < 4410 {
+                early.push(l);
+            } else if i >= 39690 {
+                late.push(l);
+            }
+        }
+        let early_f = count_crossings(&early);
+        let late_f = count_crossings(&late);
+        assert!(
+            (early_f as f32) < late_f as f32 * 0.85,
+            "glide should start near the old pitch: early={early_f}, late={late_f} crossings"
+        );
+    }
+
     #[test]
     fn cutoff_modulation_brightens() {
         // With a big positive filter-env amount the note's spectrum should
@@ -557,6 +688,71 @@ mod tests {
         assert!(
             early_ratio > late_ratio * 1.3,
             "attack should be brighter than decayed sustain: early={early_ratio}, late={late_ratio}"
+        );
+    }
+
+    #[test]
+    fn sustain_pedal_holds_released_notes() {
+        let sr = 44100;
+        let mut vm = VoiceManager::new(sr as f32, 8);
+        vm.set_sustain_pedal(true);
+        vm.note_on(60, 0.9);
+        vm.note_off(60); // released under the pedal — must keep ringing
+        for _ in 0..(sr / 2) {
+            vm.render_next();
+        }
+        assert!(
+            vm.voices.iter().any(|v| v.is_held()),
+            "pedal down: released note should still be held"
+        );
+
+        vm.set_sustain_pedal(false);
+        assert!(
+            vm.voices.iter().all(|v| !v.is_held()),
+            "pedal lift should release the sustained note"
+        );
+
+        // A key still physically down must survive the pedal lift
+        vm.set_sustain_pedal(true);
+        vm.note_on(64, 0.9);
+        vm.set_sustain_pedal(false);
+        assert!(
+            vm.voices.iter().any(|v| v.is_held() && v.note == Some(64)),
+            "pedal lift must not cut a key that is still down"
+        );
+    }
+
+    #[test]
+    fn pitch_bend_shifts_frequency() {
+        let sr = 44100.0;
+        // Zero-crossing rate as a crude frequency probe, FX bypassed
+        let crossings_with_bend = |semitones: f32| {
+            let mut vm = VoiceManager::new(sr, 8);
+            vm.set_reverb_wet(0.0);
+            vm.set_detune(0.0);
+            vm.set_pitch_bend(semitones);
+            vm.note_on(69, 1.0);
+            let mut crossings = 0u32;
+            let mut prev = 0.0f32;
+            for i in 0..(sr as usize) {
+                let (l, _) = vm.render_next();
+                // Skip the bend slew and attack before counting
+                if i > 20000 {
+                    if prev <= 0.0 && l > 0.0 {
+                        crossings += 1;
+                    }
+                    prev = l;
+                }
+            }
+            crossings
+        };
+        let base = crossings_with_bend(0.0);
+        let bent = crossings_with_bend(2.0);
+        let ratio = bent as f32 / base as f32;
+        // +2 semitones = x1.1225
+        assert!(
+            (1.06..1.19).contains(&ratio),
+            "bend +2 st should raise pitch ~12%: base={base}, bent={bent}, ratio={ratio}"
         );
     }
 }

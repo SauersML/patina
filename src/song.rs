@@ -36,7 +36,7 @@
 // use plain sets), detune, cutoff, resonance, drive, saturation, hpf
 // (high-pass cutoff Hz, 16 = off), fuzz (0..1 germanium fuzz), noise
 // (0..1 shared noise into the voices), spring (0..1 spring reverb wet),
-// pulse_width (0.05..0.95), lfo_rate (Hz), lfo_shape (0=saw 0.5=tri
+// glide (portamento seconds, 0 = off), pulse_width (0.05..0.95), lfo_rate (Hz), lfo_shape (0=saw 0.5=tri
 // 1=ramp), lfo_pitch (vibrato cents), lfo_filter (octaves), lfo_pwm
 // (width swing 0..0.45), attack,
 // decay, sustain, release, filter_env (octaves, -5..+5), filter_attack,
@@ -74,6 +74,7 @@ pub enum Param {
     FuzzAmount,
     NoiseLevel,
     SpringWet,
+    Glide,
     PulseWidth,
     LfoRate,
     LfoShape,
@@ -114,6 +115,7 @@ impl Param {
             "fuzz" => Param::FuzzAmount,
             "noise" => Param::NoiseLevel,
             "spring" => Param::SpringWet,
+            "glide" => Param::Glide,
             "pulse_width" => Param::PulseWidth,
             "lfo_rate" => Param::LfoRate,
             "lfo_shape" => Param::LfoShape,
@@ -163,6 +165,7 @@ impl Param {
             Param::FuzzAmount => vm.set_fuzz(value),
             Param::NoiseLevel => vm.set_noise(value),
             Param::SpringWet => vm.set_spring(value),
+            Param::Glide => vm.set_glide(value),
             Param::PulseWidth => vm.set_pulse_width(value),
             Param::LfoRate => vm.set_lfo_rate(value),
             Param::LfoShape => vm.set_lfo_shape(value),
@@ -252,6 +255,30 @@ pub fn load_song(path: &str) -> Result<Vec<SongEvent>, String> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| format!("could not read song file '{}': {}", path, e))?;
     parse_song(&text)
+}
+
+/// Render a song offline, as fast as the CPU allows: same events, same
+/// engine, no audio device. Returns interleaved-by-frame stereo samples,
+/// with a few seconds of tail for reverb and tape print-through to ring out.
+pub fn render_offline(events: &[SongEvent], sample_rate: f32) -> Vec<(f32, f32)> {
+    let mut vm = VoiceManager::new(sample_rate, 8);
+    let end = events.last().map(|e| e.time).unwrap_or(0.0) + 4.0;
+    let total = (end * sample_rate as f64) as usize;
+    let mut out = Vec::with_capacity(total);
+    let mut next = 0;
+    for n in 0..total {
+        let t = n as f64 / sample_rate as f64;
+        while next < events.len() && events[next].time <= t {
+            match events[next].kind {
+                EventKind::NoteOn { note, velocity } => vm.note_on(note, velocity),
+                EventKind::NoteOff { note } => vm.note_off(note),
+                EventKind::Param { param, value } => param.apply(&mut vm, value),
+            }
+            next += 1;
+        }
+        out.push(vm.render_next());
+    }
+    out
 }
 
 pub fn spawn_player(events: Vec<SongEvent>, voice_manager: Arc<Mutex<VoiceManager>>) {

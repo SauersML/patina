@@ -160,6 +160,7 @@ pub struct SynthUI {
     fuzz: f32,
     noise: f32,
     spring: f32,
+    glide: f32,
     pulse_width: f32,
     lfo_rate: f32,
     lfo_shape: f32,
@@ -672,6 +673,7 @@ impl SynthUI {
             fuzz: 0.0,
             noise: 0.0,
             spring: 0.0,
+            glide: 0.0,
             pulse_width: 0.5,
             lfo_rate: 1.0,
             lfo_shape: 0.5,
@@ -728,6 +730,7 @@ impl SynthUI {
         vm.set_fuzz(self.fuzz);
         vm.set_noise(self.noise);
         vm.set_spring(self.spring);
+        vm.set_glide(self.glide);
         vm.set_pulse_width(self.pulse_width);
         vm.set_lfo_rate(self.lfo_rate);
         vm.set_lfo_shape(self.lfo_shape);
@@ -863,6 +866,7 @@ impl SynthUI {
             self.fuzz = p.fuzz;
             self.noise = p.noise;
             self.spring = p.spring;
+            self.glide = p.glide;
             self.pulse_width = p.pulse_width;
             self.lfo_rate = p.lfo_rate;
             self.lfo_shape = p.lfo_shape;
@@ -1057,6 +1061,15 @@ impl SynthUI {
                 }
                 if knob(ui, "Width", &mut self.pulse_width, 0.05, 0.95, 0.5, false, fmt_pct) {
                     self.voice_manager.lock().set_pulse_width(self.pulse_width);
+                }
+                if knob(ui, "Glide", &mut self.glide, 0.0, 2.0, 0.0, false, |v| {
+                    if v < 0.001 {
+                        "off".into()
+                    } else {
+                        fmt_time(v)
+                    }
+                }) {
+                    self.voice_manager.lock().set_glide(self.glide);
                 }
             });
         });

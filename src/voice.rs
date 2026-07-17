@@ -40,6 +40,13 @@ pub struct Voice {
     /// faster than once per two seconds), with small residue per core.
     common_drift: f32,
     drift_rng: u32,
+    /// Portamento, per US 3,991,645: the keyboard CV charges the hold
+    /// capacitor through a glide resistance, so pitch settles exponentially
+    /// in CV (octave) space BEFORE the expo converter. `glide_offset` is the
+    /// remaining octave distance from the target note; `glide_k` the
+    /// per-sample RC coefficient (1.0 = instant).
+    glide_offset: f32,
+    glide_k: f32,
 }
 
 impl Voice {
@@ -95,6 +102,8 @@ impl Voice {
             voct_error,
             common_drift: 0.0,
             drift_rng: seed.wrapping_mul(0x27D4_EB2F) | 1,
+            glide_offset: 0.0,
+            glide_k: 1.0,
         };
         voice.set_detune(7.0);
         voice
@@ -120,7 +129,24 @@ impl Voice {
         self.filter_env_amount = octaves.clamp(-5.0, 5.0);
     }
 
-    pub fn trigger(&mut self, note: u8, velocity: f32, age: u64) {
+    pub fn set_glide_coef(&mut self, k: f32) {
+        self.glide_k = k.clamp(1e-5, 1.0);
+    }
+
+    /// `glide_from_cv` is the most recently played note's CV in octaves
+    /// (relative to A440); when glide is active the new note starts from
+    /// there and settles exponentially, like the hold capacitor charging
+    /// through the glide pot.
+    pub fn trigger(&mut self, note: u8, velocity: f32, age: u64, glide_from_cv: Option<f32>) {
+        let new_cv = (note as f32 - 69.0) / 12.0;
+        if self.glide_k < 0.999 {
+            if let Some(prev_cv) = glide_from_cv {
+                self.glide_offset = (prev_cv - new_cv).clamp(-5.0, 5.0);
+            }
+        } else {
+            self.glide_offset = 0.0;
+        }
+
         let frequency = Oscillator::note_to_frequency(note);
         let octaves_from_ref = (frequency / CAL_REF_HZ).log2();
         for (osc, err_cents_per_oct) in self.oscs.iter().zip(self.voct_error) {
@@ -177,6 +203,15 @@ impl Voice {
         self.drift_rng ^= self.drift_rng << 5;
         let r = (self.drift_rng >> 8) as f32 / (1u32 << 24) as f32 - 0.5;
         self.common_drift = (self.common_drift + r * 2.4e-5) * 0.9995;
+
+        // Glide: the CV settles toward the target note; exponential in
+        // octave space, so the audible swoop is geometric in frequency
+        let pitch_mult = if self.glide_offset.abs() > 1e-5 {
+            self.glide_offset -= self.glide_offset * self.glide_k;
+            pitch_mult * self.glide_offset.exp2()
+        } else {
+            pitch_mult
+        };
 
         let osc = (self.oscs[0].next_sample(self.common_drift, pitch_mult, pulse_width)
             + self.oscs[1].next_sample(self.common_drift, pitch_mult, pulse_width)

@@ -28,6 +28,11 @@ automate sustain
 automate release
 0.1 R:48 0.5:0.5 R:15.5
 
+# The slides: constant short glide smears every 16th slightly (the acid
+# feel), then opens wide for the half-time breakdown swoops
+automate glide
+0.045 R:48 0.14:0.5 R:15.5
+
 # The squelch: every note re-triggers this envelope, kicked +3.2 octaves
 automate filter_env
 3.2

@@ -22,6 +22,8 @@ use crate::oscillator::Waveform;
 use crate::voice_manager::VoiceManager;
 
 const NUM_VOICES: usize = 8;
+/// Standard pitch-wheel range, in semitones each direction.
+const PITCH_BEND_SEMITONES: f32 = 2.0;
 
 // ---------------------------------------------------------------------------
 // The parameter table
@@ -301,7 +303,8 @@ impl Plugin for PatinaPlugin {
         names: PortNames::const_default(),
     }];
 
-    const MIDI_INPUT: MidiConfig = MidiConfig::Basic;
+    // MidiCCs so pitch bend, mod wheel, and sustain pedal arrive too
+    const MIDI_INPUT: MidiConfig = MidiConfig::MidiCCs;
     const MIDI_OUTPUT: MidiConfig = MidiConfig::None;
     const SAMPLE_ACCURATE_AUTOMATION: bool = true;
 
@@ -348,6 +351,17 @@ impl Plugin for PatinaPlugin {
                     NoteEvent::NoteOff { note, .. } | NoteEvent::Choke { note, .. } => {
                         self.vm.note_off(note);
                     }
+                    // 0.5 is center; a standard wheel spans +/-2 semitones
+                    NoteEvent::MidiPitchBend { value, .. } => {
+                        self.vm.set_pitch_bend((value - 0.5) * 2.0 * PITCH_BEND_SEMITONES);
+                    }
+                    NoteEvent::MidiCC { cc, value, .. } => match cc {
+                        control_change::MODULATION_MSB => self.vm.set_mod_wheel(value),
+                        control_change::DAMPER_PEDAL => {
+                            self.vm.set_sustain_pedal(value >= 0.5)
+                        }
+                        _ => (),
+                    },
                     _ => (),
                 }
                 next_event = context.next_event();
