@@ -1,0 +1,76 @@
+# Acid Bath — a 303-style squelcher for Patina
+# The patch itself is set by automation: tight envelope, rising resonance,
+# and a cutoff that never sits still. Watch the sliders dance.
+# Play with:  patina --play songs/acid.song
+
+bpm 132
+gate 0.6
+
+# --- patch setup at t=0 (instant sets) ---
+automate volume
+0.85
+
+automate attack
+0.01
+
+automate decay
+0.12
+
+automate sustain
+0.2
+
+automate release
+0.08 R:48 0.5:1@lin R:15
+
+# --- the acid line: 16th notes, A minor ---
+track bass vel=0.7 len=0.25
+A2@0.95 A2 A3 A2 C3 A2 A3 A2 G2 A2 A3 A2 C3 D3 C3 G2
+A2@0.95 A2 A3 A2 C3 A2 A3 A2 G2 A2 A3 A2 C3 D3 C3 G2
+A2@0.95 A2 A3 A2 C3 A2 A3 A2 G2 A2 A3 A2 C3 D3 C3 G2
+A2@0.95 A2 A3 A2 E3 A2 A3 A2 G2 A2 C3 A2 D3 E3 D3 C3
+A2@0.95 A2 A3 A2 C3 A2 A3 A2 G2 A2 A3 A2 C3 D3 C3 G2
+A2@0.95 A2 A3 A2 C3 A2 A3 A2 G2 A2 A3 A2 C3 D3 C3 G2
+A2@0.95 A2 A3 A2 E3 A2 A3 A2 G2 A2 C3 A2 D3 E3 D3 C3
+A2@0.95 A2 A3 A2 C3 A2 A3 A2 G2 A2 A3 A2 C3 D3 C3 G2
+A3@0.95 A3 A4 A3 C4 A3 A4 A3 G3 A3 A4 A3 C4 D4 C4 G3
+A3@0.95 A3 A4 A3 C4 A3 A4 A3 G3 A3 A4 A3 C4 D4 C4 G3
+A2@0.95 A2 A3 A2 C3 A2 A3 A2 G2 A2 A3 A2 C3 D3 C3 G2
+A2@0.95 A2 A3 A2 E3 A2 A3 A2 G2 A2 C3 A2 D3 E3 D3 C3
+# breakdown: half-time
+A2:1 C3:1 G2:1 A2:0.5 C3:0.5
+A2:1 C3:1 G2:1 D3:0.5 E3:0.5
+F2:1 G2:1 A2:1 C3:0.5 D3:0.5
+A2:2 A2:2
+
+# --- stabs over the octave-up section ---
+track stabs vel=0.85 len=0.5
+R:32
+[C5 E5 A5] R:3.5 | [B4 D5 G5] R:3.5 | [C5 E5 A5] R:1.5 [D5 F5 A5] R:1.5 | [B4 D5 G5] R:3.5
+R:16
+
+# --- closing drone ---
+track pad vel=0.7
+R:60 [A1 A2 E3 A3 C4]:6
+
+# --- the squelch: cutoff pumps every two beats, peaks rising per section ---
+automate cutoff
+300
+1200:1@exp 300:1@exp 1200:1@exp 300:1@exp 1200:1@exp 300:1@exp 1200:1@exp 300:1@exp
+1200:1@exp 300:1@exp 1200:1@exp 300:1@exp 1200:1@exp 300:1@exp 1200:1@exp 300:1@exp
+2500:1@exp 350:1@exp 2500:1@exp 350:1@exp 2500:1@exp 350:1@exp 2500:1@exp 350:1@exp
+2500:1@exp 350:1@exp 2500:1@exp 350:1@exp 2500:1@exp 350:1@exp 2500:1@exp 350:1@exp
+5000:1@exp 400:1@exp 5000:1@exp 400:1@exp 5000:1@exp 400:1@exp 5000:1@exp 400:1@exp
+5000:1@exp 400:1@exp 5000:1@exp 400:1@exp 5000:1@exp 400:1@exp 5000:1@exp 400:1@exp
+2000:4@smooth 500:4@smooth 3000:4@smooth 400:4@exp
+
+automate resonance
+1.0 2.0:16@lin 3.0:16@lin R:16 2.0:4@smooth R:4 3.2:4@lin 1.5:4@smooth
+
+automate drive
+1.5 R:16 2.2:16@lin 3.0:8@lin R:8 1.8:16@smooth
+
+automate reverb_wet
+0.15 R:32 0.25:8@lin R:8 0.7:8@smooth R:8
+
+automate reverb_decay
+0.5 R:48 0.9:4@smooth R:12

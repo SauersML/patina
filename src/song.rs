@@ -568,12 +568,16 @@ mod tests {
     }
 
     #[test]
-    fn bundled_song_parses() {
-        let text = include_str!("../songs/nightdrive.song");
-        let events = parse_song(text).unwrap();
-        assert!(!events.is_empty());
-        for pair in events.windows(2) {
-            assert!(pair[0].time <= pair[1].time);
+    fn bundled_songs_parse() {
+        for text in [
+            include_str!("../songs/nightdrive.song"),
+            include_str!("../songs/acid.song"),
+        ] {
+            let events = parse_song(text).unwrap();
+            assert!(!events.is_empty());
+            for pair in events.windows(2) {
+                assert!(pair[0].time <= pair[1].time);
+            }
         }
     }
 

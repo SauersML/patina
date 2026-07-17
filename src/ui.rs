@@ -12,7 +12,6 @@ const BLACK_KEY_INDICES: [usize; 5] = [1, 3, 6, 8, 10];
 
 pub struct SynthUI {
     current_octave: i32,
-    key_states: [bool; 128],
     volume: f32,
     waveform: Waveform,
     attack: f32,
@@ -38,7 +37,6 @@ impl SynthUI {
         let ui = Self {
             voice_manager,
             current_octave: 4,
-            key_states: [false; 128],
             volume: 0.5,
             waveform: Waveform::Sawtooth,
             attack: 0.1,
@@ -65,13 +63,13 @@ impl SynthUI {
     fn apply_all_settings(&self) {
         let mut vm = self.voice_manager.lock();
         for voice in &mut vm.voices {
-            voice.oscillator.set_volume(self.volume);
             voice.oscillator.set_waveform(self.waveform);
-            voice.envelope.set_attack(self.attack);
-            voice.envelope.set_decay(self.decay);
-            voice.envelope.set_sustain(self.sustain);
-            voice.envelope.set_release(self.release);
         }
+        vm.set_volume(self.volume);
+        vm.set_attack(self.attack);
+        vm.set_decay(self.decay);
+        vm.set_sustain(self.sustain);
+        vm.set_release(self.release);
         vm.set_filter_cutoff(self.filter_cutoff);
         vm.set_filter_resonance(self.filter_resonance);
         vm.set_filter_drive(self.filter_drive);
@@ -138,6 +136,30 @@ impl SynthUI {
 
 
     pub fn update(&mut self, ctx: &egui::Context) {
+        // Pull the engine's canonical parameter values so the sliders follow
+        // song automation (and any other source) live
+        {
+            let vm = self.voice_manager.lock();
+            let p = vm.params;
+            self.volume = p.volume;
+            self.attack = p.attack;
+            self.decay = p.decay;
+            self.sustain = p.sustain;
+            self.release = p.release;
+            self.filter_cutoff = p.cutoff;
+            self.filter_resonance = p.resonance;
+            self.filter_drive = p.drive;
+            self.filter_saturation = p.saturation;
+            self.reverb_decay = p.reverb_decay;
+            self.reverb_wet = p.reverb_wet;
+            self.chorus_rate = p.chorus_rate;
+            self.chorus_depth = p.chorus_depth;
+        }
+
+        // Keep repainting so keyboard lights and slider automation animate
+        // even when the user isn't interacting
+        ctx.request_repaint_after(std::time::Duration::from_millis(33));
+
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.vertical(|ui| {
                 self.draw_header(ui);
@@ -176,10 +198,7 @@ impl SynthUI {
                 ui.vertical(|ui| {
                     ui.label("Volume");
                     if ui.add(egui::Slider::new(&mut self.volume, 0.0..=1.0)).changed() {
-                        let mut vm = self.voice_manager.lock();
-                        for voice in &mut vm.voices {
-                            voice.oscillator.set_volume(self.volume);
-                        }
+                        self.voice_manager.lock().set_volume(self.volume);
                     }
                 });
             });
@@ -201,46 +220,29 @@ impl SynthUI {
 
     fn draw_envelope_controls(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            let mut attack = self.attack;
-            let mut decay = self.decay;
-            let mut sustain = self.sustain;
-            let mut release = self.release;
-    
             ui.group(|ui| {
                 ui.vertical(|ui| {
                     ui.label("Attack");
-                    if ui.add(egui::Slider::new(&mut attack, 0.01..=2.0).logarithmic(true)).changed() {
-                        self.attack = attack;
-                        let mut vm = self.voice_manager.lock();
-                        for voice in &mut vm.voices {
-                            voice.envelope.set_attack(self.attack);
-                        }
+                    if ui.add(egui::Slider::new(&mut self.attack, 0.01..=2.0).logarithmic(true)).changed() {
+                        self.voice_manager.lock().set_attack(self.attack);
                     }
                 });
             });
-    
+
             ui.group(|ui| {
                 ui.vertical(|ui| {
                     ui.label("Decay");
-                    if ui.add(egui::Slider::new(&mut decay, 0.01..=2.0).logarithmic(true)).changed() {
-                        self.decay = decay;
-                        let mut vm = self.voice_manager.lock();
-                        for voice in &mut vm.voices {
-                            voice.envelope.set_decay(self.decay);
-                        }
+                    if ui.add(egui::Slider::new(&mut self.decay, 0.01..=2.0).logarithmic(true)).changed() {
+                        self.voice_manager.lock().set_decay(self.decay);
                     }
                 });
             });
-    
+
             ui.group(|ui| {
                 ui.vertical(|ui| {
                     ui.label("Sustain");
-                    if ui.add(egui::Slider::new(&mut sustain, 0.0..=1.0)).changed() {
-                        self.sustain = sustain;
-                        let mut vm = self.voice_manager.lock();
-                        for voice in &mut vm.voices {
-                            voice.envelope.set_sustain(self.sustain);
-                        }
+                    if ui.add(egui::Slider::new(&mut self.sustain, 0.0..=1.0)).changed() {
+                        self.voice_manager.lock().set_sustain(self.sustain);
                     }
                 });
             });
@@ -248,12 +250,8 @@ impl SynthUI {
             ui.group(|ui| {
                 ui.vertical(|ui| {
                     ui.label("Release");
-                    if ui.add(egui::Slider::new(&mut release, 0.01..=2.0).logarithmic(true)).changed() {
-                        self.release = release;
-                        let mut vm = self.voice_manager.lock();
-                        for voice in &mut vm.voices {
-                            voice.envelope.set_release(self.release);
-                        }
+                    if ui.add(egui::Slider::new(&mut self.release, 0.01..=2.0).logarithmic(true)).changed() {
+                        self.voice_manager.lock().set_release(self.release);
                     }
                 });
             });
@@ -311,9 +309,13 @@ impl SynthUI {
     
         let (rect, response) = ui.allocate_exact_size(Vec2::new(available_width, white_key_height), egui::Sense::click_and_drag());
         let painter = ui.painter();
-    
+
         self.handle_mouse_input(ui, rect, &response);
-    
+
+        // Light keys from the engine's live voice state, so song playback,
+        // MIDI, QWERTY, and mouse input all show up on the keyboard
+        let key_states = self.voice_manager.lock().held_note_states();
+
         // Draw white keys
         for visual_octave in 0..OCTAVES {
             for (i, &key_index) in WHITE_KEY_INDICES.iter().enumerate() {
@@ -323,7 +325,7 @@ impl SynthUI {
                         rect.min + Vec2::new(x, 0.0),
                         Vec2::new(white_key_width, white_key_height),
                     );
-                    let color = if self.key_states[note as usize] {
+                    let color = if key_states[note as usize] {
                         Color32::LIGHT_BLUE
                     } else {
                         Color32::WHITE
@@ -350,7 +352,7 @@ impl SynthUI {
                         rect.min + Vec2::new(x + visual_octave as f32 * 7.0 * white_key_width, 0.0),
                         Vec2::new(black_key_width, black_key_height),
                     );
-                    let color = if self.key_states[note as usize] {
+                    let color = if key_states[note as usize] {
                         Color32::LIGHT_BLUE
                     } else {
                         Color32::BLACK
@@ -473,13 +475,11 @@ impl SynthUI {
 
     fn play_note(&mut self, note: u8) {
         self.voice_manager.lock().note_on(note, 0.9);
-        self.key_states[note as usize] = true;
         println!("Playing note: {} ({:.2} Hz)", note, Oscillator::note_to_frequency(note));
     }
 
     fn stop_note(&mut self, note: u8) {
         self.voice_manager.lock().note_off(note);
-        self.key_states[note as usize] = false;
         println!("Stopping note: {}", note);
     }
 }

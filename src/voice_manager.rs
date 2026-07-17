@@ -2,11 +2,52 @@ use crate::voice::Voice;
 use crate::reverb::Reverb;
 use crate::chorus::{Chorus, ChorusMode};
 
+/// Canonical values of every automatable parameter, updated by the setters
+/// below. The UI reads this each frame so sliders follow song automation,
+/// and song automation and slider moves stay in sync.
+#[derive(Clone, Copy)]
+pub struct ParamValues {
+    pub volume: f32,
+    pub cutoff: f32,
+    pub resonance: f32,
+    pub drive: f32,
+    pub saturation: f32,
+    pub attack: f32,
+    pub decay: f32,
+    pub sustain: f32,
+    pub release: f32,
+    pub reverb_decay: f32,
+    pub reverb_wet: f32,
+    pub chorus_rate: f32,
+    pub chorus_depth: f32,
+}
+
+impl Default for ParamValues {
+    fn default() -> Self {
+        Self {
+            volume: 0.5,
+            cutoff: 15000.0,
+            resonance: 0.0,
+            drive: 1.0,
+            saturation: 1.0,
+            attack: 0.1,
+            decay: 0.1,
+            sustain: 0.7,
+            release: 0.2,
+            reverb_decay: 0.5,
+            reverb_wet: 0.5,
+            chorus_rate: 0.5,
+            chorus_depth: 0.3,
+        }
+    }
+}
+
 pub struct VoiceManager {
     pub voices: Vec<Voice>,
     reverb: Reverb,
     chorus: Chorus,
     note_counter: u64,
+    pub params: ParamValues,
 }
 
 impl VoiceManager {
@@ -16,7 +57,21 @@ impl VoiceManager {
             reverb: Reverb::new(sample_rate),
             chorus: Chorus::new(sample_rate),
             note_counter: 0,
+            params: ParamValues::default(),
         }
+    }
+
+    /// Marks which MIDI notes are currently held, for the UI keyboard display.
+    pub fn held_note_states(&self) -> [bool; 128] {
+        let mut states = [false; 128];
+        for voice in &self.voices {
+            if voice.is_held() {
+                if let Some(note) = voice.note {
+                    states[note as usize] = true;
+                }
+            }
+        }
+        states
     }
 
     pub fn note_on(&mut self, note: u8, velocity: f32) {
@@ -65,54 +120,63 @@ impl VoiceManager {
     }
 
     pub fn set_volume(&mut self, volume: f32) {
+        self.params.volume = volume;
         for voice in &self.voices {
             voice.oscillator.set_volume(volume);
         }
     }
 
     pub fn set_attack(&mut self, attack: f32) {
+        self.params.attack = attack;
         for voice in &self.voices {
             voice.envelope.set_attack(attack);
         }
     }
 
     pub fn set_decay(&mut self, decay: f32) {
+        self.params.decay = decay;
         for voice in &self.voices {
             voice.envelope.set_decay(decay);
         }
     }
 
     pub fn set_sustain(&mut self, sustain: f32) {
+        self.params.sustain = sustain;
         for voice in &self.voices {
             voice.envelope.set_sustain(sustain);
         }
     }
 
     pub fn set_release(&mut self, release: f32) {
+        self.params.release = release;
         for voice in &self.voices {
             voice.envelope.set_release(release);
         }
     }
 
     pub fn set_filter_cutoff(&mut self, cutoff: f32) {
+        self.params.cutoff = cutoff;
         for voice in &mut self.voices {
             voice.set_filter_cutoff(cutoff);
         }
     }
 
     pub fn set_filter_resonance(&mut self, resonance: f32) {
+        self.params.resonance = resonance;
         for voice in &mut self.voices {
             voice.set_filter_resonance(resonance);
         }
     }
 
     pub fn set_filter_drive(&mut self, drive: f32) {
+        self.params.drive = drive;
         for voice in &mut self.voices {
             voice.filter.set_drive(drive);
         }
     }
 
     pub fn set_filter_saturation(&mut self, saturation: f32) {
+        self.params.saturation = saturation;
         for voice in &mut self.voices {
             voice.filter.set_saturation(saturation);
         }
@@ -138,11 +202,13 @@ impl VoiceManager {
     }
 
     pub fn set_reverb_decay(&mut self, decay: f32) {
-        self.reverb.set_decay(decay.clamp(0.0, 0.99));
+        self.params.reverb_decay = decay.clamp(0.0, 0.99);
+        self.reverb.set_decay(self.params.reverb_decay);
     }
 
     pub fn set_reverb_wet(&mut self, wet: f32) {
-        self.reverb.set_wet(wet.clamp(0.0, 1.0));
+        self.params.reverb_wet = wet.clamp(0.0, 1.0);
+        self.reverb.set_wet(self.params.reverb_wet);
     }
 
     pub fn set_chorus_mode(&mut self, mode: ChorusMode) {
@@ -150,11 +216,13 @@ impl VoiceManager {
     }
 
     pub fn set_chorus_rate(&mut self, rate: f32) {
-        self.chorus.set_rate(rate);
+        self.params.chorus_rate = rate.clamp(0.1, 10.0);
+        self.chorus.set_rate(self.params.chorus_rate);
     }
 
     pub fn set_chorus_depth(&mut self, depth: f32) {
-        self.chorus.set_depth(depth);
+        self.params.chorus_depth = depth.clamp(0.0, 1.0);
+        self.chorus.set_depth(self.params.chorus_depth);
     }
 }
 
