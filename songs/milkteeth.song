@@ -1,0 +1,122 @@
+# Milk Teeth — Boards of Canada left in the sun until Aphex found it.
+#
+# The trick of unsettling is not dissonance, it is FAMILIARITY GOING
+# WRONG. So: a music box plays its little tune twice, sweetly. The
+# third time, one note slips a semitone (B->Bb, F#->F: the phrygian
+# rot). By the end the tune's own tonic has moved to Eb and it keeps
+# playing anyway, like a toy that doesn't know.
+#
+# Around it: an acid line that limps in 3+3+2, a self-oscillating
+# ladder whistling behind the wall (it follows the cutoff automation
+# like wind), ring-modulated tritone tolls whose sidebands belong to
+# no key, and pads whose unison detune is slowly automated from 6
+# toward 28 cents — by the middle section the chord itself is
+# seasick. The floor (bass) drops out entirely for the collapse.
+#
+# E minor, mostly. Then E minor with its teeth loose.
+
+bpm 116
+gate 0.85
+
+automate lfo_rate
+0.25
+automate lfo_shape
+0.5
+automate chorus_mode
+3
+automate chorus_depth
+0.3
+automate spring
+0.15
+automate reverb_decay
+0.75
+automate tape_flutter
+0.16
+automate tape_drive
+0.25
+
+track pads vel=0.5 patch=ghostpads
+[E3 G4 B4 D5]:16
+[E3 G4 B4 D5]:8 [C3 G4 B4 E5]:8 [E3 G4 B4 D5]:8 [A2 G4 C5 E5]:8
+[E3 G4 B4 D5]:8 [C3 G4 B4 E5]:8 [E3 G4 B4 D5]:8 [A2 G4 C5 E5]:8
+[E3 Bb3 G4 Db5]:16
+[E3 B4 D5]:8 [C3 B4 E5]:8 [Ab2 Eb4 C5]:8 [F#2 C4 A4]:8
+[E2 E3 Bb3 G4]:12
+
+track heart vel=0.75 patch=heartbass
+R:16
+E2:0.5 E2:0.5 R:3 E2:0.5 E2:0.5 R:3 | C2:0.5 C2:0.5 R:3 C2:0.5 C2:0.5 R:3 | E2:0.5 E2:0.5 R:3 E2:0.5 E2:0.5 R:3 | A1:0.5 A1:0.5 R:3 A1:0.5 A1:0.5 R:3
+E2:0.5 E2:0.5 R:3 E2:0.5 E2:0.5 R:3 | C2:0.5 C2:0.5 R:3 C2:0.5 C2:0.5 R:3 | E2:0.5 E2:0.5 R:3 E2:0.5 E2:0.5 R:3 | A1:0.5 A1:0.5 R:3 A1:0.5 A1:0.5 R:3
+R:16
+E2:0.5 E2:0.5 R:3 E2:0.5 E2:0.5 R:3 | C2:0.5 C2:0.5 R:3 C2:0.5 C2:0.5 R:3 | Ab1:0.5 Ab1:0.5 R:3 Ab1:0.5 Ab1:0.5 R:3 | F#1:0.5 F#1:0.5 R:3 F#1:0.5 F#1:0.5 R:3
+R:4 E1:8
+
+track box vel=0.55 patch=musicbox
+R:16
+E6:0.75 B5:0.25 G5:0.5 A5:0.5 B5:1 G5:1 | F#5:0.75 G5:0.25 E5:1.5 R:1.5
+G5:0.75 E5:0.25 B5:0.5 A5:0.5 G5:1 E5:1 | D6:0.75 B5:0.25 E6:1.5 R:1.5
+E6:0.75 B5:0.25 G5:0.5 A5:0.5 B5:1 G5:1 | F#5:0.75 G5:0.25 E5:1.5 R:1.5
+E6:0.75 B5:0.25 G5:0.5 A5:0.5 Bb5:1 G5:1 | F5:0.75 G5:0.25 E5:1.5 R:1.5
+R:32
+R:2 E6:0.5 R:3.5 Eb6:0.5 R:3.5 E6:0.5 R:3.5 R:2
+E6:0.75 B5:0.25 G5:0.5 A5:0.5 B5:1 G5:1 | F#5:0.75 G5:0.25 E5:1.5 R:1.5
+E6:0.75 B5:0.25 G5:0.5 A5:0.5 Bb5:1 G5:1 | F5:0.75 G5:0.25 E5:1.5 R:1.5
+G5:0.75 E5:0.25 B5:0.5 A5:0.5 G5:1 E5:1 | D6:0.75 B5:0.25 E6:1.5 R:1.5
+Eb6:0.75 B5:0.25 G5:0.5 Ab5:0.5 Bb5:1 Gb5:1 | F5:0.75 Gb5:0.25 E5:1.5 R:1.5
+Eb6:0.5 R:2.5 Eb6:0.5 R:2.5 Eb6:0.5 R:5.5
+
+track acid vel=0.72 len=0.25 patch=acidline
+R:48
+E2 R R E2 R R G2 R R E2 R Bb2 R B2 R R
+E2 R R E2 R R G2 R R A2 R Bb2 R B2 E3 R
+E2 R E2 R R E2 R G2 R R Bb2 R R E3 R D3
+C3 R R B2 R R Bb2 R R A2 R G2 R E2 R R
+E2 R R E2 R R G2 R R E2 R Bb2 R B2 R R
+E2 R R E2 R R G2 R R A2 R Bb2 R B2 E3 R
+E2 R R E2 R R G2 R R E2 R Bb2 R B2 R R
+E3 R D3 R C3 R B2 R Bb2 R A2 R G2 R F#2 R
+R:16
+E2 R R E2 R R G2 R R E2 R Bb2 R B2 R R
+E2 R E3 R R E2 R G2 R Bb2 R B2 R E3 R G3
+C3 R R C3 R R G2 R R C3 R Eb3 R E3 R R
+C3 R C3 R R G2 R Bb2 R C3 R Eb3 R D3 R R
+Ab2 R R Ab2 R R Eb3 R R Ab2 R C3 R B2 R R
+Ab2 R Ab2 R R Eb3 R C3 R Ab2 R G2 R Gb2 R R
+F#2 R R F#2 R R C3 R R F#2 R A2 R Bb2 R R
+F#2 R A2 R C3 R Eb3 R E3 R Eb3 R C3 R A2 R
+R:12
+
+track ghost vel=0.22 patch=whistle
+R:8 E5:24 R:16 G5:16 R:16 Eb5:16 R:24 B5:8 E5:12
+
+track toll vel=0.5 patch=ringbell
+R:14 E4:2 R:30 E4:2 R:14 A3:2 R:14 E4:2
+E4:4 Bb3:4 E4:4 Bb3:4
+R:28 E4:4 R:8 E3:4
+
+automate pads.detune
+6 R:48 12:16@smooth R:16 28:16@smooth 10:8@smooth R:24 22:12@lin
+
+automate acid.cutoff
+400 R:48 2800:24@exp 900:8@smooth R:16 3800:24@exp 1200:8@smooth R:12
+
+automate acid.resonance
+1.2 R:48 2.4:32@lin R:16 3.3:24@lin R:20
+
+automate ghost.cutoff
+300 R:8 500:24@smooth 380:16@smooth 700:16@smooth R:16 250:16@exp R:40 600:4@smooth
+
+automate lfo_pitch
+3 R:80 12:16@smooth 5:8@smooth R:36
+
+automate tape_wow
+0.22 R:78 0.5:18@smooth 0.32:8@smooth R:24 0.6:12@lin
+
+automate tape_age
+0.4 R:16 0.48:0.1@step R:31.9 0.55:0.1@step R:31.9 0.68:0.1@step R:15.9 0.6:0.1@step R:31.9 0.8:11.9@lin
+
+automate reverb_wet
+0.3 R:78 0.65:16@smooth 0.42:6@smooth R:28 0.75:12@smooth
+
+automate noise
+0 R:76 0.03:16@smooth 0:4 R:32 0.05:12@smooth
