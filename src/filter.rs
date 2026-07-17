@@ -292,9 +292,12 @@ impl LadderFilter {
         // usable and is labeled a convenience (CHOICE)
         out *= 1.0 + self.resonance * 0.3;
 
-        // Output saturation stage with antiderivative antialiasing
+        // Output saturation stage with antiderivative antialiasing,
+        // referenced to program level (it saturates around 10 V p-p, not
+        // around one volt)
         if self.saturation > 0.02 {
-            out = self.sat_adaa.process(out * self.saturation) / self.saturation;
+            let pv = crate::oscillator::PROGRAM_V;
+            out = pv * self.sat_adaa.process(out * self.saturation / pv) / self.saturation;
         }
         out
     }

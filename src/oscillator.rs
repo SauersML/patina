@@ -387,8 +387,9 @@ mod tests {
         let mut prev_phase_sample = -1.0f32;
         for _ in 0..44100 {
             let s = osc.next_sample(0.0, 1.0, 0.5);
-            // Core wrap: the saw jumps down by ~2
-            if prev_phase_sample - s > 1.0 {
+            // Core wrap: the saw jumps down by ~10 V (bandlimited over a
+            // couple of samples, so demand more than half the swing)
+            if prev_phase_sample - s > 5.0 {
                 core_wraps += 1;
             }
             prev_phase_sample = s;
