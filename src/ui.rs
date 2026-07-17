@@ -869,11 +869,26 @@ impl SynthUI {
         ctx.set_style(style);
     }
 
+    fn ensure_textures(&mut self, ctx: &egui::Context) {
+        if self.textures.is_none() {
+            let textures = Textures {
+                backdrop: ctx.load_texture("patina-backdrop", make_backdrop(), TextureOptions::LINEAR),
+                wood: ctx.load_texture("patina-wood", make_wood(), TextureOptions::LINEAR),
+                knob: ctx.load_texture("patina-knob", make_knob_sprite(), TextureOptions::LINEAR),
+            };
+            if let egui::TextureId::Managed(id) = textures.knob.id() {
+                KNOB_TEX_ID.store(id + 1, AtomicOrdering::Relaxed);
+            }
+            self.textures = Some(textures);
+        }
+    }
+
     pub fn update(&mut self, ctx: &egui::Context) {
         if !self.theme_applied {
             Self::apply_theme(ctx);
             self.theme_applied = true;
         }
+        self.ensure_textures(ctx);
 
         // Pull the engine's canonical parameter values so the controls follow
         // song automation (and any other source) live
@@ -915,37 +930,68 @@ impl SynthUI {
         // Keep repainting so key lights and the scope stay live
         ctx.request_repaint_after(std::time::Duration::from_millis(33));
 
+        // Aurora backdrop, painted on the panels' shared layer before they
+        // run so it sits under their transparent frames
+        if let Some(tex) = &self.textures {
+            ctx.layer_painter(egui::LayerId::background()).image(
+                tex.backdrop.id(),
+                ctx.screen_rect(),
+                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                Color32::WHITE,
+            );
+        }
+
         self.handle_keyboard_input(ctx);
 
         egui::TopBottomPanel::top("header")
             .frame(
                 egui::Frame::none()
-                    .fill(BG0)
                     .inner_margin(egui::style::Margin::symmetric(20.0, 12.0)),
             )
             .show(ctx, |ui| self.draw_header(ui));
 
         egui::TopBottomPanel::bottom("keyboard")
-            .frame(egui::Frame::none().fill(BG0).inner_margin(egui::style::Margin {
+            .frame(egui::Frame::none().inner_margin(egui::style::Margin {
                 left: 20.0,
                 right: 20.0,
-                top: 6.0,
+                top: 9.0,
                 bottom: 10.0,
             }))
             .show(ctx, |ui| {
+                // Walnut shelf under the keys, painted after layout
+                let bg_idx = ui.painter().add(Shape::Noop);
                 self.draw_keyboard(ui);
                 ui.add_space(7.0);
                 ui.vertical_centered(|ui| {
                     ui.label(
                         RichText::new("Z–M  ·  Q–U  play      ↑ ↓  octave      drag / scroll knobs  ·  ⇧ fine  ·  double-click reset")
                             .size(9.5)
-                            .color(TXT_LOW),
+                            .color(Color32::from_rgba_unmultiplied(0xf0, 0xe4, 0xcd, 150)),
                     );
                 });
+                let shelf = ui.min_rect().expand2(vec2(20.0, 9.5));
+                if let Some(tex) = &self.textures {
+                    let uv_w = (shelf.width() / 1024.0).clamp(0.35, 1.0);
+                    ui.painter().set(
+                        bg_idx,
+                        Shape::Vec(vec![
+                            Shape::image(
+                                tex.wood.id(),
+                                shelf,
+                                Rect::from_min_max(pos2(0.0, 0.0), pos2(uv_w, 1.0)),
+                                Color32::WHITE,
+                            ),
+                            Shape::line_segment(
+                                [shelf.left_top(), shelf.right_top()],
+                                Stroke::new(1.5, Color32::from_rgba_unmultiplied(0, 0, 0, 150)),
+                            ),
+                        ]),
+                    );
+                }
             });
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(BG0).inner_margin(egui::style::Margin {
+            .frame(egui::Frame::none().inner_margin(egui::style::Margin {
                 left: 20.0,
                 right: 20.0,
                 top: 8.0,
@@ -966,8 +1012,9 @@ impl SynthUI {
             });
     }
 
-    /// Wordmark left, octave stepper right, one hairline underneath.
+    /// Wordmark on the walnut top rail, octave stepper right.
     fn draw_header(&mut self, ui: &mut egui::Ui) {
+        let bg_idx = ui.painter().add(Shape::Noop);
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new(tracked("Patina"))
@@ -979,7 +1026,7 @@ impl SynthUI {
             ui.label(
                 RichText::new(tracked("polyphonic synthesizer"))
                     .size(8.5)
-                    .color(TXT_LOW),
+                    .color(Color32::from_rgba_unmultiplied(0xf0, 0xe4, 0xcd, 130)),
             );
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -996,7 +1043,7 @@ impl SynthUI {
                     Align2::CENTER_CENTER,
                     format!("OCT {}", self.current_octave),
                     FontId::monospace(10.5),
-                    TXT_MID,
+                    CYAN,
                 );
                 if step_button(ui, "−").on_hover_text("Octave down  (↓)").clicked() {
                     self.shift_octave(-1);
@@ -1004,14 +1051,25 @@ impl SynthUI {
             });
         });
         ui.add_space(10.0);
-        let rect = ui.min_rect();
-        ui.painter().line_segment(
-            [
-                pos2(rect.left(), rect.bottom()),
-                pos2(rect.right(), rect.bottom()),
-            ],
-            Stroke::new(1.0, HAIRLINE),
-        );
+        let rail = ui.min_rect().expand2(vec2(20.0, 12.0));
+        if let Some(tex) = &self.textures {
+            let uv_w = (rail.width() / 1024.0).clamp(0.35, 1.0);
+            ui.painter().set(
+                bg_idx,
+                Shape::Vec(vec![
+                    Shape::image(
+                        tex.wood.id(),
+                        rail,
+                        Rect::from_min_max(pos2(0.0, 0.0), pos2(uv_w, 1.0)),
+                        Color32::WHITE,
+                    ),
+                    Shape::line_segment(
+                        [rail.left_bottom(), rail.right_bottom()],
+                        Stroke::new(1.5, Color32::from_rgba_unmultiplied(0, 0, 0, 160)),
+                    ),
+                ]),
+            );
+        }
     }
 
     fn draw_oscillator_card(&mut self, ui: &mut egui::Ui) {
@@ -1310,6 +1368,17 @@ impl SynthUI {
                         );
                     }
                     painter.rect_filled(key_rect, rounding, if pressed { AMBER } else { IVORY });
+                    if !pressed {
+                        // Ivory sheen: light falls from the top
+                        painter.add(gradient_quad(
+                            Rect::from_min_max(
+                                key_rect.min,
+                                pos2(key_rect.right(), key_rect.top() + 30.0),
+                            ),
+                            Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 60),
+                            Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 0),
+                        ));
+                    }
                     let shade = Rect::from_min_max(
                         pos2(key_rect.min.x, key_rect.max.y - 6.0),
                         key_rect.max,
@@ -1385,6 +1454,15 @@ impl SynthUI {
                         if pressed { AMBER_DEEP } else { EBONY },
                     );
                     if !pressed {
+                        // Glossy ebony: lit top face
+                        painter.add(gradient_quad(
+                            Rect::from_min_max(
+                                key_rect.min + vec2(1.0, 0.0),
+                                pos2(key_rect.right() - 1.0, key_rect.top() + 16.0),
+                            ),
+                            Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 34),
+                            Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 0),
+                        ));
                         let edge = Rect::from_min_max(
                             pos2(key_rect.min.x, key_rect.max.y - 4.0),
                             key_rect.max,

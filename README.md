@@ -6,13 +6,14 @@ format for programmatic playback and parameter automation.
 
 ## ✨ Features
 
-- 🎚️ 3-oscillator unison per voice (Sine, Square, Sawtooth, Triangle) with polyBLEP anti-aliasing, adjustable detune, and analog pitch drift
+- 🎚️ 3-oscillator unison per voice built the 901B way: one bandlimited saw core with triangle folded from it, sine as a transistor-rounded triangle, pulse from a comparator with per-unit duty error — at the service manual's (non-normalized) output levels, with correlated bank drift
+- 🌫️ One shared transistor noise source distributed into every voice (903A/Juno architecture)
 - 📊 Analog-style exponential ADSR amplitude envelope
 - 🎯 Dedicated filter envelope (±5 octaves), velocity-to-filter, and keyboard tracking
 - 🔊 Polyphonic voices with age-based stealing, spread across the stereo field
 - 🎛️ Moog-inspired ladder filter: 4 tanh stages, 2× oversampled, resonance to self-oscillation, drive, saturation, transistor mismatch, thermal drift
 - 🧈 Per-sample parameter smoothing — no zipper noise under automation
-- 🌀 Juno-style chorus (modes I–IV), stereo reverb, and a physically-modeled cassette tape stage (wow, flutter, saturation, age)
+- 🌀 Juno-style chorus (modes I–IV), stereo reverb, a 905-style dual-spring reverb (dispersive, fixed mechanical decay, wet/dry only), and a physically-modeled cassette tape stage (wow, flutter, saturation, age)
 - 🖥️ Studio-hardware GUI: knobs, ADSR graph, live oscilloscope, keys that light from the engine's real voice state
 - ⌨️ QWERTY keyboard input · 🖱️ click-and-drag keys · 🎹 MIDI input
 - 📜 Text-based song files with per-track sequencing and full parameter automation
@@ -69,7 +70,7 @@ automate cutoff                # ramp any parameter through breakpoints
 
 - **Notes**: names (`C4`, `F#3`, `Eb5`, with C4 = MIDI 60) or raw MIDI numbers; `[..]` for chords; `R` or `.` for rests; `:beats` duration; `@vel` velocity; `|` bar lines (ignored).
 - **Automation**: `automate <param>` starts a curve track. The first token is the starting value; `V:D@shape` ramps to `V` over `D` beats; `R:D` holds. Shapes: `lin`, `exp` (geometric — right for frequencies), `log`, `smooth`, `step`.
-- **Parameters**: `volume`, `waveform` (0–3), `detune`, `hpf` (Hz, 16 = off), `fuzz` (0–1), `cutoff`, `resonance`, `drive`, `saturation`, `attack`, `decay`, `sustain`, `release`, `filter_env` (octaves), `filter_attack`, `filter_decay`, `filter_sustain`, `filter_release`, `reverb_decay`, `reverb_wet`, `chorus_mode` (0–4), `chorus_rate`, `chorus_depth`, `tape_wow`, `tape_flutter`, `tape_drive`, `tape_age`.
+- **Parameters**: `volume`, `waveform` (0–3), `detune`, `noise` (0–1), `hpf` (Hz, 16 = off), `fuzz` (0–1), `spring` (0–1), `cutoff`, `resonance`, `drive`, `saturation`, `attack`, `decay`, `sustain`, `release`, `filter_env` (octaves), `filter_attack`, `filter_decay`, `filter_sustain`, `filter_release`, `reverb_decay`, `reverb_wet`, `chorus_mode` (0–4), `chorus_rate`, `chorus_depth`, `tape_wow`, `tape_flutter`, `tape_drive`, `tape_age`.
 
 ## 🧪 Technical Details
 
