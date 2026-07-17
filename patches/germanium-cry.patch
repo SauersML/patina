@@ -1,6 +1,12 @@
 # Germanium Cry — fuzz lead with vibrato and slow slides
 volume 0.7
 waveform 2
+osc2_wave 2
+osc2_pitch 0
+osc2_level 0.6
+osc3_wave 2
+osc3_pitch 7
+osc3_level 0.45
 detune 6
 noise 0
 glide 0.08

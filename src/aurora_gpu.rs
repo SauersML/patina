@@ -285,34 +285,30 @@ fn cloud_density(p: vec2<f32>, t: f32) -> f32 {
 fn sky(w: vec2<f32>, t: f32, blur: f32) -> vec3<f32> {
   let y = clamp(w.y, 0.0, 1.0);
   // Three-stop gradient: deep zenith, luminous mid, warm pale horizon
-  var col = mix(vec3<f32>(0.12, 0.37, 0.75), vec3<f32>(0.36, 0.66, 0.91), smoothstep(0.0, 0.55, y));
-  col = mix(col, vec3<f32>(0.84, 0.94, 0.96), smoothstep(0.50, 0.95, y));
+  var col = mix(vec3<f32>(0.13, 0.38, 0.76), vec3<f32>(0.36, 0.66, 0.91), smoothstep(0.0, 0.70, y));
+  col = mix(col, vec3<f32>(0.84, 0.94, 0.96), smoothstep(0.40, 1.05, y));
   // Sun bloom, breathing
   let sun_pos = vec2<f32>(0.20 + 0.015 * sin(t * 0.11), 0.14 + 0.010 * sin(t * 0.07 + 1.7));
   let sr = 0.26 * (1.0 + blur * 1.4) * (1.0 + 0.03 * sin(t * 0.23));
   let sd = (w - sun_pos) / sr;
   col = col + vec3<f32>(1.00, 0.97, 0.88) * exp(-dot(sd, sd)) * 0.72;
-  // Sun rays: gentle radial spokes, erased by the frost
-  let sv = w - sun_pos;
-  let ray = max(cos(atan2(sv.y, sv.x) * 9.0 - t * 0.05), 0.0);
-  col = col + vec3<f32>(1.0, 0.98, 0.90) * ray * ray * exp(-length(sv) * 2.6) * 0.10 * (1.0 - blur);
   // Aqua counter-glow low right
   let gd = (w - vec2<f32>(0.86, 0.80)) / (0.45 * (1.0 + blur));
   col = col + vec3<f32>(0.28, 0.82, 0.72) * exp(-dot(gd, gd)) * 0.20;
   // Cumulus with volume: warped-fbm coverage, self-shaded by comparing
   // density toward the sun — lit crowns, shaded bases. Blur flattens it.
-  let cp = w * vec2<f32>(2.3, 4.8);
+  let cp = w * vec2<f32>(2.5, 3.4);
   let d = cloud_density(cp, t);
   let d_lit = cloud_density(cp + vec2<f32>(-0.09, -0.11), t);
-  let cov = smoothstep(0.47, 0.74, d) * (1.0 - blur * 0.55);
-  let lit = clamp(0.72 + (d - d_lit) * 3.2, 0.42, 1.12);
+  let cov = smoothstep(0.42, 0.86, d) * (1.0 - blur * 0.55);
+  let lit = clamp(0.78 + (d - d_lit) * 2.2, 0.58, 1.06);
   let cloud_col = vec3<f32>(0.86, 0.90, 0.96) * lit;
-  col = mix(col, cloud_col, cov * 0.85);
+  col = mix(col, cloud_col, cov * 0.75);
   // High cirrus streaks — the crisp detail the frost erases entirely
-  let cir = smoothstep(0.60, 0.80, fbm(w * vec2<f32>(6.5, 17.0) + vec2<f32>(t * 0.021, 7.7)));
-  col = mix(col, vec3<f32>(1.0, 1.0, 1.0), cir * 0.12 * (1.0 - blur));
+  let cir = smoothstep(0.52, 0.92, fbm(w * vec2<f32>(5.5, 11.0) + vec2<f32>(t * 0.021, 7.7)));
+  col = mix(col, vec3<f32>(1.0, 1.0, 1.0), cir * 0.06 * (1.0 - blur));
   // Bright haze band settling on the horizon
-  col = col + vec3<f32>(0.90, 0.96, 1.00) * exp(-abs(y - 0.88) * 9.0) * 0.10;
+  col = col + vec3<f32>(0.90, 0.96, 1.00) * exp(-(y - 0.90) * (y - 0.90) * 55.0) * 0.08;
   // Green horizon glow
   col = col + vec3<f32>(0.25, 0.52, 0.22) * 0.12 * smoothstep(0.84, 1.0, y);
   // Aero bubbles drifting upward; size sets speed, so depth reads as

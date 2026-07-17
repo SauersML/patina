@@ -189,6 +189,12 @@ pub struct SynthUI {
     spring: f32,
     glide: f32,
     sub: f32,
+    osc2_wave: Waveform,
+    osc2_pitch: f32,
+    osc2_level: f32,
+    osc3_wave: Waveform,
+    osc3_pitch: f32,
+    osc3_level: f32,
     pulse_width: f32,
     lfo_rate: f32,
     lfo_shape: f32,
@@ -332,7 +338,7 @@ fn knob(
 
     let response = response
         .on_hover_cursor(CursorIcon::ResizeVertical)
-        .on_hover_text("drag or scroll · ⇧ fine · double-click resets");
+        .on_hover_text("drag or scroll · shift for fine · double-click resets");
     let engaged = response.hovered() || response.dragged();
 
     let painter = ui.painter();
@@ -703,6 +709,12 @@ impl SynthUI {
             spring: 0.0,
             glide: 0.0,
             sub: 0.0,
+            osc2_wave: Waveform::Sawtooth,
+            osc2_pitch: 0.0,
+            osc2_level: 0.72,
+            osc3_wave: Waveform::Sawtooth,
+            osc3_pitch: 0.0,
+            osc3_level: 0.72,
             pulse_width: 0.5,
             lfo_rate: 1.0,
             lfo_shape: 0.5,
@@ -762,6 +774,12 @@ impl SynthUI {
         vm.set_spring(self.spring);
         vm.set_glide(self.glide);
         vm.set_sub(self.sub);
+        vm.set_osc_wave(1, self.osc2_wave);
+        vm.set_osc_pitch(1, self.osc2_pitch);
+        vm.set_osc_level(1, self.osc2_level);
+        vm.set_osc_wave(2, self.osc3_wave);
+        vm.set_osc_pitch(2, self.osc3_pitch);
+        vm.set_osc_level(2, self.osc3_level);
         vm.set_pulse_width(self.pulse_width);
         vm.set_lfo_rate(self.lfo_rate);
         vm.set_lfo_shape(self.lfo_shape);
@@ -801,7 +819,7 @@ impl SynthUI {
         v.widgets.active.fg_stroke = Stroke::new(1.0, AMBER);
         v.widgets.inactive.bg_stroke = Stroke::new(1.0, HAIRLINE);
         v.widgets.hovered.bg_stroke = Stroke::new(1.0, HAIRLINE_HI);
-        v.selection.bg_fill = Color32::from_rgb(0x33, 0x2a, 0x1a);
+        v.selection.bg_fill = Color32::from_rgb(0x10, 0x3a, 0x46);
         v.selection.stroke = Stroke::new(1.0, AMBER);
 
         ctx.set_style(style);
@@ -904,6 +922,12 @@ impl SynthUI {
             self.spring = p.spring;
             self.glide = p.glide;
             self.sub = p.sub;
+            self.osc2_wave = p.osc2_wave;
+            self.osc2_pitch = p.osc2_pitch;
+            self.osc2_level = p.osc2_level;
+            self.osc3_wave = p.osc3_wave;
+            self.osc3_pitch = p.osc3_pitch;
+            self.osc3_level = p.osc3_level;
             self.pulse_width = p.pulse_width;
             self.lfo_rate = p.lfo_rate;
             self.lfo_shape = p.lfo_shape;
@@ -1136,10 +1160,11 @@ impl SynthUI {
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                if step_button(ui, "+").on_hover_text("Octave up  (↑)").clicked() {
+                if step_button(ui, "+").on_hover_text("octave up · arrow-up or +").clicked() {
                     self.shift_octave(1);
                 }
-                let (chip, _) = ui.allocate_exact_size(vec2(58.0, 24.0), Sense::hover());
+                let (chip, chip_resp) = ui.allocate_exact_size(vec2(58.0, 24.0), Sense::hover());
+                chip_resp.on_hover_text("octave · arrow keys or + / -");
                 let painter = ui.painter();
                 painter.rect_filled(chip, CornerRadius::same(6), INSET);
                 painter.rect_stroke(chip, CornerRadius::same(6), Stroke::new(1.0, WELL_LINE), egui::StrokeKind::Inside);
@@ -1150,7 +1175,7 @@ impl SynthUI {
                     FontId::monospace(10.5),
                     CYAN,
                 );
-                if step_button(ui, "−").on_hover_text("Octave down  (↓)").clicked() {
+                if step_button(ui, "-").on_hover_text("octave down · arrow-down or -").clicked() {
                     self.shift_octave(-1);
                 }
             });
@@ -1206,6 +1231,47 @@ impl SynthUI {
                     }
                 }) {
                     self.voice_manager.lock().set_glide(self.glide);
+                }
+            });
+            // The other two oscillator sections: a voice is three
+            // independent oscillators (waveform / interval / level each),
+            // not three clones
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                for which in 1..=2usize {
+                    ui.label(legend(if which == 1 { "osc 2" } else { "osc 3" }));
+                    let (wave, pitch, level) = if which == 1 {
+                        (&mut self.osc2_wave, &mut self.osc2_pitch, &mut self.osc2_level)
+                    } else {
+                        (&mut self.osc3_wave, &mut self.osc3_pitch, &mut self.osc3_level)
+                    };
+                    let selected = match *wave {
+                        Waveform::Sine => 0,
+                        Waveform::Square => 1,
+                        Waveform::Sawtooth => 2,
+                        Waveform::Triangle => 3,
+                    };
+                    let id = if which == 1 { "osc2wave" } else { "osc3wave" };
+                    if let Some(i) = segmented(ui, id, &["SIN", "SQR", "SAW", "TRI"], selected) {
+                        *wave = [
+                            Waveform::Sine,
+                            Waveform::Square,
+                            Waveform::Sawtooth,
+                            Waveform::Triangle,
+                        ][i];
+                        self.voice_manager.lock().set_osc_wave(which, *wave);
+                    }
+                    if knob(ui, "Pitch", pitch, -24.0, 24.0, if which == 1 { 0.0 } else { -12.0 }, false, |v| {
+                        format!("{v:+.0} st")
+                    }) {
+                        self.voice_manager.lock().set_osc_pitch(which, *pitch);
+                    }
+                    if knob(ui, "Level", level, 0.0, 1.0, 0.72, false, fmt_pct) {
+                        self.voice_manager.lock().set_osc_level(which, *level);
+                    }
+                    if which == 1 {
+                        ui.add_space(10.0);
+                    }
                 }
             });
         });
@@ -1426,25 +1492,7 @@ impl SynthUI {
             painter.circle_filled(pos2(rect.left() + 40.0, rect.top() + 10.5), 2.0, CYAN);
         }
 
-        // Amplitude graticule at ±50% full scale; the center line is 0
-        for frac in [-0.5f32, 0.5] {
-            let y = inner.center().y - frac * inner.height() * 0.5;
-            painter.line_segment(
-                [pos2(inner.left(), y), pos2(inner.right(), y)],
-                Stroke::new(
-                    0.5,
-                    Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 12),
-                ),
-            );
-        }
-
-        let (samples, sample_rate) = {
-            let vm = self.voice_manager.lock();
-            (
-                vm.scope.iter().copied().collect::<Vec<f32>>(),
-                vm.sample_rate(),
-            )
-        };
+        let samples: Vec<f32> = self.voice_manager.lock().scope.iter().copied().collect();
         if samples.len() < 64 {
             return;
         }
@@ -1464,26 +1512,6 @@ impl SynthUI {
                 }
             }
         }
-
-        // Time graticule: one tick per 5 ms of the displayed window
-        let window_ms = window as f32 / sample_rate * 1000.0;
-        let tick_count = (window_ms / 5.0).floor() as usize;
-        for k in 1..=tick_count {
-            let x = inner.left() + inner.width() * (k as f32 * 5.0) / window_ms;
-            if x < inner.right() {
-                painter.line_segment(
-                    [pos2(x, inner.bottom() - 5.0), pos2(x, inner.bottom())],
-                    Stroke::new(1.0, Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 30)),
-                );
-            }
-        }
-        painter.text(
-            pos2(inner.right(), rect.top() + 6.0),
-            Align2::RIGHT_TOP,
-            format!("{:.0} ms · ±1.0", window_ms),
-            FontId::monospace(8.5),
-            WELL_TXT,
-        );
 
         // Accurate rendering: per-pixel-column min/max envelope, so no
         // peak between columns is ever lost to subsampling, plus the mean
@@ -1557,11 +1585,26 @@ impl SynthUI {
             Vec2::new(available_width, white_key_height),
             egui::Sense::click_and_drag(),
         );
+        // The piano is pointer-only: surrendering focus kills egui's focus
+        // ring and keeps arrow keys free for octave shifting
+        response.surrender_focus();
         self.handle_mouse_input(ui, rect, &response);
 
         // Light keys from the engine's live voice state, so song playback,
         // MIDI, QWERTY, and mouse input all show up on the keyboard
         let key_states = self.voice_manager.lock().held_note_states();
+
+        // Hover preview: tint the key under the pointer and show a hand
+        // cursor, so the keyboard invites playing before the first click
+        let hovered_note = if response.hovered() {
+            ui.input(|i| i.pointer.hover_pos())
+                .and_then(|pos| self.get_note_from_pointer(pos, rect))
+        } else {
+            None
+        };
+        if hovered_note.is_some() {
+            ui.output_mut(|o| o.cursor_icon = CursorIcon::PointingHand);
+        }
 
         let painter = ui.painter();
         painter.rect_filled(rect.expand(3.0), CornerRadius::same(6), INSET);
@@ -1591,7 +1634,15 @@ impl SynthUI {
                             Color32::from_rgba_premultiplied(0xe0, 0xa1, 0x54, 40),
                         );
                     }
+                    let hovered = hovered_note == Some(note) && !pressed;
                     painter.rect_filled(key_rect, rounding, if pressed { AMBER } else { IVORY });
+                    if hovered {
+                        painter.rect_filled(
+                            key_rect,
+                            rounding,
+                            Color32::from_rgba_unmultiplied(0x2b, 0xc6, 0xe6, 34),
+                        );
+                    }
                     if !pressed {
                         // Ivory sheen: light falls from the top
                         painter.add(gradient_quad(
@@ -1672,11 +1723,19 @@ impl SynthUI {
                         sw: 3,
                         se: 3,
                     };
+                    let hovered = hovered_note == Some(note) && !pressed;
                     painter.rect_filled(
                         key_rect,
                         rounding,
                         if pressed { AMBER_DEEP } else { EBONY },
                     );
+                    if hovered {
+                        painter.rect_filled(
+                            key_rect,
+                            rounding,
+                            Color32::from_rgba_unmultiplied(0x2b, 0xc6, 0xe6, 60),
+                        );
+                    }
                     if !pressed {
                         // Glossy ebony: lit top face
                         painter.add(gradient_quad(
@@ -1754,10 +1813,10 @@ impl SynthUI {
             Key::Q, Key::Num2, Key::W, Key::Num3, Key::E, Key::R, Key::Num5, Key::T, Key::Num6, Key::Y, Key::Num7, Key::U,
         ];
 
-        if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
+        if ctx.input(|i| i.key_pressed(Key::ArrowUp) || i.key_pressed(Key::Plus) || i.key_pressed(Key::Equals)) {
             self.shift_octave(1);
         }
-        if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
+        if ctx.input(|i| i.key_pressed(Key::ArrowDown) || i.key_pressed(Key::Minus)) {
             self.shift_octave(-1);
         }
 

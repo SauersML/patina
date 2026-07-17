@@ -1,6 +1,12 @@
 # Velvet Strings — PWM square through Juno chorus II, slow swell
 volume 0.6
 waveform 1
+osc2_wave 1
+osc2_pitch 0
+osc2_level 0.7
+osc3_wave 1
+osc3_pitch -12
+osc3_level 0.5
 detune 12
 noise 0
 glide 0

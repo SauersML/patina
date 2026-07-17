@@ -57,12 +57,15 @@ pub fn apply(vm: &mut VoiceManager, text: &str) -> Result<(), String> {
 
 /// Snapshot the current parameters as patch text (the inverse of `apply`).
 pub fn serialize(p: &ParamValues) -> String {
-    let waveform = match p.waveform {
+    let wf_num = |w: Waveform| match w {
         Waveform::Sine => 0,
         Waveform::Square => 1,
         Waveform::Sawtooth => 2,
         Waveform::Triangle => 3,
     };
+    let waveform = wf_num(p.waveform);
+    let osc2_wave = wf_num(p.osc2_wave);
+    let osc3_wave = wf_num(p.osc3_wave);
     let chorus_mode = match p.chorus_mode {
         ChorusMode::Off => 0,
         ChorusMode::I => 1,
@@ -72,7 +75,9 @@ pub fn serialize(p: &ParamValues) -> String {
     };
     format!(
         "# Patina patch\n\
-         volume {}\nwaveform {}\ndetune {}\nnoise {}\nglide {}\nsub {}\npulse_width {}\n\
+         volume {}\nwaveform {}\nosc2_wave {}\nosc2_pitch {}\nosc2_level {}\n\
+         osc3_wave {}\nosc3_pitch {}\nosc3_level {}\n\
+         detune {}\nnoise {}\nglide {}\nsub {}\npulse_width {}\n\
          lfo_rate {}\nlfo_shape {}\nlfo_pitch {}\nlfo_filter {}\nlfo_pwm {}\n\
          cutoff {}\nresonance {}\ndrive {}\nsaturation {}\nhpf {}\n\
          filter_env {}\nfilter_attack {}\nfilter_decay {}\nfilter_sustain {}\nfilter_release {}\n\
@@ -80,7 +85,9 @@ pub fn serialize(p: &ParamValues) -> String {
          fuzz {}\nspring {}\nreverb_decay {}\nreverb_wet {}\n\
          chorus_mode {}\nchorus_rate {}\nchorus_depth {}\n\
          tape_wow {}\ntape_flutter {}\ntape_drive {}\ntape_age {}\n",
-        p.volume, waveform, p.detune, p.noise, p.glide, p.sub, p.pulse_width,
+        p.volume, waveform, osc2_wave, p.osc2_pitch, p.osc2_level,
+        osc3_wave, p.osc3_pitch, p.osc3_level,
+        p.detune, p.noise, p.glide, p.sub, p.pulse_width,
         p.lfo_rate, p.lfo_shape, p.lfo_pitch, p.lfo_filter, p.lfo_pwm,
         p.cutoff, p.resonance, p.drive, p.saturation, p.hpf_cutoff,
         p.filter_env_amount, p.filter_attack, p.filter_decay, p.filter_sustain, p.filter_release,

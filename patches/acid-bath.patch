@@ -1,6 +1,12 @@
 # Acid Bath — the 303: tight envelopes, squelch, slides, a hot cassette
 volume 0.8
 waveform 2
+osc2_wave 2
+osc2_pitch 0
+osc2_level 0.0
+osc3_wave 2
+osc3_pitch 0
+osc3_level 0.0
 detune 3
 noise 0
 glide 0.05

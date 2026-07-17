@@ -15,6 +15,17 @@ const VEL_TRACK: f32 = 0.8;
 /// high notes land slightly flat, like an analog VCO between calibrations.
 const RESET_TIME: f32 = 1.5e-6;
 
+/// The 902 alignment spec: "At 0, signal output should be -60db maximum."
+/// The VCA never fully closes — a silent voice still leaks its free-running
+/// oscillators at this floor. Voices therefore render continuously; digital
+/// silence between notes is not a thing hardware does.
+const VCA_FLOOR: f32 = 1e-3;
+
+/// Sum scale into the ladder: deliberately hotter than 1/3-normalization.
+/// Three oscillators up SHOULD push the filter into its tanh curvature —
+/// the ARP 2600 manual lists "VCF OVERDRIVEN" under NO PROBLEM.
+const OSC_SUM_SCALE: f32 = 0.45;
+
 /// Exponential-converter calibration reference (~C4). V/oct scaling error
 /// accumulates in cents per octave away from this point.
 const CAL_REF_HZ: f32 = 261.63;
@@ -51,6 +62,14 @@ pub struct Voice {
     /// Juno-style sub-oscillator level: the first oscillator's divide-by-two
     /// square, mixed in before the filter.
     sub_level: f32,
+    /// A real voice is three INDEPENDENT oscillator sections (Minimoog /
+    /// 2600 architecture), not three clones: per-oscillator pitch offsets
+    /// in semitones (osc 2 and 3; osc 1 is the reference) and mix levels.
+    /// Levels default center-dominant — equal-amplitude unison cancels too
+    /// deeply when phases oppose, which reads as "hollow".
+    osc_pitch_semi: [f32; 2],
+    osc_level: [f32; 2],
+    detune_cents: f32,
     /// This card's sensitivity to the shared chassis state (rail and heat):
     /// every board reacts to the same environment, each by its own amount.
     substrate_sens: f32,
@@ -122,6 +141,9 @@ impl Voice {
             glide_offset: 0.0,
             glide_k: 1.0,
             sub_level: 0.0,
+            osc_pitch_semi: [0.0, 0.0],
+            osc_level: [0.72, 0.72],
+            detune_cents: 7.0,
             substrate_sens,
             vca_feedthrough,
             prev_env: 0.0,
@@ -139,13 +161,40 @@ impl Voice {
     }
 
     /// Unison spread in cents: oscillator 0 stays centered, 1 and 2 detune
-    /// symmetrically up and down.
+    /// symmetrically up and down — on top of their interval offsets.
     pub fn set_detune(&mut self, cents: f32) {
-        let cents = cents.clamp(0.0, 50.0);
-        let ratio = (cents / 1200.0 * std::f32::consts::LN_2).exp();
+        self.detune_cents = cents.clamp(0.0, 50.0);
+        self.update_freq_mults();
+    }
+
+    /// Interval offset for oscillator 2 or 3 in semitones (-24..+24) —
+    /// saw + saw-detuned + wave-an-octave-down is the classic voice.
+    pub fn set_osc_pitch(&mut self, which: usize, semitones: f32) {
+        if which >= 1 && which <= 2 {
+            self.osc_pitch_semi[which - 1] = semitones.clamp(-24.0, 24.0);
+            self.update_freq_mults();
+        }
+    }
+
+    pub fn set_osc_level(&mut self, which: usize, level: f32) {
+        if which >= 1 && which <= 2 {
+            self.osc_level[which - 1] = level.clamp(0.0, 1.0);
+        }
+    }
+
+    pub fn set_osc_waveform(&mut self, which: usize, waveform: Waveform) {
+        if which >= 1 && which <= 2 {
+            self.oscs[which].set_waveform(waveform);
+        }
+    }
+
+    fn update_freq_mults(&mut self) {
+        let fine = (self.detune_cents / 1200.0 * std::f32::consts::LN_2).exp();
         self.oscs[0].set_freq_mult(1.0);
-        self.oscs[1].set_freq_mult(ratio);
-        self.oscs[2].set_freq_mult(1.0 / ratio);
+        self.oscs[1]
+            .set_freq_mult(fine * (self.osc_pitch_semi[0] / 12.0).exp2());
+        self.oscs[2]
+            .set_freq_mult((self.osc_pitch_semi[1] / 12.0).exp2() / fine);
     }
 
     pub fn set_filter_env_amount(&mut self, octaves: f32) {
@@ -255,8 +304,10 @@ impl Voice {
 
         let osc = (self.oscs[0].next_sample(self.common_drift, pitch_mult, pulse_width)
             + self.oscs[1].next_sample(self.common_drift, pitch_mult, pulse_width)
-            + self.oscs[2].next_sample(self.common_drift, pitch_mult, pulse_width))
-            * (1.0 / 3.0)
+                * self.osc_level[0]
+            + self.oscs[2].next_sample(self.common_drift, pitch_mult, pulse_width)
+                * self.osc_level[1])
+            * OSC_SUM_SCALE
             + self.oscs[0].sub() * self.sub_level * 0.9
             + noise
             + bleed;
@@ -284,7 +335,9 @@ impl Voice {
         // audio path (post-trim residue) — fast attacks thump, physically
         let feedthrough = (amp_env - self.prev_env) * self.vca_feedthrough;
         self.prev_env = amp_env;
-        let sample = filtered * amp_env * vel_amp + feedthrough;
+        // The VCA never fully closes: the -60 dB floor keeps the
+        // free-running oscillators faintly alive between notes
+        let sample = filtered * (amp_env * vel_amp + VCA_FLOOR) + feedthrough;
 
         (sample * self.pan_l, sample * self.pan_r)
     }

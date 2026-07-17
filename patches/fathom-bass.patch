@@ -1,6 +1,12 @@
 # Fathom Bass — wide detuned saws, driven ladder, short glide
 volume 0.75
 waveform 2
+osc2_wave 2
+osc2_pitch 0
+osc2_level 0.75
+osc3_wave 2
+osc3_pitch -12
+osc3_level 0.85
 detune 14
 noise 0
 glide 0.03

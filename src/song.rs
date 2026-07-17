@@ -37,7 +37,9 @@
 // (high-pass cutoff Hz, 16 = off), fuzz (0..1 germanium fuzz), noise
 // (0..1 shared noise into the voices), spring (0..1 spring reverb wet),
 // glide (portamento seconds, 0 = off), sub (0..1 octave-down square),
-// pulse_width (0.05..0.95), lfo_rate (Hz), lfo_shape (0=saw 0.5=tri
+// osc2_wave/osc3_wave (0-3), osc2_pitch/osc3_pitch (semitones -24..24),
+// osc2_level/osc3_level (0..1; `waveform` is a macro setting all three
+// oscillators, per-osc waves override after it), pulse_width (0.05..0.95), lfo_rate (Hz), lfo_shape (0=saw 0.5=tri
 // 1=ramp), lfo_pitch (vibrato cents), lfo_filter (octaves), lfo_pwm
 // (width swing 0..0.45), attack,
 // decay, sustain, release, filter_env (octaves, -5..+5), filter_attack,
@@ -77,6 +79,12 @@ pub enum Param {
     SpringWet,
     Glide,
     SubLevel,
+    Osc2Wave,
+    Osc2Pitch,
+    Osc2Level,
+    Osc3Wave,
+    Osc3Pitch,
+    Osc3Level,
     PulseWidth,
     LfoRate,
     LfoShape,
@@ -99,6 +107,15 @@ pub enum Param {
     TapeAge,
 }
 
+pub(crate) fn waveform_from_value(value: f32) -> Waveform {
+    match value.round() as i32 {
+        i32::MIN..=0 => Waveform::Sine,
+        1 => Waveform::Square,
+        2 => Waveform::Sawtooth,
+        _ => Waveform::Triangle,
+    }
+}
+
 impl Param {
     pub(crate) fn from_name(name: &str) -> Option<Self> {
         Some(match name {
@@ -119,6 +136,12 @@ impl Param {
             "spring" => Param::SpringWet,
             "glide" => Param::Glide,
             "sub" => Param::SubLevel,
+            "osc2_wave" => Param::Osc2Wave,
+            "osc2_pitch" => Param::Osc2Pitch,
+            "osc2_level" => Param::Osc2Level,
+            "osc3_wave" => Param::Osc3Wave,
+            "osc3_pitch" => Param::Osc3Pitch,
+            "osc3_level" => Param::Osc3Level,
             "pulse_width" => Param::PulseWidth,
             "lfo_rate" => Param::LfoRate,
             "lfo_shape" => Param::LfoShape,
@@ -146,15 +169,7 @@ impl Param {
     pub(crate) fn apply(self, vm: &mut VoiceManager, value: f32) {
         match self {
             Param::Volume => vm.set_volume(value),
-            Param::WaveformSel => {
-                let waveform = match value.round() as i32 {
-                    i32::MIN..=0 => Waveform::Sine,
-                    1 => Waveform::Square,
-                    2 => Waveform::Sawtooth,
-                    _ => Waveform::Triangle,
-                };
-                vm.set_waveform(waveform);
-            }
+            Param::WaveformSel => vm.set_waveform(waveform_from_value(value)),
             Param::Detune => vm.set_detune(value),
             Param::Cutoff => vm.set_filter_cutoff(value),
             Param::Resonance => vm.set_filter_resonance(value),
@@ -170,6 +185,12 @@ impl Param {
             Param::SpringWet => vm.set_spring(value),
             Param::Glide => vm.set_glide(value),
             Param::SubLevel => vm.set_sub(value),
+            Param::Osc2Wave => vm.set_osc_wave(1, waveform_from_value(value)),
+            Param::Osc2Pitch => vm.set_osc_pitch(1, value),
+            Param::Osc2Level => vm.set_osc_level(1, value),
+            Param::Osc3Wave => vm.set_osc_wave(2, waveform_from_value(value)),
+            Param::Osc3Pitch => vm.set_osc_pitch(2, value),
+            Param::Osc3Level => vm.set_osc_level(2, value),
             Param::PulseWidth => vm.set_pulse_width(value),
             Param::LfoRate => vm.set_lfo_rate(value),
             Param::LfoShape => vm.set_lfo_shape(value),

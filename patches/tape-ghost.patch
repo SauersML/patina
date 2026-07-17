@@ -1,6 +1,12 @@
 # Tape Ghost — diode-sine/triangle haze on a worn cassette, springs behind
 volume 0.65
 waveform 3
+osc2_wave 3
+osc2_pitch 7
+osc2_level 0.4
+osc3_wave 3
+osc3_pitch -12
+osc3_level 0.5
 detune 9
 noise 0.05
 glide 0

@@ -46,6 +46,10 @@ pub struct Oscillator {
     duty_error: f32,
     /// Waveshaper asymmetry for the triangle fold / sine rounding.
     skew: f32,
+    /// Integrator sag: a real ramp core charging against finite source
+    /// impedance bows slightly instead of rising linearly. The quadratic
+    /// bend adds low-order even harmonics that soften the ideal saw's buzz.
+    curvature: f32,
     /// Sub-oscillator, per the Juno-106's MC5534 ("divided by two
     /// rectangular"): a square one octave down, phase-locked to the core by
     /// construction — its phase advances at exactly half the core rate.
@@ -76,6 +80,7 @@ impl Oscillator {
         // Component-tolerance constants, fixed for the life of the "board"
         let duty_error = (rand01(&mut rng) - 0.5) * 0.02; // within +/-1%
         let skew = (rand01(&mut rng) - 0.5) * 0.06;
+        let curvature = 0.02 + rand01(&mut rng) * 0.05;
         Self {
             phase,
             frequency: AtomicU32::new(frequency.to_bits()),
@@ -89,6 +94,7 @@ impl Oscillator {
             skew,
             sub_phase: 0.0,
             last_sub: 0.0,
+            curvature,
         }
     }
 
@@ -127,7 +133,12 @@ impl Oscillator {
 
         let t = self.phase as f32;
         let raw_sample = match self.waveform {
-            Waveform::Sawtooth => AMP_SAW * self.polyblep_saw(t, detuned_frequency),
+            Waveform::Sawtooth => {
+                // Integrator sag: quadratic bow (DC-corrected: mean of s^2
+                // over a saw cycle is 1/3)
+                let s = self.polyblep_saw(t, detuned_frequency);
+                AMP_SAW * (s + self.curvature * (s * s - 1.0 / 3.0))
+            }
             Waveform::Square => AMP_PULSE * self.polyblep_pulse(t, detuned_frequency),
             Waveform::Triangle => {
                 AMP_TRI * self.fold_triangle(self.polyblep_triangle(t, detuned_frequency))

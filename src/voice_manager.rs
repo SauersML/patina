@@ -36,6 +36,14 @@ pub struct ParamValues {
     pub spring: f32,
     pub glide: f32, // portamento time in seconds, 0 = off
     pub sub: f32,   // sub-oscillator level, 0..1
+    // The three-oscillator voice: osc 1 is the reference; 2 and 3 have
+    // their own waveform, interval (semitones), and mix level
+    pub osc2_wave: Waveform,
+    pub osc2_pitch: f32,
+    pub osc2_level: f32,
+    pub osc3_wave: Waveform,
+    pub osc3_pitch: f32,
+    pub osc3_level: f32,
     pub pulse_width: f32,
     pub lfo_rate: f32,
     pub lfo_shape: f32,
@@ -78,6 +86,12 @@ impl Default for ParamValues {
             spring: 0.0,
             glide: 0.0,
             sub: 0.0,
+            osc2_wave: Waveform::Sawtooth,
+            osc2_pitch: 0.0,
+            osc2_level: 0.72,
+            osc3_wave: Waveform::Sawtooth,
+            osc3_pitch: 0.0,
+            osc3_level: 0.72,
             pulse_width: 0.5,
             lfo_rate: 1.0,
             lfo_shape: 0.5,
@@ -447,6 +461,41 @@ impl VoiceManager {
         }
     }
 
+    pub fn set_osc_wave(&mut self, which: usize, waveform: Waveform) {
+        match which {
+            1 => self.params.osc2_wave = waveform,
+            2 => self.params.osc3_wave = waveform,
+            _ => return,
+        }
+        for voice in &mut self.voices {
+            voice.set_osc_waveform(which, waveform);
+        }
+    }
+
+    pub fn set_osc_pitch(&mut self, which: usize, semitones: f32) {
+        let semitones = semitones.clamp(-24.0, 24.0);
+        match which {
+            1 => self.params.osc2_pitch = semitones,
+            2 => self.params.osc3_pitch = semitones,
+            _ => return,
+        }
+        for voice in &mut self.voices {
+            voice.set_osc_pitch(which, semitones);
+        }
+    }
+
+    pub fn set_osc_level(&mut self, which: usize, level: f32) {
+        let level = level.clamp(0.0, 1.0);
+        match which {
+            1 => self.params.osc2_level = level,
+            2 => self.params.osc3_level = level,
+            _ => return,
+        }
+        for voice in &mut self.voices {
+            voice.set_osc_level(which, level);
+        }
+    }
+
     pub fn set_glide(&mut self, seconds: f32) {
         self.params.glide = seconds.clamp(0.0, 2.0);
         // RC coefficient: reach ~95% of the interval in `glide` seconds
@@ -518,27 +567,27 @@ impl VoiceManager {
         let mut deltas = [0.0f32; 16];
         let n = self.voices.len().min(16);
         for (i, voice) in self.voices.iter().enumerate().take(16) {
-            if voice.is_active() {
-                deltas[i] = voice.prefilter_delta();
-            }
+            deltas[i] = voice.prefilter_delta();
         }
 
+        // Every voice renders every sample, always: the oscillators
+        // free-run from power-on and the VCAs only close to their -60 dB
+        // floor, so a "silent" instrument is still faintly alive — like
+        // the hardware, and unlike digital silence
         let mut left = 0.0;
         let mut right = 0.0;
         for (i, voice) in self.voices.iter_mut().enumerate() {
-            if voice.is_active() {
-                let bleed = deltas[(i + n - 1) % n.max(1)] * CROSSTALK;
-                let (l, r) = voice.render_next(
-                    noise,
-                    pitch_mult,
-                    lfo_cutoff_oct,
-                    pulse_width,
-                    substrate,
-                    bleed,
-                );
-                left += l;
-                right += r;
-            }
+            let bleed = deltas[(i + n - 1) % n.max(1)] * CROSSTALK;
+            let (l, r) = voice.render_next(
+                noise,
+                pitch_mult,
+                lfo_cutoff_oct,
+                pulse_width,
+                substrate,
+                bleed,
+            );
+            left += l;
+            right += r;
         }
         // What the supply just delivered — next sample's rail load
         self.prev_current = left.abs() + right.abs();

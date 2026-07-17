@@ -1,6 +1,12 @@
 # Cathedral — diode-ladder sines, springs and long reverb, slow breath
 volume 0.65
 waveform 0
+osc2_wave 0
+osc2_pitch 12
+osc2_level 0.5
+osc3_wave 0
+osc3_pitch -12
+osc3_level 0.6
 detune 5
 noise 0.02
 glide 0
