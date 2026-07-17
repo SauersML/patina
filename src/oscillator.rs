@@ -75,6 +75,14 @@ pub struct Oscillator {
     /// construction — its phase advances at exactly half the core rate.
     sub_phase: f64,
     last_sub: f32,
+    /// 901-B residual tuning error, ADDITIVE IN HERTZ: the tracking
+    /// resistors "lower the oscillator frequency by a given number of
+    /// cycles, REGARDLESS of the magnitude of the control voltage"
+    /// (service manual, retracking procedure), trimmed until banks beat
+    /// no faster than one every two seconds. So a Moog bank beats slowly
+    /// on high notes and howls on low ones. The 4027-1's V/oct trim is
+    /// multiplicative instead, so this offset applies to Moog only.
+    hz_offset: f32,
     /// If this core wrapped during the last step: fraction of the sample
     /// period elapsed SINCE the wrap (for slaving another core to it).
     last_wrap_frac: Option<f32>,
@@ -104,6 +112,9 @@ impl Oscillator {
         let duty_error = (rand01(&mut rng) - 0.5) * 0.02; // within +/-1%
         let skew = (rand01(&mut rng) - 0.5) * 0.06;
         let curvature = 0.02 + rand01(&mut rng) * 0.05;
+        // Within the 901B acceptance: bank beat rate <= 0.5 Hz means
+        // each unit sits within ~+/-0.25 Hz of true after trimming
+        let hz_offset = (rand01(&mut rng) - 0.5) * 0.5;
         Self {
             phase,
             frequency: AtomicU32::new(frequency.to_bits()),
@@ -120,6 +131,21 @@ impl Oscillator {
             last_sub: 0.0,
             last_wrap_frac: None,
             curvature,
+            hz_offset,
+        }
+    }
+
+    /// Trim culture differs by maker: the 4027-1 converter boards carry a
+    /// symmetry trimmer (R115) and a sine purity trimmer (R121), and the
+    /// calibration procedure sets duty to "exactly 50%"; the 901B's
+    /// service windows are wider (48-52% duty, "if symmetry is still not
+    /// possible, R8 and R9 may have to be changed"). ARP units run closer
+    /// to ideal.
+    #[inline]
+    fn trim(&self) -> f32 {
+        match self.model {
+            CircuitModel::Moog => 1.0,
+            CircuitModel::Arp => 0.35,
         }
     }
 
@@ -151,11 +177,25 @@ impl Oscillator {
         let frequency = f32::from_bits(self.frequency.load(Ordering::Relaxed));
 
         // Small individual drift; the larger, shared component comes in from
-        // the voice so all three oscillators move together
-        self.drift = (self.drift + (rand01(&mut self.rng) - 0.5) * 1.2e-5) * 0.9995;
-        let detuned_frequency =
-            frequency * self.freq_mult * (1.0 + self.drift + common_drift) * pitch_mult;
-        self.duty = (pulse_width + self.duty_error).clamp(0.03, 0.97);
+        // the voice so all three oscillators move together. The 4027-1 is
+        // internally temperature-compensated (service manual 3.2.3, plus
+        // the T.C. resistor in the expo converter); the 901 walks wider —
+        // its own manual demands a 30-minute warm-up before adjusting.
+        let walk = match self.model {
+            CircuitModel::Moog => 1.2e-5,
+            CircuitModel::Arp => 0.45e-5,
+        };
+        self.drift = (self.drift + (rand01(&mut self.rng) - 0.5) * walk) * 0.9995;
+        // The 901B's additive-Hz tracking residue (see hz_offset)
+        let f_off = match self.model {
+            CircuitModel::Moog => self.hz_offset,
+            CircuitModel::Arp => 0.0,
+        };
+        let detuned_frequency = (frequency * self.freq_mult * (1.0 + self.drift + common_drift)
+            * pitch_mult
+            + f_off)
+            .max(0.01);
+        self.duty = (pulse_width + self.duty_error * self.trim()).clamp(0.03, 0.97);
 
         let dt = detuned_frequency as f64 / self.sample_rate as f64;
         self.phase += dt;
@@ -209,18 +249,29 @@ impl Oscillator {
             }
             _ => 0.0,
         };
+        // Output levels are a circuit fact per maker. Moog 901B alignment
+        // targets are deliberately UNEQUAL (saw 0.50 Vac, sine 0.50, tri
+        // 0.65, pulse 1.2 — peak ratios below), so switching waveforms
+        // changes how hard the filter is driven. The 4027-1 converter
+        // boards normalize EVERY output to "about 10 volts, peak to peak"
+        // (2600 service manual 2.3.1-2.3.2): equal drive, pulse unipolar
+        // 0..+10 V.
+        let (amp_saw, amp_sine, amp_tri, amp_pulse) = match self.model {
+            CircuitModel::Moog => (AMP_SAW, AMP_SINE, AMP_TRI, AMP_PULSE),
+            CircuitModel::Arp => (PROGRAM_V, PROGRAM_V, PROGRAM_V, 2.0 * PROGRAM_V),
+        };
         let raw_sample = match self.waveform {
             Waveform::Sawtooth => {
                 // Integrator sag: quadratic bow (DC-corrected: mean of s^2
                 // over a saw cycle is 1/3)
                 let s = self.polyblep_saw(t, detuned_frequency) + sync_fix;
-                AMP_SAW * (s + self.curvature * (s * s - 1.0 / 3.0))
+                amp_saw * (s + self.curvature * (s * s - 1.0 / 3.0))
             }
             Waveform::Square => {
-                AMP_PULSE * (self.polyblep_pulse(t, detuned_frequency) + sync_fix)
+                amp_pulse * (self.polyblep_pulse(t, detuned_frequency) + sync_fix)
             }
             Waveform::Triangle => {
-                AMP_TRI * self.fold_triangle(self.polyblep_triangle(t, detuned_frequency))
+                amp_tri * self.fold_triangle(self.polyblep_triangle(t, detuned_frequency))
             }
             Waveform::Sine => {
                 let tri = self.fold_triangle(self.polyblep_triangle(t, detuned_frequency));
@@ -230,7 +281,7 @@ impl Oscillator {
                     // 4027-1: single-transistor peak rounding, no diode knee
                     CircuitModel::Arp => Self::transistor_round(tri),
                 };
-                AMP_SINE * shaped
+                amp_sine * shaped
             }
         };
 
@@ -238,10 +289,11 @@ impl Oscillator {
     }
 
     /// Slightly asymmetric triangle, as if the fold network's two halves
-    /// aren't perfectly matched. Endpoints stay at +/-1.
+    /// aren't perfectly matched. Endpoints stay at +/-1. The asymmetry is
+    /// scaled by the maker's trim culture (R115 symmetry trimmer on ARP).
     #[inline]
     fn fold_triangle(&self, tri: f32) -> f32 {
-        tri + self.skew * (1.0 - tri * tri)
+        tri + self.skew * self.trim() * (1.0 - tri * tri)
     }
 
     /// The sine shaper, per the 901-B schematic (drawing 1101): the triangle
@@ -336,17 +388,34 @@ impl Oscillator {
     }
 
     fn soft_clip(&self, x: f32) -> f32 {
-        // 901-C output stage (drawing #1126), now in volts: the push-pull
-        // pair runs between +12 and -6 rails, so positive swings have about
-        // twice the headroom of negative ones — hard-driven waves flatten
-        // their lower lobe first (gentle even harmonics). Cubic knees per
-        // side, transparent at the 10 V p-p alignment levels.
-        if x >= 0.0 {
-            let x = x.min(12.0);
-            x * (1.0 - x * x / 432.0)
-        } else {
-            let x = x.max(-9.5);
-            x * (1.0 - x * x / 270.75)
+        match self.model {
+            // 901-C output stage (drawing #1126), in volts: the push-pull
+            // pair runs between +12 and -6 rails, so positive swings have
+            // about twice the headroom of negative ones — hard-driven
+            // waves flatten their lower lobe first (gentle even
+            // harmonics). Cubic knees per side, transparent at the
+            // alignment levels.
+            CircuitModel::Moog => {
+                if x >= 0.0 {
+                    let x = x.min(12.0);
+                    x * (1.0 - x * x / 432.0)
+                } else {
+                    let x = x.max(-9.5);
+                    x * (1.0 - x * x / 270.75)
+                }
+            }
+            // 4027-1 converter boards buffer through op-amps on +/-15 V
+            // rails: LINEAR at the 10 V p-p program level (that is the
+            // point of the design), with a short knee into the ~13.5 V
+            // rail limit.
+            CircuitModel::Arp => {
+                let a = x.abs();
+                if a <= 11.5 {
+                    x
+                } else {
+                    x.signum() * (11.5 + 2.0 * ((a - 11.5) / 2.0).tanh())
+                }
+            }
         }
     }
 
@@ -442,30 +511,109 @@ mod tests {
         let mut core_wraps = 0;
         let mut sub_rises = 0;
         let mut prev_sub = 0.0f32;
-        let mut prev_phase_sample = -1.0f32;
         for _ in 0..44100 {
-            let s = osc.next_sample(0.0, 1.0, 0.5, None);
-            // Core wrap: the saw jumps down by ~10 V (bandlimited over a
-            // couple of samples, so demand more than half the swing)
-            if prev_phase_sample - s > 5.0 {
+            osc.next_sample(0.0, 1.0, 0.5, None);
+            // Core wrap: reported exactly by the core itself
+            if osc.wrap_frac().is_some() {
                 core_wraps += 1;
             }
-            prev_phase_sample = s;
             let sub = osc.sub();
             if prev_sub < 0.0 && sub > 0.0 {
                 sub_rises += 1;
             }
             prev_sub = sub;
         }
-        // 441 Hz core (bandlimited jumps blur the wrap detector a little);
-        // the sub must sit at 220.5 Hz -> ~220 rising edges in one second
+        // 441 Hz core; the sub must sit at 220.5 Hz -> ~220 rising edges
+        // in one second
         assert!(
-            (380..=480).contains(&core_wraps),
+            (430..=452).contains(&core_wraps),
             "core wraps {core_wraps}"
         );
         assert!(
             (210..=231).contains(&sub_rises),
             "sub should run at ~220 Hz: got {sub_rises} rises"
+        );
+    }
+
+    /// 4027-1 converter boards normalize every waveform to ~10 V p-p
+    /// (2600 service manual 2.3.1-2.3.2); the pulse is positive-going
+    /// only, 0..+10 V. The Moog levels stay on the unequal 901B alignment
+    /// ratios, so the two circuits load the filter differently.
+    #[test]
+    fn arp_waveforms_all_sit_at_ten_volts_pp() {
+        let sr = 96000.0;
+        for wf in [
+            Waveform::Sawtooth,
+            Waveform::Square,
+            Waveform::Triangle,
+            Waveform::Sine,
+        ] {
+            let mut osc = Oscillator::new(sr, 220.0, 5);
+            osc.set_model(CircuitModel::Arp);
+            osc.set_waveform(wf);
+            let mut samples: Vec<f32> = (0..(sr as usize))
+                .map(|_| osc.next_sample(0.0, 1.0, 0.5, None))
+                .collect();
+            samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            // Rails read like a scope: percentiles ignore the bandlimited
+            // edge ripple (which a real edge has too, above the trace)
+            let lo = samples[(samples.len() as f32 * 0.05) as usize];
+            let hi = samples[(samples.len() as f32 * 0.95) as usize];
+            let pp = hi - lo;
+            assert!(
+                (8.4..=11.5).contains(&pp),
+                "{wf:?} should be ~10 V p-p on the ARP converters, got {pp:.2}"
+            );
+            if wf == Waveform::Square {
+                assert!(
+                    lo > -0.6,
+                    "ARP pulse is positive-going only (CR14), low rail {lo:.2}"
+                );
+            }
+        }
+    }
+
+    /// The 901B's residual tuning error is additive in HERTZ (tracking
+    /// resistors shift cycles regardless of control voltage), so a Moog
+    /// bank's beat rate is roughly constant across the keyboard — and the
+    /// trimmed 4027-1 shows far less of it.
+    #[test]
+    fn moog_tracking_error_is_additive_hertz() {
+        let sr = 44100.0;
+        let measure_offset = |model: CircuitModel, f0: f32, seed: u32| -> f32 {
+            let mut osc = Oscillator::new(sr, f0, seed);
+            osc.set_model(model);
+            osc.set_waveform(Waveform::Sawtooth);
+            let secs = 8.0;
+            let n = (secs * sr) as usize;
+            let mut wraps = 0u32;
+            for _ in 0..n {
+                osc.next_sample(0.0, 1.0, 0.5, None);
+                if osc.wrap_frac().is_some() {
+                    wraps += 1;
+                }
+            }
+            wraps as f32 / secs - f0
+        };
+        let mut moog_low = 0.0f32;
+        let mut moog_high = 0.0f32;
+        let mut arp_low = 0.0f32;
+        let seeds = [3u32, 17, 29, 41, 53, 67];
+        for &s in &seeds {
+            moog_low += measure_offset(CircuitModel::Moog, 55.0, s).abs();
+            moog_high += measure_offset(CircuitModel::Moog, 880.0, s).abs();
+            arp_low += measure_offset(CircuitModel::Arp, 55.0, s).abs();
+        }
+        let k = seeds.len() as f32;
+        let (moog_low, moog_high, arp_low) = (moog_low / k, moog_high / k, arp_low / k);
+        // Same Hz-scale error at both ends of the keyboard (not cents)
+        assert!(
+            moog_low > 0.04 && moog_high > 0.04 && moog_high < 4.0 * moog_low,
+            "Moog offset should be Hz-additive: low {moog_low:.3} Hz, high {moog_high:.3} Hz"
+        );
+        assert!(
+            arp_low < 0.5 * moog_low,
+            "trimmed 4027-1 should sit much closer to true: arp {arp_low:.3} Hz vs moog {moog_low:.3} Hz"
         );
     }
 

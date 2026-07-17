@@ -4,8 +4,19 @@
 // the attack charges toward an overshoot target so it stays punchy, and decay
 // and release approach their targets asymptotically, which reads to the ear
 // as far more natural than linear ramps.
+//
+// The overshoot target is a circuit fact, and it differs by machine:
+//   Moog 911: RC charge with the comparator set so the curve keeps its
+//   exponential knee — target 1.25 (validated against the Polymoog
+//   factory contour windows).
+//   ARP 4020 (2600 service manual 2.5.3): C1/C2 charge from Q6's LATCHED
+//   collector (near the +15 rail, less drops, ~ +14 V) and the attack
+//   terminates when the cap crosses +10 V — target ~1.38, so the ARP
+//   attack rises more linearly and hits its top harder.
 
 use std::sync::atomic::{AtomicU32, Ordering};
+
+use crate::oscillator::CircuitModel;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum EnvelopeStage {
@@ -21,14 +32,13 @@ pub struct Envelope {
     decay: AtomicU32,
     sustain: AtomicU32,
     release: AtomicU32,
+    /// Attack charges toward this level but transitions to Decay at 1.0 —
+    /// the analog "fast at first, then curving" shape. Per-circuit.
+    overshoot: AtomicU32,
     stage: EnvelopeStage,
     current_level: f32,
     sample_rate: f32,
 }
-
-/// Attack charges toward this level but transitions to Decay at 1.0,
-/// keeping the analog "fast at first, then curving" shape.
-const ATTACK_TARGET: f32 = 1.25;
 
 impl Envelope {
     pub fn new(sample_rate: f32) -> Self {
@@ -37,10 +47,20 @@ impl Envelope {
             decay: AtomicU32::new(0.1f32.to_bits()),
             sustain: AtomicU32::new(0.7f32.to_bits()),
             release: AtomicU32::new(0.2f32.to_bits()),
+            overshoot: AtomicU32::new(1.25f32.to_bits()),
             stage: EnvelopeStage::Idle,
             current_level: 0.0,
             sample_rate,
         }
+    }
+
+    /// Select the envelope circuit: 911 (Moog) or 4020 (ARP).
+    pub fn set_circuit(&self, model: CircuitModel) {
+        let target: f32 = match model {
+            CircuitModel::Moog => 1.25,
+            CircuitModel::Arp => 1.38,
+        };
+        self.overshoot.store(target.to_bits(), Ordering::Relaxed);
     }
 
     /// One-pole coefficient that covers the segment in roughly `time` seconds.
@@ -53,9 +73,11 @@ impl Envelope {
         match self.stage {
             EnvelopeStage::Attack => {
                 let attack_time = f32::from_bits(self.attack.load(Ordering::Relaxed));
-                // ln(ATTACK_TARGET / (ATTACK_TARGET - 1.0)) so 0 -> 1 takes ~attack_time
-                let k = self.coef(attack_time, 1.61);
-                self.current_level += (ATTACK_TARGET - self.current_level) * k;
+                let target = f32::from_bits(self.overshoot.load(Ordering::Relaxed));
+                // speed = ln(target / (target - 1)) so 0 -> 1 takes ~attack_time
+                let speed = (target / (target - 1.0)).ln();
+                let k = self.coef(attack_time, speed);
+                self.current_level += (target - self.current_level) * k;
                 if self.current_level >= 1.0 {
                     self.current_level = 1.0;
                     self.stage = EnvelopeStage::Decay;
@@ -147,6 +169,31 @@ mod tests {
         assert!(
             (20.0..=50.0).contains(&ms),
             "33 ms attack should complete in roughly 33 ms, took {ms:.1} ms"
+        );
+    }
+
+    /// The 4020 charges toward a higher rail (+14 latched vs the 911's
+    /// curve): with the SAME time-to-peak, the ARP attack is more linear
+    /// (lower at the midpoint), landing its top harder.
+    #[test]
+    fn arp_attack_is_more_linear_than_moog() {
+        let sr = 44100.0;
+        let mid_level = |model: CircuitModel| -> f32 {
+            let mut e = Envelope::new(sr);
+            e.set_circuit(model);
+            e.set_attack(0.1);
+            e.note_on();
+            let mut level = 0.0;
+            for _ in 0..(0.05 * sr) as usize {
+                level = e.next_sample();
+            }
+            level
+        };
+        let moog = mid_level(CircuitModel::Moog);
+        let arp = mid_level(CircuitModel::Arp);
+        assert!(
+            arp < moog - 0.01,
+            "ARP attack should sag below Moog at the midpoint: arp {arp:.3}, moog {moog:.3}"
         );
     }
 

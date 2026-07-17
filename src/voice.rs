@@ -33,6 +33,7 @@ const CAL_REF_HZ: f32 = 261.63;
 
 pub struct Voice {
     pub oscs: [Oscillator; 3],
+    circuit: CircuitModel,
     pub envelope: Envelope,
     pub filter_env: Envelope,
     pub filter: LadderFilter,
@@ -149,6 +150,7 @@ impl Voice {
                 Oscillator::new(sample_rate, 440.0, seed.wrapping_add(101)),
                 Oscillator::new(sample_rate, 440.0, seed.wrapping_add(211)),
             ],
+            circuit: CircuitModel::Moog,
             envelope: Envelope::new(sample_rate),
             filter_env,
             filter: LadderFilter::new(sample_rate, seed),
@@ -243,12 +245,16 @@ impl Voice {
     }
 
     pub fn set_circuit(&mut self, model: CircuitModel) {
+        self.circuit = model;
         for osc in &mut self.oscs {
             osc.set_model(model);
         }
         // The circuit profile is the whole signal chain: converter
-        // circuits AND the filter architecture (ladder vs 4072 gm-C)
+        // circuits, the filter architecture (ladder vs 4072 gm-C), and
+        // the envelope circuit (911 vs 4020 attack targets)
         self.filter.set_model(model);
+        self.envelope.set_circuit(model);
+        self.filter_env.set_circuit(model);
     }
 
     pub fn set_key_track(&mut self, amount: f32) {
@@ -356,9 +362,17 @@ impl Voice {
         } else {
             pitch_mult
         };
-        // Chassis coupling: this card's share of rail sag/ripple and heat
-        let pitch_mult =
-            pitch_mult * (1.0 + (substrate.pitch_mult - 1.0) * self.substrate_sens);
+        // Chassis coupling: this card's share of rail sag/ripple and heat.
+        // The ARP boards are temperature-compensated (T.C. resistor in the
+        // expo converter; 4027-1 "internally compensated") so they ride
+        // the chassis weather at a fraction of the Moog's sway — the Moog
+        // manual demands a 30-minute warm-up before even adjusting one.
+        let temp_sens = self.substrate_sens
+            * match self.circuit {
+                CircuitModel::Moog => 1.0,
+                CircuitModel::Arp => 0.4,
+            };
+        let pitch_mult = pitch_mult * (1.0 + (substrate.pitch_mult - 1.0) * temp_sens);
 
         // The voice's coupling graph is acyclic (every stage buffered, as
         // the schematics show), so integrating stages in topological order
@@ -406,7 +420,7 @@ impl Voice {
             + key_oct
             + vel_oct
             + lfo_cutoff_oct
-            + substrate.cutoff_oct * self.substrate_sens;
+            + substrate.cutoff_oct * temp_sens;
         let cutoff_mult = mod_oct.exp2();
 
         let filtered = self.hpf.process(self.filter.process(osc, cutoff_mult));
