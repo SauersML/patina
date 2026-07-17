@@ -96,7 +96,9 @@ const DEPTH_FACTOR: [f32; N_LAYERS] = [
 /// edge — nothing in the audio band, by construction instead of by filter.
 const BIAS_AMP: f32 = 0.30;
 /// Barkhausen noise scale: particle-avalanche noise per unit sqrt(|dM|).
-const BARKHAUSEN: f32 = 0.0002;
+/// Calibrated against published Type I cassette SNR: ~52-55 dB below
+/// program level on a worn reel, measured on rendered output.
+const BARKHAUSEN: f32 = 0.0016;
 
 // --- Playback ---
 /// Playback head gap length, um.

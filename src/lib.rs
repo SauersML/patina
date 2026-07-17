@@ -25,6 +25,8 @@ pub mod voice;
 pub mod voice_manager;
 
 #[cfg(feature = "app")]
+pub mod aurora_gpu;
+#[cfg(feature = "app")]
 pub mod midi_handler;
 #[cfg(feature = "app")]
 pub mod panel_render;

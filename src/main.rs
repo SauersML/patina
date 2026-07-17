@@ -58,14 +58,25 @@ where
     }
 
     let options = eframe::NativeOptions {
-        initial_window_size: Some(egui::Vec2::new(1240.0, 940.0)),
+        renderer: eframe::Renderer::Wgpu,
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1240.0, 940.0])
+            .with_min_inner_size([1000.0, 760.0]),
         ..Default::default()
     };
 
     eframe::run_native(
         "Patina",
         options,
-        Box::new(|_cc| Box::new(SynthApp { ui, _stream: stream, running })),
+        Box::new(|cc| {
+            // The WGSL sky/glass pipeline lives in egui's callback resources
+            let mut ui = ui;
+            if let Some(rs) = cc.wgpu_render_state.as_ref() {
+                patina::aurora_gpu::init(rs);
+                ui.set_gpu_available(true);
+            }
+            Ok(Box::new(SynthApp { ui, _stream: stream, running }))
+        }),
     ).map_err(|e| e.to_string())?;
 
     Ok(())

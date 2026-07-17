@@ -113,9 +113,9 @@ impl Oscillator {
                 AMP_TRI * self.fold_triangle(self.polyblep_triangle(t, detuned_frequency))
             }
             Waveform::Sine => {
-                // Triangle through the transistor peak-rounding curve
+                // Triangle through the diode-ladder rounding network
                 let tri = self.fold_triangle(self.polyblep_triangle(t, detuned_frequency));
-                AMP_SINE * Self::transistor_sine(tri)
+                AMP_SINE * self.diode_sine(tri)
             }
         };
 
@@ -129,13 +129,21 @@ impl Oscillator {
         tri + self.skew * (1.0 - tri * tri)
     }
 
-    /// The sine shaper: a soft cubic that rounds the triangle's peaks.
-    /// Not sin() — it keeps a few percent of low-order harmonics, which is
-    /// exactly what the service manual's "sine purity" trim is adjusting.
+    /// The sine shaper, per the 901-B schematic (drawing 1101): the triangle
+    /// feeds a ladder of 1N34 germanium diode pairs (D3-D6 with the
+    /// 120/18K/270/510-ohm string) that conduct progressively, flattening the
+    /// crests piecewise — plus the Q4 transistor rounding. So: a soft cubic
+    /// base with a gentle diode KNEE above ~0.7, whose position is this
+    /// unit's "sine purity" trim (P5/P6 on the drawing).
     #[inline]
-    fn transistor_sine(tri: f32) -> f32 {
+    fn diode_sine(&self, tri: f32) -> f32 {
         let x = tri.clamp(-1.0, 1.0);
-        x * (1.5 - 0.5 * x * x)
+        let rounded = x * (1.5 - 0.5 * x * x);
+        // Second diode pair conducts above the knee, shaving the crest with
+        // a slightly harder (piecewise) characteristic than the cubic
+        let knee = 0.72 + self.skew;
+        let over = (rounded.abs() - knee).max(0.0);
+        (rounded - rounded.signum() * over * 0.35) * 1.06
     }
 
     fn polyblep(&self, t: f32, dt: f32) -> f32 {
@@ -150,10 +158,19 @@ impl Oscillator {
         }
     }
 
+    /// Pulse levels are asymmetric: the 901-B comparator swings between the
+    /// +11.5 V and -6 V rails (visible on drawing 1101 — the +12 rail is
+    /// RC-filtered to +11.5, the negative rail is -6) before the 2.7K/680
+    /// output divider, so the wave's top and bottom are not mirror images.
+    /// PWM therefore shifts a little real DC, like the hardware.
     fn polyblep_pulse(&self, t: f32, frequency: f32) -> f32 {
+        const HI: f32 = 1.0;
+        const LO: f32 = -0.92;
+        const EDGE: f32 = (HI - LO) * 0.5;
         let dt = frequency / self.sample_rate;
-        let naive = if t < self.duty { 1.0 } else { -1.0 };
-        naive - self.polyblep(t, dt) + self.polyblep((t + 1.0 - self.duty) % 1.0, dt)
+        let naive = if t < self.duty { HI } else { LO };
+        naive - EDGE * self.polyblep(t, dt)
+            + EDGE * self.polyblep((t + 1.0 - self.duty) % 1.0, dt)
     }
 
     fn polyblep_saw(&self, t: f32, frequency: f32) -> f32 {
@@ -185,10 +202,18 @@ impl Oscillator {
     }
 
     fn soft_clip(&self, x: f32) -> f32 {
-        // Cubic soft clip, transparent below |x| ~ 1.5: leaves headroom for
-        // the hot 901B pulse/triangle levels so the alignment ratios survive
-        let x = x.clamp(-2.25, 2.25);
-        x * (1.0 - x * x / 15.1875)
+        // 901-C output stage (drawing #1126): the push-pull pair runs between
+        // +12 and -6 rails, so positive swings have roughly twice the
+        // headroom of negative ones — hard-driven waves flatten their lower
+        // lobe first, adding gentle even harmonics. Cubic knees per side,
+        // transparent at the alignment levels.
+        if x >= 0.0 {
+            let x = x.min(2.4);
+            x * (1.0 - x * x / 17.28)
+        } else {
+            let x = x.max(-1.9);
+            x * (1.0 - x * x / 10.83)
+        }
     }
 
     pub fn set_frequency(&self, frequency: f32) {

@@ -1,6 +1,6 @@
 use eframe::egui::{
-    self, pos2, vec2, Align2, Color32, CursorIcon, FontId, Key, Pos2, Rect, RichText,
-    Rounding, Sense, Shape, Stroke, TextureHandle, TextureOptions, Vec2,
+    self, pos2, vec2, Align2, Color32, CornerRadius, CursorIcon, FontId, Key, Pos2, Rect, RichText,
+    Sense, Shape, Stroke, TextureHandle, TextureOptions, Vec2,
 };
 use eframe::egui::epaint::Mesh;
 use parking_lot::Mutex;
@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 
+use crate::aurora_gpu;
 use crate::chorus::ChorusMode;
 use crate::oscillator::Waveform;
 use crate::panel_render;
@@ -18,36 +19,51 @@ const WHITE_KEY_INDICES: [usize; 7] = [0, 2, 4, 5, 7, 9, 11];
 const BLACK_KEY_INDICES: [usize; 5] = [1, 3, 6, 8, 10];
 
 // ---------------------------------------------------------------------------
-// Design system. A charcoal ramp, hairline strokes, and exactly two hues:
-// amber for anything you touch (pointers, arcs, lit keys), phosphor cyan for
-// the signal itself (the scope). Depth comes from layering and a single
-// top-light model — never from texture.
+// Design system: light Frutiger Aero. A luminous animated sky, white
+// frosted glass with dark slate type, dark glossy "device screens" set into
+// the glass (wells), warm walnut rails, amber for touch, aqua for signal.
 // ---------------------------------------------------------------------------
-const BG0: Color32 = Color32::from_rgb(0x0a, 0x0b, 0x0d); // window
-const BG2: Color32 = Color32::from_rgb(0x1a, 0x1c, 0x22); // controls
-const BG2_HOVER: Color32 = Color32::from_rgb(0x22, 0x25, 0x2c);
-const INSET: Color32 = Color32::from_rgb(0x06, 0x07, 0x09); // display wells
+const BG0: Color32 = Color32::from_rgb(0x6f, 0xa8, 0xd0); // sky fallback
+const BG2: Color32 = Color32::from_rgb(0xd4, 0xe7, 0xef); // light controls
+const BG2_HOVER: Color32 = Color32::from_rgb(0xe4, 0xf2, 0xf8);
+const INSET: Color32 = Color32::from_rgb(0x0a, 0x11, 0x14); // device screens
 
-const HAIRLINE: Color32 = Color32::from_rgba_premultiplied(0xff, 0xff, 0xff, 12);
-const HAIRLINE_HI: Color32 = Color32::from_rgba_premultiplied(0xff, 0xff, 0xff, 24);
+// Dark hairlines: these sit on white glass now
+const HAIRLINE: Color32 = Color32::from_rgba_premultiplied(0x24, 0x3a, 0x46, 45);
+const HAIRLINE_HI: Color32 = Color32::from_rgba_premultiplied(0x1d, 0x33, 0x40, 85);
 
-const TXT: Color32 = Color32::from_rgb(0xec, 0xe9, 0xe2);
-const TXT_MID: Color32 = Color32::from_rgb(0x9a, 0xa0, 0xa8);
-const TXT_LOW: Color32 = Color32::from_rgb(0x5c, 0x61, 0x69);
+const TXT: Color32 = Color32::from_rgb(0x24, 0x33, 0x3c);
+const TXT_MID: Color32 = Color32::from_rgb(0x43, 0x54, 0x5e);
+const TXT_LOW: Color32 = Color32::from_rgb(0x6b, 0x7c, 0x86);
 
-const AMBER: Color32 = Color32::from_rgb(0xe0, 0xa1, 0x54);
-const AMBER_HI: Color32 = Color32::from_rgb(0xff, 0xc0, 0x69);
-const AMBER_DEEP: Color32 = Color32::from_rgb(0xc2, 0x86, 0x41);
-const AMBER_INK: Color32 = Color32::from_rgb(0x54, 0x3a, 0x14);
+// Text inside the dark wells needs to stay light
+const WELL_TXT: Color32 = Color32::from_rgb(0x7f, 0x96, 0xa0);
+const WELL_TXT_HOVER: Color32 = Color32::from_rgb(0xc6, 0xd8, 0xde);
+const WELL_LINE: Color32 = Color32::from_rgba_premultiplied(0xff, 0xff, 0xff, 22);
 
-const CYAN: Color32 = Color32::from_rgb(0x6f, 0xe3, 0xf2);
+const AMBER: Color32 = Color32::from_rgb(0xd8, 0x87, 0x1f);
+const AMBER_HI: Color32 = Color32::from_rgb(0xf6, 0xa5, 0x1f);
+const AMBER_DEEP: Color32 = Color32::from_rgb(0xb0, 0x6f, 0x1a);
+const AMBER_INK: Color32 = Color32::from_rgb(0x4f, 0x34, 0x07);
 
-const CYAN_BRIGHT: Color32 = Color32::from_rgb(0xb5, 0xef, 0xf8);
+const CYAN: Color32 = Color32::from_rgb(0x35, 0xdf, 0xf5);
+
+const CYAN_BRIGHT: Color32 = Color32::from_rgb(0xf4, 0xfd, 0xff);
 
 const IVORY: Color32 = Color32::from_rgb(0xea, 0xe6, 0xdb);
 const IVORY_SHADE: Color32 = Color32::from_rgb(0xd6, 0xd0, 0xc1);
 const EBONY: Color32 = Color32::from_rgb(0x15, 0x16, 0x1a);
 const EBONY_EDGE: Color32 = Color32::from_rgb(0x2c, 0x2f, 0x36);
+
+// GPU state shared with free-function widgets: whether the WGSL pipeline is
+// live, the frame time, and a per-frame uniform slot counter (slot 0 = sky).
+static GPU_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static TIME_BITS: AtomicU64 = AtomicU64::new(0);
+
+/// Card rects collected during layout; the NEXT frame paints their glass
+/// into the background layer before any content, so the panes always sit
+/// under the controls. One frame of lag, imperceptible at 60 Hz.
+static GLASS_RECTS: Mutex<Vec<Rect>> = Mutex::new(Vec::new());
 
 // ---------------------------------------------------------------------------
 // Per-pixel material synthesis — realism without image assets. An fBm
@@ -87,18 +103,20 @@ fn gradient_quad(rect: Rect, top: Color32, bottom: Color32) -> Shape {
 /// Frosted glass panel: stacked soft shadow, translucent cool fill, a light
 /// sweep across the top, bright inner edge.
 fn glass_shapes(rect: Rect, rounding: f32) -> Vec<Shape> {
+    let cr = CornerRadius::same(rounding as u8);
     let mut shapes = Vec::with_capacity(10);
-    for (expand, alpha) in [(6.0, 26), (4.0, 40), (2.0, 60), (0.5, 80)] {
+    for (expand, alpha) in [(6.0f32, 22), (4.0, 34), (2.0, 52), (0.5, 70)] {
         shapes.push(Shape::rect_stroke(
             rect.expand(expand),
-            Rounding::same(rounding + expand),
-            Stroke::new(2.0, Color32::from_rgba_unmultiplied(0, 0, 0, alpha)),
+            CornerRadius::same((rounding + expand) as u8),
+            Stroke::new(2.0, Color32::from_rgba_unmultiplied(0x10, 0x2a, 0x38, alpha)),
+            egui::StrokeKind::Outside,
         ));
     }
     shapes.push(Shape::rect_filled(
         rect,
-        Rounding::same(rounding),
-        Color32::from_rgba_unmultiplied(0xd2, 0xe6, 0xec, 14),
+        cr,
+        Color32::from_rgba_unmultiplied(0xf4, 0xfa, 0xfc, 150),
     ));
     let sweep = Rect::from_min_max(
         rect.min + vec2(rounding, 1.5),
@@ -106,41 +124,37 @@ fn glass_shapes(rect: Rect, rounding: f32) -> Vec<Shape> {
     );
     shapes.push(gradient_quad(
         sweep,
-        Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 20),
+        Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 90),
         Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 0),
     ));
     shapes.push(Shape::rect_stroke(
         rect,
-        Rounding::same(rounding),
-        Stroke::new(1.0, Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 34)),
-    ));
-    shapes.push(Shape::line_segment(
-        [
-            pos2(rect.left() + rounding, rect.top() + 0.5),
-            pos2(rect.right() - rounding, rect.top() + 0.5),
-        ],
-        Stroke::new(1.0, Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 70)),
+        cr,
+        Stroke::new(1.0, Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 170)),
+        egui::StrokeKind::Inside,
     ));
     shapes
 }
 
 /// Aero gloss for selected segmented cells: aqua glass with a lit top half.
 fn gloss_fill(painter: &egui::Painter, rect: Rect, rounding: f32) {
+    let cr = CornerRadius::same(rounding as u8);
     painter.rect_filled(
         rect,
-        Rounding::same(rounding),
-        Color32::from_rgba_unmultiplied(0x6f, 0xe3, 0xf2, 34),
+        cr,
+        Color32::from_rgba_unmultiplied(0x2f, 0xc0, 0xdd, 200),
     );
     let top = Rect::from_min_max(rect.min, pos2(rect.right(), rect.center().y));
     painter.add(gradient_quad(
         top.shrink(1.0),
-        Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 46),
-        Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 4),
+        Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 90),
+        Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 8),
     ));
     painter.rect_stroke(
         rect,
-        Rounding::same(rounding),
-        Stroke::new(1.0, Color32::from_rgba_unmultiplied(0xa9, 0xe6, 0xf2, 120)),
+        cr,
+        Stroke::new(1.0, Color32::from_rgba_unmultiplied(0xc9, 0xf2, 0xfb, 220)),
+        egui::StrokeKind::Inside,
     );
 }
 
@@ -288,7 +302,7 @@ fn knob(
         }
     }
     if response.hovered() {
-        let scroll = ui.input(|i| i.scroll_delta.y);
+        let scroll = ui.input(|i| i.raw_scroll_delta.y);
         if scroll != 0.0 {
             let fine = ui.input(|i| i.modifiers.shift);
             let sensitivity = if fine { 0.0004 } else { 0.0015 };
@@ -452,7 +466,7 @@ fn waveform_selector(ui: &mut egui::Ui, selected: &mut Waveform) -> bool {
         Sense::hover(),
     );
     let painter = ui.painter();
-    painter.rect_filled(rect, Rounding::same(7.0), INSET);
+    painter.rect_filled(rect, CornerRadius::same(7), INSET);
 
     let mut changed = false;
     for (i, wf) in OPTIONS.iter().enumerate() {
@@ -476,9 +490,9 @@ fn waveform_selector(ui: &mut egui::Ui, selected: &mut Waveform) -> bool {
         let color = if is_selected {
             CYAN_BRIGHT
         } else if response.hovered() {
-            TXT_MID
+            WELL_TXT_HOVER
         } else {
-            TXT_LOW
+            WELL_TXT
         };
         wave_glyph(&painter, cell_rect, *wf, color);
         if i > 0 && !is_selected {
@@ -491,7 +505,7 @@ fn waveform_selector(ui: &mut egui::Ui, selected: &mut Waveform) -> bool {
             );
         }
     }
-    painter.rect_stroke(rect, Rounding::same(7.0), Stroke::new(1.0, HAIRLINE));
+    painter.rect_stroke(rect, CornerRadius::same(7), Stroke::new(1.0, HAIRLINE), egui::StrokeKind::Inside);
     changed
 }
 
@@ -503,7 +517,7 @@ fn segmented(ui: &mut egui::Ui, id: &str, labels: &[&str], selected: usize) -> O
         Sense::hover(),
     );
     let painter = ui.painter();
-    painter.rect_filled(rect, Rounding::same(7.0), INSET);
+    painter.rect_filled(rect, CornerRadius::same(7), INSET);
 
     let mut result = None;
     for (i, label) in labels.iter().enumerate() {
@@ -522,9 +536,9 @@ fn segmented(ui: &mut egui::Ui, id: &str, labels: &[&str], selected: usize) -> O
         let color = if is_selected {
             CYAN_BRIGHT
         } else if response.hovered() {
-            TXT_MID
+            WELL_TXT_HOVER
         } else {
-            TXT_LOW
+            WELL_TXT
         };
         painter.text(
             cell_rect.center(),
@@ -539,11 +553,11 @@ fn segmented(ui: &mut egui::Ui, id: &str, labels: &[&str], selected: usize) -> O
                     pos2(cell_rect.left(), cell_rect.top() + 6.0),
                     pos2(cell_rect.left(), cell_rect.bottom() - 6.0),
                 ],
-                Stroke::new(1.0, HAIRLINE),
+                Stroke::new(1.0, WELL_LINE),
             );
         }
     }
-    painter.rect_stroke(rect, Rounding::same(7.0), Stroke::new(1.0, HAIRLINE));
+    painter.rect_stroke(rect, CornerRadius::same(7), Stroke::new(1.0, HAIRLINE), egui::StrokeKind::Inside);
     result
 }
 
@@ -558,8 +572,8 @@ fn step_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
     } else {
         BG2
     };
-    painter.rect_filled(rect, Rounding::same(6.0), fill);
-    painter.rect_stroke(rect, Rounding::same(6.0), Stroke::new(1.0, HAIRLINE));
+    painter.rect_filled(rect, CornerRadius::same(6), fill);
+    painter.rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, HAIRLINE), egui::StrokeKind::Inside);
     painter.text(
         rect.center(),
         Align2::CENTER_CENTER,
@@ -580,12 +594,12 @@ fn card<R>(
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
 ) {
     let bg_idx = ui.painter().add(Shape::Noop);
-    let inner = egui::Frame::none()
-        .inner_margin(egui::style::Margin {
-            left: 16.0,
-            right: 16.0,
-            top: 12.0,
-            bottom: 14.0,
+    let inner = egui::Frame::NONE
+        .inner_margin(egui::Margin {
+            left: 16,
+            right: 16,
+            top: 12,
+            bottom: 14,
         })
         .show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -604,7 +618,12 @@ fn card<R>(
             add_contents(ui);
         });
     let rect = inner.response.rect;
-    if let Some(t) = tex {
+    if GPU_ON.load(AtomicOrdering::Relaxed) {
+        // Living glass: record the rect; next frame's background pass
+        // paints the pane underneath everything.
+        GLASS_RECTS.lock().push(rect);
+        ui.painter().set(bg_idx, Shape::Noop);
+    } else if let Some(t) = tex {
         let key = (
             rect.left().round() as i32,
             rect.top().round() as i32,
@@ -761,10 +780,10 @@ impl SynthUI {
         v.widgets.inactive.bg_fill = BG2;
         v.widgets.hovered.bg_fill = BG2_HOVER;
         v.widgets.active.bg_fill = INSET;
-        v.widgets.inactive.rounding = Rounding::same(6.0);
-        v.widgets.hovered.rounding = Rounding::same(6.0);
-        v.widgets.active.rounding = Rounding::same(6.0);
-        v.widgets.open.rounding = Rounding::same(6.0);
+        v.widgets.inactive.corner_radius = CornerRadius::same(6);
+        v.widgets.hovered.corner_radius = CornerRadius::same(6);
+        v.widgets.active.corner_radius = CornerRadius::same(6);
+        v.widgets.open.corner_radius = CornerRadius::same(6);
         v.widgets.inactive.fg_stroke = Stroke::new(1.0, TXT_MID);
         v.widgets.hovered.fg_stroke = Stroke::new(1.0, TXT);
         v.widgets.active.fg_stroke = Stroke::new(1.0, AMBER);
@@ -776,10 +795,50 @@ impl SynthUI {
         ctx.set_style(style);
     }
 
+    /// Announce that the WGSL sky/glass pipeline is installed; the CPU
+    /// frost path then stays dormant as a fallback.
+    pub fn set_gpu_available(&mut self, on: bool) {
+        GPU_ON.store(on, AtomicOrdering::Relaxed);
+    }
+
     /// Bake (or rebake) the raster layers. The backdrop renders at window
     /// size; frost panels derive from it, so they are dropped with it. A
-    /// resize debounce keeps drag-resizing cheap.
+    /// resize debounce keeps drag-resizing cheap. When the GPU pipeline is
+    /// live, the backdrop bake shrinks to a placeholder — only the wood and
+    /// knob sprites are needed.
     fn ensure_textures(&mut self, ctx: &egui::Context) {
+        if GPU_ON.load(AtomicOrdering::Relaxed) {
+            if self.textures.is_none() {
+                let rgb = panel_render::render_backdrop(8, 8);
+                let backdrop = ctx.load_texture(
+                    "patina-backdrop",
+                    panel_render::backdrop_image(8, 8, &rgb),
+                    TextureOptions::LINEAR,
+                );
+                let wood = ctx.load_texture(
+                    "patina-wood",
+                    panel_render::render_wood(1024, 128),
+                    TextureOptions::LINEAR,
+                );
+                let knob = ctx.load_texture(
+                    "patina-knob",
+                    panel_render::render_knob(128),
+                    TextureOptions::LINEAR,
+                );
+                if let egui::TextureId::Managed(id) = knob.id() {
+                    KNOB_TEX_ID.store(id + 1, AtomicOrdering::Relaxed);
+                }
+                self.textures = Some(Textures {
+                    backdrop,
+                    backdrop_rgb: rgb,
+                    backdrop_size: [8, 8],
+                    wood,
+                    knob,
+                    frost: HashMap::new(),
+                });
+            }
+            return;
+        }
         let screen = ctx.screen_rect();
         let size = [
             (screen.width().max(320.0)) as usize,
@@ -891,12 +950,31 @@ impl SynthUI {
             self.notes_active = vm.held_note_states().iter().any(|&held| held);
         }
 
-        // Keep repainting so key lights and the scope stay live
-        ctx.request_repaint_after(std::time::Duration::from_millis(33));
+        // The sky is alive: repaint at display cadence
+        ctx.request_repaint_after(std::time::Duration::from_millis(16));
 
-        // Aurora backdrop, painted on the panels' shared layer before they
-        // run so it sits under their transparent frames
-        if let Some(tex) = &self.textures {
+        let time = ctx.input(|i| i.time) as f32;
+        TIME_BITS.store(time.to_bits() as u64, AtomicOrdering::Relaxed);
+
+        // Backdrop on the panels' shared layer, before they run: the WGSL
+        // sky when the GPU pipeline is live, the baked image otherwise.
+        // Glass panes paint here too, from last frame's rects, so they are
+        // always under the controls.
+        if GPU_ON.load(AtomicOrdering::Relaxed) {
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            painter.add(aurora_gpu::sky_shape(ctx.screen_rect(), time));
+            let rects: Vec<Rect> = std::mem::take(&mut *GLASS_RECTS.lock());
+            for (i, rect) in rects.into_iter().enumerate() {
+                let slot = (i as u32 + 1) % 64;
+                painter.add(aurora_gpu::glass_shape(
+                    rect,
+                    ctx.screen_rect(),
+                    time,
+                    12.0,
+                    slot,
+                ));
+            }
+        } else if let Some(tex) = &self.textures {
             ctx.layer_painter(egui::LayerId::background()).image(
                 tex.backdrop.id(),
                 ctx.screen_rect(),
@@ -909,17 +987,17 @@ impl SynthUI {
 
         egui::TopBottomPanel::top("header")
             .frame(
-                egui::Frame::none()
-                    .inner_margin(egui::style::Margin::symmetric(20.0, 12.0)),
+                egui::Frame::NONE
+                    .inner_margin(egui::Margin::symmetric(20, 12)),
             )
             .show(ctx, |ui| self.draw_header(ui));
 
         egui::TopBottomPanel::bottom("keyboard")
-            .frame(egui::Frame::none().inner_margin(egui::style::Margin {
-                left: 20.0,
-                right: 20.0,
-                top: 9.0,
-                bottom: 10.0,
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin {
+                left: 20,
+                right: 20,
+                top: 9,
+                bottom: 10,
             }))
             .show(ctx, |ui| {
                 // Walnut shelf under the keys, painted after layout
@@ -956,11 +1034,11 @@ impl SynthUI {
 
         let mut tex = self.textures.take();
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().inner_margin(egui::style::Margin {
-                left: 20.0,
-                right: 20.0,
-                top: 8.0,
-                bottom: 8.0,
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin {
+                left: 20,
+                right: 20,
+                top: 8,
+                bottom: 8,
             }))
             .show(ctx, |ui| {
                 ui.spacing_mut().item_spacing = vec2(12.0, 12.0);
@@ -987,7 +1065,7 @@ impl SynthUI {
                 RichText::new(tracked("Patina"))
                     .size(14.0)
                     .strong()
-                    .color(TXT),
+                    .color(IVORY),
             );
             ui.add_space(2.0);
             ui.label(
@@ -1003,8 +1081,8 @@ impl SynthUI {
                 }
                 let (chip, _) = ui.allocate_exact_size(vec2(58.0, 24.0), Sense::hover());
                 let painter = ui.painter();
-                painter.rect_filled(chip, Rounding::same(6.0), INSET);
-                painter.rect_stroke(chip, Rounding::same(6.0), Stroke::new(1.0, HAIRLINE));
+                painter.rect_filled(chip, CornerRadius::same(6), INSET);
+                painter.rect_stroke(chip, CornerRadius::same(6), Stroke::new(1.0, WELL_LINE), egui::StrokeKind::Inside);
                 painter.text(
                     chip.center(),
                     Align2::CENTER_CENTER,
@@ -1267,8 +1345,8 @@ impl SynthUI {
         let width = ui.available_width();
         let (rect, _) = ui.allocate_exact_size(vec2(width, 64.0), Sense::hover());
         let painter = ui.painter();
-        painter.rect_filled(rect, Rounding::same(10.0), INSET);
-        painter.rect_stroke(rect, Rounding::same(10.0), Stroke::new(1.0, HAIRLINE));
+        painter.rect_filled(rect, CornerRadius::same(10), INSET);
+        painter.rect_stroke(rect, CornerRadius::same(10), Stroke::new(1.0, HAIRLINE), egui::StrokeKind::Inside);
 
         let inner = rect.shrink2(vec2(14.0, 10.0));
         painter.line_segment(
@@ -1276,14 +1354,14 @@ impl SynthUI {
                 pos2(inner.left(), inner.center().y),
                 pos2(inner.right(), inner.center().y),
             ],
-            Stroke::new(1.0, HAIRLINE),
+            Stroke::new(1.0, WELL_LINE),
         );
         painter.text(
             pos2(rect.left() + 12.0, rect.top() + 6.0),
             Align2::LEFT_TOP,
             tracked("out"),
             FontId::proportional(8.5),
-            TXT_LOW,
+            WELL_TXT,
         );
         if self.notes_active {
             painter.circle_filled(pos2(rect.left() + 40.0, rect.top() + 10.5), 2.0, CYAN);
@@ -1357,7 +1435,7 @@ impl SynthUI {
         let key_states = self.voice_manager.lock().held_note_states();
 
         let painter = ui.painter();
-        painter.rect_filled(rect.expand(3.0), Rounding::same(6.0), INSET);
+        painter.rect_filled(rect.expand(3.0), CornerRadius::same(6), INSET);
 
         // White keys
         for visual_octave in 0..OCTAVES {
@@ -1371,11 +1449,11 @@ impl SynthUI {
                         rect.min + Vec2::new(x + 1.0, sink),
                         Vec2::new(white_key_width - 2.0, white_key_height - sink),
                     );
-                    let rounding = Rounding {
-                        nw: 0.0,
-                        ne: 0.0,
-                        sw: 3.0,
-                        se: 3.0,
+                    let rounding = CornerRadius {
+                        nw: 0,
+                        ne: 0,
+                        sw: 3,
+                        se: 3,
                     };
                     if pressed {
                         painter.rect_filled(
@@ -1459,11 +1537,11 @@ impl SynthUI {
                             + Vec2::new(x + visual_octave as f32 * 7.0 * white_key_width, sink),
                         Vec2::new(black_key_width, black_key_height - sink),
                     );
-                    let rounding = Rounding {
-                        nw: 0.0,
-                        ne: 0.0,
-                        sw: 3.0,
-                        se: 3.0,
+                    let rounding = CornerRadius {
+                        nw: 0,
+                        ne: 0,
+                        sw: 3,
+                        se: 3,
                     };
                     painter.rect_filled(
                         key_rect,
@@ -1486,7 +1564,7 @@ impl SynthUI {
                         );
                         painter.rect_filled(edge, rounding, EBONY_EDGE);
                     }
-                    painter.rect_stroke(key_rect, rounding, Stroke::new(1.0, INSET));
+                    painter.rect_stroke(key_rect, rounding, Stroke::new(1.0, INSET), egui::StrokeKind::Inside);
 
                     if let Some(hint) = self.key_hint(visual_octave, key_index) {
                         painter.text(

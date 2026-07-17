@@ -601,11 +601,22 @@ mod tests {
     #[test]
     fn glide_swoops_from_previous_note() {
         let sr = 44100.0;
+        // Schmitt-trigger crossing counter: hysteresis at 20% of the window
+        // peak, so harmonic ripple near zero can't double-count cycles
         let count_crossings = |samples: &[f32]| -> usize {
-            samples
-                .windows(2)
-                .filter(|w| w[0] <= 0.0 && w[1] > 0.0)
-                .count()
+            let peak = samples.iter().fold(0.0f32, |a, &s| a.max(s.abs()));
+            let th = peak * 0.2;
+            let mut low = true;
+            let mut count = 0;
+            for &s in samples {
+                if low && s > th {
+                    count += 1;
+                    low = false;
+                } else if !low && s < -th {
+                    low = true;
+                }
+            }
+            count
         };
         let mut vm = VoiceManager::new(sr, 8);
         vm.set_glide(0.3);
