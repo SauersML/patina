@@ -246,6 +246,9 @@ impl Voice {
         for osc in &mut self.oscs {
             osc.set_model(model);
         }
+        // The circuit profile is the whole signal chain: converter
+        // circuits AND the filter architecture (ladder vs 4072 gm-C)
+        self.filter.set_model(model);
     }
 
     pub fn set_key_track(&mut self, amount: f32) {

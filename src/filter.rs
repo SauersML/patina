@@ -375,8 +375,13 @@ impl LadderFilter {
         self.cutoff += (self.target_cutoff - self.cutoff) * 0.006;
         self.resonance += (self.target_resonance - self.resonance) * 0.006;
 
+        let fc_top = match self.model {
+            // The 4072's documented bandwidth ceiling
+            CircuitModel::Arp => ARP_FC_MAX.min(self.sample_rate * 0.49),
+            CircuitModel::Moog => self.sample_rate * 0.49,
+        };
         let fc = (self.cutoff * cutoff_mult * (1.0 + self.thermal_drift))
-            .clamp(16.0, self.sample_rate * 0.49);
+            .clamp(16.0, fc_top);
 
         // 2x oversampling; exact placement via tan prewarp per substep
         let t_step = 0.5 / self.sample_rate;
@@ -388,44 +393,80 @@ impl LadderFilter {
             g_base * self.mismatch[3],
         ];
 
-        // Regeneration: knob k, unit trim, and the threshold placed below
-        // knob max per the service manual (SCHEMATIC)
-        let k = self.resonance * self.res_cal * 1.12;
+        match self.model {
+            CircuitModel::Moog => {
+                // Regeneration: knob k, unit trim, and the threshold placed
+                // below knob max per the service manual (SCHEMATIC)
+                let k = self.resonance * self.res_cal * 1.12;
 
-        // FS -> volts; midpoint averages this sample's input with the last
-        // Program volts through the input attenuator; drive is the
-        // attenuator's setting (more drive = more signal reaches the ladder)
-        let vin = input * INPUT_ATTEN * self.drive;
-        let vin_avg_a = (vin + self.vin_prev) * 0.5 / (2.0 * VT);
-        self.vin_prev = vin;
+                // Program volts through the input attenuator; drive is the
+                // attenuator's setting (more drive = more ladder current)
+                let vin = input * INPUT_ATTEN * self.drive;
+                let vin_avg_a = (vin + self.vin_prev) * 0.5 / (2.0 * VT);
+                self.vin_prev = vin;
 
-        for _ in 0..2 {
-            self.midpoint_step(vin_avg_a, g, k);
-            // AC-coupled regeneration (dwg #1149): track the feedback tap's
-            // DC so only audio circulates in the loop
-            self.fb_dc += self.fb_dc_a * (self.v[3] - self.fb_dc);
+                for _ in 0..2 {
+                    self.midpoint_step(vin_avg_a, g, k);
+                    // AC-coupled regeneration (dwg #1149): track the
+                    // feedback tap's DC so only audio circulates
+                    self.fb_dc += self.fb_dc_a * (self.v[3] - self.fb_dc);
+                }
+
+                // Output: -V4, back to program level. sqrt(drive) make-up
+                // keeps the drive knob about grit rather than volume
+                // (CHOICE); unity through-gain at resonance minimum per
+                // the 904A calibration
+                let mut out = -self.v[3] / (INPUT_ATTEN * self.drive.sqrt().max(0.5));
+
+                // Partial make-up for the exact 1/(1+k) passband loss. The
+                // hardware does NOT do this — players ride the volume;
+                // labeled a convenience (CHOICE)
+                out *= 1.0 + self.resonance * 0.3;
+
+                // Output saturation stage with antiderivative antialiasing,
+                // referenced to program level
+                if self.saturation > 0.02 {
+                    let pv = crate::oscillator::PROGRAM_V;
+                    out = pv * self.sat_adaa.process(out * self.saturation / pv)
+                        / self.saturation;
+                }
+                out
+            }
+            CircuitModel::Arp => {
+                // "When the Q is at maximum, the VCF will oscillate" —
+                // threshold k=4 lands just inside the knob's travel. The
+                // margin is trimmed (service manual 'VCF cal') so the
+                // oscillation settles at the spec'd 13-14 V p-p, not more
+                let k = self.resonance * self.res_cal * 1.02;
+
+                let vin = input * ARP_ATTEN * self.drive;
+                let vin_avg = (vin + self.vin_prev) * 0.5;
+                self.vin_prev = vin;
+
+                // DC-coupled feedback: no regeneration-cap tracking. The
+                // manual's checkout self-oscillates the VCF at 10 Hz —
+                // only a DC-coupled loop can do that.
+                for _ in 0..2 {
+                    self.midpoint_step_arp(vin_avg, g, k);
+                }
+
+                // Back to program level (gain trimmed for unity passband,
+                // service manual 2.9.3 step 4), plus the dual-gang pot's
+                // level compensation: the second resonance gang restores
+                // what 1/(1+k) takes away, so the 4072 keeps its body at
+                // high resonance. The gang law 0.65*k is the one constant
+                // jointly trimmed to BOTH manual specs: passband held near
+                // unity under resonance AND 13-14 V p-p self-oscillation
+                let mut out = self.v[3] / (ARP_ATTEN * self.drive.sqrt().max(0.5));
+                out *= 1.0 + 0.65 * k;
+
+                // The TL074/LM3900 output stages clip at the +/-15 V
+                // rails; transparent at program level, engaged by
+                // self-oscillation (which the manual specs at 13-14 V p-p)
+                out = ARP_RAIL * self.sat_adaa.process(out / ARP_RAIL);
+                out
+            }
         }
-
-        // Output: -V4, back to FS. sqrt(drive) make-up keeps the drive knob
-        // about grit rather than volume (CHOICE)
-        // Output buffer restores program level: unity through-gain at
-        // resonance minimum, per the 904A calibration ("output amplitude
-        // equals the VCO1 input amplitude")
-        let mut out = -self.v[3] / (INPUT_ATTEN * self.drive.sqrt().max(0.5));
-
-        // Partial make-up for the exact 1/(1+k) passband loss. The hardware
-        // does NOT do this — players ride the volume; this keeps patches
-        // usable and is labeled a convenience (CHOICE)
-        out *= 1.0 + self.resonance * 0.3;
-
-        // Output saturation stage with antiderivative antialiasing,
-        // referenced to program level (it saturates around 10 V p-p, not
-        // around one volt)
-        if self.saturation > 0.02 {
-            let pv = crate::oscillator::PROGRAM_V;
-            out = pv * self.sat_adaa.process(out * self.saturation / pv) / self.saturation;
-        }
-        out
     }
 }
 
@@ -601,6 +642,174 @@ mod tests {
         assert!(
             (0.7..=1.3).contains(&g),
             "passband gain should be near unity, got {g}"
+        );
+    }
+
+    /// The 4072 gm-C cascade is still four one-poles: same -12 dB at fc,
+    /// same 24 dB/oct — the topologies differ in nonlinearity and
+    /// feedback behavior, not in the small-signal transfer function.
+    #[test]
+    fn arp_rolloff_is_four_pole() {
+        let cfg = |f: &mut LadderFilter| {
+            f.set_model(CircuitModel::Arp);
+            f.set_cutoff(1000.0);
+            f.set_resonance(0.0);
+            f.set_drive(0.2);
+        };
+        let g_fc = gain_at(cfg, 1000.0, 0.5);
+        let g_pass = gain_at(cfg, 62.5, 0.5);
+        let db_fc = 20.0 * (g_fc / g_pass).log10();
+        assert!(
+            (-13.5..=-10.5).contains(&db_fc),
+            "4072 gain at fc should be -12 dB re passband, got {db_fc:.2} dB"
+        );
+        let g2 = gain_at(cfg, 2000.0, 0.5);
+        let g4 = gain_at(cfg, 4000.0, 0.5);
+        let ratio = g4 / g2;
+        assert!(
+            (0.05..=0.13).contains(&ratio),
+            "expected ~25/289 between 2fc and 4fc, got {ratio:.4}"
+        );
+    }
+
+    /// THE audible difference between the circuits, derived from topology:
+    /// the ladder's stages saturate on absolute voltages (colors the
+    /// passband); the 4072's pairs see only adjacent-stage differences
+    /// (clean in the passband). Same hot signal, same settings: the
+    /// ladder must produce far more passband harmonic distortion.
+    #[test]
+    fn arp_is_cleaner_than_the_ladder_in_the_passband() {
+        let sr = 88200.0;
+        let f0 = 441.0;
+        let n = sr as usize;
+        let h3_of = |model: CircuitModel| -> f32 {
+            let mut f = LadderFilter::new(sr, 3);
+            f.set_model(model);
+            f.set_cutoff(8000.0);
+            f.set_resonance(0.0);
+            f.set_drive(6.0);
+            f.set_saturation(0.0);
+            let mut out = Vec::with_capacity(n);
+            for i in 0..n {
+                let x = 4.5 * (TAU * f0 * i as f32 / sr).sin();
+                out.push(f.process(x, 1.0));
+            }
+            let goertzel = |freq: f32| -> f32 {
+                let (mut re, mut im) = (0.0f32, 0.0f32);
+                for (i, &s) in out[n / 2..].iter().enumerate() {
+                    let a = TAU * freq * i as f32 / sr;
+                    re += s * a.cos();
+                    im += s * a.sin();
+                }
+                (re * re + im * im).sqrt()
+            };
+            goertzel(3.0 * f0) / goertzel(f0).max(1e-9)
+        };
+        let moog = h3_of(CircuitModel::Moog);
+        let arp = h3_of(CircuitModel::Arp);
+        assert!(
+            arp < 0.25 * moog,
+            "4072 should be far cleaner in the passband: ladder H3/H1={moog:.4}, 4072 H3/H1={arp:.4}"
+        );
+    }
+
+    /// The dual-gang resonance pot's compensation: the 4072 keeps its
+    /// passband body at high resonance where the ladder thins toward
+    /// 1/(1+k).
+    #[test]
+    fn arp_passband_holds_at_high_resonance() {
+        let ratio_of = |model: CircuitModel| -> f32 {
+            let g0 = gain_at(
+                |f| {
+                    f.set_model(model);
+                    f.set_cutoff(8000.0);
+                    f.set_resonance(0.0);
+                    f.set_drive(0.2);
+                },
+                400.0,
+                0.25,
+            );
+            let gk = gain_at(
+                |f| {
+                    f.set_model(model);
+                    f.set_cutoff(8000.0);
+                    f.set_resonance(3.0);
+                    f.set_drive(0.2);
+                },
+                400.0,
+                0.25,
+            );
+            gk / g0
+        };
+        let arp = ratio_of(CircuitModel::Arp);
+        let moog = ratio_of(CircuitModel::Moog);
+        // (the ladder figure includes its labeled partial make-up gain;
+        // its raw ODE loss at this k is 1/(1+3.36) ~ 0.23)
+        assert!(
+            arp > 0.65 && arp > 1.4 * moog,
+            "compensated 4072 passband should hold where the ladder thins: 4072 {arp:.3}, ladder {moog:.3}"
+        );
+    }
+
+    /// Service manual 2.9.3 step 15: resonance max, output "a 13-14 volt
+    /// peak to peak sine wave". DC-coupled feedback self-oscillates.
+    #[test]
+    fn arp_self_oscillates_hot() {
+        let sr = 44100.0;
+        let mut filter = LadderFilter::new(sr, 7);
+        filter.set_model(CircuitModel::Arp);
+        filter.set_cutoff(500.0);
+        filter.set_resonance(4.0);
+        for _ in 0..8000 {
+            filter.process(0.0, 1.0);
+        }
+        filter.process(2.5, 1.0);
+        let (mut hi, mut lo) = (0.0f32, 0.0f32);
+        for i in 0..44100 {
+            let y = filter.process(0.0, 1.0);
+            assert!(y.is_finite());
+            if i > 44100 - 8820 {
+                hi = hi.max(y);
+                lo = lo.min(y);
+            }
+        }
+        let pp = hi - lo;
+        assert!(
+            (9.0..=16.0).contains(&pp),
+            "4072 self-oscillation should be ~13-14 V p-p, got {pp:.1}"
+        );
+    }
+
+    /// The 4072's documented flaw: cutoff tops out around 10 kHz however
+    /// far the control is pushed. The ladder opens fully.
+    #[test]
+    fn arp_cutoff_ceiling_is_real() {
+        let g_of = |model: CircuitModel| -> f32 {
+            gain_at(
+                |f| {
+                    f.set_model(model);
+                    f.set_cutoff(20000.0);
+                    f.set_resonance(0.0);
+                    f.set_drive(0.2);
+                },
+                15000.0,
+                0.25,
+            ) / gain_at(
+                |f| {
+                    f.set_model(model);
+                    f.set_cutoff(20000.0);
+                    f.set_resonance(0.0);
+                    f.set_drive(0.2);
+                },
+                1000.0,
+                0.25,
+            )
+        };
+        let arp = g_of(CircuitModel::Arp);
+        let moog = g_of(CircuitModel::Moog);
+        assert!(
+            arp < 0.2 && moog > 0.3,
+            "15 kHz through a 'fully open' filter: 4072 should be capped ({arp:.3}), ladder open ({moog:.3})"
         );
     }
 
