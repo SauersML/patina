@@ -1,4 +1,9 @@
-// In src/envelope.rs
+// Analog-style ADSR envelope.
+//
+// All segments are exponential (one-pole RC curves) like hardware envelopes:
+// the attack charges toward an overshoot target so it stays punchy, and decay
+// and release approach their targets asymptotically, which reads to the ear
+// as far more natural than linear ramps.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -19,8 +24,11 @@ pub struct Envelope {
     stage: EnvelopeStage,
     current_level: f32,
     sample_rate: f32,
-    time_in_stage: f32,
 }
+
+/// Attack charges toward this level but transitions to Decay at 1.0,
+/// keeping the analog "fast at first, then curving" shape.
+const ATTACK_TARGET: f32 = 1.25;
 
 impl Envelope {
     pub fn new(sample_rate: f32) -> Self {
@@ -32,37 +40,47 @@ impl Envelope {
             stage: EnvelopeStage::Idle,
             current_level: 0.0,
             sample_rate,
-            time_in_stage: 0.0,
         }
+    }
+
+    /// One-pole coefficient that covers the segment in roughly `time` seconds.
+    #[inline]
+    fn coef(&self, time: f32, speed: f32) -> f32 {
+        1.0 - (-speed / (time.max(0.0005) * self.sample_rate)).exp()
     }
 
     pub fn next_sample(&mut self) -> f32 {
         match self.stage {
             EnvelopeStage::Attack => {
                 let attack_time = f32::from_bits(self.attack.load(Ordering::Relaxed));
-                self.current_level += 1.0 / (attack_time * self.sample_rate);
+                // ln(ATTACK_TARGET / (ATTACK_TARGET - 1.0)) so 0 -> 1 takes ~attack_time
+                let k = self.coef(attack_time, 1.61);
+                self.current_level += (ATTACK_TARGET - self.current_level) * k;
                 if self.current_level >= 1.0 {
                     self.current_level = 1.0;
                     self.stage = EnvelopeStage::Decay;
-                    self.time_in_stage = 0.0;
                 }
             }
             EnvelopeStage::Decay => {
                 let decay_time = f32::from_bits(self.decay.load(Ordering::Relaxed));
                 let sustain_level = f32::from_bits(self.sustain.load(Ordering::Relaxed));
-                self.current_level -= (1.0 - sustain_level) / (decay_time * self.sample_rate);
-                if self.current_level <= sustain_level {
+                let k = self.coef(decay_time, 4.0);
+                self.current_level += (sustain_level - self.current_level) * k;
+                if (self.current_level - sustain_level).abs() < 1e-4 {
                     self.current_level = sustain_level;
                     self.stage = EnvelopeStage::Sustain;
                 }
             }
             EnvelopeStage::Sustain => {
-                // Do nothing, maintain the sustain level
+                // Track the sustain control smoothly so live tweaks don't step
+                let sustain_level = f32::from_bits(self.sustain.load(Ordering::Relaxed));
+                self.current_level += (sustain_level - self.current_level) * 0.005;
             }
             EnvelopeStage::Release => {
                 let release_time = f32::from_bits(self.release.load(Ordering::Relaxed));
-                self.current_level -= self.current_level / (release_time * self.sample_rate);
-                if self.current_level < 0.001 {
+                let k = self.coef(release_time, 4.0);
+                self.current_level -= self.current_level * k;
+                if self.current_level < 1e-4 {
                     self.current_level = 0.0;
                     self.stage = EnvelopeStage::Idle;
                 }
@@ -71,18 +89,18 @@ impl Envelope {
                 self.current_level = 0.0;
             }
         }
-        self.time_in_stage += 1.0 / self.sample_rate;
         self.current_level
     }
 
+    /// Retriggers from the current level, so restarts are click-free.
     pub fn note_on(&mut self) {
         self.stage = EnvelopeStage::Attack;
-        self.time_in_stage = 0.0;
     }
 
     pub fn note_off(&mut self) {
-        self.stage = EnvelopeStage::Release;
-        self.time_in_stage = 0.0;
+        if self.stage != EnvelopeStage::Idle {
+            self.stage = EnvelopeStage::Release;
+        }
     }
 
     pub fn set_attack(&self, attack: f32) {

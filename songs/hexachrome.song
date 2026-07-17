@@ -1,0 +1,45 @@
+# Hexachrome — dusty Boards-of-Canada tape study for Patina
+# Two slow modal chord passes over a droning bass, a hollow triangle-ish
+# lead wandering above. The reel degrades as it plays: wow deepens, the
+# tape drives harder, and by the end the oxide is shedding.
+# Play with:  patina --play songs/hexachrome.song
+
+bpm 78
+gate 0.92
+
+# Dm9-ish -> Bbmaj7 -> Gm7 -> A7sus, hazy seventies-documentary changes
+track pads vel=0.6
+[D3 A3 C4 E4]:8 [Bb2 F3 A3 D4]:8 [G2 D3 F3 Bb3]:8 [A2 E3 G3 C4]:8
+[D3 A3 C4 E4]:8 [Bb2 F3 A3 D4]:8 [G2 D3 F3 Bb3]:8 [A2 E3 G3 C4]:8
+
+track bass vel=0.75
+D2:8 Bb1:8 G1:8 A1:8
+D2:8 Bb1:8 G1:8 A1:8
+
+# The lead sits out the first pass, then hums a lazy pentatonic line
+track lead vel=0.55 len=2
+R:32
+F4 E4 D4:4 | R:2 A4 C5:4 | R:2 Bb4 A4 G4:2 | F4:2 E4:4 D4:8
+
+# Warm, half-closed filter breathing slowly with the changes
+automate cutoff
+900 2400:16@exp 900:16@exp | 2800:16@exp 700:16@exp
+
+automate reverb_wet
+0.55 R:32 0.7:16@smooth
+
+# --- The cassette story ---
+# Start on a decent deck: gentle wow, light drive.
+# Second pass the transport loosens and the tape ages before your ears.
+
+automate tape_wow
+0.3 R:24 0.55:16@smooth R:16 0.75:8@smooth
+
+automate tape_flutter
+0.15 R:32 0.35:24@lin
+
+automate tape_drive
+0.35 0.5:32@lin 0.7:24@smooth
+
+automate tape_age
+0.2 R:32 0.65:24@smooth R:4 0.85:4@lin

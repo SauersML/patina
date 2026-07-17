@@ -6,6 +6,7 @@ mod voice_manager;
 mod filter;
 mod reverb;
 mod chorus;
+mod tape;
 mod midi_handler;
 mod song;
 

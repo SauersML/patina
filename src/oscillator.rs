@@ -1,6 +1,5 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::f32::consts::PI;
-use rand;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Waveform {
@@ -13,34 +12,53 @@ pub enum Waveform {
 pub struct Oscillator {
     phase: f64,
     frequency: AtomicU32,
+    /// Fixed frequency ratio for unison detune (2^(cents/1200)).
+    freq_mult: f32,
     sample_rate: f32,
-    volume: AtomicU32,
     waveform: Waveform,
     drift: f32,
+    rng: u32,
+}
+
+#[inline]
+fn xorshift(state: &mut u32) -> u32 {
+    let mut x = *state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    *state = x;
+    x
+}
+
+#[inline]
+fn rand01(state: &mut u32) -> f32 {
+    (xorshift(state) >> 8) as f32 / (1u32 << 24) as f32
 }
 
 impl Oscillator {
-    pub fn new(sample_rate: f32, frequency: f32) -> Self {
+    pub fn new(sample_rate: f32, frequency: f32, seed: u32) -> Self {
+        let mut rng = seed.wrapping_mul(0x9E37_79B9) | 1;
+        // Random start phase so unison oscillators never phase-lock
+        let phase = rand01(&mut rng) as f64;
         Self {
-            phase: 0.0,
+            phase,
             frequency: AtomicU32::new(frequency.to_bits()),
+            freq_mult: 1.0,
             sample_rate,
-            volume: AtomicU32::new(1.0f32.to_bits()),
             waveform: Waveform::Sawtooth,
             drift: 0.0,
+            rng,
         }
     }
 
     pub fn next_sample(&mut self) -> f32 {
         let frequency = f32::from_bits(self.frequency.load(Ordering::Relaxed));
-        let volume = f32::from_bits(self.volume.load(Ordering::Relaxed));
-        
+
         // Slow bounded random walk models analog pitch drift; fresh per-sample
-        // noise here acts as FM noise and adds audible hiss
-        self.drift = (self.drift + (rand::random::<f32>() - 0.5) * 2e-5) * 0.9995;
-        let detuned_frequency = frequency * (1.0 + self.drift);
-        
-        // More precise phase accumulation
+        // noise here would act as FM noise and add audible hiss
+        self.drift = (self.drift + (rand01(&mut self.rng) - 0.5) * 2e-5) * 0.9995;
+        let detuned_frequency = frequency * self.freq_mult * (1.0 + self.drift);
+
         self.phase += detuned_frequency as f64 / self.sample_rate as f64;
         self.phase %= 1.0;
 
@@ -51,21 +69,18 @@ impl Oscillator {
             Waveform::Triangle => self.polyblep_triangle(self.phase as f32, detuned_frequency),
         };
 
-        // Apply soft clipping for analog-like distortion
-        let clipped_sample = self.soft_clip(raw_sample);
-
-        clipped_sample * volume
+        self.soft_clip(raw_sample)
     }
 
     fn polyblep(&self, t: f32, dt: f32) -> f32 {
         if t < dt {
             let t = t / dt;
-            return 2.0 * t - t * t - 1.0;
+            2.0 * t - t * t - 1.0
         } else if t > 1.0 - dt {
             let t = (t - 1.0) / dt;
-            return t * t + 2.0 * t + 1.0;
+            t * t + 2.0 * t + 1.0
         } else {
-            return 0.0;
+            0.0
         }
     }
 
@@ -94,28 +109,27 @@ impl Oscillator {
     fn integrate_polyblep(&self, t: f32, dt: f32) -> f32 {
         if t < dt {
             let t = t / dt;
-            return dt * (t * t * t / 3.0 - t * t / 2.0 - t + 1.0 / 3.0);
+            dt * (t * t * t / 3.0 - t * t / 2.0 - t + 1.0 / 3.0)
         } else if t > 1.0 - dt {
             let t = (t - 1.0) / dt;
-            return dt * (-t * t * t / 3.0 + t * t + t + 1.0 / 3.0);
+            dt * (-t * t * t / 3.0 + t * t + t + 1.0 / 3.0)
         } else {
-            return 0.0;
+            0.0
         }
     }
 
     fn soft_clip(&self, x: f32) -> f32 {
-        // Cubic soft clip; the previous formula inverted polarity for |x| > ~1.7
+        // Cubic soft clip, transparent below |x| ~ 1
         let x = x.clamp(-1.5, 1.5);
         x * (1.0 - x * x / 6.75)
     }
-
 
     pub fn set_frequency(&self, frequency: f32) {
         self.frequency.store(frequency.to_bits(), Ordering::Relaxed);
     }
 
-    pub fn set_volume(&self, volume: f32) {
-        self.volume.store(volume.to_bits(), Ordering::Relaxed);
+    pub fn set_freq_mult(&mut self, mult: f32) {
+        self.freq_mult = mult;
     }
 
     pub fn set_waveform(&mut self, waveform: Waveform) {

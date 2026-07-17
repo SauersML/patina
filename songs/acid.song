@@ -1,26 +1,48 @@
 # Acid Bath — a 303-style squelcher for Patina
-# The patch itself is set by automation: tight envelope, rising resonance,
-# and a cutoff that never sits still. Watch the sliders dance.
+# The patch is set entirely by automation at t=0: tight amp envelope, a snappy
+# filter envelope doing the per-note squelch, high resonance, filter drive,
+# and a hot cassette on the master bus. The section automation then evolves
+# the squelch length, base cutoff, and resonance across the piece.
 # Play with:  patina --play songs/acid.song
 
 bpm 132
 gate 0.6
 
-# --- patch setup at t=0 (instant sets) ---
+# --- patch setup at t=0 ---
 automate volume
 0.85
 
+automate detune
+3
+
 automate attack
-0.01
+0.005
 
 automate decay
-0.12
+0.15
 
 automate sustain
-0.2
+0.15
 
 automate release
-0.08 R:48 0.5:1@lin R:15
+0.1 R:48 0.5:0.5 R:15.5
+
+# The squelch: every note re-triggers this envelope, kicked +3.2 octaves
+automate filter_env
+3.2
+
+automate filter_attack
+0.002
+
+automate filter_sustain
+0.0
+
+automate filter_release
+0.12
+
+# Squelch length grows as the piece develops
+automate filter_decay
+0.12 R:16 0.2:16@lin 0.28:16@lin R:16
 
 # --- the acid line: 16th notes, A minor ---
 track bass vel=0.7 len=0.25
@@ -52,25 +74,28 @@ R:16
 track pad vel=0.7
 R:60 [A1 A2 E3 A3 C4]:6
 
-# --- the squelch: cutoff pumps every two beats, peaks rising per section ---
+# --- base cutoff opens per section; the envelope rides on top of it ---
 automate cutoff
-300
-1200:1@exp 300:1@exp 1200:1@exp 300:1@exp 1200:1@exp 300:1@exp 1200:1@exp 300:1@exp
-1200:1@exp 300:1@exp 1200:1@exp 300:1@exp 1200:1@exp 300:1@exp 1200:1@exp 300:1@exp
-2500:1@exp 350:1@exp 2500:1@exp 350:1@exp 2500:1@exp 350:1@exp 2500:1@exp 350:1@exp
-2500:1@exp 350:1@exp 2500:1@exp 350:1@exp 2500:1@exp 350:1@exp 2500:1@exp 350:1@exp
-5000:1@exp 400:1@exp 5000:1@exp 400:1@exp 5000:1@exp 400:1@exp 5000:1@exp 400:1@exp
-5000:1@exp 400:1@exp 5000:1@exp 400:1@exp 5000:1@exp 400:1@exp 5000:1@exp 400:1@exp
-2000:4@smooth 500:4@smooth 3000:4@smooth 400:4@exp
+180 R:16 400:16@exp 700:16@exp | 2500:8@smooth 250:8@exp
 
 automate resonance
-1.0 2.0:16@lin 3.0:16@lin R:16 2.0:4@smooth R:4 3.2:4@lin 1.5:4@smooth
+2.4 R:16 3.0:16@lin 3.4:8@lin R:8 | 2.6:8@smooth 1.8:8@lin
 
 automate drive
-1.5 R:16 2.2:16@lin 3.0:8@lin R:8 1.8:16@smooth
+2.4 R:32 3.2:16@lin 2.0:16@smooth
 
 automate reverb_wet
-0.15 R:32 0.25:8@lin R:8 0.7:8@smooth R:8
+0.12 R:44 0.75:8@smooth R:12
 
 automate reverb_decay
 0.5 R:48 0.9:4@smooth R:12
+
+# --- master bus: a hot, slightly worn cassette ---
+automate tape_drive
+0.4
+
+automate tape_flutter
+0.15
+
+automate tape_age
+0.12

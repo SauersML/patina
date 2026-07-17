@@ -32,9 +32,11 @@
 //   value. Shapes: lin (default), exp (musical/geometric — right for
 //   frequencies), log (fast start), smooth (S-curve), step (jump at the end).
 //
-// Automatable parameters: volume, cutoff, resonance, drive, saturation,
-// attack, decay, sustain, release, reverb_decay, reverb_wet, chorus_rate,
-// chorus_depth.
+// Automatable parameters: volume, detune, cutoff, resonance, drive,
+// saturation, attack, decay, sustain, release, filter_env (octaves, -5..+5),
+// filter_attack, filter_decay, filter_sustain, filter_release, reverb_decay,
+// reverb_wet, chorus_mode (0=off..4=IV, use plain sets), chorus_rate,
+// chorus_depth, tape_wow, tape_flutter, tape_drive, tape_age.
 
 use std::sync::Arc;
 use std::thread;
@@ -42,6 +44,7 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 
+use crate::chorus::ChorusMode;
 use crate::voice_manager::VoiceManager;
 
 // Automation curves are sampled at this many points per beat
@@ -50,6 +53,7 @@ const AUTOMATION_STEPS_PER_BEAT: f64 = 32.0;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Param {
     Volume,
+    Detune,
     Cutoff,
     Resonance,
     Drive,
@@ -58,16 +62,27 @@ pub enum Param {
     Decay,
     Sustain,
     Release,
+    FilterEnvAmount,
+    FilterAttack,
+    FilterDecay,
+    FilterSustain,
+    FilterRelease,
     ReverbDecay,
     ReverbWet,
+    ChorusModeSel,
     ChorusRate,
     ChorusDepth,
+    TapeWow,
+    TapeFlutter,
+    TapeDrive,
+    TapeAge,
 }
 
 impl Param {
     fn from_name(name: &str) -> Option<Self> {
         Some(match name {
             "volume" => Param::Volume,
+            "detune" => Param::Detune,
             "cutoff" => Param::Cutoff,
             "resonance" => Param::Resonance,
             "drive" => Param::Drive,
@@ -76,10 +91,20 @@ impl Param {
             "decay" => Param::Decay,
             "sustain" => Param::Sustain,
             "release" => Param::Release,
+            "filter_env" => Param::FilterEnvAmount,
+            "filter_attack" => Param::FilterAttack,
+            "filter_decay" => Param::FilterDecay,
+            "filter_sustain" => Param::FilterSustain,
+            "filter_release" => Param::FilterRelease,
             "reverb_decay" => Param::ReverbDecay,
             "reverb_wet" => Param::ReverbWet,
+            "chorus_mode" => Param::ChorusModeSel,
             "chorus_rate" => Param::ChorusRate,
             "chorus_depth" => Param::ChorusDepth,
+            "tape_wow" => Param::TapeWow,
+            "tape_flutter" => Param::TapeFlutter,
+            "tape_drive" => Param::TapeDrive,
+            "tape_age" => Param::TapeAge,
             _ => return None,
         })
     }
@@ -87,6 +112,7 @@ impl Param {
     fn apply(self, vm: &mut VoiceManager, value: f32) {
         match self {
             Param::Volume => vm.set_volume(value),
+            Param::Detune => vm.set_detune(value),
             Param::Cutoff => vm.set_filter_cutoff(value),
             Param::Resonance => vm.set_filter_resonance(value),
             Param::Drive => vm.set_filter_drive(value),
@@ -95,10 +121,29 @@ impl Param {
             Param::Decay => vm.set_decay(value),
             Param::Sustain => vm.set_sustain(value),
             Param::Release => vm.set_release(value),
+            Param::FilterEnvAmount => vm.set_filter_env_amount(value),
+            Param::FilterAttack => vm.set_filter_attack(value),
+            Param::FilterDecay => vm.set_filter_decay(value),
+            Param::FilterSustain => vm.set_filter_sustain(value),
+            Param::FilterRelease => vm.set_filter_release(value),
             Param::ReverbDecay => vm.set_reverb_decay(value),
             Param::ReverbWet => vm.set_reverb_wet(value),
+            Param::ChorusModeSel => {
+                let mode = match value.round() as i32 {
+                    i32::MIN..=0 => ChorusMode::Off,
+                    1 => ChorusMode::I,
+                    2 => ChorusMode::II,
+                    3 => ChorusMode::III,
+                    _ => ChorusMode::IV,
+                };
+                vm.set_chorus_mode(mode);
+            }
             Param::ChorusRate => vm.set_chorus_rate(value),
             Param::ChorusDepth => vm.set_chorus_depth(value),
+            Param::TapeWow => vm.set_tape_wow(value),
+            Param::TapeFlutter => vm.set_tape_flutter(value),
+            Param::TapeDrive => vm.set_tape_drive(value),
+            Param::TapeAge => vm.set_tape_age(value),
         }
     }
 }

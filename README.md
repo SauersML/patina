@@ -6,16 +6,16 @@ format for programmatic playback and parameter automation.
 
 ## ✨ Features
 
-- 🎚️ Multiple oscillator types (Sine, Square, Sawtooth, Triangle) with polyBLEP anti-aliasing
-- 📊 ADSR envelope generator
-- 🔊 Polyphonic voice management with age-based voice stealing
-- 🎛️ Moog-inspired ladder filter (resonance, drive, saturation, thermal drift)
-- 🌀 Juno-style chorus (modes I–IV) and a stereo reverb
-- 🖥️ Real-time parameter control via GUI
-- ⌨️ QWERTY keyboard input for note playing
-- 🖱️ Click-and-drag interface for playing notes
-- 🎹 MIDI input (auto-connects to an IAC Driver if present)
-- 📜 Text-based song files with per-track sequencing and parameter automation
+- 🎚️ 3-oscillator unison per voice (Sine, Square, Sawtooth, Triangle) with polyBLEP anti-aliasing, adjustable detune, and analog pitch drift
+- 📊 Analog-style exponential ADSR amplitude envelope
+- 🎯 Dedicated filter envelope (±5 octaves), velocity-to-filter, and keyboard tracking
+- 🔊 Polyphonic voices with age-based stealing, spread across the stereo field
+- 🎛️ Moog-inspired ladder filter: 4 tanh stages, 2× oversampled, resonance to self-oscillation, drive, saturation, transistor mismatch, thermal drift
+- 🧈 Per-sample parameter smoothing — no zipper noise under automation
+- 🌀 Juno-style chorus (modes I–IV), stereo reverb, and a physically-modeled cassette tape stage (wow, flutter, saturation, age)
+- 🖥️ Studio-hardware GUI: knobs, ADSR graph, live oscilloscope, keys that light from the engine's real voice state
+- ⌨️ QWERTY keyboard input · 🖱️ click-and-drag keys · 🎹 MIDI input
+- 📜 Text-based song files with per-track sequencing and full parameter automation
 
 ## 🚀 Getting Started
 
@@ -69,13 +69,14 @@ automate cutoff                # ramp any parameter through breakpoints
 
 - **Notes**: names (`C4`, `F#3`, `Eb5`, with C4 = MIDI 60) or raw MIDI numbers; `[..]` for chords; `R` or `.` for rests; `:beats` duration; `@vel` velocity; `|` bar lines (ignored).
 - **Automation**: `automate <param>` starts a curve track. The first token is the starting value; `V:D@shape` ramps to `V` over `D` beats; `R:D` holds. Shapes: `lin`, `exp` (geometric — right for frequencies), `log`, `smooth`, `step`.
-- **Parameters**: `volume`, `cutoff`, `resonance`, `drive`, `saturation`, `attack`, `decay`, `sustain`, `release`, `reverb_decay`, `reverb_wet`, `chorus_rate`, `chorus_depth`.
+- **Parameters**: `volume`, `detune`, `cutoff`, `resonance`, `drive`, `saturation`, `attack`, `decay`, `sustain`, `release`, `filter_env` (octaves), `filter_attack`, `filter_decay`, `filter_sustain`, `filter_release`, `reverb_decay`, `reverb_wet`, `chorus_mode` (0–4), `chorus_rate`, `chorus_depth`, `tape_wow`, `tape_flutter`, `tape_drive`, `tape_age`.
 
 ## 🧪 Technical Details
 
 - **Audio Engine**: CPAL (Cross-Platform Audio Library) for low-latency audio output.
-- **Oscillators**: polyBLEP anti-aliasing with slow analog-style pitch drift.
-- **Filter**: Moog-inspired ladder filter with resonance, drive, saturation, transistor mismatch, and thermal drift.
+- **Oscillators**: 3-oscillator unison, polyBLEP anti-aliasing, free-running phases, bounded-random-walk pitch drift.
+- **Filter**: Huovilainen-style Moog ladder — four one-pole stages with tanh nonlinearities at 2× oversampling, per-sample cutoff modulation (filter envelope + key tracking + velocity), smoothed parameters, transistor mismatch, thermal drift.
+- **Envelopes**: exponential RC-curve ADSR for amplitude and filter, click-free retriggering.
 - **Chorus**: modeled on the Roland Juno bucket-brigade chorus, modes I–IV.
-- **Envelope**: ADSR (Attack, Decay, Sustain, Release).
-- **Voice Management**: polyphonic with age-based voice stealing (idle voices first, then releasing, then oldest).
+- **Tape**: cassette model with wow/flutter/drift transport, Langevin magnetization curve, head bump, gap loss, dropouts, and hiss.
+- **Voice Management**: polyphonic with age-based voice stealing (idle voices first, then releasing, then oldest), equal-power stereo voice spread, DC-blocked and soft-limited master bus.
