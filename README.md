@@ -75,7 +75,8 @@ automate cutoff                # ramp any parameter through breakpoints
 
 - **Audio Engine**: CPAL (Cross-Platform Audio Library) for low-latency audio output.
 - **Oscillators**: 3-oscillator unison, polyBLEP anti-aliasing, free-running phases, bounded-random-walk pitch drift.
-- **Filter**: Huovilainen-style Moog ladder — four one-pole stages with tanh nonlinearities at 2× oversampling, per-sample cutoff modulation (filter envelope + key tracking + velocity), smoothed parameters, transistor mismatch, thermal drift.
+- **Filter**: the Huovilainen model of the Moog transistor ladder (US 3,475,623) — four one-pole stages with tanh differential-pair nonlinearities at thermal-voltage signal scale, 2× oversampled with half-sample-averaged feedback, published cutoff/resonance tuning-compensation polynomials, authentic passband thinning at high resonance, self-oscillation at k = 4, per-sample cutoff modulation, smoothed parameters, transistor mismatch, thermal drift.
+- **VCO circuit tolerances**: per-oscillator V/octave scaling error (±1.5 cents/octave from the calibration point) and finite integrator-reset time that flattens high notes — the imperfections that make analog chords bloom.
 - **Envelopes**: exponential RC-curve ADSR for amplitude and filter, click-free retriggering.
 - **Chorus**: modeled on the Roland Juno bucket-brigade chorus, modes I–IV.
 - **Tape**: cassette model with wow/flutter/drift transport, Langevin magnetization curve, head bump, gap loss, dropouts, and hiss.

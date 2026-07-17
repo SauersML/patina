@@ -8,6 +8,15 @@ const KEY_TRACK: f32 = 0.4;
 /// How much velocity opens the filter, in octaves at full velocity swing.
 const VEL_TRACK: f32 = 0.8;
 
+/// Finite sawtooth-core reset time (US 3,943,456 variable-rate integrator):
+/// the discharge takes real time, so f_actual = f / (1 + f * T_RESET) and
+/// high notes land slightly flat, like an analog VCO between calibrations.
+const RESET_TIME: f32 = 1.5e-6;
+
+/// Exponential-converter calibration reference (~C4). V/oct scaling error
+/// accumulates in cents per octave away from this point.
+const CAL_REF_HZ: f32 = 261.63;
+
 pub struct Voice {
     pub oscs: [Oscillator; 3],
     pub envelope: Envelope,
@@ -20,6 +29,10 @@ pub struct Voice {
     pan_l: f32,
     pan_r: f32,
     filter_env_amount: f32, // octaves, -5..+5
+    /// Per-oscillator V/octave scaling tolerance in cents per octave —
+    /// the matched-transistor expo converters are never perfectly trimmed,
+    /// so intervals stretch differently on every voice and chords bloom.
+    voct_error: [f32; 3],
 }
 
 impl Voice {
@@ -41,6 +54,20 @@ impl Voice {
         filter_env.set_sustain(0.0);
         filter_env.set_release(0.3);
 
+        // Component-tolerance randoms, fixed for the life of the "board"
+        let mut rng = seed.wrapping_mul(0xB529_7A4D) | 1;
+        let mut rand01 = move || {
+            rng ^= rng << 13;
+            rng ^= rng >> 17;
+            rng ^= rng << 5;
+            (rng >> 8) as f32 / (1u32 << 24) as f32
+        };
+        let voct_error = [
+            (rand01() - 0.5) * 3.0, // +/-1.5 cents per octave
+            (rand01() - 0.5) * 3.0,
+            (rand01() - 0.5) * 3.0,
+        ];
+
         let mut voice = Self {
             oscs: [
                 Oscillator::new(sample_rate, 440.0, seed),
@@ -57,6 +84,7 @@ impl Voice {
             pan_l: theta.cos(),
             pan_r: theta.sin(),
             filter_env_amount: 0.0,
+            voct_error,
         };
         voice.set_detune(7.0);
         voice
@@ -84,8 +112,15 @@ impl Voice {
 
     pub fn trigger(&mut self, note: u8, velocity: f32, age: u64) {
         let frequency = Oscillator::note_to_frequency(note);
-        for osc in &self.oscs {
-            osc.set_frequency(frequency);
+        let octaves_from_ref = (frequency / CAL_REF_HZ).log2();
+        for (osc, err_cents_per_oct) in self.oscs.iter().zip(self.voct_error) {
+            // V/oct tracking error grows with distance from the calibration
+            // point, then the finite reset time flattens the top end
+            let scale = (err_cents_per_oct * octaves_from_ref / 1200.0
+                * std::f32::consts::LN_2)
+                .exp();
+            let f = frequency * scale;
+            osc.set_frequency(f / (1.0 + f * RESET_TIME));
         }
         self.envelope.note_on();
         self.filter_env.note_on();

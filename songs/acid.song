@@ -9,8 +9,9 @@ bpm 132
 gate 0.6
 
 # --- patch setup at t=0 ---
+# A touch hotter now that high resonance authentically thins the passband
 automate volume
-0.85
+0.95
 
 automate detune
 3
