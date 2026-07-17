@@ -98,7 +98,7 @@ pub enum Param {
 }
 
 impl Param {
-    fn from_name(name: &str) -> Option<Self> {
+    pub(crate) fn from_name(name: &str) -> Option<Self> {
         Some(match name {
             "volume" => Param::Volume,
             "waveform" => Param::WaveformSel,
@@ -140,7 +140,7 @@ impl Param {
         })
     }
 
-    fn apply(self, vm: &mut VoiceManager, value: f32) {
+    pub(crate) fn apply(self, vm: &mut VoiceManager, value: f32) {
         match self {
             Param::Volume => vm.set_volume(value),
             Param::WaveformSel => {
@@ -209,7 +209,7 @@ enum Shape {
 }
 
 impl Shape {
-    fn from_name(name: &str) -> Option<Self> {
+    pub(crate) fn from_name(name: &str) -> Option<Self> {
         Some(match name {
             "lin" => Shape::Lin,
             "exp" => Shape::Exp,

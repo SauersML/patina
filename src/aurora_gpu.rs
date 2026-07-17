@@ -284,33 +284,71 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     return vec4<f32>(col, 1.0);
   }
 
-  // Glass pane; the callback rect carries `pad` of shadow around the panel
+  // -------------------------------------------------------------------
+  // Physically-based glass slab. No painted highlights: everything below
+  // is Snell refraction, Fresnel-Schlick reflectance, Beer-Lambert
+  // absorption, micro-facet scattering, and a Blinn sun glint — all lit
+  // by the SAME sun that renders in the sky.
+  // -------------------------------------------------------------------
   let pad = 22.0;
   let inner = u.rect_size - vec2<f32>(pad * 2.0, pad * 2.0);
   let lp = in.uv * u.rect_size - vec2<f32>(pad, pad);
   let sdf = panel_sdf(lp, inner, u.corner);
 
-  // Soft drop shadow, biased downward
-  let sh = exp(-max(sdf - 2.0, 0.0) * 0.14) * 0.28 * step(0.0, sdf);
+  // Two-lobe penumbra: contact-sharp plus distance-soft, like an area light
+  let dsh = max(sdf, 0.0);
+  let sh = (0.20 * exp(-dsh * 0.30) + 0.11 * exp(-dsh * 0.055)) * step(0.0, sdf);
 
-  var col = sky(w, u.time, 1.0);
-  // Frosted white glass
-  col = mix(col, vec3<f32>(1.0, 1.0, 1.0), 0.44);
-  col = col + vec3<f32>(-0.005, 0.006, 0.014);
-  // Frost grain
-  col = col + (vnoise(p * 1.9) - 0.5) * 0.018;
-  // A light sweep slowly crossing the pane
-  let swp = fract(u.time * 0.02);
-  let dband = (in.uv.x * 0.9 - in.uv.y * 0.45) - (swp * 2.6 - 0.8);
-  col = col + vec3<f32>(1.0, 1.0, 1.0) * exp(-dband * dband * 34.0) * 0.07;
-  // Top sheen, bottom seat
+  // Slab geometry: flat interior, beveled rim. Normal from the SDF gradient.
+  let eps = 1.5;
+  let gx = panel_sdf(lp + vec2<f32>(eps, 0.0), inner, u.corner)
+         - panel_sdf(lp - vec2<f32>(eps, 0.0), inner, u.corner);
+  let gy = panel_sdf(lp + vec2<f32>(0.0, eps), inner, u.corner)
+         - panel_sdf(lp - vec2<f32>(0.0, eps), inner, u.corner);
+  let bevel = 9.0;
+  let rim = clamp(1.0 + sdf / bevel, 0.0, 1.0); // 1 at the edge, 0 inside
+  let tilt = rim * rim * 0.85;
+  let n = normalize(vec3<f32>(vec2<f32>(gx, gy) / (2.0 * eps) * tilt, 1.0));
+
+  // Snell: refract the straight-on view ray through IOR 1.52
+  let rdir = refract(vec3<f32>(0.0, 0.0, -1.0), n, 1.0 / 1.52);
+  let gap = 16.0;
+  let thick = mix(0.35, 1.0, 1.0 - rim);
+  let ofs = rdir.xy / max(-rdir.z, 0.2) * gap * thick;
+
+  // Frost is micro-facet scattering: jittered refracted samples of the
+  // analytically blurred field (Gaussians compose, so the blur is exact)
+  let j = vec2<f32>(
+    vnoise(p * 0.85 + vec2<f32>(13.7, 0.0)) - 0.5,
+    vnoise(p * 0.85 + vec2<f32>(0.0, 57.3)) - 0.5
+  ) * 7.0;
+  let c0 = sky((p + ofs) / u.screen, u.time, 1.0);
+  let c1 = sky((p + ofs + j) / u.screen, u.time, 1.0);
+  var col = c0 * 0.6 + c1 * 0.4;
+
+  // Beer-Lambert: extinction along the refracted path (cool-tinted glass);
+  // longer oblique paths through the bevel tint denser
+  let path = (0.35 + thick) / max(-rdir.z, 0.35);
+  col = col * exp(-vec3<f32>(0.050, 0.020, 0.009) * path);
+
+  // Fresnel-Schlick, n = 1.52: the grazing rim mirrors the upper sky
+  let cosv = clamp(n.z, 0.0, 1.0);
+  let fres = 0.042 + 0.958 * pow(1.0 - cosv, 5.0);
+  let refl = sky(vec2<f32>((p.x + ofs.x) / u.screen.x, w.y * 0.22), u.time, 0.6);
+  col = mix(col, refl * 1.12, clamp(fres, 0.0, 0.85));
+
+  // Blinn sun glint off the slab — the same sun the sky renders
+  let sun = normalize(vec3<f32>(-0.45, -0.55, 0.70));
+  let hlf = normalize(sun + vec3<f32>(0.0, 0.0, 1.0));
+  let spec = pow(clamp(dot(n, hlf), 0.0, 1.0), 170.0);
+  col = col + vec3<f32>(1.0, 0.97, 0.88) * spec * (0.10 + fres * 6.0);
+
+  // Diffuse scattering lift — the milkiness of etched glass
+  col = mix(col, vec3<f32>(1.0, 1.0, 1.0), 0.35);
+
+  // Contact occlusion where the pane seats into its shadow
   let fy = lp.y / max(inner.y, 1.0);
-  let sheen = clamp(1.0 - fy * 2.2, 0.0, 1.0);
-  col = col + sheen * sheen * 0.10;
-  col = col - clamp((fy - 0.85) / 0.15, 0.0, 1.0) * 0.06;
-  // Rim light just inside the edge
-  let rim = exp(-abs(sdf + 1.2) * 1.1);
-  col = col + rim * 0.16;
+  col = col - clamp((fy - 0.88) / 0.12, 0.0, 1.0) * 0.05;
 
   let cover = clamp(0.5 - sdf, 0.0, 1.0);
   let alpha = clamp(cover + sh, 0.0, 1.0);

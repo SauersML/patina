@@ -16,6 +16,7 @@ pub mod hpf;
 pub mod lfo;
 pub mod noise;
 pub mod oscillator;
+pub mod patch;
 pub mod render;
 pub mod reverb;
 pub mod song;
