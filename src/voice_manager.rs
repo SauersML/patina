@@ -6,6 +6,7 @@ use crate::tape::Tape;
 use crate::fuzz::Fuzz;
 use crate::noise::NoiseSource;
 use crate::spring::SpringReverb;
+use crate::lfo::Lfo;
 use std::collections::VecDeque;
 
 /// Samples kept for the UI oscilloscope display.
@@ -27,6 +28,12 @@ pub struct ParamValues {
     pub fuzz: f32,
     pub noise: f32,
     pub spring: f32,
+    pub pulse_width: f32,
+    pub lfo_rate: f32,
+    pub lfo_shape: f32,
+    pub lfo_pitch: f32,  // vibrato depth in cents
+    pub lfo_filter: f32, // cutoff modulation in octaves
+    pub lfo_pwm: f32,    // pulse-width swing, 0..0.45
     pub attack: f32,
     pub decay: f32,
     pub sustain: f32,
@@ -61,6 +68,12 @@ impl Default for ParamValues {
             fuzz: 0.0,
             noise: 0.0,
             spring: 0.0,
+            pulse_width: 0.5,
+            lfo_rate: 1.0,
+            lfo_shape: 0.5,
+            lfo_pitch: 0.0,
+            lfo_filter: 0.0,
+            lfo_pwm: 0.0,
             attack: 0.1,
             decay: 0.1,
             sustain: 0.7,
@@ -112,6 +125,7 @@ pub struct VoiceManager {
     noise_source: NoiseSource,
     noise_gain: f32, // smoothed
     spring: SpringReverb,
+    lfo: Lfo,
     note_counter: u64,
     pub params: ParamValues,
     pub scope: VecDeque<f32>,
@@ -134,6 +148,7 @@ impl VoiceManager {
             noise_source: NoiseSource::new(),
             noise_gain: 0.0,
             spring: SpringReverb::new(sample_rate),
+            lfo: Lfo::new(sample_rate),
             note_counter: 0,
             params,
             scope: VecDeque::with_capacity(SCOPE_LEN),
@@ -332,6 +347,32 @@ impl VoiceManager {
         self.spring.set_wet(self.params.spring);
     }
 
+    pub fn set_pulse_width(&mut self, width: f32) {
+        self.params.pulse_width = width.clamp(0.05, 0.95);
+    }
+
+    pub fn set_lfo_rate(&mut self, rate: f32) {
+        self.params.lfo_rate = rate.clamp(0.1, 30.0);
+        self.lfo.set_rate(self.params.lfo_rate);
+    }
+
+    pub fn set_lfo_shape(&mut self, shape: f32) {
+        self.params.lfo_shape = shape.clamp(0.0, 1.0);
+        self.lfo.set_shape(self.params.lfo_shape);
+    }
+
+    pub fn set_lfo_pitch(&mut self, cents: f32) {
+        self.params.lfo_pitch = cents.clamp(0.0, 200.0);
+    }
+
+    pub fn set_lfo_filter(&mut self, octaves: f32) {
+        self.params.lfo_filter = octaves.clamp(0.0, 4.0);
+    }
+
+    pub fn set_lfo_pwm(&mut self, depth: f32) {
+        self.params.lfo_pwm = depth.clamp(0.0, 0.45);
+    }
+
     pub fn render_next(&mut self) -> (f32, f32) {
         // One shared noise generator distributed to every active voice
         // (903A / Juno-106 architecture) — filtered per voice, gated by
@@ -343,11 +384,23 @@ impl VoiceManager {
             0.0
         };
 
+        // One global LFO drives every voice together — vibrato in CV space
+        // (an exponential frequency ratio), filter in octaves, PWM on the
+        // pulse comparator threshold
+        let lfo = self.lfo.next();
+        let pitch_mult = if self.params.lfo_pitch > 0.01 {
+            (lfo * self.params.lfo_pitch / 1200.0).exp2()
+        } else {
+            1.0
+        };
+        let lfo_cutoff_oct = lfo * self.params.lfo_filter;
+        let pulse_width = self.params.pulse_width + lfo * self.params.lfo_pwm;
+
         let mut left = 0.0;
         let mut right = 0.0;
         for voice in &mut self.voices {
             if voice.is_active() {
-                let (l, r) = voice.render_next(noise);
+                let (l, r) = voice.render_next(noise, pitch_mult, lfo_cutoff_oct, pulse_width);
                 left += l;
                 right += r;
             }

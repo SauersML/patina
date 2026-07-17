@@ -36,7 +36,9 @@
 // use plain sets), detune, cutoff, resonance, drive, saturation, hpf
 // (high-pass cutoff Hz, 16 = off), fuzz (0..1 germanium fuzz), noise
 // (0..1 shared noise into the voices), spring (0..1 spring reverb wet),
-// attack,
+// pulse_width (0.05..0.95), lfo_rate (Hz), lfo_shape (0=saw 0.5=tri
+// 1=ramp), lfo_pitch (vibrato cents), lfo_filter (octaves), lfo_pwm
+// (width swing 0..0.45), attack,
 // decay, sustain, release, filter_env (octaves, -5..+5), filter_attack,
 // filter_decay, filter_sustain, filter_release, reverb_decay, reverb_wet,
 // chorus_mode (0=off..4=IV, use plain sets), chorus_rate, chorus_depth,
@@ -72,6 +74,12 @@ pub enum Param {
     FuzzAmount,
     NoiseLevel,
     SpringWet,
+    PulseWidth,
+    LfoRate,
+    LfoShape,
+    LfoPitch,
+    LfoFilter,
+    LfoPwm,
     FilterEnvAmount,
     FilterAttack,
     FilterDecay,
@@ -106,6 +114,12 @@ impl Param {
             "fuzz" => Param::FuzzAmount,
             "noise" => Param::NoiseLevel,
             "spring" => Param::SpringWet,
+            "pulse_width" => Param::PulseWidth,
+            "lfo_rate" => Param::LfoRate,
+            "lfo_shape" => Param::LfoShape,
+            "lfo_pitch" => Param::LfoPitch,
+            "lfo_filter" => Param::LfoFilter,
+            "lfo_pwm" => Param::LfoPwm,
             "filter_env" => Param::FilterEnvAmount,
             "filter_attack" => Param::FilterAttack,
             "filter_decay" => Param::FilterDecay,
@@ -149,6 +163,12 @@ impl Param {
             Param::FuzzAmount => vm.set_fuzz(value),
             Param::NoiseLevel => vm.set_noise(value),
             Param::SpringWet => vm.set_spring(value),
+            Param::PulseWidth => vm.set_pulse_width(value),
+            Param::LfoRate => vm.set_lfo_rate(value),
+            Param::LfoShape => vm.set_lfo_shape(value),
+            Param::LfoPitch => vm.set_lfo_pitch(value),
+            Param::LfoFilter => vm.set_lfo_filter(value),
+            Param::LfoPwm => vm.set_lfo_pwm(value),
             Param::FilterEnvAmount => vm.set_filter_env_amount(value),
             Param::FilterAttack => vm.set_filter_attack(value),
             Param::FilterDecay => vm.set_filter_decay(value),
@@ -276,7 +296,7 @@ fn parse_song(text: &str) -> Result<Vec<SongEvent>, String> {
 
     for (line_no, raw) in text.lines().enumerate() {
         let err = |msg: String| format!("line {}: {}", line_no + 1, msg);
-        let line = raw.split('#').next().unwrap_or("").trim();
+        let line = strip_comment(raw).trim();
         if line.is_empty() {
             continue;
         }
@@ -443,6 +463,18 @@ fn parse_automation_token(token: &str) -> Result<AutoToken, String> {
         Some(dur) => Ok(AutoToken::Ramp { to: value, dur, shape }),
         None => Ok(AutoToken::Set(value)),
     }
+}
+
+/// A `#` starts a comment only at line start or after whitespace, so sharp
+/// note names like F#4 survive.
+fn strip_comment(raw: &str) -> &str {
+    let bytes = raw.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'#' && (i == 0 || bytes[i - 1].is_ascii_whitespace()) {
+            return &raw[..i];
+        }
+    }
+    raw
 }
 
 /// Split a line into tokens, keeping bracketed chords together.
@@ -646,6 +678,7 @@ mod tests {
             include_str!("../songs/nightdrive.song"),
             include_str!("../songs/acid.song"),
             include_str!("../songs/hexachrome.song"),
+            include_str!("../songs/pulsar.song"),
         ] {
             let events = parse_song(text).unwrap();
             assert!(!events.is_empty());
@@ -653,6 +686,19 @@ mod tests {
                 assert!(pair[0].time <= pair[1].time);
             }
         }
+    }
+
+    #[test]
+    fn sharps_survive_comment_stripping() {
+        // F#4 must not be truncated as a comment; trailing comments after
+        // whitespace still work
+        let events =
+            parse_song("bpm 120\ntrack a\nF#4 [G2 F#3]:2 # a comment\n").unwrap();
+        let ons = events
+            .iter()
+            .filter(|e| matches!(e.kind, EventKind::NoteOn { .. }))
+            .count();
+        assert_eq!(ons, 3);
     }
 
     #[test]

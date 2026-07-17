@@ -1,5 +1,6 @@
 mod envelope;
 mod oscillator;
+mod panel_render;
 mod ui;
 mod voice;
 mod voice_manager;
@@ -9,6 +10,7 @@ mod adaa;
 mod fuzz;
 mod noise;
 mod spring;
+mod lfo;
 mod reverb;
 mod chorus;
 mod tape;
@@ -74,7 +76,7 @@ where
     }
 
     let options = eframe::NativeOptions {
-        initial_window_size: Some(egui::Vec2::new(1200.0, 800.0)),
+        initial_window_size: Some(egui::Vec2::new(1240.0, 940.0)),
         ..Default::default()
     };
 

@@ -1,5 +1,5 @@
 use eframe::egui::{
-    self, pos2, vec2, Align2, Color32, ColorImage, CursorIcon, FontId, Key, Pos2, Rect, RichText,
+    self, pos2, vec2, Align2, Color32, CursorIcon, FontId, Key, Pos2, Rect, RichText,
     Rounding, Sense, Shape, Stroke, TextureHandle, TextureOptions, Vec2,
 };
 use eframe::egui::epaint::Mesh;
@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use crate::chorus::ChorusMode;
 use crate::oscillator::Waveform;
+use crate::panel_render;
 use crate::voice_manager::VoiceManager;
 
 const OCTAVES: usize = 3;
@@ -57,178 +58,18 @@ const EBONY_EDGE: Color32 = Color32::from_rgb(0x2c, 0x2f, 0x36);
 
 struct Textures {
     backdrop: TextureHandle,
+    backdrop_rgb: Vec<[f32; 3]>,
+    backdrop_size: [usize; 2],
     wood: TextureHandle,
     knob: TextureHandle,
+    /// Baked frosted-glass panels, keyed by rounded screen rect.
+    frost: HashMap<(i32, i32, i32, i32), TextureHandle>,
 }
 
 /// The knob sprite's texture id (+1, 0 = unset), so the knob widget can use
 /// it without threading a handle through every call site.
 static KNOB_TEX_ID: AtomicU64 = AtomicU64::new(0);
 
-fn vhash(ix: i32, iy: i32, seed: u32) -> f32 {
-    let mut h = (ix as u32).wrapping_mul(374_761_393)
-        ^ (iy as u32).wrapping_mul(668_265_263)
-        ^ seed.wrapping_mul(2_654_435_761);
-    h = (h ^ (h >> 13)).wrapping_mul(1_274_126_177);
-    ((h ^ (h >> 16)) & 0xffff) as f32 / 65535.0
-}
-
-fn vnoise(x: f32, y: f32, seed: u32) -> f32 {
-    let (ix, iy) = (x.floor() as i32, y.floor() as i32);
-    let (fx, fy) = (x - x.floor(), y - y.floor());
-    let sx = fx * fx * (3.0 - 2.0 * fx);
-    let sy = fy * fy * (3.0 - 2.0 * fy);
-    let a = vhash(ix, iy, seed);
-    let b = vhash(ix + 1, iy, seed);
-    let c = vhash(ix, iy + 1, seed);
-    let d = vhash(ix + 1, iy + 1, seed);
-    a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy
-}
-
-fn fbm(x: f32, y: f32, octaves: u32, seed: u32) -> f32 {
-    let (mut amp, mut freq, mut sum, mut norm) = (0.5, 1.0, 0.0, 0.0);
-    for i in 0..octaves {
-        sum += vnoise(x * freq, y * freq, seed + i) * amp;
-        norm += amp;
-        amp *= 0.5;
-        freq *= 2.0;
-    }
-    sum / norm
-}
-
-fn px(r: f32, g: f32, b: f32) -> Color32 {
-    Color32::from_rgb(
-        (r.clamp(0.0, 1.0) * 255.0) as u8,
-        (g.clamp(0.0, 1.0) * 255.0) as u8,
-        (b.clamp(0.0, 1.0) * 255.0) as u8,
-    )
-}
-
-/// Deep teal-navy field with a few soft aurora glows.
-fn make_backdrop() -> ColorImage {
-    let (w, h) = (640usize, 400usize);
-    let mut pixels = Vec::with_capacity(w * h);
-    // (x, y, radius, r, g, b, strength)
-    let blobs: [(f32, f32, f32, f32, f32, f32, f32); 4] = [
-        (0.16, 0.18, 0.55, 0.28, 0.75, 0.85, 0.10), // aqua, upper left
-        (0.88, 0.10, 0.50, 0.35, 0.80, 0.65, 0.06), // sea green, upper right
-        (0.62, 0.95, 0.65, 0.90, 0.62, 0.30, 0.07), // warm amber, low center
-        (0.30, 0.78, 0.55, 0.25, 0.55, 0.75, 0.06), // deep teal, low left
-    ];
-    for y in 0..h {
-        let fy = y as f32 / h as f32;
-        for x in 0..w {
-            let fx = x as f32 / w as f32;
-            let base = 0.055 - fy * 0.020;
-            let (mut r, mut g, mut b) = (base * 0.75, base * 1.00, base * 1.20);
-            for (bx, by, rad, br, bg, bb, strength) in blobs {
-                let dx = (fx - bx) / rad;
-                let dy = (fy - by) / rad;
-                let fall = (-(dx * dx + dy * dy) * 2.2).exp() * strength;
-                r += br * fall;
-                g += bg * fall;
-                b += bb * fall;
-            }
-            // Dither breaks up gradient banding
-            let d = (vhash(x as i32, y as i32, 3) - 0.5) * 0.008;
-            pixels.push(px(r + d, g + d, b + d));
-        }
-    }
-    ColorImage { size: [w, h], pixels }
-}
-
-/// Aged walnut: growth rings warped by fBm, fine along-grain streaks and
-/// pores, a satin sheen at the top edge and shade at the base.
-fn make_wood() -> ColorImage {
-    let (w, h) = (1024usize, 128usize);
-    let mut pixels = Vec::with_capacity(w * h);
-    let dark = (0.115, 0.068, 0.038);
-    let light = (0.400, 0.265, 0.148);
-    for y in 0..h {
-        let fy = y as f32 / h as f32;
-        for x in 0..w {
-            let (xf, yf) = (x as f32, y as f32);
-            let warp = fbm(xf * 0.006, yf * 0.030, 4, 11);
-            let t = xf * 0.011 + warp * 6.5;
-            let ring = ((t * std::f32::consts::TAU * 0.75).sin() * 0.5 + 0.5).powf(1.7);
-            let streak = fbm(xf * 0.045, yf * 0.90, 3, 47);
-            let pores = fbm(xf * 0.50, yf * 0.18, 2, 83);
-            let shade = 0.52 * ring + 0.26 * streak + 0.14 * warp + 0.08 * pores;
-            let mut r = dark.0 + (light.0 - dark.0) * shade;
-            let mut g = dark.1 + (light.1 - dark.1) * shade;
-            let mut b = dark.2 + (light.2 - dark.2) * shade;
-            let finish = 1.10 - 0.28 * fy;
-            r *= finish;
-            g *= finish;
-            b *= finish;
-            if fy < 0.018 {
-                r = r * 0.6 + 0.28;
-                g = g * 0.6 + 0.22;
-                b = b * 0.6 + 0.15;
-            }
-            if fy > 0.965 {
-                r *= 0.45;
-                g *= 0.45;
-                b *= 0.45;
-            }
-            pixels.push(px(r, g, b));
-        }
-    }
-    ColorImage { size: [w, h], pixels }
-}
-
-/// Sphere-shaded knob cap: key light upper-left, tight Frutiger gloss lobe,
-/// aqua bounce along the lower rim, fresnel edge — rendered once.
-fn make_knob_sprite() -> ColorImage {
-    let s = 128usize;
-    let mut pixels = Vec::with_capacity(s * s);
-    let c = s as f32 / 2.0;
-    let radius = c - 2.0;
-    let l = (-0.42f32, -0.62f32, 0.66f32);
-    let llen = (l.0 * l.0 + l.1 * l.1 + l.2 * l.2).sqrt();
-    let l = (l.0 / llen, l.1 / llen, l.2 / llen);
-    for y in 0..s {
-        for x in 0..s {
-            let dx = (x as f32 - c) / radius;
-            let dy = (y as f32 - c) / radius;
-            let d2 = dx * dx + dy * dy;
-            if d2 >= 1.0 {
-                pixels.push(Color32::TRANSPARENT);
-                continue;
-            }
-            let nz = (1.0 - d2).sqrt();
-            let lambert = (dx * l.0 + dy * l.1 + nz * l.2).max(0.0);
-            let angle = dy.atan2(dx);
-            let brush = vnoise(angle * 14.0, d2.sqrt() * 3.0, 5) * 0.05;
-            let base = 0.075 + lambert * 0.16 + brush;
-            let (mut r, mut g, mut b) = (base * 0.96, base * 1.02, base * 1.12);
-            let sx = dx + 0.34;
-            let sy = dy + 0.44;
-            let spec = (-(sx * sx + sy * sy) * 9.0).exp();
-            r += spec * 0.34;
-            g += spec * 0.37;
-            b += spec * 0.40;
-            let rim = (d2.sqrt() - 0.72).max(0.0) / 0.28;
-            let below = (dy + 0.2).max(0.0);
-            let bounce = rim * below * 0.14;
-            g += bounce * 0.8;
-            b += bounce;
-            let edge = 1.0 - ((d2.sqrt() - 0.93).max(0.0) / 0.07) * 0.5;
-            r *= edge;
-            g *= edge;
-            b *= edge;
-            let alpha = ((1.0 - d2.sqrt()) * radius).clamp(0.0, 1.0);
-            let cpx = px(r, g, b);
-            pixels.push(Color32::from_rgba_unmultiplied(
-                cpx.r(),
-                cpx.g(),
-                cpx.b(),
-                (alpha * 255.0) as u8,
-            ));
-        }
-    }
-    ColorImage { size: [s, s], pixels }
-}
 
 /// A quad whose top and bottom edges carry different vertex colors — the
 /// GPU interpolates, giving a smooth vertical gradient.
@@ -319,6 +160,12 @@ pub struct SynthUI {
     fuzz: f32,
     noise: f32,
     spring: f32,
+    pulse_width: f32,
+    lfo_rate: f32,
+    lfo_shape: f32,
+    lfo_pitch: f32,
+    lfo_filter: f32,
+    lfo_pwm: f32,
     detune: f32,
     fenv_amount: f32,
     fenv_attack: f32,
@@ -342,6 +189,9 @@ pub struct SynthUI {
     theme_applied: bool,
     notes_active: bool,
     textures: Option<Textures>,
+    /// Resize debounce: the backdrop rebakes once the size holds still.
+    pending_size: [usize; 2],
+    size_stable_frames: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -719,10 +569,15 @@ fn step_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
     response
 }
 
-/// Card: one surface, hairline edge, a lit top edge, and a legend header
-/// with a rule. The background paints after layout via a placeholder so it
-/// sits under the contents.
-fn card<R>(ui: &mut egui::Ui, title: &str, add_contents: impl FnOnce(&mut egui::Ui) -> R) {
+/// Frosted glass card with legend header and hairline rule. Given the
+/// baked layers, the glass is real: the backdrop behind this rect, Gaussian
+/// blurred, masked, and edge-lit — with a soft baked drop shadow.
+fn card<R>(
+    ui: &mut egui::Ui,
+    title: &str,
+    tex: Option<&mut Textures>,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) {
     let bg_idx = ui.painter().add(Shape::Noop);
     let inner = egui::Frame::none()
         .inner_margin(egui::style::Margin {
@@ -748,7 +603,42 @@ fn card<R>(ui: &mut egui::Ui, title: &str, add_contents: impl FnOnce(&mut egui::
             add_contents(ui);
         });
     let rect = inner.response.rect;
-    ui.painter().set(bg_idx, Shape::Vec(glass_shapes(rect, 12.0)));
+    if let Some(t) = tex {
+        let key = (
+            rect.left().round() as i32,
+            rect.top().round() as i32,
+            rect.width().round() as i32,
+            rect.height().round() as i32,
+        );
+        if !t.frost.contains_key(&key) {
+            if t.frost.len() > 64 {
+                t.frost.clear();
+            }
+            let img = panel_render::frost_panel(
+                &t.backdrop_rgb,
+                t.backdrop_size[0],
+                t.backdrop_size[1],
+                (rect.left(), rect.top(), rect.width(), rect.height()),
+                12.0,
+            );
+            let handle = ui
+                .ctx()
+                .load_texture(format!("frost-{:?}", key), img, TextureOptions::LINEAR);
+            t.frost.insert(key, handle);
+        }
+        let handle = &t.frost[&key];
+        ui.painter().set(
+            bg_idx,
+            Shape::image(
+                handle.id(),
+                rect.expand(panel_render::frost_pad()),
+                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                Color32::WHITE,
+            ),
+        );
+    } else {
+        ui.painter().set(bg_idx, Shape::Vec(glass_shapes(rect, 12.0)));
+    }
 }
 
 /// Vertical hairline between subgroups inside a card.
@@ -782,6 +672,12 @@ impl SynthUI {
             fuzz: 0.0,
             noise: 0.0,
             spring: 0.0,
+            pulse_width: 0.5,
+            lfo_rate: 1.0,
+            lfo_shape: 0.5,
+            lfo_pitch: 0.0,
+            lfo_filter: 0.0,
+            lfo_pwm: 0.0,
             detune: 7.0,
             fenv_amount: 0.0,
             fenv_attack: 0.005,
@@ -802,6 +698,8 @@ impl SynthUI {
             theme_applied: false,
             notes_active: false,
             textures: None,
+            pending_size: [0, 0],
+            size_stable_frames: 0,
         };
         // Push the UI defaults into the engine so what you see is what you hear
         ui.apply_all_settings();
@@ -830,6 +728,12 @@ impl SynthUI {
         vm.set_fuzz(self.fuzz);
         vm.set_noise(self.noise);
         vm.set_spring(self.spring);
+        vm.set_pulse_width(self.pulse_width);
+        vm.set_lfo_rate(self.lfo_rate);
+        vm.set_lfo_shape(self.lfo_shape);
+        vm.set_lfo_pitch(self.lfo_pitch);
+        vm.set_lfo_filter(self.lfo_filter);
+        vm.set_lfo_pwm(self.lfo_pwm);
         vm.set_reverb_decay(self.reverb_decay);
         vm.set_reverb_wet(self.reverb_wet);
         vm.set_chorus_mode(self.chorus_mode);
@@ -869,18 +773,68 @@ impl SynthUI {
         ctx.set_style(style);
     }
 
+    /// Bake (or rebake) the raster layers. The backdrop renders at window
+    /// size; frost panels derive from it, so they are dropped with it. A
+    /// resize debounce keeps drag-resizing cheap.
     fn ensure_textures(&mut self, ctx: &egui::Context) {
-        if self.textures.is_none() {
-            let textures = Textures {
-                backdrop: ctx.load_texture("patina-backdrop", make_backdrop(), TextureOptions::LINEAR),
-                wood: ctx.load_texture("patina-wood", make_wood(), TextureOptions::LINEAR),
-                knob: ctx.load_texture("patina-knob", make_knob_sprite(), TextureOptions::LINEAR),
-            };
-            if let egui::TextureId::Managed(id) = textures.knob.id() {
+        let screen = ctx.screen_rect();
+        let size = [
+            (screen.width().max(320.0)) as usize,
+            (screen.height().max(240.0)) as usize,
+        ];
+        let stale = match &self.textures {
+            None => true,
+            Some(t) => {
+                (t.backdrop_size[0] as i32 - size[0] as i32).abs() > 8
+                    || (t.backdrop_size[1] as i32 - size[1] as i32).abs() > 8
+            }
+        };
+        if !stale {
+            return;
+        }
+        if self.pending_size == size {
+            self.size_stable_frames += 1;
+        } else {
+            self.pending_size = size;
+            self.size_stable_frames = 0;
+        }
+        // First bake happens immediately; rebakes wait for a stable size
+        if self.textures.is_some() && self.size_stable_frames < 12 {
+            return;
+        }
+
+        let rgb = panel_render::render_backdrop(size[0], size[1]);
+        let backdrop = ctx.load_texture(
+            "patina-backdrop",
+            panel_render::backdrop_image(size[0], size[1], &rgb),
+            TextureOptions::LINEAR,
+        );
+        let (wood, knob) = if let Some(t) = self.textures.take() {
+            (t.wood, t.knob)
+        } else {
+            let wood = ctx.load_texture(
+                "patina-wood",
+                panel_render::render_wood(1024, 128),
+                TextureOptions::LINEAR,
+            );
+            let knob = ctx.load_texture(
+                "patina-knob",
+                panel_render::render_knob(128),
+                TextureOptions::LINEAR,
+            );
+            if let egui::TextureId::Managed(id) = knob.id() {
                 KNOB_TEX_ID.store(id + 1, AtomicOrdering::Relaxed);
             }
-            self.textures = Some(textures);
-        }
+            (wood, knob)
+        };
+        self.textures = Some(Textures {
+            backdrop,
+            backdrop_rgb: rgb,
+            backdrop_size: size,
+            wood,
+            knob,
+            frost: HashMap::new(),
+        });
     }
 
     pub fn update(&mut self, ctx: &egui::Context) {
@@ -909,6 +863,12 @@ impl SynthUI {
             self.fuzz = p.fuzz;
             self.noise = p.noise;
             self.spring = p.spring;
+            self.pulse_width = p.pulse_width;
+            self.lfo_rate = p.lfo_rate;
+            self.lfo_shape = p.lfo_shape;
+            self.lfo_pitch = p.lfo_pitch;
+            self.lfo_filter = p.lfo_filter;
+            self.lfo_pwm = p.lfo_pwm;
             self.detune = p.detune;
             self.fenv_amount = p.filter_env_amount;
             self.fenv_attack = p.filter_attack;
@@ -990,6 +950,7 @@ impl SynthUI {
                 }
             });
 
+        let mut tex = self.textures.take();
         egui::CentralPanel::default()
             .frame(egui::Frame::none().inner_margin(egui::style::Margin {
                 left: 20.0,
@@ -1000,16 +961,18 @@ impl SynthUI {
             .show(ctx, |ui| {
                 ui.spacing_mut().item_spacing = vec2(12.0, 12.0);
                 ui.horizontal(|ui| {
-                    self.draw_oscillator_card(ui);
-                    self.draw_envelope_card(ui);
-                    self.draw_filter_card(ui);
+                    self.draw_oscillator_card(ui, tex.as_mut());
+                    self.draw_envelope_card(ui, tex.as_mut());
+                    self.draw_filter_card(ui, tex.as_mut());
                 });
                 ui.horizontal(|ui| {
-                    self.draw_filter_env_card(ui);
-                    self.draw_effects_card(ui);
+                    self.draw_filter_env_card(ui, tex.as_mut());
+                    self.draw_lfo_card(ui, tex.as_mut());
                 });
+                self.draw_effects_card(ui, tex.as_mut());
                 self.draw_scope(ui);
             });
+        self.textures = tex;
     }
 
     /// Wordmark on the walnut top rail, octave stepper right.
@@ -1072,8 +1035,8 @@ impl SynthUI {
         }
     }
 
-    fn draw_oscillator_card(&mut self, ui: &mut egui::Ui) {
-        card(ui, "Oscillator", |ui| {
+    fn draw_oscillator_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>) {
+        card(ui, "Oscillator", tex, |ui| {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.add_space(10.0);
@@ -1092,12 +1055,15 @@ impl SynthUI {
                 if knob(ui, "Noise", &mut self.noise, 0.0, 1.0, 0.0, false, fmt_pct) {
                     self.voice_manager.lock().set_noise(self.noise);
                 }
+                if knob(ui, "Width", &mut self.pulse_width, 0.05, 0.95, 0.5, false, fmt_pct) {
+                    self.voice_manager.lock().set_pulse_width(self.pulse_width);
+                }
             });
         });
     }
 
-    fn draw_envelope_card(&mut self, ui: &mut egui::Ui) {
-        card(ui, "Envelope", |ui| {
+    fn draw_envelope_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>) {
+        card(ui, "Envelope", tex, |ui| {
             ui.horizontal(|ui| {
                 if knob(ui, "Attack", &mut self.attack, 0.01, 2.0, 0.1, true, fmt_time) {
                     self.voice_manager.lock().set_attack(self.attack);
@@ -1115,8 +1081,8 @@ impl SynthUI {
         });
     }
 
-    fn draw_filter_card(&mut self, ui: &mut egui::Ui) {
-        card(ui, "Filter", |ui| {
+    fn draw_filter_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>) {
+        card(ui, "Filter", tex, |ui| {
             ui.horizontal(|ui| {
                 if knob(ui, "Cutoff", &mut self.filter_cutoff, 20.0, 20000.0, 15000.0, true, fmt_hz) {
                     self.voice_manager.lock().set_filter_cutoff(self.filter_cutoff);
@@ -1137,8 +1103,8 @@ impl SynthUI {
         });
     }
 
-    fn draw_filter_env_card(&mut self, ui: &mut egui::Ui) {
-        card(ui, "Filter Envelope", |ui| {
+    fn draw_filter_env_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>) {
+        card(ui, "Filter Envelope", tex, |ui| {
             ui.horizontal(|ui| {
                 if knob(ui, "Amount", &mut self.fenv_amount, -5.0, 5.0, 0.0, false, |v| {
                     format!("{:+.1} oct", v)
@@ -1161,8 +1127,46 @@ impl SynthUI {
         });
     }
 
-    fn draw_effects_card(&mut self, ui: &mut egui::Ui) {
-        card(ui, "Effects", |ui| {
+    fn draw_lfo_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>) {
+        card(ui, "LFO", tex, |ui| {
+            ui.horizontal(|ui| {
+                if knob(ui, "Rate", &mut self.lfo_rate, 0.1, 30.0, 1.0, true, |v| {
+                    format!("{:.2} Hz", v)
+                }) {
+                    self.voice_manager.lock().set_lfo_rate(self.lfo_rate);
+                }
+                if knob(ui, "Shape", &mut self.lfo_shape, 0.0, 1.0, 0.5, false, |v| {
+                    if v < 0.15 {
+                        "saw".into()
+                    } else if v > 0.85 {
+                        "ramp".into()
+                    } else if (0.4..=0.6).contains(&v) {
+                        "tri".into()
+                    } else {
+                        format!("{:.2}", v)
+                    }
+                }) {
+                    self.voice_manager.lock().set_lfo_shape(self.lfo_shape);
+                }
+                if knob(ui, "Pitch", &mut self.lfo_pitch, 0.0, 200.0, 0.0, false, |v| {
+                    format!("{:.0} ct", v)
+                }) {
+                    self.voice_manager.lock().set_lfo_pitch(self.lfo_pitch);
+                }
+                if knob(ui, "Filter", &mut self.lfo_filter, 0.0, 4.0, 0.0, false, |v| {
+                    format!("{:.2} oct", v)
+                }) {
+                    self.voice_manager.lock().set_lfo_filter(self.lfo_filter);
+                }
+                if knob(ui, "PWM", &mut self.lfo_pwm, 0.0, 0.45, 0.0, false, fmt_pct) {
+                    self.voice_manager.lock().set_lfo_pwm(self.lfo_pwm);
+                }
+            });
+        });
+    }
+
+    fn draw_effects_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>) {
+        card(ui, "Effects", tex, |ui| {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.label(legend("Chorus"));

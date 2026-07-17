@@ -40,8 +40,10 @@ pub struct Oscillator {
     waveform: Waveform,
     drift: f32,
     rng: u32,
-    /// Comparator threshold error: pulse duty sits near, not at, 50%.
+    /// Effective comparator threshold this sample (base width + unit error).
     duty: f32,
+    /// This unit's fixed comparator error: duty sits near, not at, center.
+    duty_error: f32,
     /// Waveshaper asymmetry for the triangle fold / sine rounding.
     skew: f32,
 }
@@ -67,7 +69,7 @@ impl Oscillator {
         // Random start phase so unison oscillators never phase-lock
         let phase = rand01(&mut rng) as f64;
         // Component-tolerance constants, fixed for the life of the "board"
-        let duty = 0.5 + (rand01(&mut rng) - 0.5) * 0.02; // within 49-51%
+        let duty_error = (rand01(&mut rng) - 0.5) * 0.02; // within +/-1%
         let skew = (rand01(&mut rng) - 0.5) * 0.06;
         Self {
             phase,
@@ -77,7 +79,8 @@ impl Oscillator {
             waveform: Waveform::Sawtooth,
             drift: 0.0,
             rng,
-            duty,
+            duty: 0.5 + duty_error,
+            duty_error,
             skew,
         }
     }
@@ -85,14 +88,19 @@ impl Oscillator {
     /// `common_drift` is the voice-shared component (the oscillators sit on
     /// one controller card and supply); each core adds its own smaller
     /// residual walk on top, so a bank beats slowly rather than wobbling.
-    pub fn next_sample(&mut self, common_drift: f32) -> f32 {
+    /// `pitch_mult` is the global modulation ratio (vibrato applied in CV
+    /// space, so it is exponential — a frequency ratio, not added hertz).
+    /// `pulse_width` is the comparator threshold; this unit's duty error
+    /// rides on top of it.
+    pub fn next_sample(&mut self, common_drift: f32, pitch_mult: f32, pulse_width: f32) -> f32 {
         let frequency = f32::from_bits(self.frequency.load(Ordering::Relaxed));
 
         // Small individual drift; the larger, shared component comes in from
         // the voice so all three oscillators move together
         self.drift = (self.drift + (rand01(&mut self.rng) - 0.5) * 1.2e-5) * 0.9995;
         let detuned_frequency =
-            frequency * self.freq_mult * (1.0 + self.drift + common_drift);
+            frequency * self.freq_mult * (1.0 + self.drift + common_drift) * pitch_mult;
+        self.duty = (pulse_width + self.duty_error).clamp(0.03, 0.97);
 
         self.phase += detuned_frequency as f64 / self.sample_rate as f64;
         self.phase %= 1.0;
@@ -209,7 +217,7 @@ mod tests {
         osc.set_waveform(waveform);
         let mut peak = 0.0f32;
         for _ in 0..44100 {
-            peak = peak.max(osc.next_sample(0.0).abs());
+            peak = peak.max(osc.next_sample(0.0, 1.0, 0.5).abs());
         }
         peak
     }
@@ -238,7 +246,7 @@ mod tests {
         // Collect one steady period and correlate against a pure sinusoid
         let mut samples = Vec::new();
         for _ in 0..4410 {
-            samples.push(osc.next_sample(0.0));
+            samples.push(osc.next_sample(0.0, 1.0, 0.5));
         }
         let period = &samples[4310..4410];
         // Fundamental amplitude via DFT bin
@@ -258,5 +266,27 @@ mod tests {
             thd > 0.005 && thd < 0.12,
             "transistor sine should have a few percent THD, got {thd}"
         );
+    }
+
+    /// PWM: the mean of a pulse wave is 2*duty - 1, so the width control
+    /// must move the DC balance accordingly.
+    #[test]
+    fn pulse_width_shifts_duty() {
+        let measure = |width: f32| -> f32 {
+            let mut osc = Oscillator::new(44100.0, 441.0, 3);
+            osc.set_waveform(Waveform::Square);
+            let mut sum = 0.0f32;
+            let n = 44100;
+            for _ in 0..n {
+                sum += osc.next_sample(0.0, 1.0, width);
+            }
+            sum / n as f32
+        };
+        let narrow = measure(0.2);
+        let center = measure(0.5);
+        let wide = measure(0.8);
+        assert!(narrow < -0.5, "20% duty should sit negative, got {narrow}");
+        assert!(center.abs() < 0.1, "50% duty near zero mean, got {center}");
+        assert!(wide > 0.5, "80% duty should sit positive, got {wide}");
     }
 }

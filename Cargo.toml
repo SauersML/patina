@@ -3,16 +3,45 @@ name = "patina"
 version = "0.1.0"
 edition = "2021"
 
+[workspace]
+members = ["xtask"]
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "patina"
+path = "src/main.rs"
+required-features = ["app"]
+
+[features]
+default = ["app"]
+# The standalone desktop app (window, audio device, hardware MIDI in)
+app = [
+    "dep:cpal",
+    "dep:eframe",
+    "dep:dasp_sample",
+    "dep:midir",
+    "dep:midly",
+    "dep:crossbeam-channel",
+]
+# The CLAP/VST3 plugin (host provides audio, MIDI, and parameter UI):
+#   cargo xtask bundle patina --release --no-default-features --features plugin
+plugin = ["dep:nih_plug"]
+
 [dependencies]
-cpal = "0.15.2"
-eframe = "0.22.0"
 parking_lot = "0.12.1"
-dasp_sample = "0.11"
 rand = "0.8.5"
 reverb = "1.0.47"
-midir = "0.10.1"
-midly = "0.5.3"
-crossbeam-channel = "0.5.14"
+
+cpal = { version = "0.15.2", optional = true }
+eframe = { version = "0.22.0", optional = true }
+dasp_sample = { version = "0.11", optional = true }
+midir = { version = "0.10.1", optional = true }
+midly = { version = "0.5.3", optional = true }
+crossbeam-channel = { version = "0.5.14", optional = true }
+
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", optional = true }
 
 # The tape engine runs 8x-oversampled hysteresis; keep debug builds realtime
 [profile.dev]

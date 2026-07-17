@@ -1,0 +1,92 @@
+# Pulsar — PWM pad study for Patina's new LFO
+# Square waves with the comparator threshold swept by the global LFO
+# (the string-machine trick), Juno chorus on top. Second pass brings a
+# lead with a slow global vibrato swell and a gentle filter wobble —
+# one LFO moving everything together, like the hardware.
+# Play with:  patina --play songs/pulsar.song
+
+bpm 84
+gate 0.92
+
+# --- patch ---
+automate waveform
+1
+
+automate pulse_width
+0.5
+
+automate detune
+10
+
+automate volume
+0.8
+
+automate attack
+0.15
+
+automate decay
+0.4
+
+automate sustain
+0.75
+
+automate release
+0.6
+
+automate filter_env
+0.8
+
+automate filter_decay
+0.5
+
+automate filter_sustain
+0.4
+
+automate cutoff
+2200 3200:32@exp 1800:32@exp R:8
+
+automate chorus_mode
+2
+
+automate reverb_wet
+0.5
+
+automate spring
+0.2
+
+automate tape_wow
+0.15
+
+automate tape_drive
+0.25
+
+# --- the LFO story ---
+automate lfo_rate
+0.55
+
+automate lfo_shape
+0.5
+
+# Wide PWM the whole way through: the pad shimmer
+automate lfo_pwm
+0.3
+
+# Global vibrato swells in for the second pass
+automate lfo_pitch
+0 R:32 6:8@smooth R:32
+
+# ...and the filter starts breathing with it
+automate lfo_filter
+0 R:32 0.35:6@smooth R:34
+
+# --- pads: Em7 - Cmaj7 - G - D, 8 beats each, two passes ---
+track pads vel=0.6
+[E2 E3 G3 D4]:8 [C2 C3 E3 B3]:8 [G2 G3 B3 F#4]:8 [D2 D3 F#3 A3]:8
+[E2 E3 G3 D4]:8 [C2 C3 E3 B3]:8 [G2 G3 B3 F#4]:8 [D2 D3 F#3 A3]:8
+[E2 B2 E3 G3 B3 E4]:8
+
+# --- lead joins for the second pass, riding the global vibrato ---
+track lead vel=0.85 len=1
+R:32
+E5:3 D5 B4:2 G4:2 | A4:3 B4 C5:2 E5:2 | D5:3 B4 G4:2 A4:2 | F#4:3 A4 D5:4
+R:8

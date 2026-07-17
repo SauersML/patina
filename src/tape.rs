@@ -76,6 +76,11 @@ const N_LAYERS: usize = 3;
 const LAYER_DEPTH_UM: [f32; N_LAYERS] = [0.4, 1.7, 3.5];
 /// Head-field decay into the coating: H(d) = H0 / (1 + d / FIELD_DEPTH_UM).
 const FIELD_DEPTH_UM: f32 = 1.2;
+const DEPTH_FACTOR: [f32; N_LAYERS] = [
+    1.0 / (1.0 + LAYER_DEPTH_UM[0] / FIELD_DEPTH_UM),
+    1.0 / (1.0 + LAYER_DEPTH_UM[1] / FIELD_DEPTH_UM),
+    1.0 / (1.0 + LAYER_DEPTH_UM[2] / FIELD_DEPTH_UM),
+];
 /// AC bias runs BIAS-COHERENTLY: exactly one bias cycle per output sample
 /// (bias frequency = the output sample rate, e.g. 48 kHz — a legitimate
 /// cassette bias). The hysteresis loop turns the bias into a harmonic-rich
@@ -99,6 +104,9 @@ const CROSSTALK: f32 = 0.02;
 /// Print-through: adjacent-wind echo delay and base level.
 const PRINT_DELAY_S: f32 = 1.35;
 const PRINT_LEVEL: f32 = 0.0035;
+/// Record-alignment trimmer pivots (the deck's two "trim pots").
+const TRIM_LOW_HZ: f32 = 2500.0;
+const TRIM_HIGH_HZ: f32 = 9000.0;
 
 pub struct Tape {
     sample_rate: f32,
@@ -120,9 +128,10 @@ pub struct Tape {
     azimuth_skew: f32, // right-channel read offset, samples
 
     // Record side
-    pre_emphasis: [OnePoleHighPass; 2],
-    thickness_comp: [OnePoleHighPass; 2],
-    thickness_gain: f32,
+    record_eq: [Shelf; 2],
+    trim_low: [OnePoleHighPass; 2],
+    trim_high: [OnePoleHighPass; 2],
+    trim_gains: (f32, f32),
     field_scale: f32,
     makeup: f32,
 
@@ -133,7 +142,9 @@ pub struct Tape {
     up3: [Halfband; 2],
     hysteresis: [[JilesAtherton; N_LAYERS]; 2],
     barkhausen_level: f32,
+    noise_rng: XorShift32,
     wallace_alpha: [[f32; N_LAYERS]; 2],
+    wallace_stale: bool,
     wallace_state: [[[f32; 2]; N_LAYERS]; 2],
     down1: [Halfband; 2],
     down2: [Halfband; 2],
@@ -155,7 +166,7 @@ pub struct Tape {
     gap_frac: f32,
     gap_prev: [f32; 2],
     head_bump: [PeakingFilter; 2],
-    de_emphasis: [OnePoleHighPass; 2],
+    playback_eq: [Shelf; 2],
     dc_block: [OnePoleHighPass; 2],
     crosstalk_lp: [OnePole; 2],
     prev_out: (f32, f32),
@@ -176,25 +187,17 @@ impl Tape {
         let gap_samples = (GAP_UM / TAPE_SPEED_UM_S) * sample_rate;
         let gap_frac = (gap_samples - 1.0).clamp(0.0, 1.0);
 
-        // Self-alignment, step 1: derive the record EQ thickness shelf from
-        // this deck's own layer geometry, the way a technician trims record
-        // EQ until the system measures flat. Target: unity at 10 kHz for a
-        // fresh tape, given the per-layer Wallace losses.
-        let response_10k: f32 = (0..N_LAYERS)
-            .map(|l| {
-                let d = SPACING_NEW_UM + LAYER_DEPTH_UM[l];
-                let f0 = TAPE_SPEED_UM_S / (2.0 * PI * d);
-                let per_pole = 1.0 / (1.0 + (10000.0 / f0).powi(2));
-                per_pole // two cascaded poles => squared magnitude of one
-            })
-            .sum::<f32>()
-            / N_LAYERS as f32;
-        let boost = 1.0 / response_10k.max(1e-3);
-        let hp_mag_10k = {
-            let r = 10000.0f32 / 4000.0;
-            r / (1.0 + r * r).sqrt()
-        };
-        let thickness_gain = ((boost - 1.0) / hp_mag_10k).clamp(0.0, 4.0);
+        // Self-alignment, step 1: the deck derives its record EQ from its
+        // own fresh-tape layer geometry, exactly like a technician with two
+        // trim pots: two high-pass trimmers, gains solved so the system
+        // measures flat against the 1 kHz reference at 5 and 13 kHz.
+        let trim_gains = align_record_trim();
+
+        // The 120 us emphasis pair is EXACTLY reciprocal (pole/zero swap),
+        // so record and playback EQ cancel to numerical precision in-band;
+        // any in-band coloration that remains is physics, not filters.
+        let record_shelf = Shelf::high_boost(sample_rate, 1326.0, 8000.0);
+        let playback_shelf = record_shelf.inverse();
 
         let mut tape = Self {
             sample_rate,
@@ -212,10 +215,10 @@ impl Tape {
             jitter: SmoothedNoise::new(sample_rate, 12.0),
             scrape: ScrapeOscillator::new(sample_rate),
             azimuth_skew: 0.0,
-            // Standard cassette playback time constant: 120 us (~1326 Hz)
-            pre_emphasis: [OnePoleHighPass::new(sample_rate, 1326.0); 2],
-            thickness_comp: [OnePoleHighPass::new(sample_rate, 4000.0); 2],
-            thickness_gain,
+            record_eq: [record_shelf; 2],
+            trim_low: [OnePoleHighPass::new(sample_rate, TRIM_LOW_HZ); 2],
+            trim_high: [OnePoleHighPass::new(sample_rate, TRIM_HIGH_HZ); 2],
+            trim_gains,
             field_scale: 0.0,
             makeup: 1.0,
             bias_table,
@@ -224,7 +227,9 @@ impl Tape {
             up3: [Halfband::new(); 2],
             hysteresis: [[JilesAtherton::new(); N_LAYERS]; 2],
             barkhausen_level: 0.0,
+            noise_rng: XorShift32::new(0x0DDB_1A5E),
             wallace_alpha: [[1.0; N_LAYERS]; 2],
+            wallace_stale: true,
             wallace_state: [[[0.0; 2]; N_LAYERS]; 2],
             down1: [Halfband::new(); 2],
             down2: [Halfband::new(); 2],
@@ -242,7 +247,7 @@ impl Tape {
             gap_frac,
             gap_prev: [0.0; 2],
             head_bump: [PeakingFilter::new(); 2],
-            de_emphasis: [OnePoleHighPass::new(sample_rate, 1326.0); 2],
+            playback_eq: [playback_shelf; 2],
             dc_block: [OnePoleHighPass::new(sample_rate, 10.0); 2],
             crosstalk_lp: [OnePole::new(sample_rate, 300.0); 2],
             prev_out: (0.0, 0.0),
@@ -279,8 +284,10 @@ impl Tape {
         // Runs only on knob moves, never per sample.
         self.makeup = calibrate_makeup(self.field_scale, self.sample_rate);
 
-        // Head bump only shows up once the tape is actually being hit
-        let bump_db = 3.0 * self.drive;
+        // The head-bump contour is a playback-geometry effect; it fades in
+        // quickly with record level only so a barely-engaged deck stays
+        // near-transparent
+        let bump_db = 2.5 * self.drive.sqrt();
         for filter in &mut self.head_bump {
             filter.set_peaking(self.sample_rate, 60.0, 1.2, bump_db);
         }
@@ -298,6 +305,7 @@ impl Tape {
         self.barkhausen_level = BARKHAUSEN * (0.4 + 1.6 * self.age * self.age);
 
         self.print_level = PRINT_LEVEL * self.age * self.age;
+        self.wallace_stale = true;
 
         // Reschedule so raising AGE from zero doesn't wait on a stale
         // (effectively infinite) arrival time
@@ -370,16 +378,20 @@ impl Tape {
         self.dropout_env += 0.004 * (self.dropout_target - self.dropout_env);
 
         // --- Per-layer Wallace spacing loss, f0 = v / (2 pi d). Dropout lift
-        // raises d for every layer while it lasts ---
+        // raises d for every layer while it lasts; the six exp() calls only
+        // run while spacing is actually moving ---
         let lift = (1.0 - self.dropout_env) * SPACING_DROPOUT_UM;
-        let os_rate = self.sample_rate * OS as f32;
-        for ch in 0..2 {
-            let az = if ch == 1 { self.azimuth_spacing_factor } else { 1.0 };
-            for l in 0..N_LAYERS {
-                let d = (self.spacing_age_um + LAYER_DEPTH_UM[l] + lift) * az;
-                let f0 = TAPE_SPEED_UM_S / (2.0 * PI * d);
-                self.wallace_alpha[ch][l] = one_pole_alpha(os_rate, f0);
+        if self.wallace_stale || lift > 1e-4 {
+            let os_rate = self.sample_rate * OS as f32;
+            for ch in 0..2 {
+                let az = if ch == 1 { self.azimuth_spacing_factor } else { 1.0 };
+                for l in 0..N_LAYERS {
+                    let d = (self.spacing_age_um + LAYER_DEPTH_UM[l] + lift) * az;
+                    let f0 = TAPE_SPEED_UM_S / (2.0 * PI * d);
+                    self.wallace_alpha[ch][l] = one_pole_alpha(os_rate, f0);
+                }
             }
+            self.wallace_stale = lift > 1e-4;
         }
 
         let bias_sub = self.bias_table;
@@ -406,10 +418,11 @@ impl Tape {
     }
 
     fn process_channel(&mut self, x: f32, ch: usize, bias_sub: &[f32; OS]) -> f32 {
-        // --- Record side: 120 us emphasis + the deck's own thickness shelf ---
-        let emphasized = x
-            + 0.6 * self.pre_emphasis[ch].process(x)
-            + self.thickness_gain * self.thickness_comp[ch].process(x);
+        // --- Record side: exact 120 us emphasis, then the alignment trims ---
+        let shelved = self.record_eq[ch].process(x);
+        let emphasized = shelved
+            + self.trim_gains.0 * self.trim_low[ch].process(shelved)
+            + self.trim_gains.1 * self.trim_high[ch].process(shelved);
 
         // --- Upsample 8x (polyphase half-band allpass cascade) ---
         let (a, b) = self.up1[ch].up(emphasized);
@@ -423,20 +436,19 @@ impl Tape {
         }
 
         // --- The oxide: bias + program through depth-resolved hysteresis ---
-        let mut rng = rand::thread_rng();
+        let gain = self.makeup / N_LAYERS as f32;
         let mut mag = [0.0f32; OS];
         for s in 0..OS {
             let h_surface = sub[s] * self.field_scale + bias_sub[s];
             let mut acc = 0.0;
             for l in 0..N_LAYERS {
-                let depth_factor = 1.0 / (1.0 + LAYER_DEPTH_UM[l] / FIELD_DEPTH_UM);
                 let ja = &mut self.hysteresis[ch][l];
                 let m_prev = ja.m;
-                let m = ja.step(h_surface * depth_factor);
+                let m = ja.step(h_surface * DEPTH_FACTOR[l]);
                 // Barkhausen: magnetization moves in particle avalanches, so
                 // the noise power rides on how much switching just happened
                 let avalanche = (m - m_prev).abs().sqrt();
-                let noise: f32 = rng.gen_range(-1.0f32..1.0);
+                let noise = self.noise_rng.bipolar();
                 let m_noisy = m + noise * self.barkhausen_level * avalanche;
                 // This layer's spacing loss, at the oversampled rate
                 let st = &mut self.wallace_state[ch][l];
@@ -445,7 +457,7 @@ impl Tape {
                 st[1] += alpha * (st[0] - st[1]);
                 acc += st[1];
             }
-            mag[s] = acc * (self.makeup / N_LAYERS as f32);
+            mag[s] = acc * gain;
         }
 
         // --- Decimate back to base rate (bias vanishes in the cascade) ---
@@ -476,7 +488,7 @@ impl Tape {
             (tape_signal + self.gap_frac * self.gap_prev[ch]) / (1.0 + self.gap_frac);
         self.gap_prev[ch] = tape_signal;
         let bumped = self.head_bump[ch].process(gapped);
-        let de_emphasized = bumped - 0.35 * self.de_emphasis[ch].process(bumped);
+        let de_emphasized = self.playback_eq[ch].process(bumped);
         self.dc_block[ch].process(de_emphasized)
     }
 
@@ -492,10 +504,14 @@ impl Tape {
         self.gap_prev[ch] = 0.0;
         self.head_bump[ch] = {
             let mut f = PeakingFilter::new();
-            f.set_peaking(self.sample_rate, 60.0, 1.2, 3.0 * self.drive);
+            f.set_peaking(self.sample_rate, 60.0, 1.2, 2.5 * self.drive.sqrt());
             f
         };
-        self.de_emphasis[ch] = OnePoleHighPass::new(self.sample_rate, 1326.0);
+        let record_shelf = Shelf::high_boost(self.sample_rate, 1326.0, 8000.0);
+        self.record_eq[ch] = record_shelf;
+        self.playback_eq[ch] = record_shelf.inverse();
+        self.trim_low[ch] = OnePoleHighPass::new(self.sample_rate, TRIM_LOW_HZ);
+        self.trim_high[ch] = OnePoleHighPass::new(self.sample_rate, TRIM_HIGH_HZ);
         self.dc_block[ch] = OnePoleHighPass::new(self.sample_rate, 10.0);
     }
 }
@@ -528,6 +544,155 @@ fn calibrate_makeup(field_scale: f32, sample_rate: f32) -> f32 {
     }
     let amp = 2.0 * ((re * re + im * im).sqrt() as f32) / count as f32;
     (0.1 / amp.max(1e-5)).min(60.0)
+}
+
+/// Solve the deck's two record-EQ trimmer gains so the fresh-tape system
+/// response measures flat against the 1 kHz reference at 5 and 13 kHz.
+/// Pure analysis of the layer geometry (complex frequency responses), run
+/// once at construction — the digital equivalent of a two-pot alignment.
+fn align_record_trim() -> (f32, f32) {
+    // Just enough complex arithmetic for frequency responses
+    #[derive(Clone, Copy)]
+    struct C(f32, f32);
+    impl C {
+        fn mul(self, o: C) -> C {
+            C(self.0 * o.0 - self.1 * o.1, self.0 * o.1 + self.1 * o.0)
+        }
+        fn div(self, o: C) -> C {
+            let d = o.0 * o.0 + o.1 * o.1;
+            C((self.0 * o.0 + self.1 * o.1) / d, (self.1 * o.0 - self.0 * o.1) / d)
+        }
+        fn add(self, o: C) -> C {
+            C(self.0 + o.0, self.1 + o.1)
+        }
+        fn scale(self, s: f32) -> C {
+            C(self.0 * s, self.1 * s)
+        }
+        fn norm(self) -> f32 {
+            (self.0 * self.0 + self.1 * self.1).sqrt()
+        }
+    }
+    let one = C(1.0, 0.0);
+
+    // Fresh-tape layer sum: each layer is two cascaded Wallace poles
+    let layers = |f: f32| -> C {
+        let mut sum = C(0.0, 0.0);
+        for l in 0..N_LAYERS {
+            let d = SPACING_NEW_UM + LAYER_DEPTH_UM[l];
+            let f0 = TAPE_SPEED_UM_S / (2.0 * PI * d);
+            let pole = C(1.0, f / f0);
+            sum = sum.add(one.div(pole.mul(pole)));
+        }
+        sum.scale(1.0 / N_LAYERS as f32)
+    };
+    // One-pole high-pass trimmer response
+    let hp = |f: f32, pivot: f32| -> C {
+        let r = f / pivot;
+        C(0.0, r).div(C(1.0, r))
+    };
+    // Solve |1 + g h| = t for the smallest non-negative g
+    let solve_gain = |t: f32, h: C| -> f32 {
+        let (a, b) = (h.0 * h.0 + h.1 * h.1, h.0);
+        let disc = b * b - a * (1.0 - t * t);
+        if disc <= 0.0 {
+            return 0.0;
+        }
+        ((disc.sqrt() - b) / a).max(0.0)
+    };
+
+    let (fa, fb) = (5000.0, 13000.0);
+    let (mut g_low, mut g_high) = (0.0f32, 0.0f32);
+    for _ in 0..40 {
+        let system = |gl: f32, gh: f32, f: f32| {
+            one.add(hp(f, TRIM_LOW_HZ).scale(gl))
+                .mul(one.add(hp(f, TRIM_HIGH_HZ).scale(gh)))
+                .mul(layers(f))
+                .norm()
+        };
+        let reference = system(g_low, g_high, 1000.0);
+        let needed = reference
+            / one.add(hp(fa, TRIM_HIGH_HZ).scale(g_high)).mul(layers(fa)).norm();
+        g_low = solve_gain(needed, hp(fa, TRIM_LOW_HZ));
+
+        let reference = system(g_low, g_high, 1000.0);
+        let needed = reference
+            / one.add(hp(fb, TRIM_LOW_HZ).scale(g_low)).mul(layers(fb)).norm();
+        g_high = solve_gain(needed, hp(fb, TRIM_HIGH_HZ));
+    }
+    (g_low.clamp(0.0, 6.0), g_high.clamp(0.0, 10.0))
+}
+
+/// First-order shelving filter with an EXACT inverse: one zero, one pole,
+/// each placed by its own bilinear map so the corner frequencies land
+/// precisely. `high_boost(fz, fp)` boosts highs by fp/fz; `inverse()` swaps
+/// pole and zero, so the pair cancels to numerical precision.
+#[derive(Clone, Copy)]
+struct Shelf {
+    b0: f32,
+    b1: f32,
+    a1: f32,
+    x1: f32,
+    y1: f32,
+}
+
+impl Shelf {
+    fn high_boost(sample_rate: f32, f_zero: f32, f_pole: f32) -> Self {
+        let z0 = bilinear_root(sample_rate, f_zero);
+        let p0 = bilinear_root(sample_rate, f_pole);
+        let g = (1.0 - p0) / (1.0 - z0); // unity gain at DC
+        Self { b0: g, b1: -g * z0, a1: -p0, x1: 0.0, y1: 0.0 }
+    }
+
+    fn inverse(&self) -> Self {
+        Self {
+            b0: 1.0 / self.b0,
+            b1: self.a1 / self.b0,
+            a1: self.b1 / self.b0,
+            x1: 0.0,
+            y1: 0.0,
+        }
+    }
+
+    #[inline]
+    fn process(&mut self, x: f32) -> f32 {
+        let y = self.b0 * x + self.b1 * self.x1 - self.a1 * self.y1;
+        self.x1 = x;
+        self.y1 = y;
+        y
+    }
+}
+
+/// Real-axis z-plane root for a first-order factor at `freq`, prewarped.
+fn bilinear_root(sample_rate: f32, freq: f32) -> f32 {
+    let t = (PI * freq / sample_rate).tan();
+    (1.0 - t) / (1.0 + t)
+}
+
+/// The same xorshift PRNG the oscillator and filter use: no thread-local
+/// lookups in the audio path.
+#[derive(Clone, Copy)]
+struct XorShift32(u32);
+
+impl XorShift32 {
+    fn new(seed: u32) -> Self {
+        Self(seed | 1)
+    }
+
+    #[inline]
+    fn next_u32(&mut self) -> u32 {
+        let mut x = self.0;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        self.0 = x;
+        x
+    }
+
+    /// Uniform in [-1, 1).
+    #[inline]
+    fn bipolar(&mut self) -> f32 {
+        (self.next_u32() >> 8) as f32 * (2.0 / 16_777_216.0) - 1.0
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -654,6 +819,7 @@ struct ScrapeOscillator {
     dt: f32,
     w0: f32,
     friction_at_rest: f32,
+    rng: XorShift32,
 }
 
 const SCRAPE_HZ: f32 = 3400.0;
@@ -670,6 +836,7 @@ impl ScrapeOscillator {
             dt: 1.0 / sample_rate,
             w0: 2.0 * PI * SCRAPE_HZ,
             friction_at_rest: MU_DELTA * (-1.0 / STRIBECK_V).exp(),
+            rng: XorShift32::new(0x5C4A_9E17),
         }
     }
 
@@ -677,7 +844,7 @@ impl ScrapeOscillator {
         // Sliding speed of tape over head, normalized (1 = nominal)
         let v_rel = (1.0 + self.w).max(0.0);
         let friction = MU_DELTA * (-v_rel / STRIBECK_V).exp() - self.friction_at_rest;
-        let seed: f32 = rand::thread_rng().gen_range(-1.0f32..1.0) * 1e-3;
+        let seed = self.rng.bipolar() * 1e-3;
         // Semi-implicit Euler in normalized coordinates (u' = w0*w,
         // w' = -w0*u - ...): stable for a ~3.4 kHz resonance at audio rates
         self.w += self.dt
@@ -803,6 +970,7 @@ struct SmoothedNoise {
     stage2: f32,
     alpha: f32,
     gain: f32,
+    rng: XorShift32,
 }
 
 impl SmoothedNoise {
@@ -813,11 +981,12 @@ impl SmoothedNoise {
             stage2: 0.0,
             alpha,
             gain: 1.0 / (0.577 * (alpha / 2.0).sqrt().max(1e-6)),
+            rng: XorShift32::new((cutoff * 1000.0) as u32),
         }
     }
 
     fn next(&mut self) -> f32 {
-        let white: f32 = rand::thread_rng().gen_range(-1.0..1.0);
+        let white = self.rng.bipolar();
         self.stage1 += self.alpha * (white - self.stage1);
         self.stage2 += self.alpha * (self.stage1 - self.stage2);
         (self.stage2 * self.gain).clamp(-1.0, 1.0)
@@ -1167,21 +1336,22 @@ mod tests {
         // Emergent frequency response: fresh tape holds its top end (the
         // deck's self-derived record EQ compensates layer losses), worn
         // tape loses it
+        // Response ratios measured at low level, fundamental only — at hot
+        // levels HF saturation would masquerade as frequency response
         let hf_ratio = |age: f32| {
             let gain_at = |freq: f32| {
                 let mut tape = Tape::new(FS);
                 tape.set_age(age);
                 tape.set_drive(0.3);
-                let mut in_e = 0.0f32;
-                let mut out_e = 0.0f32;
-                for (i, x) in sine(48000, freq).enumerate() {
-                    let (l, _) = tape.process(x, x);
-                    if i > 12000 {
-                        in_e += x * x;
-                        out_e += l * l;
+                let n = 48000;
+                let mut out = Vec::with_capacity(n / 2);
+                for (i, x) in sine(n, freq).enumerate() {
+                    let (l, _) = tape.process(x * 0.2, x * 0.2);
+                    if i >= n / 2 {
+                        out.push(l);
                     }
                 }
-                (out_e / in_e).sqrt()
+                tone_amplitude(&out, freq, FS) / 0.1
             };
             gain_at(10000.0) / gain_at(400.0)
         };
@@ -1189,6 +1359,58 @@ mod tests {
         let worn = hf_ratio(1.0);
         assert!(fresh > 0.25, "fresh tape should keep its top end: {}", fresh);
         assert!(worn < fresh * 0.5, "worn tape must dull: fresh {} worn {}", fresh, worn);
+    }
+
+    #[test]
+    fn frequency_response_meets_cassette_spec() {
+        // A fresh, aligned deck must hold +-3.5 dB against the 1 kHz
+        // reference across the audible band (Type I cassettes were specced
+        // around 30 Hz - 14 kHz +-3 dB; we verify 200 Hz - 13 kHz, clear of
+        // the head-bump region below and the spec edge above). Measured the
+        // way the real spec is measured: at low level (~-20 VU), because at
+        // reference level cassette HF genuinely saturates — that is
+        // compression, not frequency response.
+        let gain_at = |freq: f32| {
+            let mut tape = Tape::new(FS);
+            tape.set_drive(0.3);
+            let n = 48000;
+            let mut out = Vec::with_capacity(n / 2);
+            for (i, x) in sine(n, freq).enumerate() {
+                let (l, _) = tape.process(x * 0.2, x * 0.2);
+                if i >= n / 2 {
+                    out.push(l);
+                }
+            }
+            tone_amplitude(&out, freq, FS) / 0.1
+        };
+        let reference = gain_at(1000.0);
+        for freq in [200.0, 500.0, 2000.0, 5000.0, 8000.0, 11000.0, 13000.0] {
+            let db = 20.0 * (gain_at(freq) / reference).log10();
+            assert!(
+                db.abs() < 3.5,
+                "{} Hz is {:+.2} dB against the 1 kHz reference",
+                freq,
+                db
+            );
+        }
+    }
+
+    #[test]
+    fn emphasis_pair_is_exactly_reciprocal() {
+        // Record shelf into playback shelf must cancel to numerical
+        // precision — any in-band color the tape adds is physics, not EQ
+        let mut record = Shelf::high_boost(FS, 1326.0, 8000.0);
+        let mut playback = record.inverse();
+        let mut worst = 0.0f32;
+        let mut rng = XorShift32::new(12345);
+        for i in 0..4096 {
+            let x = rng.bipolar();
+            let y = playback.process(record.process(x));
+            if i > 16 {
+                worst = worst.max((y - x).abs());
+            }
+        }
+        assert!(worst < 1e-4, "pair must cancel, worst error {}", worst);
     }
 
     #[test]

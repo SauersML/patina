@@ -158,7 +158,15 @@ impl Voice {
         self.held || !self.envelope.is_idle()
     }
 
-    pub fn render_next(&mut self, noise: f32) -> (f32, f32) {
+    /// `pitch_mult`, `lfo_cutoff_oct`, and `pulse_width` carry the global
+    /// LFO modulation — one LFO drives every voice together.
+    pub fn render_next(
+        &mut self,
+        noise: f32,
+        pitch_mult: f32,
+        lfo_cutoff_oct: f32,
+        pulse_width: f32,
+    ) -> (f32, f32) {
         let amp_env = self.envelope.next_sample();
         let filter_env = self.filter_env.next_sample();
 
@@ -170,9 +178,9 @@ impl Voice {
         let r = (self.drift_rng >> 8) as f32 / (1u32 << 24) as f32 - 0.5;
         self.common_drift = (self.common_drift + r * 2.4e-5) * 0.9995;
 
-        let osc = (self.oscs[0].next_sample(self.common_drift)
-            + self.oscs[1].next_sample(self.common_drift)
-            + self.oscs[2].next_sample(self.common_drift))
+        let osc = (self.oscs[0].next_sample(self.common_drift, pitch_mult, pulse_width)
+            + self.oscs[1].next_sample(self.common_drift, pitch_mult, pulse_width)
+            + self.oscs[2].next_sample(self.common_drift, pitch_mult, pulse_width))
             * (1.0 / 3.0)
             + noise;
 
@@ -180,7 +188,7 @@ impl Voice {
         let note = self.note.unwrap_or(60) as f32;
         let key_oct = (note - 60.0) / 12.0 * KEY_TRACK;
         let vel_oct = (self.velocity - 0.5) * VEL_TRACK;
-        let mod_oct = filter_env * self.filter_env_amount + key_oct + vel_oct;
+        let mod_oct = filter_env * self.filter_env_amount + key_oct + vel_oct + lfo_cutoff_oct;
         let cutoff_mult = mod_oct.exp2();
 
         let filtered = self.hpf.process(self.filter.process(osc, cutoff_mult));
