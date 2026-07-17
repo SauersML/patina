@@ -1,7 +1,7 @@
 use crate::voice::Voice;
 use crate::reverb::Reverb;
 use crate::chorus::{Chorus, ChorusMode};
-use crate::oscillator::Waveform;
+use crate::oscillator::{CircuitModel, Waveform};
 use crate::tape::Tape;
 use crate::fuzz::Fuzz;
 use crate::noise::NoiseSource;
@@ -44,6 +44,9 @@ pub struct ParamValues {
     pub osc3_wave: Waveform,
     pub osc3_pitch: f32,
     pub osc3_level: f32,
+    pub circuit: CircuitModel,
+    pub key_track: f32,
+    pub osc_fm: f32,
     pub pulse_width: f32,
     pub lfo_rate: f32,
     pub lfo_shape: f32,
@@ -92,6 +95,9 @@ impl Default for ParamValues {
             osc3_wave: Waveform::Sawtooth,
             osc3_pitch: 0.0,
             osc3_level: 0.72,
+            circuit: CircuitModel::Moog,
+            key_track: 0.4,
+            osc_fm: 0.0,
             pulse_width: 0.5,
             lfo_rate: 1.0,
             lfo_shape: 0.5,
@@ -493,6 +499,27 @@ impl VoiceManager {
         }
         for voice in &mut self.voices {
             voice.set_osc_level(which, level);
+        }
+    }
+
+    pub fn set_circuit(&mut self, model: CircuitModel) {
+        self.params.circuit = model;
+        for voice in &mut self.voices {
+            voice.set_circuit(model);
+        }
+    }
+
+    pub fn set_key_track(&mut self, amount: f32) {
+        self.params.key_track = amount.clamp(0.0, 1.0);
+        for voice in &mut self.voices {
+            voice.set_key_track(self.params.key_track);
+        }
+    }
+
+    pub fn set_osc_fm(&mut self, amount: f32) {
+        self.params.osc_fm = amount.clamp(0.0, 1.0);
+        for voice in &mut self.voices {
+            voice.set_fm_amount(self.params.osc_fm);
         }
     }
 

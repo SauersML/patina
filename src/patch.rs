@@ -77,6 +77,7 @@ pub fn serialize(p: &ParamValues) -> String {
         "# Patina patch\n\
          volume {}\nwaveform {}\nosc2_wave {}\nosc2_pitch {}\nosc2_level {}\n\
          osc3_wave {}\nosc3_pitch {}\nosc3_level {}\n\
+         circuit {}\nkey_track {}\nosc_fm {}\n\
          detune {}\nnoise {}\nglide {}\nsub {}\npulse_width {}\n\
          lfo_rate {}\nlfo_shape {}\nlfo_pitch {}\nlfo_filter {}\nlfo_pwm {}\n\
          cutoff {}\nresonance {}\ndrive {}\nsaturation {}\nhpf {}\n\
@@ -87,6 +88,8 @@ pub fn serialize(p: &ParamValues) -> String {
          tape_wow {}\ntape_flutter {}\ntape_drive {}\ntape_age {}\n",
         p.volume, waveform, osc2_wave, p.osc2_pitch, p.osc2_level,
         osc3_wave, p.osc3_pitch, p.osc3_level,
+        if p.circuit == crate::oscillator::CircuitModel::Arp { 1 } else { 0 },
+        p.key_track, p.osc_fm,
         p.detune, p.noise, p.glide, p.sub, p.pulse_width,
         p.lfo_rate, p.lfo_shape, p.lfo_pitch, p.lfo_filter, p.lfo_pwm,
         p.cutoff, p.resonance, p.drive, p.saturation, p.hpf_cutoff,

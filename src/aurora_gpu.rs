@@ -32,7 +32,9 @@ struct Uniforms {
     time: f32,
     mode: f32,
     corner: f32,
-    _pad: [f32; 3],
+    energy: f32,
+    brightness: f32,
+    phase: f32,
 }
 
 pub struct AuroraPipeline {
@@ -161,7 +163,15 @@ impl egui_wgpu::CallbackTrait for AuroraCallback {
     }
 }
 
-fn shape(rect: egui::Rect, screen: egui::Rect, time: f32, mode: f32, corner: f32, slot: u32) -> egui::Shape {
+fn shape(
+    rect: egui::Rect,
+    screen: egui::Rect,
+    time: f32,
+    mode: f32,
+    corner: f32,
+    mood: [f32; 3],
+    slot: u32,
+) -> egui::Shape {
     let uniforms = Uniforms {
         rect_min: [rect.left(), rect.top()],
         rect_size: [rect.width(), rect.height()],
@@ -169,7 +179,9 @@ fn shape(rect: egui::Rect, screen: egui::Rect, time: f32, mode: f32, corner: f32
         time,
         mode,
         corner,
-        _pad: [0.0; 3],
+        energy: mood[0],
+        brightness: mood[1],
+        phase: mood[2],
     };
     egui::Shape::Callback(egui_wgpu::Callback::new_paint_callback(
         rect,
@@ -177,14 +189,22 @@ fn shape(rect: egui::Rect, screen: egui::Rect, time: f32, mode: f32, corner: f32
     ))
 }
 
-/// The animated sky, filling `screen`. Uses uniform slot 0.
-pub fn sky_shape(screen: egui::Rect, time: f32) -> egui::Shape {
-    shape(screen, screen, time, 0.0, 0.0, 0)
+/// The animated sky, filling `screen`. Uses uniform slot 0. `mood` is
+/// [energy, brightness, phase] — the slow-smoothed voice of the engine.
+pub fn sky_shape(screen: egui::Rect, time: f32, mood: [f32; 3]) -> egui::Shape {
+    shape(screen, screen, time, 0.0, 0.0, mood, 0)
 }
 
 /// A living frosted-glass pane over `panel` (shadow pad added around it).
-pub fn glass_shape(panel: egui::Rect, screen: egui::Rect, time: f32, corner: f32, slot: u32) -> egui::Shape {
-    shape(panel.expand(PAD), screen, time, 1.0, corner, slot)
+pub fn glass_shape(
+    panel: egui::Rect,
+    screen: egui::Rect,
+    time: f32,
+    corner: f32,
+    mood: [f32; 3],
+    slot: u32,
+) -> egui::Shape {
+    shape(panel.expand(PAD), screen, time, 1.0, corner, mood, slot)
 }
 
 const WGSL: &str = r#"
@@ -195,9 +215,9 @@ struct U {
   time: f32,
   mode: f32,
   corner: f32,
-  pad0: f32,
-  pad1: f32,
-  pad2: f32,
+  energy: f32,
+  brightness: f32,
+  phase: f32,
 };
 @group(0) @binding(0) var<uniform> u: U;
 
@@ -261,7 +281,7 @@ fn bubble(w: vec2<f32>, c: vec2<f32>, r: f32, t: f32, blur: f32) -> vec3<f32> {
     0.84 + 0.16 * sin(ang * 3.0 + 2.1 + t * 0.3),
     0.96
   );
-  var glow = film * shell * (0.26 - blur * 0.13);
+  var glow = film * shell * (0.26 - blur * 0.13) * (0.75 + u.energy * 0.55);
   // Interior haze, densest at the middle, vanishing before the shell
   glow = glow + vec3<f32>(0.85, 0.94, 1.0) * exp(-d * d * 2.2) * 0.055;
   // Broad specular bloom toward the sun, upper-left
@@ -272,12 +292,12 @@ fn bubble(w: vec2<f32>, c: vec2<f32>, r: f32, t: f32, blur: f32) -> vec3<f32> {
 
 // Domain-warped cloud density: fbm displaced by fbm gives billowing
 // cumulus shapes instead of flat threshold smudges.
-fn cloud_density(p: vec2<f32>, t: f32) -> f32 {
+fn cloud_density(p: vec2<f32>, ph: f32) -> f32 {
   let q = vec2<f32>(
-    fbm(p + vec2<f32>(t * 0.014, 0.0)),
-    fbm(p + vec2<f32>(5.2, 1.3) - vec2<f32>(t * 0.011, 0.0))
+    fbm(p + vec2<f32>(ph * 1.4, 0.0)),
+    fbm(p + vec2<f32>(5.2, 1.3) - vec2<f32>(ph * 1.1, 0.0))
   );
-  return fbm(p + q * 1.5 + vec2<f32>(t * 0.008, 0.0));
+  return fbm(p + q * 1.5 + vec2<f32>(ph * 0.8, 0.0));
 }
 
 // The Frutiger Aero sky. `blur` widens every light source analytically —
@@ -291,16 +311,16 @@ fn sky(w: vec2<f32>, t: f32, blur: f32) -> vec3<f32> {
   let sun_pos = vec2<f32>(0.20 + 0.015 * sin(t * 0.11), 0.14 + 0.010 * sin(t * 0.07 + 1.7));
   let sr = 0.26 * (1.0 + blur * 1.4) * (1.0 + 0.03 * sin(t * 0.23));
   let sd = (w - sun_pos) / sr;
-  col = col + vec3<f32>(1.00, 0.97, 0.88) * exp(-dot(sd, sd)) * 0.72;
+  col = col + vec3<f32>(1.00, 0.97, 0.88) * exp(-dot(sd, sd)) * (0.58 + u.energy * 0.34);
   // Aqua counter-glow low right
   let gd = (w - vec2<f32>(0.86, 0.80)) / (0.45 * (1.0 + blur));
-  col = col + vec3<f32>(0.28, 0.82, 0.72) * exp(-dot(gd, gd)) * 0.20;
+  col = col + vec3<f32>(0.28, 0.82, 0.72) * exp(-dot(gd, gd)) * (0.14 + u.energy * 0.14);
   // Cumulus with volume: warped-fbm coverage, self-shaded by comparing
   // density toward the sun — lit crowns, shaded bases. Blur flattens it.
   let cp = w * vec2<f32>(2.5, 3.4);
-  let d = cloud_density(cp, t);
-  let d_lit = cloud_density(cp + vec2<f32>(-0.09, -0.11), t);
-  let cov = smoothstep(0.42, 0.86, d) * (1.0 - blur * 0.55);
+  let d = cloud_density(cp, u.phase);
+  let d_lit = cloud_density(cp + vec2<f32>(-0.09, -0.11), u.phase);
+  let cov = smoothstep(0.40 + u.brightness * 0.06, 0.86, d) * (1.0 - blur * 0.55);
   let lit = clamp(0.78 + (d - d_lit) * 2.2, 0.58, 1.06);
   let cloud_col = vec3<f32>(0.86, 0.90, 0.96) * lit;
   col = mix(col, cloud_col, cov * 0.75);
@@ -308,7 +328,7 @@ fn sky(w: vec2<f32>, t: f32, blur: f32) -> vec3<f32> {
   let cir = smoothstep(0.52, 0.92, fbm(w * vec2<f32>(5.5, 11.0) + vec2<f32>(t * 0.021, 7.7)));
   col = mix(col, vec3<f32>(1.0, 1.0, 1.0), cir * 0.06 * (1.0 - blur));
   // Bright haze band settling on the horizon
-  col = col + vec3<f32>(0.90, 0.96, 1.00) * exp(-(y - 0.90) * (y - 0.90) * 55.0) * 0.08;
+  col = col + vec3<f32>(0.90, 0.96, 1.00) * exp(-(y - 0.90) * (y - 0.90) * 55.0) * (0.05 + (1.0 - u.brightness) * 0.09);
   // Green horizon glow
   col = col + vec3<f32>(0.25, 0.52, 0.22) * 0.12 * smoothstep(0.84, 1.0, y);
   // Aero bubbles drifting upward; size sets speed, so depth reads as
@@ -334,7 +354,7 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
 
   if (u.mode < 0.5) {
     var col = sky(w, u.time, 0.0);
-    col = col + (hash2(p) - 0.5) * 0.010;
+    col = col + (hash2(p) - 0.5) * 0.016;
     return vec4<f32>(col, 1.0);
   }
 
@@ -399,6 +419,7 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
 
   // Diffuse scattering lift — the milkiness of etched glass
   col = mix(col, vec3<f32>(1.0, 1.0, 1.0), 0.35);
+  col = col + (hash2(p) - 0.5) * 0.012;
 
   // Contact occlusion where the pane seats into its shadow
   let fy = lp.y / max(inner.y, 1.0);

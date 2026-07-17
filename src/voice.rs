@@ -1,12 +1,9 @@
-use crate::oscillator::{Oscillator, Waveform};
+use crate::oscillator::{CircuitModel, Oscillator, Waveform};
 use crate::envelope::Envelope;
 use crate::filter::LadderFilter;
 use crate::hpf::HighPassLadder;
 use crate::substrate::SubstrateState;
 
-/// Fixed keyboard tracking: how much the filter follows note pitch, in
-/// octaves of cutoff per octave of pitch.
-const KEY_TRACK: f32 = 0.4;
 /// How much velocity opens the filter, in octaves at full velocity swing.
 const VEL_TRACK: f32 = 0.8;
 
@@ -70,6 +67,20 @@ pub struct Voice {
     osc_pitch_semi: [f32; 2],
     osc_level: [f32; 2],
     detune_cents: f32,
+    /// Filter keyboard tracking, octaves of cutoff per octave of pitch.
+    /// The 2600 trims this to full 1 V/oct so a self-oscillating filter
+    /// plays in tune; the Minimoog offers fractional settings.
+    key_track: f32,
+    /// The 2600's prewired cross-oscillator FM: osc 2 modulates osc 1's
+    /// frequency through the exponential converter (audio-rate, in CV
+    /// space — the source of the growl).
+    fm_amount: f32,
+    prev_osc2: f32,
+    /// Post-filter DC block (ARP R162 "eliminates the DC from the output";
+    /// Moog dwg #1149 shows 2.5 uF output coupling). Needed because the
+    /// unipolar/asymmetric pulses legitimately push DC through the ladder.
+    dc_x1: f32,
+    dc_y1: f32,
     /// This card's sensitivity to the shared chassis state (rail and heat):
     /// every board reacts to the same environment, each by its own amount.
     substrate_sens: f32,
@@ -144,6 +155,11 @@ impl Voice {
             osc_pitch_semi: [0.0, 0.0],
             osc_level: [0.72, 0.72],
             detune_cents: 7.0,
+            key_track: 0.4,
+            fm_amount: 0.0,
+            prev_osc2: 0.0,
+            dc_x1: 0.0,
+            dc_y1: 0.0,
             substrate_sens,
             vca_feedthrough,
             prev_env: 0.0,
@@ -207,6 +223,20 @@ impl Voice {
 
     pub fn set_sub_level(&mut self, level: f32) {
         self.sub_level = level.clamp(0.0, 1.0);
+    }
+
+    pub fn set_circuit(&mut self, model: CircuitModel) {
+        for osc in &mut self.oscs {
+            osc.set_model(model);
+        }
+    }
+
+    pub fn set_key_track(&mut self, amount: f32) {
+        self.key_track = amount.clamp(0.0, 1.0);
+    }
+
+    pub fn set_fm_amount(&mut self, amount: f32) {
+        self.fm_amount = amount.clamp(0.0, 1.0);
     }
 
     /// `glide_from_cv` is the most recently played note's CV in octaves
@@ -302,12 +332,20 @@ impl Voice {
         let pitch_mult =
             pitch_mult * (1.0 + (substrate.pitch_mult - 1.0) * self.substrate_sens);
 
-        let osc = (self.oscs[0].next_sample(self.common_drift, pitch_mult, pulse_width)
-            + self.oscs[1].next_sample(self.common_drift, pitch_mult, pulse_width)
-                * self.osc_level[0]
-            + self.oscs[2].next_sample(self.common_drift, pitch_mult, pulse_width)
-                * self.osc_level[1])
-            * OSC_SUM_SCALE
+        // Osc 2 renders first; its previous sample FMs osc 1 through the
+        // exponential converter (the 2600's prewired routing) — at zero
+        // amount the exp2 is skipped entirely
+        let o2 = self.oscs[1].next_sample(self.common_drift, pitch_mult, pulse_width);
+        let fm_mult = if self.fm_amount > 1e-4 {
+            (self.fm_amount * self.prev_osc2 * 2.0).exp2()
+        } else {
+            1.0
+        };
+        self.prev_osc2 = (o2 * 0.7).clamp(-1.0, 1.0);
+        let o1 = self.oscs[0].next_sample(self.common_drift, pitch_mult * fm_mult, pulse_width);
+        let o3 = self.oscs[2].next_sample(self.common_drift, pitch_mult, pulse_width);
+
+        let osc = (o1 + o2 * self.osc_level[0] + o3 * self.osc_level[1]) * OSC_SUM_SCALE
             + self.oscs[0].sub() * self.sub_level * 0.9
             + noise
             + bleed;
@@ -318,7 +356,7 @@ impl Voice {
 
         // Cutoff modulation in octaves: filter envelope, key tracking, velocity
         let note = self.note.unwrap_or(60) as f32;
-        let key_oct = (note - 60.0) / 12.0 * KEY_TRACK;
+        let key_oct = (note - 60.0) / 12.0 * self.key_track;
         let vel_oct = (self.velocity - 0.5) * VEL_TRACK;
         let mod_oct = filter_env * self.filter_env_amount
             + key_oct
@@ -328,6 +366,15 @@ impl Voice {
         let cutoff_mult = mod_oct.exp2();
 
         let filtered = self.hpf.process(self.filter.process(osc, cutoff_mult));
+        // Post-filter DC block (ARP R162 / Moog output coupling): removes
+        // the operating-point DC the unipolar and asymmetric pulses push
+        // through the ladder, before the VCA can gate it into thumps
+        let filtered = {
+            let y = filtered - self.dc_x1 + 0.9955 * self.dc_y1;
+            self.dc_x1 = filtered;
+            self.dc_y1 = y;
+            y
+        };
 
         // Gentle velocity curve on amplitude
         let vel_amp = 0.3 + 0.7 * self.velocity * self.velocity;

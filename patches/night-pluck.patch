@@ -7,6 +7,9 @@ osc2_level 0.7
 osc3_wave 2
 osc3_pitch -12
 osc3_level 0.6
+circuit 0
+key_track 0.4
+osc_fm 0
 detune 10
 noise 0
 glide 0

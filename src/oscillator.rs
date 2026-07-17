@@ -25,6 +25,20 @@ pub enum Waveform {
     Triangle,
 }
 
+/// Which hardware's converter circuits shape the waveforms. The Moog 901-B
+/// and ARP 4027 use genuinely different circuits — the service documents
+/// say to pick a profile, not average them into one vague "analog".
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CircuitModel {
+    /// 901-B: pulse swings between the +11.5/-6 rails (bipolar,
+    /// asymmetric); sine from the 1N34 diode-ladder with its soft knee.
+    Moog,
+    /// 4027-1: pulse rectified positive-going-only (CR7/CR8/CR14), so PWM
+    /// shifts the filter's operating point; sine from a single transistor
+    /// rounding ("Q3's nonlinearity"), smoother than the diode ladder.
+    Arp,
+}
+
 // Peak-amplitude ratios from the 901B service targets, saw = 1.0
 const AMP_SAW: f32 = 1.0;
 const AMP_SINE: f32 = 0.82;
@@ -38,6 +52,7 @@ pub struct Oscillator {
     freq_mult: f32,
     sample_rate: f32,
     waveform: Waveform,
+    model: CircuitModel,
     drift: f32,
     rng: u32,
     /// Effective comparator threshold this sample (base width + unit error).
@@ -87,6 +102,7 @@ impl Oscillator {
             freq_mult: 1.0,
             sample_rate,
             waveform: Waveform::Sawtooth,
+            model: CircuitModel::Moog,
             drift: 0.0,
             rng,
             duty: 0.5 + duty_error,
@@ -144,9 +160,14 @@ impl Oscillator {
                 AMP_TRI * self.fold_triangle(self.polyblep_triangle(t, detuned_frequency))
             }
             Waveform::Sine => {
-                // Triangle through the diode-ladder rounding network
                 let tri = self.fold_triangle(self.polyblep_triangle(t, detuned_frequency));
-                AMP_SINE * self.diode_sine(tri)
+                let shaped = match self.model {
+                    // 901-B: the 1N34 diode-ladder rounding network
+                    CircuitModel::Moog => self.diode_sine(tri),
+                    // 4027-1: single-transistor peak rounding, no diode knee
+                    CircuitModel::Arp => Self::transistor_round(tri),
+                };
+                AMP_SINE * shaped
             }
         };
 
@@ -177,6 +198,19 @@ impl Oscillator {
         (rounded - rounded.signum() * over * 0.35) * 1.06
     }
 
+    /// ARP sine converter: "Q3's nonlinearity rounds the peaks of the
+    /// triangle to approximate a sine wave" — one smooth transistor curve,
+    /// its residue set by the R121 purity trimmer (the per-unit skew).
+    #[inline]
+    fn transistor_round(tri: f32) -> f32 {
+        let x = tri.clamp(-1.0, 1.0);
+        x * (1.5 - 0.5 * x * x)
+    }
+
+    pub fn set_model(&mut self, model: CircuitModel) {
+        self.model = model;
+    }
+
     fn polyblep(&self, t: f32, dt: f32) -> f32 {
         if t < dt {
             let t = t / dt;
@@ -189,19 +223,25 @@ impl Oscillator {
         }
     }
 
-    /// Pulse levels are asymmetric: the 901-B comparator swings between the
-    /// +11.5 V and -6 V rails (visible on drawing 1101 — the +12 rail is
-    /// RC-filtered to +11.5, the negative rail is -6) before the 2.7K/680
-    /// output divider, so the wave's top and bottom are not mirror images.
-    /// PWM therefore shifts a little real DC, like the hardware.
+    /// Pulse converter, per circuit model.
+    /// MOOG (901-B/901-C): the comparator swings between the +11.5 V and
+    /// -6 V rails (drawing 1101), so top and bottom are asymmetric mirror
+    /// images — a little real DC moves with PWM.
+    /// ARP (4027-1): "CR7 rectifies the output of A8 so the pulse wave is
+    /// positive going only" — fully unipolar, so PWM shifts the ladder's
+    /// operating point substantially and even harmonics track the width.
+    /// Both models' DC is eliminated after the filter, in the voice
+    /// (ARP R162; the 2.5 uF output coupling on Moog dwg #1149).
     fn polyblep_pulse(&self, t: f32, frequency: f32) -> f32 {
-        const HI: f32 = 1.0;
-        const LO: f32 = -0.92;
-        const EDGE: f32 = (HI - LO) * 0.5;
+        let (hi, lo) = match self.model {
+            CircuitModel::Moog => (1.0f32, -0.92f32),
+            CircuitModel::Arp => (1.0f32, 0.0f32),
+        };
+        let edge = (hi - lo) * 0.5;
         let dt = frequency / self.sample_rate;
-        let naive = if t < self.duty { HI } else { LO };
-        naive - EDGE * self.polyblep(t, dt)
-            + EDGE * self.polyblep((t + 1.0 - self.duty) % 1.0, dt)
+        let naive = if t < self.duty { hi } else { lo };
+        naive - edge * self.polyblep(t, dt)
+            + edge * self.polyblep((t + 1.0 - self.duty) % 1.0, dt)
     }
 
     fn polyblep_saw(&self, t: f32, frequency: f32) -> f32 {
@@ -365,13 +405,15 @@ mod tests {
         );
     }
 
-    /// PWM: the mean of a pulse wave is 2*duty - 1, so the width control
-    /// must move the DC balance accordingly.
+    /// PWM moves the DC operating point in both circuit models: the Moog
+    /// pulse is bipolar-asymmetric (rail-limited), the ARP pulse is fully
+    /// unipolar (rectified), so its mean IS the duty cycle.
     #[test]
     fn pulse_width_shifts_duty() {
-        let measure = |width: f32| -> f32 {
+        let measure = |width: f32, model: CircuitModel| -> f32 {
             let mut osc = Oscillator::new(44100.0, 441.0, 3);
             osc.set_waveform(Waveform::Square);
+            osc.set_model(model);
             let mut sum = 0.0f32;
             let n = 44100;
             for _ in 0..n {
@@ -379,11 +421,18 @@ mod tests {
             }
             sum / n as f32
         };
-        let narrow = measure(0.2);
-        let center = measure(0.5);
-        let wide = measure(0.8);
-        assert!(narrow < -0.5, "20% duty should sit negative, got {narrow}");
-        assert!(center.abs() < 0.1, "50% duty near zero mean, got {center}");
-        assert!(wide > 0.5, "80% duty should sit positive, got {wide}");
+        // Moog: mean crosses zero around center width
+        let m_narrow = measure(0.2, CircuitModel::Moog);
+        let m_wide = measure(0.8, CircuitModel::Moog);
+        assert!(m_narrow < -0.4 && m_wide > 0.4, "Moog: {m_narrow}..{m_wide}");
+        // ARP: strictly positive, monotone in duty
+        let a_narrow = measure(0.2, CircuitModel::Arp);
+        let a_center = measure(0.5, CircuitModel::Arp);
+        let a_wide = measure(0.8, CircuitModel::Arp);
+        assert!(a_narrow > 0.0, "ARP pulse mean must be positive: {a_narrow}");
+        assert!(
+            a_narrow < a_center && a_center < a_wide,
+            "ARP mean must track duty: {a_narrow} < {a_center} < {a_wide}"
+        );
     }
 }

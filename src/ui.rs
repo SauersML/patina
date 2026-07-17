@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::aurora_gpu;
 use crate::chorus::ChorusMode;
-use crate::oscillator::Waveform;
+use crate::oscillator::{CircuitModel, Waveform};
 use crate::panel_render;
 use crate::voice_manager::VoiceManager;
 
@@ -195,6 +195,9 @@ pub struct SynthUI {
     osc3_wave: Waveform,
     osc3_pitch: f32,
     osc3_level: f32,
+    circuit: CircuitModel,
+    key_track: f32,
+    osc_fm: f32,
     pulse_width: f32,
     lfo_rate: f32,
     lfo_shape: f32,
@@ -225,6 +228,11 @@ pub struct SynthUI {
     theme_applied: bool,
     notes_active: bool,
     textures: Option<Textures>,
+    /// Slow-smoothed engine signals feeding the sky: loudness, filter
+    /// openness, and an integrated cloud-drift phase.
+    mood_energy: f32,
+    mood_bright: f32,
+    sky_phase: f32,
     /// Resize debounce: the backdrop rebakes once the size holds still.
     pending_size: [usize; 2],
     size_stable_frames: u32,
@@ -678,14 +686,8 @@ fn card<R>(
 
 /// Vertical hairline between subgroups inside a card.
 fn vseparator(ui: &mut egui::Ui, height: f32) {
-    let (rect, _) = ui.allocate_exact_size(vec2(9.0, height), Sense::hover());
-    ui.painter().line_segment(
-        [
-            pos2(rect.center().x, rect.top() + 2.0),
-            pos2(rect.center().x, rect.bottom() - 2.0),
-        ],
-        Stroke::new(1.0, HAIRLINE),
-    );
+    // A breath of space, not a line — the grouping reads from the gap
+    let _ = ui.allocate_exact_size(vec2(9.0, height), Sense::hover());
 }
 
 impl SynthUI {
@@ -715,6 +717,9 @@ impl SynthUI {
             osc3_wave: Waveform::Sawtooth,
             osc3_pitch: 0.0,
             osc3_level: 0.72,
+            circuit: CircuitModel::Moog,
+            key_track: 0.4,
+            osc_fm: 0.0,
             pulse_width: 0.5,
             lfo_rate: 1.0,
             lfo_shape: 0.5,
@@ -742,6 +747,9 @@ impl SynthUI {
             theme_applied: false,
             notes_active: false,
             textures: None,
+            mood_energy: 0.0,
+            mood_bright: 1.0,
+            sky_phase: 0.0,
             pending_size: [0, 0],
             size_stable_frames: 0,
         };
@@ -780,6 +788,9 @@ impl SynthUI {
         vm.set_osc_wave(2, self.osc3_wave);
         vm.set_osc_pitch(2, self.osc3_pitch);
         vm.set_osc_level(2, self.osc3_level);
+        vm.set_circuit(self.circuit);
+        vm.set_key_track(self.key_track);
+        vm.set_osc_fm(self.osc_fm);
         vm.set_pulse_width(self.pulse_width);
         vm.set_lfo_rate(self.lfo_rate);
         vm.set_lfo_shape(self.lfo_shape);
@@ -928,6 +939,9 @@ impl SynthUI {
             self.osc3_wave = p.osc3_wave;
             self.osc3_pitch = p.osc3_pitch;
             self.osc3_level = p.osc3_level;
+            self.circuit = p.circuit;
+            self.key_track = p.key_track;
+            self.osc_fm = p.osc_fm;
             self.pulse_width = p.pulse_width;
             self.lfo_rate = p.lfo_rate;
             self.lfo_shape = p.lfo_shape;
@@ -950,7 +964,22 @@ impl SynthUI {
             self.tape_drive = p.tape_drive;
             self.tape_age = p.tape_age;
             self.notes_active = vm.held_note_states().iter().any(|&held| held);
+
+            // The sky listens, slowly: loudness and filter openness ease in
+            // over seconds, and cloud drift accelerates as an integral so
+            // speed changes never jump
+            let rms = {
+                let n = vm.scope.len().max(1);
+                let sum: f32 = vm.scope.iter().rev().take(512).map(|s| s * s).sum();
+                (sum / n.min(512) as f32).sqrt()
+            };
+            let target_energy = (rms * 5.0).clamp(0.0, 1.0);
+            let target_bright = ((p.cutoff / 20.0).ln() / (1000.0f32).ln()).clamp(0.0, 1.0);
+            self.mood_energy += (target_energy - self.mood_energy) * 0.012;
+            self.mood_bright += (target_bright - self.mood_bright) * 0.008;
         }
+        let dt = ctx.input(|i| i.stable_dt).min(0.05);
+        self.sky_phase += dt * (0.008 + self.mood_energy * 0.030);
 
         // The sky is alive: repaint at display cadence
         ctx.request_repaint_after(std::time::Duration::from_millis(16));
@@ -963,8 +992,9 @@ impl SynthUI {
         // Glass panes paint here too, from last frame's rects, so they are
         // always under the controls.
         if GPU_ON.load(AtomicOrdering::Relaxed) {
+            let mood = [self.mood_energy, self.mood_bright, self.sky_phase];
             let painter = ctx.layer_painter(egui::LayerId::background());
-            painter.add(aurora_gpu::sky_shape(ctx.screen_rect(), time));
+            painter.add(aurora_gpu::sky_shape(ctx.screen_rect(), time, mood));
             let rects: Vec<Rect> = std::mem::take(&mut *GLASS_RECTS.lock());
             for (i, rect) in rects.into_iter().enumerate() {
                 let slot = (i as u32 + 1) % 64;
@@ -973,6 +1003,7 @@ impl SynthUI {
                     ctx.screen_rect(),
                     time,
                     12.0,
+                    mood,
                     slot,
                 ));
             }
@@ -1018,12 +1049,7 @@ impl SynthUI {
                     pos2(screen.left(), core.top() - 9.5),
                     pos2(screen.right(), screen.bottom()),
                 );
-                let mut shapes = rail_shapes(shelf);
-                shapes.push(Shape::line_segment(
-                    [shelf.left_top(), shelf.right_top()],
-                    Stroke::new(1.5, Color32::from_rgba_unmultiplied(0, 0, 0, 150)),
-                ));
-                painter.set(bg_idx, Shape::Vec(shapes));
+                painter.set(bg_idx, Shape::Vec(rail_shapes(shelf)));
             });
 
         let mut tex = self.textures.take();
@@ -1187,14 +1213,9 @@ impl SynthUI {
             pos2(screen.left(), screen.top()),
             pos2(screen.right(), core.bottom()),
         );
-        let mut shapes = rail_shapes(rail);
-        shapes.push(Shape::line_segment(
-            [rail.left_bottom(), rail.right_bottom()],
-            Stroke::new(1.5, Color32::from_rgba_unmultiplied(0, 0, 0, 160)),
-        ));
         ui.painter()
             .with_clip_rect(screen)
-            .set(bg_idx, Shape::Vec(shapes));
+            .set(bg_idx, Shape::Vec(rail_shapes(rail)));
     }
 
     fn draw_oscillator_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>, fill: Option<f32>) {
@@ -1238,6 +1259,16 @@ impl SynthUI {
             // not three clones
             ui.add_space(2.0);
             ui.horizontal(|ui| {
+                // Which hardware's converter circuits shape the waves
+                let circ_sel = if self.circuit == CircuitModel::Arp { 1 } else { 0 };
+                if let Some(i) = segmented(ui, "circuit", &["MOOG", "ARP"], circ_sel) {
+                    self.circuit = if i == 1 { CircuitModel::Arp } else { CircuitModel::Moog };
+                    self.voice_manager.lock().set_circuit(self.circuit);
+                }
+                if knob(ui, "FM", &mut self.osc_fm, 0.0, 1.0, 0.0, false, fmt_pct) {
+                    self.voice_manager.lock().set_osc_fm(self.osc_fm);
+                }
+                ui.add_space(6.0);
                 for which in 1..=2usize {
                     ui.label(legend(if which == 1 { "osc 2" } else { "osc 3" }));
                     let (wave, pitch, level) = if which == 1 {
@@ -1313,6 +1344,9 @@ impl SynthUI {
                 }
                 if knob(ui, "Hi-Pass", &mut self.hpf_cutoff, 16.0, 8000.0, 16.0, true, fmt_hz) {
                     self.voice_manager.lock().set_hpf_cutoff(self.hpf_cutoff);
+                }
+                if knob(ui, "Track", &mut self.key_track, 0.0, 1.0, 0.4, false, fmt_pct) {
+                    self.voice_manager.lock().set_key_track(self.key_track);
                 }
             });
         });

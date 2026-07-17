@@ -85,6 +85,9 @@ pub enum Param {
     Osc3Wave,
     Osc3Pitch,
     Osc3Level,
+    CircuitSel,
+    KeyTrack,
+    OscFm,
     PulseWidth,
     LfoRate,
     LfoShape,
@@ -142,6 +145,9 @@ impl Param {
             "osc3_wave" => Param::Osc3Wave,
             "osc3_pitch" => Param::Osc3Pitch,
             "osc3_level" => Param::Osc3Level,
+            "circuit" => Param::CircuitSel,
+            "key_track" => Param::KeyTrack,
+            "osc_fm" => Param::OscFm,
             "pulse_width" => Param::PulseWidth,
             "lfo_rate" => Param::LfoRate,
             "lfo_shape" => Param::LfoShape,
@@ -191,6 +197,13 @@ impl Param {
             Param::Osc3Wave => vm.set_osc_wave(2, waveform_from_value(value)),
             Param::Osc3Pitch => vm.set_osc_pitch(2, value),
             Param::Osc3Level => vm.set_osc_level(2, value),
+            Param::CircuitSel => vm.set_circuit(if value.round() as i32 >= 1 {
+                crate::oscillator::CircuitModel::Arp
+            } else {
+                crate::oscillator::CircuitModel::Moog
+            }),
+            Param::KeyTrack => vm.set_key_track(value),
+            Param::OscFm => vm.set_osc_fm(value),
             Param::PulseWidth => vm.set_pulse_width(value),
             Param::LfoRate => vm.set_lfo_rate(value),
             Param::LfoShape => vm.set_lfo_shape(value),
