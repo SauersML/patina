@@ -30,7 +30,15 @@
 //            slew rate of the discrete Model 3 mixer, softening only the
 //            very fastest, hottest edges (transient intermodulation).
 //
-// All magnitudes are derived from the service specs, not tuned by ear.
+// Epistemic status, honestly: the MECHANISMS here are physical and the
+// rail/ripple magnitudes come from the published supply spec, but the
+// COUPLING COEFFICIENTS (how much rail movement survives the compensated
+// expo converters, the cold-start detune, crosstalk level) are physically
+// plausible conjecture pending measurement against hardware. They are kept
+// deliberately small — well under a cent, ~-64 dB — so that if they are
+// wrong, they are wrong quietly. Validating them requires a real 900-series
+// system and a day with a spectrum analyzer; the constants below document
+// exactly what to measure.
 
 use std::f32::consts::TAU;
 
