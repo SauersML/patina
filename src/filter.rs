@@ -1,8 +1,10 @@
-// Moog transistor ladder — white-box circuit emulation.
+// The VCF: TWO white-box circuit emulations, selected by CircuitModel.
 //
-// This is the large-signal ODE system of the ladder (D'Angelo & Valimaki
-// 2014; the form used in Paschou, Esqueda, Valimaki & Mourjopoulos, APSIPA
-// 2017, eqs. 1-4), in real electrical units:
+// == Moog transistor ladder ==
+//
+// The large-signal ODE system of the ladder (D'Angelo & Valimaki 2014; the
+// form used in Paschou, Esqueda, Valimaki & Mourjopoulos, APSIPA 2017,
+// eqs. 1-4), in real electrical units:
 //
 //   (1/wc) dV1/dt = -tanh(A*V1) - tanh(A*(Vin + k*V4))
 //   (1/wc) dV2/dt =  tanh(A*V1) - tanh(A*V2)
@@ -10,33 +12,61 @@
 //   (1/wc) dV4/dt =  tanh(A*V3) - tanh(A*V4)
 //
 // with A = 1/(2*VT), VT = 25.85 mV thermal voltage, k in [0,4] the feedback
-// coefficient, and the output taken from V4 (inverted). The DC solution of
-// this system gives the passband gain exactly: V4 = -Vin/(1+k).
+// coefficient, output from V4 (inverted). DC solution: V4 = -Vin/(1+k).
+// Both stage currents saturate INDEPENDENTLY (two tanh terms of absolute
+// stage voltages), so the ladder colors the signal even in its flat
+// passband — the "warmth" is structural, not an add-on.
 //
-// Discretization: the IMPLICIT MIDPOINT RULE (A-stable), which keeps the
-// resonance path inside the numerical solution instead of inserting an
-// artificial unit delay. The resulting nonlinear system (eqs. 6-14 of the
-// APSIPA paper) is solved each step by Newton-Raphson with the analytic
-// Jacobian (eq. 17). The Jacobian is lower-bidiagonal plus one corner entry
-// (the feedback), so J*delta = -F is solved in CLOSED FORM by forward
-// elimination — no matrix library, O(1) per iteration.
+// == ARP 4072 (the post-lawsuit, genuinely-ARP circuit) ==
 //
-// Because the method is implicit and trapezoidal-class, cutoff placement is
-// handled exactly by tan() prewarping. The empirical tuning polynomials the
-// explicit Huovilainen structure needs (fcr/acr) do not exist here: a
-// correct method requires no corrections.
+// Traced from the Yusynth 4072 clone schematic (Yves Usson, 2006, from the
+// potted module) and the 2600 service manual section 2.9: four identical
+// cascaded sections, each a matched differential pair driving an op-amp
+// integrator (470 pF selected/matched caps) — a gm-C cascade, NOT a ladder:
 //
-// Epistemic status of everything in this file:
-//   DERIVED    the ODE system, midpoint discretization, Newton solve,
-//              prewarping, passband/rolloff/oscillation behavior
-//   SCHEMATIC  AC-coupled regeneration (2.5 uF on dwg #1149), the
-//              hand-SELECTED regeneration threshold trim, per-stage
-//              component tolerance, oscillation threshold below knob max
-//              (service manual: threshold at regeneration 7-8 of 10)
-//   CHOICE     the FS-to-volts drive mapping (voiced for continuity),
-//              partial resonance make-up gain (the hardware genuinely
-//              thins; this is a level convenience and labeled as such),
-//              the output saturation stage
+//   (1/wc) dV1/dt = S(Vin - k*V4 - V1)      S(x) = 2*VT*tanh(x/(2*VT))
+//   (1/wc) dVi/dt = S(V(i-1) - Vi)          i = 2..4
+//
+// The pair sees only the DIFFERENCE between adjacent stages. In the
+// passband the stages track their inputs and the difference is tiny, so
+// the 4072 stays clean where the ladder already saturates; distortion
+// appears only where the filter is actually working (near and above fc).
+// That is the honest, derivable reason the ARP sounds "cleaner/darker"
+// and the Moog "warmer" — not a marketing adjective, a topology.
+// (The pairs carry 220R emitter degeneration, but at audio-cutoff tail
+// currents I*RE << VT, so the knee stays at ~2*VT — DERIVED.)
+//
+// Resonance: DC-coupLED feedback (no Moog-style 2.5 uF regeneration cap)
+// from stage 4 to the first pair's opposite base through a DUAL-GANG pot
+// whose second gang compensates the output level — the 4072 keeps its
+// bass at high resonance where the Moog thins by 1/(1+k). The service
+// manual's own checkout targets: unity passband gain (R163 trim), 24
+// dB/oct, self-oscillation 13-14 V p-p, fc range 10 Hz - 10 kHz (the
+// famously miscalculated bandwidth ceiling of the original 4072).
+//
+// == Method (both circuits) ==
+//
+// IMPLICIT MIDPOINT RULE (A-stable), keeping the resonance path inside the
+// numerical solution instead of inserting an artificial unit delay. The
+// nonlinear system is solved each step by Newton-Raphson with the analytic
+// Jacobian; both circuits' Jacobians are lower-bidiagonal plus one corner
+// entry (the feedback), so J*delta = -F is solved in CLOSED FORM by
+// forward elimination — no matrix library, O(1) per iteration. Cutoff is
+// placed exactly by tan() prewarping. 2x oversampled.
+//
+// Epistemic status:
+//   DERIVED    both ODE systems, midpoint discretization, Newton solves,
+//              prewarping, passband/rolloff/oscillation behavior, the
+//              4072 pair knee at 2*VT despite degeneration
+//   SCHEMATIC  ladder: AC-coupled regeneration (2.5 uF, dwg #1149),
+//              SELECTED threshold trim, oscillation below knob max;
+//              4072: gm-C topology, DC-coupled feedback, dual-gang
+//              level compensation, ~100:1 input divider (R6 100K/R7 1K),
+//              ~10 kHz cutoff ceiling, 13-14 V p-p self-oscillation and
+//              unity passband gain (service manual checkout 2.9.3)
+//   CHOICE     the FS-to-volts drive mapping, the ladder's partial
+//              resonance make-up (labeled convenience), the exact
+//              compensation-gang law (0.9*k), both output stages
 //
 // Runs 2x oversampled to control aliasing from the tanh harmonics, per the
 // literature's recommendation for nonlinear ladder models.
@@ -44,6 +74,7 @@
 use std::f32::consts::PI;
 
 use crate::adaa::AdaaTanh;
+use crate::oscillator::CircuitModel;
 
 /// Thermal voltage at room temperature, volts.
 const VT: f32 = 0.02585;
@@ -54,11 +85,22 @@ const VT: f32 = 0.02585;
 /// al.); ours is voiced so a full 5 V swing lands at tanh argument 0.4
 /// with drive = 1, the operating point the patches were built around.
 const INPUT_ATTEN: f32 = 0.4 * 2.0 * VT / crate::oscillator::PROGRAM_V;
+/// 4072 input divider: the op-amp mixer runs at program level, then R6
+/// (100K) into R7 (1K) drops it to pair level (SCHEMATIC, Yusynth trace).
+const ARP_ATTEN: f32 = 1.0 / 101.0;
+/// The 4072's miscalculated bandwidth ceiling: the service manual gives
+/// the VCF range as 10 Hz - 10 kHz, and the design error capping the
+/// original 4072's top end is documented lore ARP later fixed. Patina
+/// keeps the flaw — it is part of what that filter is.
+const ARP_FC_MAX: f32 = 10_500.0;
+/// Where the 4072's op-amp output stages run out of rail (+/-15 V supply).
+const ARP_RAIL: f32 = 13.5;
 /// Newton-Raphson stopping tolerance on the residual, volts.
 const NEWTON_TOL: f32 = 1e-6;
 const NEWTON_MAX_ITERS: usize = 8;
 
 pub struct LadderFilter {
+    model: CircuitModel,
     sample_rate: f32,
     target_cutoff: f32,
     cutoff: f32, // smoothed
@@ -108,6 +150,7 @@ impl LadderFilter {
         }
         let res_cal = 1.0 + (rand01(&mut rng) - 0.5) * 0.03;
         Self {
+            model: CircuitModel::Moog,
             sample_rate,
             target_cutoff: 15000.0,
             cutoff: 15000.0,
@@ -131,6 +174,10 @@ impl LadderFilter {
 
     pub fn set_cutoff(&mut self, cutoff: f32) {
         self.target_cutoff = cutoff.clamp(16.0, self.sample_rate * 0.45);
+    }
+
+    pub fn set_model(&mut self, model: CircuitModel) {
+        self.model = model;
     }
 
     pub fn set_resonance(&mut self, resonance: f32) {
@@ -232,6 +279,85 @@ impl LadderFilter {
             v[1] += delta2;
             v[2] += delta3;
             v[3] += delta4;
+        }
+        self.v = v;
+    }
+
+    /// One implicit-midpoint step of the 4072 gm-C cascade. Each stage's
+    /// pair sees the DIFFERENCE of adjacent stage voltages inside a single
+    /// tanh; the resonance feedback k*V4 sums (DC-coupled) against the
+    /// input at the first pair. `vin_avg` is the midpoint-averaged input,
+    /// volts at pair level.
+    #[inline]
+    fn midpoint_step_arp(&mut self, vin_avg: f32, g: [f32; 4], k: f32) {
+        let a = 1.0 / (2.0 * VT);
+        let p = self.v;
+        // 4*VT*g * tanh(x/(2VT)) linearizes to 2*g*x: a trapezoidal
+        // one-pole with exact tan() prewarping, same scaling as the ladder
+        let c = [
+            4.0 * VT * g[0],
+            4.0 * VT * g[1],
+            4.0 * VT * g[2],
+            4.0 * VT * g[3],
+        ];
+
+        let mut v = p;
+        let mut iters = 0;
+        loop {
+            iters += 1;
+            let m1 = 0.5 * (v[0] + p[0]);
+            let m2 = 0.5 * (v[1] + p[1]);
+            let m3 = 0.5 * (v[2] + p[2]);
+            let m4 = 0.5 * (v[3] + p[3]);
+            // Stage drive differences, pair-level volts
+            let x1 = vin_avg - k * m4 - m1;
+            let x2 = m1 - m2;
+            let x3 = m2 - m3;
+            let x4 = m3 - m4;
+            let t1 = (a * x1).tanh();
+            let t2 = (a * x2).tanh();
+            let t3 = (a * x3).tanh();
+            let t4 = (a * x4).tanh();
+
+            let f1 = v[0] - p[0] - c[0] * t1;
+            let f2 = v[1] - p[1] - c[1] * t2;
+            let f3 = v[2] - p[2] - c[2] * t3;
+            let f4 = v[3] - p[3] - c[3] * t4;
+
+            let worst = f1.abs().max(f2.abs()).max(f3.abs()).max(f4.abs());
+            if worst < NEWTON_TOL || iters > NEWTON_MAX_ITERS {
+                if iters > self.max_iters_seen {
+                    self.max_iters_seen = iters;
+                }
+                break;
+            }
+
+            let u1 = 1.0 - t1 * t1;
+            let u2 = 1.0 - t2 * t2;
+            let u3 = 1.0 - t3 * t3;
+            let u4 = 1.0 - t4 * t4;
+
+            // J: dFi/dvi = 1 + g_i*u_i, dFi/dv(i-1) = -g_i*u_i, and the
+            // feedback corner dF1/dv4 = +g_1*u_1*k — bidiagonal plus
+            // corner, eliminated in closed form exactly like the ladder
+            let d1 = 1.0 + g[0] * u1;
+            let d2 = 1.0 + g[1] * u2;
+            let d3 = 1.0 + g[2] * u3;
+            let d4 = 1.0 + g[3] * u4;
+            let e = g[0] * u1 * k;
+
+            let b2 = g[1] * u2 / d2;
+            let a2 = -f2 / d2;
+            let b3 = g[2] * u3 * b2 / d3;
+            let a3 = (-f3 + g[2] * u3 * a2) / d3;
+            let b4 = g[3] * u4 * b3 / d4;
+            let a4 = (-f4 + g[3] * u4 * a3) / d4;
+
+            let delta1 = (-f1 - e * a4) / (d1 + e * b4);
+            v[0] += delta1;
+            v[1] += a2 + b2 * delta1;
+            v[2] += a3 + b3 * delta1;
+            v[3] += a4 + b4 * delta1;
         }
         self.v = v;
     }
