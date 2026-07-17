@@ -91,6 +91,9 @@ pub enum Param {
     SyncSel,
     RingAmount,
     UiOctave,
+    PitchBendSemis,
+    ModWheel,
+    SustainPedal,
     PulseWidth,
     LfoRate,
     LfoShape,
@@ -119,6 +122,109 @@ pub(crate) fn waveform_from_value(value: f32) -> Waveform {
         1 => Waveform::Square,
         2 => Waveform::Sawtooth,
         _ => Waveform::Triangle,
+    }
+}
+
+impl Param {
+    /// The MIDI CC chart: every automatable parameter is reachable from a
+    /// controller. Standard assignments where they exist (1 mod wheel,
+    /// 5 portamento, 7 volume, 64 sustain, 71/74 resonance/cutoff,
+    /// 72/73/75/79 envelope, 91/93 sends); the 102-119 block carries the
+    /// engine-specific rest.
+    pub fn from_cc(cc: u8) -> Option<Param> {
+        Some(match cc {
+            1 => Param::ModWheel,
+            5 => Param::Glide,
+            7 => Param::Volume,
+            64 => Param::SustainPedal,
+            71 => Param::Resonance,
+            72 => Param::Release,
+            73 => Param::Attack,
+            74 => Param::Cutoff,
+            75 => Param::Decay,
+            76 => Param::LfoRate,
+            77 => Param::LfoPitch,
+            78 => Param::LfoFilter,
+            79 => Param::Sustain,
+            80 => Param::SubLevel,
+            81 => Param::NoiseLevel,
+            82 => Param::PulseWidth,
+            83 => Param::Detune,
+            85 => Param::Osc2Level,
+            86 => Param::Osc2Pitch,
+            87 => Param::Osc3Level,
+            88 => Param::Osc3Pitch,
+            89 => Param::OscFm,
+            90 => Param::RingAmount,
+            91 => Param::ReverbWet,
+            92 => Param::TapeWow,
+            93 => Param::ChorusDepth,
+            94 => Param::TapeFlutter,
+            95 => Param::SpringWet,
+            102 => Param::HpfCutoff,
+            103 => Param::Drive,
+            104 => Param::Saturation,
+            105 => Param::KeyTrack,
+            106 => Param::FilterEnvAmount,
+            107 => Param::FilterAttack,
+            108 => Param::FilterDecay,
+            109 => Param::FilterSustain,
+            110 => Param::FilterRelease,
+            111 => Param::ChorusRate,
+            112 => Param::ChorusModeSel,
+            113 => Param::WaveformSel,
+            114 => Param::Osc2Wave,
+            115 => Param::Osc3Wave,
+            116 => Param::CircuitSel,
+            117 => Param::SyncSel,
+            118 => Param::TapeDrive,
+            119 => Param::TapeAge,
+            _ => return None,
+        })
+    }
+
+    /// Map a normalized controller position (0..1) into this parameter's
+    /// native range — the same ranges the knobs use, logarithmic where the
+    /// knobs are logarithmic, stepped where the parameter is discrete.
+    pub fn midi_value(self, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        let lin = |lo: f32, hi: f32| lo + (hi - lo) * t;
+        let log = |lo: f32, hi: f32| lo * (hi / lo).powf(t);
+        let step = |n: f32| (t * n).round();
+        match self {
+            Param::Volume | Param::Sustain | Param::FilterSustain
+            | Param::SubLevel | Param::NoiseLevel | Param::OscFm
+            | Param::RingAmount | Param::ReverbWet | Param::ChorusDepth
+            | Param::TapeWow | Param::TapeFlutter | Param::TapeDrive
+            | Param::TapeAge | Param::SpringWet | Param::KeyTrack
+            | Param::FuzzAmount | Param::ModWheel | Param::LfoShape
+            | Param::SustainPedal => lin(0.0, 1.0),
+            Param::ReverbDecay => lin(0.0, 0.99),
+            Param::PulseWidth => lin(0.05, 0.95),
+            Param::Detune => lin(0.0, 30.0),
+            Param::Osc2Level | Param::Osc3Level => lin(0.0, 1.0),
+            Param::Osc2Pitch | Param::Osc3Pitch => lin(-24.0, 24.0).round(),
+            Param::Attack | Param::Decay | Param::Release => log(0.01, 2.0),
+            Param::FilterAttack => log(0.001, 2.0),
+            Param::FilterDecay | Param::FilterRelease => log(0.01, 2.0),
+            Param::FilterEnvAmount => lin(-5.0, 5.0),
+            Param::Cutoff => log(20.0, 20000.0),
+            Param::HpfCutoff => log(16.0, 8000.0),
+            Param::Resonance => lin(0.0, 4.0),
+            Param::Drive => lin(0.1, 5.0),
+            Param::Saturation => lin(0.0, 2.0),
+            Param::Glide => lin(0.0, 2.0),
+            Param::LfoRate => log(0.1, 30.0),
+            Param::LfoPitch => lin(0.0, 200.0),
+            Param::LfoFilter => lin(0.0, 4.0),
+            Param::LfoPwm => lin(0.0, 0.45),
+            Param::ChorusRate => log(0.1, 10.0),
+            Param::ChorusModeSel => step(4.0),
+            Param::WaveformSel | Param::Osc2Wave | Param::Osc3Wave => step(3.0),
+            Param::CircuitSel | Param::SyncSel => step(1.0),
+            Param::UiOctave => step(8.0),
+            Param::PitchBendSemis => lin(-2.0, 2.0),
+        }
     }
 }
 
@@ -153,6 +259,9 @@ impl Param {
             "osc_fm" => Param::OscFm,
             "sync" => Param::SyncSel,
             "octave" => Param::UiOctave,
+            "bend" => Param::PitchBendSemis,
+            "mod_wheel" => Param::ModWheel,
+            "pedal" => Param::SustainPedal,
             "ring" => Param::RingAmount,
             "pulse_width" => Param::PulseWidth,
             "lfo_rate" => Param::LfoRate,
@@ -213,6 +322,9 @@ impl Param {
             Param::SyncSel => vm.set_sync(value.round() as i32 >= 1),
             Param::RingAmount => vm.set_ring(value),
             Param::UiOctave => vm.set_ui_octave(value),
+            Param::PitchBendSemis => vm.set_pitch_bend(value),
+            Param::ModWheel => vm.set_mod_wheel(value.clamp(0.0, 1.0)),
+            Param::SustainPedal => vm.set_sustain_pedal(value >= 0.5),
             Param::PulseWidth => vm.set_pulse_width(value),
             Param::LfoRate => vm.set_lfo_rate(value),
             Param::LfoShape => vm.set_lfo_shape(value),

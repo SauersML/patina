@@ -346,12 +346,27 @@ impl MidiHandler {
                             },
                             MidiMessage::Controller { controller, value } => {
                                 if let Some(vm) = &voice_manager {
-                                    match controller.as_int() {
-                                        // CC1: mod wheel -> performance vibrato
-                                        1 => vm.lock().set_mod_wheel(value.as_int() as f32 / 127.0),
-                                        // CC64: sustain (damper) pedal
-                                        64 => vm.lock().set_sustain_pedal(value.as_int() >= 64),
-                                        _ => {}
+                                    // The full chart lives in Param::from_cc —
+                                    // every automatable parameter answers to a
+                                    // controller, scaled like its knob
+                                    if let Some(param) = crate::song::Param::from_cc(controller.as_int()) {
+                                        let t = value.as_int() as f32 / 127.0;
+                                        param.apply(&mut vm.lock(), param.midi_value(t));
+                                    }
+                                }
+                            },
+                            // Program change flips the whole instrument to a
+                            // factory patch, keyboard register included
+                            MidiMessage::ProgramChange { program } => {
+                                if let Some(vm) = &voice_manager {
+                                    let bank = crate::patch::FACTORY;
+                                    let idx = program.as_int() as usize;
+                                    if let Some((name, text)) = bank.get(idx) {
+                                        if let Err(e) = crate::patch::apply(&mut vm.lock(), text) {
+                                            eprintln!("Program change to '{}' failed: {}", name, e);
+                                        } else {
+                                            println!("Program change: {}", name);
+                                        }
                                     }
                                 }
                             },
