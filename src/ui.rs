@@ -1,7 +1,8 @@
 use eframe::egui::{
-    self, pos2, vec2, Align2, Color32, CursorIcon, FontId, Key, Rect, RichText, Rounding, Sense,
-    Shape, Stroke, Vec2,
+    self, pos2, vec2, Align2, Color32, CursorIcon, FontId, Key, Pos2, Rect, RichText, Rounding,
+    Sense, Shape, Stroke, Vec2,
 };
+use eframe::egui::epaint::Mesh;
 use parking_lot::Mutex;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -15,24 +16,44 @@ const WHITE_KEY_INDICES: [usize; 7] = [0, 2, 4, 5, 7, 9, 11];
 const BLACK_KEY_INDICES: [usize; 5] = [1, 3, 6, 8, 10];
 
 // ---------------------------------------------------------------------------
-// Palette — dark studio hardware look with a warm amber accent
+// Materials — old wood, aged brass, warm amber (the "old") against dark
+// glass and phosphor-cyan electricity (the "new"). Everything is painted
+// procedurally: gradient meshes, seeded grain, layered glow strokes.
 // ---------------------------------------------------------------------------
-const BG: Color32 = Color32::from_rgb(0x12, 0x14, 0x18);
-const BG_INSET: Color32 = Color32::from_rgb(0x0c, 0x0d, 0x10);
-const PANEL: Color32 = Color32::from_rgb(0x1b, 0x1e, 0x25);
+const BG_TOP: Color32 = Color32::from_rgb(0x15, 0x16, 0x1b);
+const BG_BOTTOM: Color32 = Color32::from_rgb(0x0b, 0x0c, 0x0f);
+const BG_INSET: Color32 = Color32::from_rgb(0x08, 0x09, 0x0c);
 const PANEL_EDGE: Color32 = Color32::from_rgb(0x2a, 0x2e, 0x38);
 const HOVER: Color32 = Color32::from_rgb(0x2e, 0x33, 0x3e);
+
+const TEXT: Color32 = Color32::from_rgb(0xe6, 0xe4, 0xdd);
+const TEXT_DIM: Color32 = Color32::from_rgb(0x8b, 0x92, 0xa0);
+
 const ACCENT: Color32 = Color32::from_rgb(0xff, 0xb1, 0x4a);
 const ACCENT_SOFT: Color32 = Color32::from_rgb(0x3a, 0x2f, 0x1d);
 const ACCENT_PRESSED_SHADE: Color32 = Color32::from_rgb(0xd9, 0x8f, 0x2f);
 const ACCENT_INK: Color32 = Color32::from_rgb(0x5c, 0x40, 0x12);
-const TEXT: Color32 = Color32::from_rgb(0xe6, 0xe4, 0xdd);
-const TEXT_DIM: Color32 = Color32::from_rgb(0x8b, 0x92, 0xa0);
 
-const WHITE_KEY: Color32 = Color32::from_rgb(0xe8, 0xe6, 0xe0);
-const WHITE_KEY_SHADE: Color32 = Color32::from_rgb(0xcf, 0xcd, 0xc5);
-const BLACK_KEY: Color32 = Color32::from_rgb(0x14, 0x15, 0x19);
-const BLACK_KEY_EDGE: Color32 = Color32::from_rgb(0x32, 0x35, 0x3e);
+const ELECTRIC: Color32 = Color32::from_rgb(0x53, 0xe7, 0xff);
+const ELECTRIC_DIM: Color32 = Color32::from_rgb(0x2f, 0x7c, 0x8a);
+
+const WOOD_HI: Color32 = Color32::from_rgb(0x4a, 0x32, 0x1e);
+const WOOD_LO: Color32 = Color32::from_rgb(0x27, 0x19, 0x0e);
+const GRAIN_DARK: Color32 = Color32::from_rgba_premultiplied(0x14, 0x0c, 0x06, 90);
+const GRAIN_LIGHT: Color32 = Color32::from_rgba_premultiplied(0x50, 0x38, 0x20, 60);
+
+const BRASS_HI: Color32 = Color32::from_rgb(0xd9, 0xb4, 0x6a);
+const BRASS_LO: Color32 = Color32::from_rgb(0x8a, 0x6a, 0x35);
+const BRASS_EDGE: Color32 = Color32::from_rgb(0x54, 0x40, 0x1f);
+const BRASS_INK: Color32 = Color32::from_rgb(0x2b, 0x1d, 0x0e);
+
+const IVORY: Color32 = Color32::from_rgb(0xf1, 0xea, 0xd8);
+const IVORY_SHADE: Color32 = Color32::from_rgb(0xd6, 0xcd, 0xb4);
+const EBONY: Color32 = Color32::from_rgb(0x14, 0x15, 0x19);
+const EBONY_EDGE: Color32 = Color32::from_rgb(0x32, 0x35, 0x3e);
+const FELT: Color32 = Color32::from_rgb(0x6e, 0x1e, 0x27);
+
+const SERIF: &str = "patina-serif";
 
 pub struct SynthUI {
     current_octave: i32,
@@ -65,14 +86,167 @@ pub struct SynthUI {
     tape_age: f32,
     pressed_keys: HashSet<Key>,
     theme_applied: bool,
+    serif_loaded: bool,
+    notes_active: bool,
+    time: f64,
 }
 
 // ---------------------------------------------------------------------------
-// Custom widgets
+// Procedural material painting
 // ---------------------------------------------------------------------------
 
-/// A rotary knob. Drag vertically to turn, hold Shift for fine control,
-/// double-click to reset to `default`. Returns true when the value changed.
+fn hash01(seed: u32) -> f32 {
+    let mut x = seed.wrapping_mul(2654435769);
+    x ^= x >> 16;
+    x = x.wrapping_mul(2246822519);
+    x ^= x >> 13;
+    (x & 0xffff) as f32 / 65535.0
+}
+
+/// A quad whose top and bottom edges carry different vertex colors — the
+/// GPU interpolates, giving a smooth vertical gradient.
+fn gradient_quad(rect: Rect, top: Color32, bottom: Color32) -> Shape {
+    let mut mesh = Mesh::default();
+    mesh.colored_vertex(rect.left_top(), top);
+    mesh.colored_vertex(rect.right_top(), top);
+    mesh.colored_vertex(rect.left_bottom(), bottom);
+    mesh.colored_vertex(rect.right_bottom(), bottom);
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(2, 1, 3);
+    Shape::mesh(mesh)
+}
+
+/// Horizontal variant, for vignette edges.
+fn gradient_quad_h(rect: Rect, left: Color32, right: Color32) -> Shape {
+    let mut mesh = Mesh::default();
+    mesh.colored_vertex(rect.left_top(), left);
+    mesh.colored_vertex(rect.right_top(), right);
+    mesh.colored_vertex(rect.left_bottom(), left);
+    mesh.colored_vertex(rect.right_bottom(), right);
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(2, 1, 3);
+    Shape::mesh(mesh)
+}
+
+/// Walnut rail: gradient base plus seeded wavy grain strokes. The seed keeps
+/// the grain identical frame to frame so it never shimmers.
+fn wood_shapes(rect: Rect, seed: u32) -> Vec<Shape> {
+    let mut shapes = vec![
+        Shape::rect_filled(rect, 0.0, WOOD_LO),
+        gradient_quad(rect, WOOD_HI, WOOD_LO),
+    ];
+
+    let n = ((rect.height() / 6.0) as i32).max(4);
+    for i in 0..n {
+        let h = hash01(seed.wrapping_add(i as u32).wrapping_mul(7919));
+        let y = rect.top() + rect.height() * (i as f32 + 0.5) / n as f32 + (h - 0.5) * 5.0;
+        let amp = 0.8 + h * 2.2;
+        let phase = h * 21.0;
+        let freq = 5.0 + h * 9.0;
+        let color = if i % 3 == 0 { GRAIN_LIGHT } else { GRAIN_DARK };
+        let points: Vec<Pos2> = (0..=40)
+            .map(|k| {
+                let t = k as f32 / 40.0;
+                pos2(
+                    rect.left() + t * rect.width(),
+                    y + (t * freq + phase).sin() * amp,
+                )
+            })
+            .collect();
+        shapes.push(Shape::line(points, Stroke::new(0.7 + h * 0.9, color)));
+    }
+
+    // Bevel: lit top edge, shadowed bottom edge
+    shapes.push(Shape::line_segment(
+        [rect.left_top(), rect.right_top()],
+        Stroke::new(1.0, Color32::from_rgba_premultiplied(0x6b, 0x50, 0x30, 70)),
+    ));
+    shapes.push(Shape::line_segment(
+        [rect.left_bottom(), rect.right_bottom()],
+        Stroke::new(2.0, Color32::from_rgba_premultiplied(0, 0, 0, 130)),
+    ));
+    shapes
+}
+
+/// A brass screw head with a randomly rotated slot.
+fn screw_shapes(center: Pos2, radius: f32, seed: u32) -> Vec<Shape> {
+    let angle = hash01(seed) * std::f32::consts::PI;
+    let dir = vec2(angle.cos(), angle.sin()) * radius * 0.72;
+    vec![
+        Shape::circle_filled(
+            center + vec2(0.6, 1.0),
+            radius,
+            Color32::from_rgba_premultiplied(0, 0, 0, 110),
+        ),
+        Shape::circle_filled(center, radius, BRASS_LO),
+        Shape::circle_stroke(center, radius, Stroke::new(1.0, BRASS_EDGE)),
+        Shape::circle_stroke(
+            center - vec2(radius * 0.25, radius * 0.25),
+            radius * 0.55,
+            Stroke::new(1.0, Color32::from_rgba_premultiplied(0xd9, 0xb4, 0x6a, 140)),
+        ),
+        Shape::line_segment([center - dir, center + dir], Stroke::new(1.2, BRASS_INK)),
+    ]
+}
+
+/// Dark translucent glass: tinted fill, top sheen gradient, bright inner
+/// edge over a dark outer edge.
+fn glass_shapes(rect: Rect, rounding: f32) -> Vec<Shape> {
+    let sheen = Rect::from_min_max(
+        rect.min + vec2(rounding, 2.0),
+        pos2(rect.right() - rounding, rect.top() + rect.height() * 0.45),
+    );
+    vec![
+        Shape::rect_stroke(
+            rect.expand(1.0),
+            Rounding::same(rounding + 1.0),
+            Stroke::new(1.5, Color32::from_rgba_premultiplied(0, 0, 0, 140)),
+        ),
+        Shape::rect_filled(
+            rect,
+            Rounding::same(rounding),
+            Color32::from_rgba_premultiplied(0x10, 0x14, 0x1a, 205),
+        ),
+        gradient_quad(
+            sheen,
+            Color32::from_rgba_premultiplied(0xff, 0xff, 0xff, 11),
+            Color32::from_rgba_premultiplied(0xff, 0xff, 0xff, 0),
+        ),
+        Shape::rect_stroke(
+            rect,
+            Rounding::same(rounding),
+            Stroke::new(1.0, Color32::from_rgba_premultiplied(0xff, 0xff, 0xff, 20)),
+        ),
+    ]
+}
+
+/// Small status lamp. `on` lamps glow electric cyan and breathe slowly.
+fn draw_led(painter: &egui::Painter, center: Pos2, on: bool, time: f64, seed: f32) {
+    if on {
+        let pulse = 0.7 + 0.3 * ((time * 2.4 + seed as f64).sin() as f32 * 0.5 + 0.5);
+        painter.circle_filled(
+            center,
+            5.5,
+            Color32::from_rgba_premultiplied(0x53, 0xe7, 0xff, (36.0 * pulse) as u8),
+        );
+        painter.circle_filled(center, 2.4, ELECTRIC);
+        painter.circle_filled(
+            center - vec2(0.6, 0.6),
+            0.8,
+            Color32::from_rgba_premultiplied(0xff, 0xff, 0xff, 200),
+        );
+    } else {
+        painter.circle_filled(center, 2.4, Color32::from_rgb(0x1a, 0x20, 0x26));
+        painter.circle_stroke(center, 2.4, Stroke::new(1.0, PANEL_EDGE));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Widgets
+// ---------------------------------------------------------------------------
+
+/// A brass-bezel rotary knob with a dark glass face and a phosphor readout.
+/// Drag vertically, Shift for fine control, double-click to reset.
 fn knob(
     ui: &mut egui::Ui,
     label: &str,
@@ -134,52 +308,87 @@ fn knob(
         TEXT_DIM,
     );
 
-    let arc_points = |t0: f32, t1: f32| -> Vec<egui::Pos2> {
+    let arc_points = |t0: f32, t1: f32, radius: f32| -> Vec<Pos2> {
         let n = 40;
         (0..=n)
             .map(|i| {
                 let a = start + sweep * (t0 + (t1 - t0) * i as f32 / n as f32);
-                center + vec2(a.cos(), a.sin()) * arc_radius
+                center + vec2(a.cos(), a.sin()) * radius
             })
             .collect()
     };
 
-    // Track and value arcs
+    // Track and amber value arc
     painter.add(Shape::line(
-        arc_points(0.0, 1.0),
+        arc_points(0.0, 1.0, arc_radius),
         Stroke::new(3.0, PANEL_EDGE),
     ));
     if t > 0.001 {
-        painter.add(Shape::line(arc_points(0.0, t), Stroke::new(3.0, ACCENT)));
+        if engaged {
+            painter.add(Shape::line(
+                arc_points(0.0, t, arc_radius),
+                Stroke::new(6.0, Color32::from_rgba_premultiplied(0xff, 0xb1, 0x4a, 50)),
+            ));
+        }
+        painter.add(Shape::line(
+            arc_points(0.0, t, arc_radius),
+            Stroke::new(3.0, ACCENT),
+        ));
     }
 
-    // Knob body and pointer
-    let body_stroke = if engaged {
-        Stroke::new(1.5, ACCENT)
-    } else {
-        Stroke::new(1.0, PANEL_EDGE)
-    };
-    painter.circle(center, 13.0, Color32::from_rgb(0x23, 0x27, 0x30), body_stroke);
+    // Brass bezel over a drop shadow, dark glass face
+    painter.circle_filled(
+        center + vec2(0.0, 1.5),
+        14.5,
+        Color32::from_rgba_premultiplied(0, 0, 0, 110),
+    );
+    painter.circle_filled(center, 14.0, BRASS_LO);
+    painter.circle_stroke(center, 14.0, Stroke::new(1.0, BRASS_EDGE));
+    // Top-left glint on the bezel
+    let glint: Vec<Pos2> = (0..=20)
+        .map(|i| {
+            let a = (-200.0 + 160.0 * i as f32 / 20.0).to_radians();
+            center + vec2(a.cos(), a.sin()) * 13.0
+        })
+        .collect();
+    painter.add(Shape::line(
+        glint,
+        Stroke::new(1.4, Color32::from_rgba_premultiplied(0xd9, 0xb4, 0x6a, 150)),
+    ));
+    painter.circle_filled(center, 10.0, Color32::from_rgb(0x0e, 0x12, 0x16));
+    painter.circle_filled(
+        center - vec2(0.0, 3.0),
+        6.0,
+        Color32::from_rgba_premultiplied(0xff, 0xff, 0xff, 7),
+    );
+    if engaged {
+        painter.circle_stroke(
+            center,
+            15.5,
+            Stroke::new(2.0, Color32::from_rgba_premultiplied(0x53, 0xe7, 0xff, 80)),
+        );
+    }
+
     let angle = start + sweep * t;
     let dir = vec2(angle.cos(), angle.sin());
     painter.line_segment(
-        [center + dir * 5.0, center + dir * 12.0],
-        Stroke::new(2.0, if engaged { ACCENT } else { TEXT }),
+        [center + dir * 3.5, center + dir * 9.0],
+        Stroke::new(2.0, ACCENT),
     );
 
-    // Value readout
+    // Phosphor readout — dim cyan at rest, lit while touched
     painter.text(
         pos2(rect.center().x, rect.bottom() - 4.0),
         Align2::CENTER_BOTTOM,
         fmt(*value),
         FontId::monospace(10.5),
-        if engaged { TEXT } else { TEXT_DIM },
+        if engaged { ELECTRIC } else { ELECTRIC_DIM },
     );
 
     changed
 }
 
-/// Waveform selector button with a painted wave glyph.
+/// Waveform selector with a painted glyph on dark glass.
 fn wave_button(ui: &mut egui::Ui, waveform: Waveform, selected: bool) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(48.0, 34.0), Sense::click());
     let painter = ui.painter();
@@ -192,9 +401,15 @@ fn wave_button(ui: &mut egui::Ui, waveform: Waveform, selected: bool) -> egui::R
         BG_INSET
     };
     painter.rect_filled(rect, Rounding::same(6.0), bg);
-    if selected {
-        painter.rect_stroke(rect, Rounding::same(6.0), Stroke::new(1.0, ACCENT));
-    }
+    painter.rect_stroke(
+        rect,
+        Rounding::same(6.0),
+        if selected {
+            Stroke::new(1.0, ACCENT)
+        } else {
+            Stroke::new(1.0, PANEL_EDGE)
+        },
+    );
 
     let inner = rect.shrink2(vec2(11.0, 11.0));
     let (l, r, top, bot, mid) = (
@@ -204,7 +419,7 @@ fn wave_button(ui: &mut egui::Ui, waveform: Waveform, selected: bool) -> egui::R
         inner.bottom(),
         inner.center().y,
     );
-    let points: Vec<egui::Pos2> = match waveform {
+    let points: Vec<Pos2> = match waveform {
         Waveform::Sine => (0..=24)
             .map(|i| {
                 let x = i as f32 / 24.0;
@@ -241,7 +456,7 @@ fn wave_button(ui: &mut egui::Ui, waveform: Waveform, selected: bool) -> egui::R
     response.on_hover_text(format!("{:?}", waveform))
 }
 
-/// Small pill-shaped toggle used for the chorus mode selector.
+/// Pill toggle for the chorus modes.
 fn pill_button(ui: &mut egui::Ui, text: &str, selected: bool) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(36.0, 22.0), Sense::click());
     let painter = ui.painter();
@@ -266,22 +481,67 @@ fn pill_button(ui: &mut egui::Ui, text: &str, selected: bool) -> egui::Response 
     response
 }
 
-/// Panel with an accent-colored section title.
-fn section<R>(ui: &mut egui::Ui, title: &str, add_contents: impl FnOnce(&mut egui::Ui) -> R) {
-    egui::Frame::none()
-        .fill(PANEL)
-        .rounding(Rounding::same(10.0))
-        .stroke(Stroke::new(1.0, PANEL_EDGE))
-        .inner_margin(12.0)
-        .show(ui, |ui| {
-            ui.label(RichText::new(title).color(ACCENT).size(11.0).strong());
-            ui.add_space(6.0);
-            add_contents(ui);
-        });
+/// A small machined-brass button.
+fn brass_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(26.0, 22.0), Sense::click());
+    let painter = ui.painter();
+    painter.rect_filled(
+        rect.translate(vec2(0.0, 1.0)),
+        Rounding::same(5.0),
+        Color32::from_rgba_premultiplied(0, 0, 0, 120),
+    );
+    painter.rect_filled(rect, Rounding::same(5.0), BRASS_LO);
+    let (hi, lo) = if response.is_pointer_button_down_on() {
+        (BRASS_LO, BRASS_LO)
+    } else if response.hovered() {
+        (BRASS_HI, BRASS_LO)
+    } else {
+        (
+            Color32::from_rgb(0xb8, 0x93, 0x50),
+            Color32::from_rgb(0x77, 0x5a, 0x2c),
+        )
+    };
+    painter.add(gradient_quad(rect.shrink(1.5), hi, lo));
+    painter.rect_stroke(rect, Rounding::same(5.0), Stroke::new(1.0, BRASS_EDGE));
+    painter.text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        label,
+        FontId::proportional(11.0),
+        BRASS_INK,
+    );
+    response
 }
 
 fn mini_header(text: &str) -> RichText {
     RichText::new(text).size(10.0).color(TEXT_DIM)
+}
+
+/// Glass panel section with a brass title and a status lamp. The background
+/// is painted after layout via a placeholder shape, so the glass sits under
+/// the contents.
+fn section<R>(
+    ui: &mut egui::Ui,
+    title: &str,
+    title_font: FontId,
+    led: Option<bool>,
+    time: f64,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) {
+    let bg_idx = ui.painter().add(Shape::Noop);
+    let inner = egui::Frame::none().inner_margin(12.0).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(title).font(title_font).color(BRASS_HI));
+            if let Some(on) = led {
+                let (led_rect, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+                draw_led(ui.painter(), led_rect.center(), on, time, title.len() as f32);
+            }
+        });
+        ui.add_space(4.0);
+        add_contents(ui);
+    });
+    let rect = inner.response.rect;
+    ui.painter().set(bg_idx, Shape::Vec(glass_shapes(rect, 10.0)));
 }
 
 fn fmt_hz(v: f32) -> String {
@@ -341,6 +601,9 @@ impl SynthUI {
             tape_age: 0.0,
             pressed_keys: HashSet::new(),
             theme_applied: false,
+            serif_loaded: false,
+            notes_active: false,
+            time: 0.0,
         };
         // Push the UI defaults into the engine so what you see is what you hear
         ui.apply_all_settings();
@@ -376,15 +639,55 @@ impl SynthUI {
         vm.set_tape_age(self.tape_age);
     }
 
-    fn apply_theme(ctx: &egui::Context) {
+    /// Try to install a real serif for the brand type — old-world print
+    /// against the phosphor readouts. Falls back to the default font.
+    fn install_fonts(&mut self, ctx: &egui::Context) {
+        let candidates = [
+            "/System/Library/Fonts/Supplemental/Georgia Italic.ttf",
+            "/System/Library/Fonts/Supplemental/Georgia.ttf",
+            "/System/Library/Fonts/Supplemental/Times New Roman.ttf",
+        ];
+        for path in candidates {
+            if let Ok(bytes) = std::fs::read(path) {
+                let mut fonts = egui::FontDefinitions::default();
+                fonts
+                    .font_data
+                    .insert(SERIF.to_owned(), egui::FontData::from_owned(bytes));
+                let mut family = fonts
+                    .families
+                    .get(&egui::FontFamily::Proportional)
+                    .cloned()
+                    .unwrap_or_default();
+                family.insert(0, SERIF.to_owned());
+                fonts
+                    .families
+                    .insert(egui::FontFamily::Name(SERIF.into()), family);
+                ctx.set_fonts(fonts);
+                self.serif_loaded = true;
+                return;
+            }
+        }
+    }
+
+    fn display_font(&self, size: f32) -> FontId {
+        if self.serif_loaded {
+            FontId::new(size, egui::FontFamily::Name(SERIF.into()))
+        } else {
+            FontId::proportional(size)
+        }
+    }
+
+    fn apply_theme(&mut self, ctx: &egui::Context) {
+        self.install_fonts(ctx);
+
         let mut style = (*ctx.style()).clone();
         style.spacing.item_spacing = vec2(8.0, 8.0);
         style.spacing.button_padding = vec2(10.0, 4.0);
 
         let v = &mut style.visuals;
         *v = egui::Visuals::dark();
-        v.panel_fill = BG;
-        v.window_fill = BG;
+        v.panel_fill = Color32::TRANSPARENT;
+        v.window_fill = BG_BOTTOM;
         v.override_text_color = Some(TEXT);
         v.widgets.inactive.bg_fill = BG_INSET;
         v.widgets.hovered.bg_fill = HOVER;
@@ -403,9 +706,33 @@ impl SynthUI {
         ctx.set_style(style);
     }
 
+    /// Full-window backdrop: vertical gradient with a soft vignette, painted
+    /// on the background layer beneath the transparent panels.
+    fn paint_backdrop(&self, ctx: &egui::Context) {
+        let rect = ctx.screen_rect();
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Background,
+            egui::Id::new("patina-backdrop"),
+        ));
+        painter.add(gradient_quad(rect, BG_TOP, BG_BOTTOM));
+        let shade = Color32::from_rgba_premultiplied(0, 0, 0, 70);
+        let clear = Color32::from_rgba_premultiplied(0, 0, 0, 0);
+        let edge = 90.0_f32.min(rect.width() * 0.2);
+        painter.add(gradient_quad_h(
+            Rect::from_min_max(rect.left_top(), pos2(rect.left() + edge, rect.bottom())),
+            shade,
+            clear,
+        ));
+        painter.add(gradient_quad_h(
+            Rect::from_min_max(pos2(rect.right() - edge, rect.top()), rect.right_bottom()),
+            clear,
+            shade,
+        ));
+    }
+
     pub fn update(&mut self, ctx: &egui::Context) {
         if !self.theme_applied {
-            Self::apply_theme(ctx);
+            self.apply_theme(ctx);
             self.theme_applied = true;
         }
 
@@ -439,45 +766,35 @@ impl SynthUI {
             self.tape_flutter = p.tape_flutter;
             self.tape_drive = p.tape_drive;
             self.tape_age = p.tape_age;
+            self.notes_active = vm.held_note_states().iter().any(|&held| held);
         }
+        self.time = ctx.input(|i| i.time);
 
-        // Keep repainting so keyboard lights and knob automation animate
+        // Keep repainting so keyboard lights, lamps, and the scope animate
         // even when the user isn't interacting
         ctx.request_repaint_after(std::time::Duration::from_millis(33));
 
+        self.paint_backdrop(ctx);
         self.handle_keyboard_input(ctx);
 
         egui::TopBottomPanel::top("header")
             .frame(
                 egui::Frame::none()
-                    .fill(BG)
-                    .inner_margin(egui::style::Margin::symmetric(16.0, 10.0)),
+                    .inner_margin(egui::style::Margin::symmetric(18.0, 12.0)),
             )
             .show(ctx, |ui| self.draw_header(ui));
 
         egui::TopBottomPanel::bottom("keyboard")
-            .frame(egui::Frame::none().fill(BG).inner_margin(egui::style::Margin {
-                left: 16.0,
-                right: 16.0,
-                top: 4.0,
-                bottom: 10.0,
+            .frame(egui::Frame::none().inner_margin(egui::style::Margin {
+                left: 18.0,
+                right: 18.0,
+                top: 10.0,
+                bottom: 12.0,
             }))
-            .show(ctx, |ui| {
-                self.draw_keyboard(ui);
-                ui.add_space(6.0);
-                ui.vertical_centered(|ui| {
-                    ui.label(
-                        RichText::new(
-                            "play: Z–M lower · Q–U upper  |  ↑ ↓ octave  |  knobs: drag · shift = fine · double-click = reset",
-                        )
-                        .size(10.5)
-                        .color(TEXT_DIM),
-                    );
-                });
-            });
+            .show(ctx, |ui| self.draw_keyboard_shelf(ui));
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(BG).inner_margin(16.0))
+            .frame(egui::Frame::none().inner_margin(16.0))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     self.draw_oscillator_section(ui);
@@ -495,40 +812,78 @@ impl SynthUI {
             });
     }
 
+    /// Wood header rail: brand type stamped into walnut, screws in the
+    /// corners, octave controls machined in brass with a phosphor readout.
     fn draw_header(&mut self, ui: &mut egui::Ui) {
+        let bg_idx = ui.painter().add(Shape::Noop);
+
         ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("Patina")
-                    .font(FontId::proportional(24.0))
-                    .strong()
-                    .color(TEXT),
+            let title_pos = ui.cursor().min;
+            let painter = ui.painter();
+            // Stamped type: dark press shadow below-right, cream face on top
+            painter.text(
+                title_pos + vec2(1.5, 3.5),
+                Align2::LEFT_TOP,
+                "Patina",
+                self.display_font(27.0),
+                Color32::from_rgba_premultiplied(0, 0, 0, 160),
             );
+            let title_rect = painter.text(
+                title_pos + vec2(0.0, 2.0),
+                Align2::LEFT_TOP,
+                "Patina",
+                self.display_font(27.0),
+                IVORY,
+            );
+            ui.allocate_exact_size(vec2(title_rect.width() + 12.0, 34.0), Sense::hover());
             ui.label(
-                RichText::new("POLYPHONIC SYNTH")
-                    .size(10.0)
-                    .color(ACCENT),
+                RichText::new("POLYPHONIC · EST. 2026")
+                    .font(FontId::monospace(9.0))
+                    .color(ELECTRIC_DIM),
             );
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                if ui.button("▶").on_hover_text("Octave up (↑)").clicked() {
+                if brass_button(ui, "▶").on_hover_text("Octave up (↑)").clicked() {
                     self.shift_octave(1);
                 }
-                ui.label(
-                    RichText::new(format!("OCTAVE {}", self.current_octave))
-                        .monospace()
-                        .size(13.0)
-                        .color(TEXT_DIM),
+                // Octave readout on a little dark glass screen
+                let (chip, _) = ui.allocate_exact_size(vec2(58.0, 22.0), Sense::hover());
+                let painter = ui.painter();
+                painter.rect_filled(chip, Rounding::same(4.0), Color32::from_rgb(0x04, 0x07, 0x09));
+                painter.rect_stroke(chip, Rounding::same(4.0), Stroke::new(1.0, PANEL_EDGE));
+                painter.text(
+                    chip.center(),
+                    Align2::CENTER_CENTER,
+                    format!("OCT {}", self.current_octave),
+                    FontId::monospace(12.0),
+                    ELECTRIC,
                 );
-                if ui.button("◀").on_hover_text("Octave down (↓)").clicked() {
+                if brass_button(ui, "◀").on_hover_text("Octave down (↓)").clicked() {
                     self.shift_octave(-1);
                 }
             });
         });
+
+        let rail = ui.min_rect().expand2(vec2(18.0, 12.0));
+        let mut shapes = wood_shapes(rail, 11);
+        for (i, corner) in [
+            rail.left_top() + vec2(10.0, 10.0),
+            rail.right_top() + vec2(-10.0, 10.0),
+            rail.left_bottom() + vec2(10.0, -10.0),
+            rail.right_bottom() + vec2(-10.0, -10.0),
+        ]
+        .iter()
+        .enumerate()
+        {
+            shapes.extend(screw_shapes(*corner, 3.2, 100 + i as u32));
+        }
+        ui.painter().set(bg_idx, Shape::Vec(shapes));
     }
 
     fn draw_oscillator_section(&mut self, ui: &mut egui::Ui) {
-        section(ui, "OSCILLATOR", |ui| {
+        let (font, led, time) = (self.display_font(13.0), Some(self.notes_active), self.time);
+        section(ui, "Oscillator", font, led, time, |ui| {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.label(mini_header("WAVE"));
@@ -566,8 +921,32 @@ impl SynthUI {
         });
     }
 
+    fn draw_envelope_section(&mut self, ui: &mut egui::Ui) {
+        let (font, led, time) = (self.display_font(13.0), Some(self.notes_active), self.time);
+        section(ui, "Envelope", font, led, time, |ui| {
+            ui.horizontal(|ui| {
+                if knob(ui, "ATTACK", &mut self.attack, 0.01, 2.0, 0.1, true, fmt_time) {
+                    self.voice_manager.lock().set_attack(self.attack);
+                }
+                if knob(ui, "DECAY", &mut self.decay, 0.01, 2.0, 0.1, true, fmt_time) {
+                    self.voice_manager.lock().set_decay(self.decay);
+                }
+                if knob(ui, "SUSTAIN", &mut self.sustain, 0.0, 1.0, 0.7, false, fmt_pct) {
+                    self.voice_manager.lock().set_sustain(self.sustain);
+                }
+                if knob(ui, "RELEASE", &mut self.release, 0.01, 2.0, 0.2, true, fmt_time) {
+                    self.voice_manager.lock().set_release(self.release);
+                }
+                ui.add_space(6.0);
+                self.draw_adsr_graph(ui);
+            });
+        });
+    }
+
     fn draw_filter_env_section(&mut self, ui: &mut egui::Ui) {
-        section(ui, "FILTER ENV", |ui| {
+        let led = self.fenv_amount.abs() > 0.05;
+        let (font, time) = (self.display_font(13.0), self.time);
+        section(ui, "Filter Env", font, Some(led), time, |ui| {
             ui.horizontal(|ui| {
                 if knob(ui, "AMOUNT", &mut self.fenv_amount, -5.0, 5.0, 0.0, false, |v| {
                     format!("{:+.1} oct", v)
@@ -590,31 +969,11 @@ impl SynthUI {
         });
     }
 
-    fn draw_envelope_section(&mut self, ui: &mut egui::Ui) {
-        section(ui, "ENVELOPE", |ui| {
-            ui.horizontal(|ui| {
-                if knob(ui, "ATTACK", &mut self.attack, 0.01, 2.0, 0.1, true, fmt_time) {
-                    self.voice_manager.lock().set_attack(self.attack);
-                }
-                if knob(ui, "DECAY", &mut self.decay, 0.01, 2.0, 0.1, true, fmt_time) {
-                    self.voice_manager.lock().set_decay(self.decay);
-                }
-                if knob(ui, "SUSTAIN", &mut self.sustain, 0.0, 1.0, 0.7, false, fmt_pct) {
-                    self.voice_manager.lock().set_sustain(self.sustain);
-                }
-                if knob(ui, "RELEASE", &mut self.release, 0.01, 2.0, 0.2, true, fmt_time) {
-                    self.voice_manager.lock().set_release(self.release);
-                }
-                ui.add_space(6.0);
-                self.draw_adsr_graph(ui);
-            });
-        });
-    }
-
     fn draw_adsr_graph(&self, ui: &mut egui::Ui) {
         let (rect, _) = ui.allocate_exact_size(vec2(160.0, 88.0), Sense::hover());
         let painter = ui.painter();
         painter.rect_filled(rect, Rounding::same(6.0), BG_INSET);
+        painter.rect_stroke(rect, Rounding::same(6.0), Stroke::new(1.0, PANEL_EDGE));
 
         let inner = rect.shrink(10.0);
         // Fixed visual fraction for the sustain plateau; A/D/R share the rest
@@ -637,32 +996,49 @@ impl SynthUI {
             pos2(xs, ys),
             pos2(inner.right(), bottom),
         ];
+        painter.add(Shape::line(
+            points.clone(),
+            Stroke::new(4.0, Color32::from_rgba_premultiplied(0xff, 0xb1, 0x4a, 45)),
+        ));
         painter.add(Shape::line(points.clone(), Stroke::new(2.0, ACCENT)));
         for pt in [points[1], points[2], points[3]] {
             painter.circle_filled(pt, 2.5, ACCENT);
         }
     }
 
-    /// Live oscilloscope of the engine output, trigger-stabilized on a
-    /// rising zero crossing so periodic waveforms hold still.
+    /// CRT-style oscilloscope: dark glass, faint phosphor grid, and the
+    /// engine output as a glowing cyan trace, trigger-stabilized on a rising
+    /// zero crossing so periodic waveforms hold still.
     fn draw_scope(&self, ui: &mut egui::Ui) {
         let width = ui.available_width();
-        let (rect, _) = ui.allocate_exact_size(vec2(width, 72.0), Sense::hover());
+        let (rect, _) = ui.allocate_exact_size(vec2(width, 76.0), Sense::hover());
         let painter = ui.painter();
-        painter.rect_filled(rect, Rounding::same(10.0), BG_INSET);
-        painter.rect_stroke(rect, Rounding::same(10.0), Stroke::new(1.0, PANEL_EDGE));
+        for shape in glass_shapes(rect, 10.0) {
+            painter.add(shape);
+        }
 
-        let inner = rect.shrink2(vec2(12.0, 10.0));
-        painter.line_segment(
-            [pos2(inner.left(), inner.center().y), pos2(inner.right(), inner.center().y)],
-            Stroke::new(1.0, PANEL_EDGE),
-        );
+        let inner = rect.shrink2(vec2(14.0, 11.0));
+        let grid = Color32::from_rgba_premultiplied(0x53, 0xe7, 0xff, 14);
+        for i in 0..=12 {
+            let x = inner.left() + inner.width() * i as f32 / 12.0;
+            painter.line_segment(
+                [pos2(x, inner.top()), pos2(x, inner.bottom())],
+                Stroke::new(0.5, grid),
+            );
+        }
+        for i in 0..=4 {
+            let y = inner.top() + inner.height() * i as f32 / 4.0;
+            painter.line_segment(
+                [pos2(inner.left(), y), pos2(inner.right(), y)],
+                Stroke::new(0.5, grid),
+            );
+        }
         painter.text(
-            pos2(rect.left() + 10.0, rect.top() + 6.0),
+            pos2(rect.left() + 12.0, rect.top() + 6.0),
             Align2::LEFT_TOP,
             "SCOPE",
-            FontId::proportional(9.0),
-            TEXT_DIM,
+            FontId::monospace(9.0),
+            ELECTRIC_DIM,
         );
 
         let samples: Vec<f32> = self.voice_manager.lock().scope.iter().copied().collect();
@@ -682,7 +1058,7 @@ impl SynthUI {
         }
 
         let n = 256usize;
-        let points: Vec<egui::Pos2> = (0..n)
+        let points: Vec<Pos2> = (0..n)
             .map(|i| {
                 let sample = samples[start + i * (window - 1) / (n - 1)];
                 pos2(
@@ -692,16 +1068,22 @@ impl SynthUI {
             })
             .collect();
 
-        // Soft glow pass under the crisp trace
+        // Phosphor: wide soft bloom, tighter halo, crisp trace
         painter.add(Shape::line(
             points.clone(),
-            Stroke::new(4.0, Color32::from_rgba_unmultiplied(0xff, 0xb1, 0x4a, 40)),
+            Stroke::new(7.0, Color32::from_rgba_premultiplied(0x53, 0xe7, 0xff, 18)),
         ));
-        painter.add(Shape::line(points, Stroke::new(1.5, ACCENT)));
+        painter.add(Shape::line(
+            points.clone(),
+            Stroke::new(3.5, Color32::from_rgba_premultiplied(0x53, 0xe7, 0xff, 60)),
+        ));
+        painter.add(Shape::line(points, Stroke::new(1.4, ELECTRIC)));
     }
 
     fn draw_filter_section(&mut self, ui: &mut egui::Ui) {
-        section(ui, "FILTER", |ui| {
+        let led = self.filter_cutoff < 19_000.0 || self.filter_resonance > 0.05;
+        let (font, time) = (self.display_font(13.0), self.time);
+        section(ui, "Filter", font, Some(led), time, |ui| {
             ui.horizontal(|ui| {
                 if knob(ui, "CUTOFF", &mut self.filter_cutoff, 20.0, 20000.0, 15000.0, true, fmt_hz) {
                     self.voice_manager.lock().set_filter_cutoff(self.filter_cutoff);
@@ -720,7 +1102,14 @@ impl SynthUI {
     }
 
     fn draw_effects_section(&mut self, ui: &mut egui::Ui) {
-        section(ui, "EFFECTS", |ui| {
+        let led = self.chorus_mode != ChorusMode::Off
+            || self.reverb_wet > 0.01
+            || self.tape_wow > 0.01
+            || self.tape_flutter > 0.01
+            || self.tape_drive > 0.01
+            || self.tape_age > 0.01;
+        let (font, time) = (self.display_font(13.0), self.time);
+        section(ui, "Effects", font, Some(led), time, |ui| {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.label(mini_header("CHORUS"));
@@ -804,6 +1193,30 @@ impl SynthUI {
         }
     }
 
+    /// The keyboard sits on a walnut shelf with a red felt strip along the
+    /// fallboard, like an old upright.
+    fn draw_keyboard_shelf(&mut self, ui: &mut egui::Ui) {
+        let bg_idx = ui.painter().add(Shape::Noop);
+
+        self.draw_keyboard(ui);
+        ui.add_space(6.0);
+        ui.vertical_centered(|ui| {
+            ui.label(
+                RichText::new(
+                    "play: Z–M lower · Q–U upper  |  ↑ ↓ octave  |  knobs: drag · shift = fine · double-click = reset",
+                )
+                .size(10.5)
+                .color(Color32::from_rgb(0xc9, 0xb4, 0x8e)),
+            );
+        });
+
+        let shelf = ui.min_rect().expand2(vec2(18.0, 11.0));
+        let mut shapes = wood_shapes(shelf, 47);
+        shapes.extend(screw_shapes(shelf.left_bottom() + vec2(10.0, -9.0), 3.2, 200));
+        shapes.extend(screw_shapes(shelf.right_bottom() + vec2(-10.0, -9.0), 3.2, 201));
+        ui.painter().set(bg_idx, Shape::Vec(shapes));
+    }
+
     fn draw_keyboard(&mut self, ui: &mut egui::Ui) {
         let available_width = ui.available_width();
         let white_key_width = available_width / (7.0 * OCTAVES as f32);
@@ -822,9 +1235,9 @@ impl SynthUI {
         let key_states = self.voice_manager.lock().held_note_states();
 
         let painter = ui.painter();
-        painter.rect_filled(rect.expand(4.0), Rounding::same(6.0), BG_INSET);
+        painter.rect_filled(rect.expand(4.0), Rounding::same(4.0), BG_INSET);
 
-        // White keys
+        // White keys — aged ivory
         for visual_octave in 0..OCTAVES {
             for (i, &key_index) in WHITE_KEY_INDICES.iter().enumerate() {
                 if let Some(note) = self.calculate_midi_note(visual_octave as i32, key_index) {
@@ -840,7 +1253,15 @@ impl SynthUI {
                         sw: 4.0,
                         se: 4.0,
                     };
-                    painter.rect_filled(key_rect, rounding, if pressed { ACCENT } else { WHITE_KEY });
+                    if pressed {
+                        // Warm glow bleeding around the lit key
+                        painter.rect_filled(
+                            key_rect.expand(3.0),
+                            rounding,
+                            Color32::from_rgba_premultiplied(0xff, 0xb1, 0x4a, 55),
+                        );
+                    }
+                    painter.rect_filled(key_rect, rounding, if pressed { ACCENT } else { IVORY });
                     // Front-edge shading gives the keys a little depth
                     let shade = Rect::from_min_max(
                         pos2(key_rect.min.x, key_rect.max.y - 7.0),
@@ -849,7 +1270,12 @@ impl SynthUI {
                     painter.rect_filled(
                         shade,
                         rounding,
-                        if pressed { ACCENT_PRESSED_SHADE } else { WHITE_KEY_SHADE },
+                        if pressed { ACCENT_PRESSED_SHADE } else { IVORY_SHADE },
+                    );
+                    // Side shadow keeps the keys reading as separate slats
+                    painter.line_segment(
+                        [key_rect.right_top(), key_rect.right_bottom()],
+                        Stroke::new(1.0, Color32::from_rgba_premultiplied(0, 0, 0, 40)),
                     );
 
                     if key_index == 0 {
@@ -861,7 +1287,7 @@ impl SynthUI {
                             if pressed {
                                 ACCENT_INK
                             } else {
-                                Color32::from_rgb(0xb5, 0xb2, 0xa9)
+                                Color32::from_rgb(0xb5, 0xac, 0x93)
                             },
                         );
                     }
@@ -874,7 +1300,7 @@ impl SynthUI {
                             if pressed {
                                 ACCENT_INK
                             } else {
-                                Color32::from_rgb(0x9a, 0x97, 0x8f)
+                                Color32::from_rgb(0x9a, 0x91, 0x79)
                             },
                         );
                     }
@@ -882,7 +1308,7 @@ impl SynthUI {
             }
         }
 
-        // Black keys
+        // Black keys — ebony with a lit front edge
         for visual_octave in 0..OCTAVES {
             for (i, &key_index) in BLACK_KEY_INDICES.iter().enumerate() {
                 if let Some(note) = self.calculate_midi_note(visual_octave as i32, key_index) {
@@ -908,15 +1334,14 @@ impl SynthUI {
                     painter.rect_filled(
                         key_rect,
                         rounding,
-                        if pressed { ACCENT_PRESSED_SHADE } else { BLACK_KEY },
+                        if pressed { ACCENT_PRESSED_SHADE } else { EBONY },
                     );
                     if !pressed {
-                        // Lighter front edge so black keys read as raised
                         let edge = Rect::from_min_max(
                             pos2(key_rect.min.x, key_rect.max.y - 5.0),
                             key_rect.max,
                         );
-                        painter.rect_filled(edge, rounding, BLACK_KEY_EDGE);
+                        painter.rect_filled(edge, rounding, EBONY_EDGE);
                     }
                     painter.rect_stroke(key_rect, rounding, Stroke::new(1.0, BG_INSET));
 
@@ -932,6 +1357,13 @@ impl SynthUI {
                 }
             }
         }
+
+        // Red felt strip along the fallboard
+        painter.rect_filled(
+            Rect::from_min_max(rect.left_top(), pos2(rect.right(), rect.top() + 3.5)),
+            0.0,
+            FELT,
+        );
     }
 
     fn get_note_from_pointer(&self, pos: egui::Pos2, rect: Rect) -> Option<u8> {
