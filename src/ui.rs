@@ -35,7 +35,7 @@ pub struct SynthUI {
 
 impl SynthUI {
     pub fn new(voice_manager: Arc<Mutex<VoiceManager>>) -> Self {
-        Self {
+        let ui = Self {
             voice_manager,
             current_octave: 4,
             key_states: [false; 128],
@@ -56,7 +56,31 @@ impl SynthUI {
             reverb_decay: 0.5,
             reverb_wet: 0.5,
             pressed_keys: HashSet::new(),
+        };
+        // Push the UI defaults into the engine so what you see is what you hear
+        ui.apply_all_settings();
+        ui
+    }
+
+    fn apply_all_settings(&self) {
+        let mut vm = self.voice_manager.lock();
+        for voice in &mut vm.voices {
+            voice.oscillator.set_volume(self.volume);
+            voice.oscillator.set_waveform(self.waveform);
+            voice.envelope.set_attack(self.attack);
+            voice.envelope.set_decay(self.decay);
+            voice.envelope.set_sustain(self.sustain);
+            voice.envelope.set_release(self.release);
         }
+        vm.set_filter_cutoff(self.filter_cutoff);
+        vm.set_filter_resonance(self.filter_resonance);
+        vm.set_filter_drive(self.filter_drive);
+        vm.set_filter_saturation(self.filter_saturation);
+        vm.set_reverb_decay(self.reverb_decay);
+        vm.set_reverb_wet(self.reverb_wet);
+        vm.set_chorus_mode(self.chorus_mode);
+        vm.set_chorus_rate(self.chorus_rate);
+        vm.set_chorus_depth(self.chorus_depth);
     }
 
 
@@ -134,7 +158,7 @@ impl SynthUI {
 
     fn draw_header(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.heading("RustSynth");
+            ui.heading("Patina");
             ui.add_space(10.0);
             ui.label(format!("Octave: {}", self.current_octave));
             if ui.button("-").clicked() {
@@ -405,25 +429,22 @@ impl SynthUI {
     }
 
     fn handle_mouse_input(&mut self, ui: &egui::Ui, rect: Rect, response: &egui::Response) {
-        if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
-            if let Some(note) = self.get_note_from_pointer(pos, rect) {
-                if response.clicked() || (response.dragged() && Some(note) != self.active_mouse_note) {
-                    // Stop the previous note if there was one
-                    if let Some(old_note) = self.active_mouse_note.take() {
-                        self.stop_note(old_note);
+        // Hold the note for as long as the mouse button is down on the keyboard,
+        // gliding to a new note when the pointer drags across key boundaries
+        if response.is_pointer_button_down_on() || response.dragged() {
+            if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
+                if let Some(note) = self.get_note_from_pointer(pos, rect) {
+                    if Some(note) != self.active_mouse_note {
+                        if let Some(old_note) = self.active_mouse_note.take() {
+                            self.stop_note(old_note);
+                        }
+                        self.play_note(note);
+                        self.active_mouse_note = Some(note);
                     }
-                    // Play the new note
-                    self.play_note(note);
-                    self.active_mouse_note = Some(note);
                 }
             }
-        }
-
-        // Check if the mouse button is released or if the pointer leaves the keyboard area
-        if response.drag_released() || (!response.dragged() && self.active_mouse_note.is_some()) {
-            if let Some(old_note) = self.active_mouse_note.take() {
-                self.stop_note(old_note);
-            }
+        } else if let Some(old_note) = self.active_mouse_note.take() {
+            self.stop_note(old_note);
         }
     }
 
@@ -451,7 +472,7 @@ impl SynthUI {
     }
 
     fn play_note(&mut self, note: u8) {
-        self.voice_manager.lock().note_on(note);
+        self.voice_manager.lock().note_on(note, 0.9);
         self.key_states[note as usize] = true;
         println!("Playing note: {} ({:.2} Hz)", note, Oscillator::note_to_frequency(note));
     }

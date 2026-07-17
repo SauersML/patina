@@ -16,7 +16,7 @@ pub struct Oscillator {
     sample_rate: f32,
     volume: AtomicU32,
     waveform: Waveform,
-    detune: f32,
+    drift: f32,
 }
 
 impl Oscillator {
@@ -27,7 +27,7 @@ impl Oscillator {
             sample_rate,
             volume: AtomicU32::new(1.0f32.to_bits()),
             waveform: Waveform::Sawtooth,
-            detune: 0.001, // 0.1% detune
+            drift: 0.0,
         }
     }
 
@@ -35,8 +35,10 @@ impl Oscillator {
         let frequency = f32::from_bits(self.frequency.load(Ordering::Relaxed));
         let volume = f32::from_bits(self.volume.load(Ordering::Relaxed));
         
-        // Apply slight detuning
-        let detuned_frequency = frequency * (1.0 + self.detune * (2.0 * rand::random::<f32>() - 1.0));
+        // Slow bounded random walk models analog pitch drift; fresh per-sample
+        // noise here acts as FM noise and adds audible hiss
+        self.drift = (self.drift + (rand::random::<f32>() - 0.5) * 2e-5) * 0.9995;
+        let detuned_frequency = frequency * (1.0 + self.drift);
         
         // More precise phase accumulation
         self.phase += detuned_frequency as f64 / self.sample_rate as f64;
@@ -102,7 +104,9 @@ impl Oscillator {
     }
 
     fn soft_clip(&self, x: f32) -> f32 {
-        x * (1.5 - 0.5 * x * x).tanh()
+        // Cubic soft clip; the previous formula inverted polarity for |x| > ~1.7
+        let x = x.clamp(-1.5, 1.5);
+        x * (1.0 - x * x / 6.75)
     }
 
 

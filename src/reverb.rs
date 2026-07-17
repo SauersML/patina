@@ -90,30 +90,29 @@ impl LateReflections {
 
     fn process(&mut self, input: f32) -> f32 {
         let mut output = 0.0;
+        let n = self.delay_lines.len().min(4);
 
-        // Read from delay lines and apply filtering
-        let temp_outputs: Vec<f32> = self.delay_lines.iter_mut()
-            .zip(self.filters.iter_mut())
-            .map(|(delay_line, filter)| {
-                let delayed = delay_line.read(0);
-                filter.process(delayed)
-            })
-            .collect();
+        // Read from delay lines and apply filtering.
+        // Fixed-size buffers: this runs per sample on the audio thread,
+        // so heap allocation here is not acceptable.
+        let mut temp_outputs = [0.0f32; 4];
+        for i in 0..n {
+            let delayed = self.delay_lines[i].read(0);
+            temp_outputs[i] = self.filters[i].process(delayed);
+        }
 
         // Apply feedback matrix
-        let feedback_outputs: Vec<f32> = (0..self.delay_lines.len())
-            .map(|i| {
-                temp_outputs.iter()
-                    .enumerate()
-                    .map(|(j, &out)| out * self.feedback_matrix[i][j])
-                    .sum::<f32>()
-            })
-            .collect();
+        let mut feedback_outputs = [0.0f32; 4];
+        for i in 0..n {
+            for j in 0..n {
+                feedback_outputs[i] += temp_outputs[j] * self.feedback_matrix[i][j];
+            }
+        }
 
         // Update delay lines
-        for (i, delay_line) in self.delay_lines.iter_mut().enumerate() {
+        for i in 0..n {
             let new_sample = input + feedback_outputs[i] * self.decay;
-            delay_line.write(new_sample);
+            self.delay_lines[i].write(new_sample);
             output += new_sample;
         }
 
@@ -142,7 +141,7 @@ impl Reverb {
             eq: Equalizer::new(sample_rate),
             wet: 0.7,
             dry: 0.3,
-            second_reverb: SecondReverb::new(),
+            second_reverb,
         }
     }
 
@@ -182,10 +181,6 @@ impl Reverb {
     pub fn set_wet(&mut self, wet: f32) {
         self.wet = wet.clamp(0.0, 1.0);
         self.dry = 1.0 - self.wet;
-    }
-
-    pub fn get_wet(&self) -> f32 {
-        self.wet
     }
 }
 

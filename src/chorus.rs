@@ -1,7 +1,5 @@
 use std::f32::consts::PI;
 use rand::Rng;
-use std::sync::Arc;
-use std::sync::Mutex;
 
 pub struct Chorus {
     buffer_left: Vec<f32>,
@@ -10,17 +8,19 @@ pub struct Chorus {
     size: usize,
     mode: ChorusMode,
     sample_rate: f32,
-    low_pass_filter: LowPassFilter,
-    high_pass_filter: HighPassFilter,
-    noise_generator: Arc<Mutex<NoiseGenerator>>,
+    // Separate filter state per channel; sharing one filter between left and
+    // right corrupts both channels' state
+    low_pass_left: LowPassFilter,
+    low_pass_right: LowPassFilter,
+    high_pass_left: HighPassFilter,
+    high_pass_right: HighPassFilter,
+    noise_generator: NoiseGenerator,
     saturation: Saturation,
     feedback: f32,
     voices: Vec<Voice>,
     rate: f32,
     depth: f32,
     wet_dry_mix: f32,
-    prev_delay_left: Vec<f32>,
-    prev_delay_right: Vec<f32>,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -73,9 +73,11 @@ impl Chorus {
             size,
             mode: ChorusMode::Off,
             sample_rate,
-            low_pass_filter: LowPassFilter::new(sample_rate),
-            high_pass_filter: HighPassFilter::new(sample_rate),
-            noise_generator: Arc::new(Mutex::new(NoiseGenerator::new())),
+            low_pass_left: LowPassFilter::new(sample_rate),
+            low_pass_right: LowPassFilter::new(sample_rate),
+            high_pass_left: HighPassFilter::new(sample_rate),
+            high_pass_right: HighPassFilter::new(sample_rate),
+            noise_generator: NoiseGenerator::new(),
             saturation: Saturation::new(),
             feedback: 0.25,
             rate: 0.5,
@@ -86,8 +88,6 @@ impl Chorus {
                 Voice::new(0.95, 0.953, 0.5),
             ],
             wet_dry_mix: 0.5,
-            prev_delay_left: vec![0.0; 3],
-            prev_delay_right: vec![0.0; 3],
         }
     }
 
@@ -138,8 +138,6 @@ impl Chorus {
                 self.wet_dry_mix = 0.6;
             },
         }
-        self.prev_delay_left = vec![0.0; self.voices.len()];
-        self.prev_delay_right = vec![0.0; self.voices.len()];
     }
 
 
@@ -148,10 +146,10 @@ impl Chorus {
             return (input_left, input_right);
         }
 
-        let high_passed_left = self.high_pass_filter.process(input_left);
-        let high_passed_right = self.high_pass_filter.process(input_right);
-        let filtered_input_left = self.low_pass_filter.process(high_passed_left);
-        let filtered_input_right = self.low_pass_filter.process(high_passed_right);
+        let high_passed_left = self.high_pass_left.process(input_left);
+        let high_passed_right = self.high_pass_right.process(input_right);
+        let filtered_input_left = self.low_pass_left.process(high_passed_left);
+        let filtered_input_right = self.low_pass_right.process(high_passed_right);
 
         let feedback_left = self.buffer_left[self.index];
         let feedback_right = self.buffer_right[self.index];
@@ -165,7 +163,7 @@ impl Chorus {
 
         let (left_output, right_output) = self.calculate_delay_samples(input_with_feedback_left, input_with_feedback_right);
 
-        let noise = self.noise_generator.lock().unwrap().generate();
+        let noise = self.noise_generator.generate();
         let left_output = left_output + noise;
         let right_output = right_output + noise;
 

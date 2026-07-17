@@ -19,6 +19,7 @@ use crate::voice_manager::VoiceManager;
 /// Currently we're handling the basic note events, but this enum can be extended
 /// in the future to handle control changes, pitch bend, etc.
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // channel-based API kept alongside the direct VoiceManager path
 pub enum MidiEvent {
     /// Note On event with note number (0-127) and velocity (0-127)
     NoteOn { note: u8, velocity: u8 },
@@ -58,6 +59,7 @@ pub struct MidiHandler {
     sender: Sender<MidiEvent>,
 
     /// Channel for receiving MIDI events (for the channel-based approach).
+    #[allow(dead_code)]
     receiver: Receiver<MidiEvent>,
 
     /// Reference to the VoiceManager for direct event handling.
@@ -65,6 +67,7 @@ pub struct MidiHandler {
     voice_manager: Option<Arc<Mutex<VoiceManager>>>,
 }
 
+#[allow(dead_code)] // the channel-based helpers are unused but part of the public surface
 impl MidiHandler {
     /// Creates a new MidiHandler and returns the handler along with a receiver
     /// for MIDI events.
@@ -88,7 +91,7 @@ impl MidiHandler {
         let (sender, receiver) = bounded(128);
         let receiver_clone = receiver.clone();
     
-        let midi_in = MidiInput::new("rust_synth_midi_input")?;
+        let midi_in = MidiInput::new("patina_midi_input")?;
 
         let mut handler = Self {
             midi_in: Some(midi_in),
@@ -174,7 +177,7 @@ impl MidiHandler {
     pub fn scan_devices(&mut self) -> Result<(), Box<dyn Error>> {
         // Create a new MidiInput instance if needed
         if self.midi_in.is_none() {
-            self.midi_in = Some(MidiInput::new("rust_synth_midi_input")?);
+            self.midi_in = Some(MidiInput::new("patina_midi_input")?);
         }
         
         let midi_in = self.midi_in.as_ref().unwrap();
@@ -273,7 +276,7 @@ impl MidiHandler {
         println!("Attempting to connect to MIDI device #{}: {}", idx, port_name);
         
         // We need to create a new MidiInput for the connection
-        let mut midi_in = MidiInput::new("rust_synth_midi_connection")?;
+        let mut midi_in = MidiInput::new("patina_midi_connection")?;
         midi_in.ignore(Ignore::None);
         
         // Clone sender and voice_manager for the closure
@@ -283,7 +286,7 @@ impl MidiHandler {
         // Add debug print in the callback to confirm we're receiving MIDI messages
         let connection = midi_in.connect(
             &port,
-            "rust_synth",
+            "patina",
             move |_timestamp, message, _| {
                 // This closure is called for each incoming MIDI message
                 
@@ -302,7 +305,7 @@ impl MidiHandler {
                                     // This is a genuine Note On message
                                     if let Some(vm) = &voice_manager {
                                         // Direct approach: call note_on() on the VoiceManager
-                                        vm.lock().note_on(note);
+                                        vm.lock().note_on(note, velocity as f32 / 127.0);
                                     } else {
                                         // Channel approach: send a NoteOn event through the channel
                                         let _ = sender.send(MidiEvent::NoteOn { 
@@ -403,8 +406,8 @@ impl MidiHandler {
         // This we don't stall the audio thread if the channel is empty
         while let Ok(event) = self.receiver.try_recv() {
             match event {
-                MidiEvent::NoteOn { note, velocity: _ } => {
-                    voice_manager.note_on(note);
+                MidiEvent::NoteOn { note, velocity } => {
+                    voice_manager.note_on(note, velocity as f32 / 127.0);
                 },
                 MidiEvent::NoteOff { note, velocity: _ } => {
                     voice_manager.note_off(note);

@@ -6,7 +6,7 @@ pub struct VoiceManager {
     pub voices: Vec<Voice>,
     reverb: Reverb,
     chorus: Chorus,
-    active_notes: std::collections::HashSet<u8>,
+    note_counter: u64,
 }
 
 impl VoiceManager {
@@ -15,32 +15,83 @@ impl VoiceManager {
             voices: (0..num_voices).map(|_| Voice::new(sample_rate)).collect(),
             reverb: Reverb::new(sample_rate),
             chorus: Chorus::new(sample_rate),
-            active_notes: std::collections::HashSet::new(),
+            note_counter: 0,
         }
     }
 
-    pub fn note_on(&mut self, note: u8) {
-        if self.active_notes.insert(note) {
-            if let Some(inactive_voice) = self.voices.iter_mut().find(|v| !v.is_active()) {
-                inactive_voice.trigger(note);
-            } else if let Some(oldest_voice) = self.find_oldest_voice() {
-                oldest_voice.trigger(note);
-            }
+    pub fn note_on(&mut self, note: u8, velocity: f32) {
+        self.note_counter += 1;
+        let age = self.note_counter;
+
+        // Retrigger if this note is already held
+        if let Some(voice) = self.voices.iter_mut().find(|v| v.is_held() && v.note == Some(note)) {
+            voice.trigger(note, velocity, age);
+            return;
+        }
+
+        // Prefer a fully idle voice, then the longest-releasing voice,
+        // then steal the oldest held voice
+        let index = self
+            .voices
+            .iter()
+            .position(|v| !v.is_active())
+            .or_else(|| {
+                self.voices
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, v)| !v.is_held())
+                    .min_by_key(|(_, v)| v.age())
+                    .map(|(i, _)| i)
+            })
+            .or_else(|| {
+                self.voices
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, v)| v.age())
+                    .map(|(i, _)| i)
+            });
+
+        if let Some(i) = index {
+            self.voices[i].trigger(note, velocity, age);
         }
     }
 
     pub fn note_off(&mut self, note: u8) {
-        if self.active_notes.remove(&note) {
-            for voice in self.voices.iter_mut() {
-                if voice.note == Some(note) {
-                    voice.release();
-                }
+        for voice in self.voices.iter_mut() {
+            if voice.is_held() && voice.note == Some(note) {
+                voice.release();
             }
         }
     }
 
-    fn find_oldest_voice(&mut self) -> Option<&mut Voice> {
-        self.voices.iter_mut().min_by_key(|v| v.note)
+    pub fn set_volume(&mut self, volume: f32) {
+        for voice in &self.voices {
+            voice.oscillator.set_volume(volume);
+        }
+    }
+
+    pub fn set_attack(&mut self, attack: f32) {
+        for voice in &self.voices {
+            voice.envelope.set_attack(attack);
+        }
+    }
+
+    pub fn set_decay(&mut self, decay: f32) {
+        for voice in &self.voices {
+            voice.envelope.set_decay(decay);
+        }
+    }
+
+    pub fn set_sustain(&mut self, sustain: f32) {
+        for voice in &self.voices {
+            voice.envelope.set_sustain(sustain);
+        }
+    }
+
+    pub fn set_release(&mut self, release: f32) {
+        for voice in &self.voices {
+            voice.envelope.set_release(release);
+        }
     }
 
     pub fn set_filter_cutoff(&mut self, cutoff: f32) {
@@ -67,50 +118,24 @@ impl VoiceManager {
         }
     }
 
-
     pub fn render_next(&mut self) -> (f32, f32) {
-        let mut left_output = 0.0;
-        let mut right_output = 0.0;
-
-        let mut active_voices = 0;
+        let mut mix = 0.0;
         for voice in &mut self.voices {
             if voice.is_active() {
-                let voice_output = voice.render_next();
-                left_output += voice_output;
-                right_output += voice_output;
-                active_voices += 1;
+                mix += voice.render_next();
             }
         }
-    
-        if active_voices > 0 {
-            let normalization_factor = 1.0 / (active_voices as f32).sqrt();
-            left_output *= normalization_factor;
-            right_output *= normalization_factor;
-        }
-    
-        // Apply reverb
-        let (reverb_left, reverb_right) = self.reverb.process(left_output, right_output);
 
-        // Mix dry and reverb signals
-        let wet_amount = self.reverb.get_wet();
+        // Fixed headroom rather than per-sample renormalization by active-voice
+        // count, which made held notes jump in volume as other notes came and went
+        mix *= 0.35;
 
+        // Reverb and chorus each handle their own dry/wet mix internally
+        let (left, right) = self.reverb.process(mix, mix);
+        let (left, right) = self.chorus.process(left, right);
 
-
-        let left = left_output * (1.0 - wet_amount) + reverb_left * wet_amount;
-        let right = right_output * (1.0 - wet_amount) + reverb_right * wet_amount;
-
-        // Apply chorus to the reverb output
-        let (chorus_left, chorus_right) = self.chorus.process(left, right);
-
-        // Mix reverb and chorus
-        let chorus_mix = 0.8;
-        let left = left * (1.0 - chorus_mix) + chorus_left * chorus_mix;
-        let right = right * (1.0 - chorus_mix) + chorus_right * chorus_mix;
-
-        (left, right)
+        (soft_limit(left), soft_limit(right))
     }
-
-
 
     pub fn set_reverb_decay(&mut self, decay: f32) {
         self.reverb.set_decay(decay.clamp(0.0, 0.99));
@@ -131,4 +156,8 @@ impl VoiceManager {
     pub fn set_chorus_depth(&mut self, depth: f32) {
         self.chorus.set_depth(depth);
     }
+}
+
+fn soft_limit(x: f32) -> f32 {
+    x.tanh()
 }

@@ -7,6 +7,7 @@ mod filter;
 mod reverb;
 mod chorus;
 mod midi_handler;
+mod song;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Sample, SampleFormat, SizedSample};
@@ -35,7 +36,7 @@ struct SynthApp {
     running: Arc<AtomicBool>,
 }
 
-fn run<T>(device: &cpal::Device, config: &cpal::StreamConfig) -> Result<(), Box<dyn std::error::Error>>
+fn run<T>(device: &cpal::Device, config: &cpal::StreamConfig, song_path: Option<&str>) -> Result<(), Box<dyn std::error::Error>>
 where
     T: Sample + SizedSample + FromSample<f32>,
 {
@@ -61,13 +62,18 @@ where
 
     let ui = SynthUI::new(Arc::clone(&voice_manager));
 
+    if let Some(path) = song_path {
+        let events = song::load_song(path)?;
+        song::spawn_player(events, Arc::clone(&voice_manager));
+    }
+
     let options = eframe::NativeOptions {
         initial_window_size: Some(egui::Vec2::new(1200.0, 800.0)),
         ..Default::default()
     };
 
     eframe::run_native(
-        "Rust Synth",
+        "Patina",
         options,
         Box::new(|_cc| Box::new(SynthApp { ui, _stream: stream, running })),
     ).map_err(|e| e.to_string())?;
@@ -79,8 +85,10 @@ fn write_data<T>(output: &mut [T], channels: usize, voice_manager: &Arc<Mutex<Vo
 where
     T: Sample + FromSample<f32>,
 {
+    // Lock once per callback, not once per frame
+    let mut vm = voice_manager.lock();
     for frame in output.chunks_mut(channels) {
-        let (left, right) = voice_manager.lock().render_next();
+        let (left, right) = vm.render_next();
         let left_sample = T::from_sample(left);
         let right_sample = T::from_sample(right);
 
@@ -91,6 +99,14 @@ where
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = std::env::args().collect();
+    let song_path = args
+        .iter()
+        .position(|a| a == "--play")
+        .and_then(|i| args.get(i + 1))
+        .cloned();
+    let song_path = song_path.as_deref();
+
     let host = cpal::default_host();
     let device = host.default_output_device().expect("no output device available");
 
@@ -147,11 +163,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config: cpal::StreamConfig = supported_config.into();
 
     match sample_format {
-        SampleFormat::F32 => run::<f32>(&device, &config)?,
-        SampleFormat::I16 => run::<i16>(&device, &config)?,
-        SampleFormat::U16 => run::<u16>(&device, &config)?,
-        SampleFormat::U8 => run::<u8>(&device, &config)?,
-        SampleFormat::I8 => run::<i8>(&device, &config)?,
+        SampleFormat::F32 => run::<f32>(&device, &config, song_path)?,
+        SampleFormat::I16 => run::<i16>(&device, &config, song_path)?,
+        SampleFormat::U16 => run::<u16>(&device, &config, song_path)?,
+        SampleFormat::U8 => run::<u8>(&device, &config, song_path)?,
+        SampleFormat::I8 => run::<i8>(&device, &config, song_path)?,
         _ => {
             println!("Unsupported sample format: {:?}, trying to use a different format...", sample_format);
             
@@ -168,11 +184,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("Trying alternative config: {:?}", config);
                     
                     match format {
-                        SampleFormat::F32 => return run::<f32>(&device, &stream_config),
-                        SampleFormat::I16 => return run::<i16>(&device, &stream_config),
-                        SampleFormat::U16 => return run::<u16>(&device, &stream_config),
-                        SampleFormat::U8 => return run::<u8>(&device, &stream_config),
-                        SampleFormat::I8 => return run::<i8>(&device, &stream_config),
+                        SampleFormat::F32 => return run::<f32>(&device, &stream_config, song_path),
+                        SampleFormat::I16 => return run::<i16>(&device, &stream_config, song_path),
+                        SampleFormat::U16 => return run::<u16>(&device, &stream_config, song_path),
+                        SampleFormat::U8 => return run::<u8>(&device, &stream_config, song_path),
+                        SampleFormat::I8 => return run::<i8>(&device, &stream_config, song_path),
                         _ => continue,
                     }
                 }

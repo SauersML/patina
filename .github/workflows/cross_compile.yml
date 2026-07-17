@@ -79,15 +79,15 @@ jobs:
         shell: bash
         run: |
           if [ "${{ matrix.use_cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }} --bin RustWave
+            cross build --release --target ${{ matrix.target }} --bin patina
           else
-            cargo build --release --target ${{ matrix.target }} --bin RustWave
+            cargo build --release --target ${{ matrix.target }} --bin patina
           fi
     
       # 6) Copy the artifact to a friendly name
       - name: Stage artifact
         run: |
-          BIN_NAME="RustWave"
+          BIN_NAME="patina"
           SUFFIX=""
           if [[ "${{ matrix.target }}" == *"windows"* ]]; then
             SUFFIX=".exe"
@@ -107,4 +107,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: ${{ format('{0}-{1}{2}', 'RustWave', matrix.artifact_suffix, contains(matrix.target, 'windows') && '.exe' || '') }}
+          path: ${{ format('{0}-{1}{2}', 'patina', matrix.artifact_suffix, contains(matrix.target, 'windows') && '.exe' || '') }}
