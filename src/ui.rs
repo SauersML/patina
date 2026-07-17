@@ -29,7 +29,8 @@ const BG2: Color32 = Color32::from_rgb(0xd4, 0xe7, 0xef); // light controls
 const BG2_HOVER: Color32 = Color32::from_rgb(0xe4, 0xf2, 0xf8);
 const INSET: Color32 = Color32::from_rgb(0x0a, 0x11, 0x14); // device screens
 
-// Dark hairlines: these sit on white glass now
+// TOUCH is the single interaction accent (deep aqua): arcs, lit keys,
+// selection gloss. Dark hairlines sit on white glass.
 const HAIRLINE: Color32 = Color32::from_rgba_premultiplied(0x24, 0x3a, 0x46, 45);
 const HAIRLINE_HI: Color32 = Color32::from_rgba_premultiplied(0x1d, 0x33, 0x40, 85);
 
@@ -42,10 +43,10 @@ const WELL_TXT: Color32 = Color32::from_rgb(0x7f, 0x96, 0xa0);
 const WELL_TXT_HOVER: Color32 = Color32::from_rgb(0xc6, 0xd8, 0xde);
 const WELL_LINE: Color32 = Color32::from_rgba_premultiplied(0xff, 0xff, 0xff, 22);
 
-const AMBER: Color32 = Color32::from_rgb(0x12, 0x9e, 0xc0);
-const AMBER_HI: Color32 = Color32::from_rgb(0x1e, 0xc2, 0xe8);
-const AMBER_DEEP: Color32 = Color32::from_rgb(0x0d, 0x7c, 0x98);
-const AMBER_INK: Color32 = Color32::from_rgb(0x05, 0x33, 0x40);
+const TOUCH: Color32 = Color32::from_rgb(0x12, 0x9e, 0xc0);
+const TOUCH_HI: Color32 = Color32::from_rgb(0x1e, 0xc2, 0xe8);
+const TOUCH_DEEP: Color32 = Color32::from_rgb(0x0d, 0x7c, 0x98);
+const TOUCH_INK: Color32 = Color32::from_rgb(0x05, 0x33, 0x40);
 
 const CYAN: Color32 = Color32::from_rgb(0x35, 0xdf, 0xf5);
 
@@ -409,7 +410,7 @@ fn knob(
             .collect();
         painter.add(Shape::line(
             points,
-            Stroke::new(2.5, if engaged { AMBER_HI } else { AMBER }),
+            Stroke::new(2.5, if engaged { TOUCH_HI } else { TOUCH }),
         ));
     }
     // Arc endpoint
@@ -417,7 +418,7 @@ fn knob(
     painter.circle_filled(
         center + vec2(end_angle.cos(), end_angle.sin()) * arc_r,
         2.0,
-        if engaged { AMBER_HI } else { AMBER },
+        if engaged { TOUCH_HI } else { TOUCH },
     );
 
     // Committed 2D: a flat disc; the arc, ticks, and pointer carry it
@@ -442,7 +443,7 @@ fn knob(
         [center + dir * 5.0, center + dir * 12.5],
         Stroke::new(
             2.0,
-            if engaged { AMBER_HI } else { Color32::from_rgb(0xee, 0xf4, 0xf6) },
+            if engaged { TOUCH_HI } else { Color32::from_rgb(0xee, 0xf4, 0xf6) },
         ),
     );
 
@@ -451,7 +452,7 @@ fn knob(
         Align2::CENTER_BOTTOM,
         fmt(*value),
         FontId::monospace(10.0),
-        if engaged { AMBER_HI } else { TXT_LOW },
+        if engaged { TOUCH_HI } else { TXT_LOW },
     );
 
     changed
@@ -861,11 +862,11 @@ impl SynthUI {
         v.widgets.open.corner_radius = CornerRadius::same(6);
         v.widgets.inactive.fg_stroke = Stroke::new(1.0, TXT_MID);
         v.widgets.hovered.fg_stroke = Stroke::new(1.0, TXT);
-        v.widgets.active.fg_stroke = Stroke::new(1.0, AMBER);
+        v.widgets.active.fg_stroke = Stroke::new(1.0, TOUCH);
         v.widgets.inactive.bg_stroke = Stroke::new(1.0, HAIRLINE);
         v.widgets.hovered.bg_stroke = Stroke::new(1.0, HAIRLINE_HI);
         v.selection.bg_fill = Color32::from_rgb(0x10, 0x3a, 0x46);
-        v.selection.stroke = Stroke::new(1.0, AMBER);
+        v.selection.stroke = Stroke::new(1.0, TOUCH);
 
         ctx.set_style(style);
     }
@@ -1182,7 +1183,7 @@ impl SynthUI {
                 Err(e) => eprintln!("Could not save patch: {e}"),
             }
         }
-        let color = if response.hovered() { AMBER_HI } else { AMBER };
+        let color = if response.hovered() { TOUCH_HI } else { TOUCH };
         painter.rect_stroke(
             cell,
             CornerRadius::same(6),
@@ -1387,7 +1388,7 @@ impl SynthUI {
                     segmented(ui, "sync", &["FREE", "SYNC"], if self.sync { 1 } else { 0 })
                 {
                     self.sync = i == 1;
-                    self.voice_manager.lock().set_sync(self.sync);
+                    Param::SyncSel.apply(&mut self.voice_manager.lock(), i as f32);
                 }
             });
         });
@@ -1641,7 +1642,7 @@ impl SynthUI {
                             ChorusMode::III,
                             ChorusMode::IV,
                         ][i];
-                        self.voice_manager.lock().set_chorus_mode(self.chorus_mode);
+                        Param::ChorusModeSel.apply(&mut self.voice_manager.lock(), i as f32);
                     }
                     ui.add_space(2.0);
                     ui.horizontal(|ui| {
@@ -1934,7 +1935,7 @@ impl SynthUI {
                         );
                     }
                     let hovered = hovered_note == Some(note) && !pressed;
-                    painter.rect_filled(key_rect, rounding, if pressed { AMBER } else { IVORY });
+                    painter.rect_filled(key_rect, rounding, if pressed { TOUCH } else { IVORY });
                     if hovered {
                         painter.rect_filled(
                             key_rect,
@@ -1960,7 +1961,7 @@ impl SynthUI {
                     painter.rect_filled(
                         shade,
                         rounding,
-                        if pressed { AMBER_DEEP } else { IVORY_SHADE },
+                        if pressed { TOUCH_DEEP } else { IVORY_SHADE },
                     );
                     painter.line_segment(
                         [key_rect.right_top(), key_rect.right_bottom()],
@@ -1974,7 +1975,7 @@ impl SynthUI {
                             format!("C{}", self.current_octave + visual_octave as i32),
                             FontId::proportional(8.5),
                             if pressed {
-                                AMBER_INK
+                                TOUCH_INK
                             } else {
                                 Color32::from_rgb(0xb8, 0xb1, 0x9e)
                             },
@@ -1987,7 +1988,7 @@ impl SynthUI {
                             hint,
                             FontId::proportional(10.0),
                             if pressed {
-                                AMBER_INK
+                                TOUCH_INK
                             } else {
                                 Color32::from_rgb(0xa3, 0x9c, 0x88)
                             },
@@ -2026,7 +2027,7 @@ impl SynthUI {
                     painter.rect_filled(
                         key_rect,
                         rounding,
-                        if pressed { AMBER_DEEP } else { EBONY },
+                        if pressed { TOUCH_DEEP } else { EBONY },
                     );
                     if hovered {
                         painter.rect_filled(
@@ -2059,7 +2060,7 @@ impl SynthUI {
                             Align2::CENTER_CENTER,
                             hint,
                             FontId::proportional(9.5),
-                            if pressed { AMBER_INK } else { TXT_LOW },
+                            if pressed { TOUCH_INK } else { TXT_LOW },
                         );
                     }
                 }

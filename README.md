@@ -41,12 +41,13 @@ format for programmatic playback and parameter automation.
 
 3. Or play a song file:
    ```
-   cargo run --release -- --play songs/nightdrive.song
+   cargo run --release            # shuffles to a random song
+   cargo run --release -- --play songs/ferris-wheel.song
    ```
 
 ## 🎚️ Patches
 
-The strip at the top of the panel holds the factory bank (US 3,981,218 style — one click retunes every block at once, live, even under held notes): **Init · Velvet · Acid · Pluck · Ghost · Fathom · Cry · Cathedral**. `SAVE` snapshots your current knobs to `patches/user-N.patch` — plain text, same parameter names as song automation, edit at will.
+The strip at the top of the panel holds the factory bank (US 3,981,218 style — one click retunes every block at once, live, even under held notes): **Init · Glasswing · Rust Engine · Peppermint · Sea of Dials · Fathom · Tears · Moths · Anemone · Thunder · Choir** — each with its own keyboard register (a bass patch arrives at octave 2). `SAVE` snapshots your current knobs to `patches/user-N.patch` — plain text, same parameter names as song automation, edit at will.
 
 ## 🎛️ Usage
 
@@ -57,6 +58,26 @@ Once Patina is running, you'll see the GUI with various controls:
 - Play notes using your computer keyboard (Z-M for lower octave, Q-P for higher octave).
 - Click or drag on the on-screen keyboard to play notes with your mouse.
 - Connect a MIDI keyboard (or enable the macOS IAC Driver for virtual MIDI).
+
+## 🎹 MIDI
+
+Every automatable parameter answers to a controller, scaled exactly like
+its on-screen knob (log where the knob is log). One chart, defined once in
+`Param::from_cc`:
+
+| CC | Parameter | CC | Parameter |
+|----|-----------|----|-----------|
+| 1 | mod wheel (vibrato) | 85/86 | osc 2 level / pitch |
+| 5 | glide time | 87/88 | osc 3 level / pitch |
+| 7 | volume | 89/90 | FM / ring |
+| 64 | sustain pedal | 91/93/95 | reverb / chorus / spring |
+| 71/74 | resonance / cutoff | 92/94 | tape wow / flutter |
+| 72/73/75/79 | release / attack / decay / sustain | 102–111 | hpf, drive, saturation, key track, filter env (A/D/S/R), chorus rate |
+| 76/77/78 | LFO rate / pitch / filter | 112–119 | chorus mode, waveforms, circuit, sync, tape drive/age |
+
+Pitch bend is ±2 semitones. **Program change** switches factory patches.
+Songs speak the same language — `automate bend`, `automate mod_wheel`, and
+`automate pedal` work like any other parameter.
 
 ## 📜 Song files
 

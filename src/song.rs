@@ -879,10 +879,10 @@ mod tests {
     #[test]
     fn bundled_songs_parse() {
         for text in [
-            include_str!("../songs/nightdrive.song"),
-            include_str!("../songs/acid.song"),
-            include_str!("../songs/hexachrome.song"),
-            include_str!("../songs/pulsar.song"),
+            include_str!("../songs/ferris-wheel.song"),
+            include_str!("../songs/grid-runner.song"),
+            include_str!("../songs/tide-engine.song"),
+            include_str!("../songs/polaris.song"),
         ] {
             let events = parse_song(text).unwrap();
             assert!(!events.is_empty());
