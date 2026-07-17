@@ -32,11 +32,12 @@
 //   value. Shapes: lin (default), exp (musical/geometric — right for
 //   frequencies), log (fast start), smooth (S-curve), step (jump at the end).
 //
-// Automatable parameters: volume, detune, cutoff, resonance, drive,
-// saturation, attack, decay, sustain, release, filter_env (octaves, -5..+5),
-// filter_attack, filter_decay, filter_sustain, filter_release, reverb_decay,
-// reverb_wet, chorus_mode (0=off..4=IV, use plain sets), chorus_rate,
-// chorus_depth, tape_wow, tape_flutter, tape_drive, tape_age.
+// Automatable parameters: volume, waveform (0=sine 1=square 2=saw 3=tri,
+// use plain sets), detune, cutoff, resonance, drive, saturation, attack,
+// decay, sustain, release, filter_env (octaves, -5..+5), filter_attack,
+// filter_decay, filter_sustain, filter_release, reverb_decay, reverb_wet,
+// chorus_mode (0=off..4=IV, use plain sets), chorus_rate, chorus_depth,
+// tape_wow, tape_flutter, tape_drive, tape_age.
 
 use std::sync::Arc;
 use std::thread;
@@ -45,6 +46,7 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 
 use crate::chorus::ChorusMode;
+use crate::oscillator::Waveform;
 use crate::voice_manager::VoiceManager;
 
 // Automation curves are sampled at this many points per beat
@@ -53,6 +55,7 @@ const AUTOMATION_STEPS_PER_BEAT: f64 = 32.0;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Param {
     Volume,
+    WaveformSel,
     Detune,
     Cutoff,
     Resonance,
@@ -82,6 +85,7 @@ impl Param {
     fn from_name(name: &str) -> Option<Self> {
         Some(match name {
             "volume" => Param::Volume,
+            "waveform" => Param::WaveformSel,
             "detune" => Param::Detune,
             "cutoff" => Param::Cutoff,
             "resonance" => Param::Resonance,
@@ -112,6 +116,15 @@ impl Param {
     fn apply(self, vm: &mut VoiceManager, value: f32) {
         match self {
             Param::Volume => vm.set_volume(value),
+            Param::WaveformSel => {
+                let waveform = match value.round() as i32 {
+                    i32::MIN..=0 => Waveform::Sine,
+                    1 => Waveform::Square,
+                    2 => Waveform::Sawtooth,
+                    _ => Waveform::Triangle,
+                };
+                vm.set_waveform(waveform);
+            }
             Param::Detune => vm.set_detune(value),
             Param::Cutoff => vm.set_filter_cutoff(value),
             Param::Resonance => vm.set_filter_resonance(value),
@@ -617,6 +630,7 @@ mod tests {
         for text in [
             include_str!("../songs/nightdrive.song"),
             include_str!("../songs/acid.song"),
+            include_str!("../songs/hexachrome.song"),
         ] {
             let events = parse_song(text).unwrap();
             assert!(!events.is_empty());

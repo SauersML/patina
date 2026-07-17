@@ -415,6 +415,7 @@ impl SynthUI {
             let vm = self.voice_manager.lock();
             let p = vm.params;
             self.volume = p.volume;
+            self.waveform = p.waveform;
             self.attack = p.attack;
             self.decay = p.decay;
             self.sustain = p.sustain;

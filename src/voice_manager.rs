@@ -14,6 +14,7 @@ const SCOPE_LEN: usize = 2048;
 #[derive(Clone, Copy)]
 pub struct ParamValues {
     pub volume: f32,
+    pub waveform: Waveform,
     pub detune: f32,
     pub cutoff: f32,
     pub resonance: f32,
@@ -43,6 +44,7 @@ impl Default for ParamValues {
     fn default() -> Self {
         Self {
             volume: 0.5,
+            waveform: Waveform::Sawtooth,
             detune: 7.0,
             cutoff: 15000.0,
             resonance: 0.0,
@@ -186,6 +188,7 @@ impl VoiceManager {
     }
 
     pub fn set_waveform(&mut self, waveform: Waveform) {
+        self.params.waveform = waveform;
         for voice in &mut self.voices {
             voice.set_waveform(waveform);
         }

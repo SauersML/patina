@@ -69,7 +69,7 @@ automate cutoff                # ramp any parameter through breakpoints
 
 - **Notes**: names (`C4`, `F#3`, `Eb5`, with C4 = MIDI 60) or raw MIDI numbers; `[..]` for chords; `R` or `.` for rests; `:beats` duration; `@vel` velocity; `|` bar lines (ignored).
 - **Automation**: `automate <param>` starts a curve track. The first token is the starting value; `V:D@shape` ramps to `V` over `D` beats; `R:D` holds. Shapes: `lin`, `exp` (geometric — right for frequencies), `log`, `smooth`, `step`.
-- **Parameters**: `volume`, `detune`, `cutoff`, `resonance`, `drive`, `saturation`, `attack`, `decay`, `sustain`, `release`, `filter_env` (octaves), `filter_attack`, `filter_decay`, `filter_sustain`, `filter_release`, `reverb_decay`, `reverb_wet`, `chorus_mode` (0–4), `chorus_rate`, `chorus_depth`, `tape_wow`, `tape_flutter`, `tape_drive`, `tape_age`.
+- **Parameters**: `volume`, `waveform` (0–3), `detune`, `cutoff`, `resonance`, `drive`, `saturation`, `attack`, `decay`, `sustain`, `release`, `filter_env` (octaves), `filter_attack`, `filter_decay`, `filter_sustain`, `filter_release`, `reverb_decay`, `reverb_wet`, `chorus_mode` (0–4), `chorus_rate`, `chorus_depth`, `tape_wow`, `tape_flutter`, `tape_drive`, `tape_age`.
 
 ## 🧪 Technical Details
 
