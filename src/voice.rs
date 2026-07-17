@@ -12,11 +12,14 @@ const VEL_TRACK: f32 = 0.8;
 /// high notes land slightly flat, like an analog VCO between calibrations.
 const RESET_TIME: f32 = 1.5e-6;
 
-/// The 902 alignment spec: "At 0, signal output should be -60db maximum."
 /// The VCA never fully closes — a silent voice still leaks its free-running
-/// oscillators at this floor. Voices therefore render continuously; digital
-/// silence between notes is not a thing hardware does.
-const VCA_FLOOR: f32 = 1e-3;
+/// oscillators. The 902 alignment spec sets the CEILING ("At 0, signal
+/// output should be -60db maximum"); the Polymoog factory noise table shows
+/// where passing units actually sit (-77 to -84 dBm per preset, with
+/// bleed-through explicitly listened for and tolerated below that). A
+/// serviced floor of -70 dB. Voices render continuously; digital silence
+/// between notes is not a thing hardware does.
+const VCA_FLOOR: f32 = 3.2e-4;
 
 /// Mixer gain into the VCF's summing junction (dimensionless; the signals
 /// are volts). Deliberately hot: three oscillators up SHOULD push the

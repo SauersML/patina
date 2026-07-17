@@ -123,3 +123,58 @@ impl Envelope {
         self.stage == EnvelopeStage::Idle
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The Polymoog factory contour spec is a usable tolerance for RC
+    /// envelopes: "attack to 7.5 VDC +/-1.0 VDC in 33 ms +/-5 ms". Our
+    /// attack set to 33 ms must reach full level inside a comparable
+    /// window (widened for the different attack topology).
+    #[test]
+    fn attack_lands_in_the_factory_window() {
+        let sr = 44100.0;
+        let mut env = Envelope::new(sr);
+        env.set_attack(0.033);
+        env.note_on();
+        let mut samples = 0usize;
+        while env.next_sample() < 0.999 {
+            samples += 1;
+            assert!(samples < 4410, "attack never completed");
+        }
+        let ms = samples as f32 / sr * 1000.0;
+        assert!(
+            (20.0..=50.0).contains(&ms),
+            "33 ms attack should complete in roughly 33 ms, took {ms:.1} ms"
+        );
+    }
+
+    /// Release must be exponential (RC), not linear: after one time
+    /// constant the level sits near 1/e of the start, not on a straight
+    /// line to zero.
+    #[test]
+    fn release_is_exponential() {
+        let sr = 44100.0;
+        let mut env = Envelope::new(sr);
+        env.set_attack(0.001);
+        env.set_sustain(1.0);
+        env.set_release(0.4);
+        env.note_on();
+        for _ in 0..8820 {
+            env.next_sample();
+        }
+        env.note_off();
+        // Our release coefficient spans the set time with speed 4.0, so
+        // one time constant is release/4 = 100 ms
+        let tau_samples = (0.4 / 4.0 * sr) as usize;
+        let mut level = 1.0;
+        for _ in 0..tau_samples {
+            level = env.next_sample();
+        }
+        assert!(
+            (0.25..=0.5).contains(&level),
+            "after one tau the level should be ~1/e, got {level}"
+        );
+    }
+}

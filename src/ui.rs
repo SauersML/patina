@@ -756,6 +756,12 @@ impl SynthUI {
         };
         // Push the UI defaults into the engine so what you see is what you hear
         ui.apply_all_settings();
+        // Hardware powers on IN a state — the Polymoog test sheet notes
+        // "Preset 8 always comes on first". Patina comes on in Init.
+        let mut ui = ui;
+        if crate::patch::apply(&mut ui.voice_manager.lock(), crate::patch::FACTORY[0].1).is_ok() {
+            ui.active_patch = Some(0);
+        }
         ui
     }
 
@@ -1244,7 +1250,7 @@ impl SynthUI {
                 if knob(ui, "Width", &mut self.pulse_width, 0.05, 0.95, 0.5, false, fmt_pct) {
                     self.voice_manager.lock().set_pulse_width(self.pulse_width);
                 }
-                if knob(ui, "Glide", &mut self.glide, 0.0, 2.0, 0.0, false, |v| {
+                if knob(ui, "Glide", &mut self.glide, 0.0, 5.0, 0.0, false, |v| {
                     if v < 0.001 {
                         "off".into()
                     } else {

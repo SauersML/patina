@@ -524,7 +524,9 @@ impl VoiceManager {
     }
 
     pub fn set_glide(&mut self, seconds: f32) {
-        self.params.glide = seconds.clamp(0.0, 2.0);
+        // Range per the Polymoog factory spec: full glide is 3.75-8.75 s
+        // across the keyboard, so the knob reaches well past 2 s
+        self.params.glide = seconds.clamp(0.0, 5.0);
         // RC coefficient: reach ~95% of the interval in `glide` seconds
         let k = if self.params.glide < 1e-3 {
             1.0
