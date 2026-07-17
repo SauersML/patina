@@ -17,3 +17,7 @@ reverb = "1.0.47"
 midir = "0.10.1"
 midly = "0.5.3"
 crossbeam-channel = "0.5.14"
+
+# The tape engine runs 8x-oversampled hysteresis; keep debug builds realtime
+[profile.dev]
+opt-level = 2
