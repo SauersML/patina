@@ -40,6 +40,16 @@ pub struct LadderFilter {
     // delay[5]: half-sample-averaged feedback tap
     delay: [f32; 6],
     mismatch: [f32; 4],
+    /// Per-unit regeneration calibration: the 904A schematic (dwg #1149)
+    /// shows a hand-SELECTED resistor in the feedback path, trimmed per unit
+    /// to place the threshold of regeneration — so each filter's
+    /// self-oscillation point sits very slightly differently.
+    res_cal: f32,
+    /// The regeneration path on dwg #1149 is AC-coupled (2.5 uF in series
+    /// with the 2.5K pot): resonance feedback is high-passed (~25 Hz), so DC
+    /// never circulates in the loop. This is the feedback tap's DC state.
+    fb_dc: f32,
+    fb_dc_a: f32,
     thermal_drift: f32,
     rng: u32,
     sat_adaa: AdaaTanh,
@@ -77,6 +87,7 @@ impl LadderFilter {
             // Subtle per-stage component tolerance, within 0.4%
             *m = 1.0 + (rand01(&mut rng) - 0.5) * 0.004;
         }
+        let res_cal = 1.0 + (rand01(&mut rng) - 0.5) * 0.03;
         Self {
             sample_rate,
             target_cutoff: 15000.0,
@@ -89,6 +100,9 @@ impl LadderFilter {
             stage_tanh: [0.0; 3],
             delay: [0.0; 6],
             mismatch,
+            res_cal,
+            fb_dc: 0.0,
+            fb_dc_a: 1.0 - (-TAU * 25.0 / sample_rate).exp(),
             thermal_drift: 0.0,
             rng,
             sat_adaa: AdaaTanh::new(),
@@ -136,13 +150,21 @@ impl LadderFilter {
         // One-pole coefficient per 2x-oversampled step, in thermal units
         let f = fc * 0.5;
         let tune = (1.0 - (-TAU * f * fcr).exp()) / THERMAL;
-        // Resonance knob is already the classic k in 0..4
-        let res_quad = self.resonance * acr;
+        // Resonance knob is already the classic k in 0..4; res_cal is this
+        // unit's SELECTED-resistor trim of the regeneration threshold. The
+        // service manual places the threshold of regeneration at knob 7-8 of
+        // 10 — before the top — so the loop gain runs 12% hot: oscillation
+        // arrives around 3.6 on our 0-4 knob, with margin over the trim.
+        let res_quad = self.resonance * acr * self.res_cal * 1.12;
 
         let x_in = input * self.drive;
 
         for _ in 0..2 {
-            let mut inp = x_in - res_quad * self.delay[5];
+            // AC-coupled regeneration (dwg #1149): subtract the slowly
+            // tracked DC of the feedback tap so only audio circulates
+            self.fb_dc += self.fb_dc_a * (self.delay[5] - self.fb_dc);
+            let fb = self.delay[5] - self.fb_dc;
+            let mut inp = x_in - res_quad * fb;
             self.stage[0] = self.delay[0]
                 + tune * self.mismatch[0] * (fast_tanh(inp * THERMAL) - self.stage_tanh[0]);
             self.delay[0] = self.stage[0];
