@@ -242,36 +242,51 @@ fn fbm(p: vec2<f32>) -> f32 {
   return v;
 }
 
-// One drifting soap bubble: thin-film rim, faint fill, a specular bead.
-// `blur` softens and widens it — the frosted panes diffuse what floats by.
+// A drifting orb of light: everything is a Gaussian — a soft luminous
+// shell whose density peaks near (not at) the boundary, an interior haze,
+// and a wide specular bloom. No hard edges anywhere; the form breathes,
+// and its radius wobbles slowly so the silhouette never reads as a circle.
 fn bubble(w: vec2<f32>, c: vec2<f32>, r: f32, t: f32, blur: f32) -> vec3<f32> {
-  let d = length(w - c) / r;
-  let soft = 0.06 + blur * 0.55;
-  let rimw = 0.10 + blur * 0.40;
-  let ring = smoothstep(1.0 - rimw - soft, 1.0 - rimw, d) * (1.0 - smoothstep(1.0, 1.0 + soft, d));
-  // Thin-film iridescence around the rim
-  let ang = atan2(w.y - c.y, w.x - c.x);
+  let v = w - c;
+  let ang = atan2(v.y, v.x);
+  // Organic silhouette: radius modulated around the circumference
+  let wob = 1.0 + 0.10 * sin(ang * 2.0 + t * 0.21) + 0.05 * sin(ang * 5.0 - t * 0.13);
+  let d = length(v) / (r * wob);
+  // Gaussian shell centred just inside the boundary; blur fattens it
+  let shell_w = 0.16 + blur * 0.55;
+  let shell = exp(-(d - 0.86) * (d - 0.86) / (shell_w * shell_w));
+  // Thin-film tint drifting around the shell
   let film = vec3<f32>(
-    0.75 + 0.25 * sin(ang * 3.0 + t * 0.3),
-    0.85 + 0.15 * sin(ang * 3.0 + 2.1 + t * 0.3),
-    0.95
+    0.72 + 0.24 * sin(ang * 3.0 + t * 0.3),
+    0.84 + 0.16 * sin(ang * 3.0 + 2.1 + t * 0.3),
+    0.96
   );
-  var glow = film * ring * (0.38 - blur * 0.20);
-  // Interior lens brightening + specular bead upper-left
-  glow = glow + vec3<f32>(1.0, 1.0, 1.0) * (1.0 - smoothstep(0.0, 1.0, d)) * 0.035;
-  let bead = (w - c) / r + vec2<f32>(0.38, 0.42);
-  glow = glow + vec3<f32>(1.0, 1.0, 1.0) * exp(-dot(bead, bead) * (60.0 - blur * 45.0)) * (0.5 - blur * 0.3);
+  var glow = film * shell * (0.26 - blur * 0.13);
+  // Interior haze, densest at the middle, vanishing before the shell
+  glow = glow + vec3<f32>(0.85, 0.94, 1.0) * exp(-d * d * 2.2) * 0.055;
+  // Broad specular bloom toward the sun, upper-left
+  let bead = v / (r * wob) + vec2<f32>(0.34, 0.38);
+  glow = glow + vec3<f32>(1.0, 1.0, 1.0) * exp(-dot(bead, bead) * (14.0 - blur * 9.0)) * (0.28 - blur * 0.16);
   return glow;
+}
+
+// Domain-warped cloud density: fbm displaced by fbm gives billowing
+// cumulus shapes instead of flat threshold smudges.
+fn cloud_density(p: vec2<f32>, t: f32) -> f32 {
+  let q = vec2<f32>(
+    fbm(p + vec2<f32>(t * 0.014, 0.0)),
+    fbm(p + vec2<f32>(5.2, 1.3) - vec2<f32>(t * 0.011, 0.0))
+  );
+  return fbm(p + q * 1.5 + vec2<f32>(t * 0.008, 0.0));
 }
 
 // The Frutiger Aero sky. `blur` widens every light source analytically —
 // this IS the glass blur, computed in closed form.
 fn sky(w: vec2<f32>, t: f32, blur: f32) -> vec3<f32> {
-  var col = mix(
-    vec3<f32>(0.20, 0.48, 0.82),
-    vec3<f32>(0.70, 0.90, 0.95),
-    pow(clamp(w.y, 0.0, 1.0), 1.25)
-  );
+  let y = clamp(w.y, 0.0, 1.0);
+  // Three-stop gradient: deep zenith, luminous mid, warm pale horizon
+  var col = mix(vec3<f32>(0.12, 0.37, 0.75), vec3<f32>(0.36, 0.66, 0.91), smoothstep(0.0, 0.55, y));
+  col = mix(col, vec3<f32>(0.84, 0.94, 0.96), smoothstep(0.50, 0.95, y));
   // Sun bloom, breathing
   let sun_pos = vec2<f32>(0.20 + 0.015 * sin(t * 0.11), 0.14 + 0.010 * sin(t * 0.07 + 1.7));
   let sr = 0.26 * (1.0 + blur * 1.4) * (1.0 + 0.03 * sin(t * 0.23));
@@ -284,19 +299,29 @@ fn sky(w: vec2<f32>, t: f32, blur: f32) -> vec3<f32> {
   // Aqua counter-glow low right
   let gd = (w - vec2<f32>(0.86, 0.80)) / (0.45 * (1.0 + blur));
   col = col + vec3<f32>(0.28, 0.82, 0.72) * exp(-dot(gd, gd)) * 0.20;
-  // Clouds at two scales: broad masses and crisp streaks; detail dies
-  // under blur, which is what makes the frost legible
-  let cl1 = fbm(w * vec2<f32>(2.6, 5.5) + vec2<f32>(t * 0.010, 0.0));
-  let cl2 = fbm(w * vec2<f32>(7.0, 15.0) + vec2<f32>(t * 0.022, 3.7));
-  let broad = smoothstep(0.50, 0.80, cl1) * (1.0 - blur * 0.55);
-  let crisp = smoothstep(0.55, 0.78, cl2) * (1.0 - blur * 0.95);
-  col = mix(col, vec3<f32>(1.0, 1.0, 1.0), broad * 0.28 + crisp * 0.14);
+  // Cumulus with volume: warped-fbm coverage, self-shaded by comparing
+  // density toward the sun — lit crowns, shaded bases. Blur flattens it.
+  let cp = w * vec2<f32>(2.3, 4.8);
+  let d = cloud_density(cp, t);
+  let d_lit = cloud_density(cp + vec2<f32>(-0.09, -0.11), t);
+  let cov = smoothstep(0.47, 0.74, d) * (1.0 - blur * 0.55);
+  let lit = clamp(0.72 + (d - d_lit) * 3.2, 0.42, 1.12);
+  let cloud_col = vec3<f32>(0.86, 0.90, 0.96) * lit;
+  col = mix(col, cloud_col, cov * 0.85);
+  // High cirrus streaks — the crisp detail the frost erases entirely
+  let cir = smoothstep(0.60, 0.80, fbm(w * vec2<f32>(6.5, 17.0) + vec2<f32>(t * 0.021, 7.7)));
+  col = mix(col, vec3<f32>(1.0, 1.0, 1.0), cir * 0.12 * (1.0 - blur));
+  // Bright haze band settling on the horizon
+  col = col + vec3<f32>(0.90, 0.96, 1.00) * exp(-abs(y - 0.88) * 9.0) * 0.10;
   // Green horizon glow
-  col = col + vec3<f32>(0.25, 0.52, 0.22) * 0.12 * smoothstep(0.84, 1.0, w.y);
-  // Aero bubbles drifting upward, wrapping around
-  col = col + bubble(w, vec2<f32>(0.70 + 0.03 * sin(t * 0.10), fract(0.90 - t * 0.0045)), 0.055, t, blur);
-  col = col + bubble(w, vec2<f32>(0.34 + 0.02 * sin(t * 0.13 + 2.0), fract(0.55 - t * 0.0032)), 0.034, t, blur);
-  col = col + bubble(w, vec2<f32>(0.91 + 0.02 * sin(t * 0.08 + 4.0), fract(0.30 - t * 0.0055)), 0.042, t, blur);
+  col = col + vec3<f32>(0.25, 0.52, 0.22) * 0.12 * smoothstep(0.84, 1.0, y);
+  // Aero bubbles drifting upward; size sets speed, so depth reads as
+  // parallax. The frost diffuses whichever drift behind a pane.
+  col = col + bubble(w, vec2<f32>(0.70 + 0.030 * sin(t * 0.10), fract(0.90 - t * 0.0060)), 0.058, t, blur);
+  col = col + bubble(w, vec2<f32>(0.34 + 0.020 * sin(t * 0.13 + 2.0), fract(0.55 - t * 0.0034)), 0.034, t, blur);
+  col = col + bubble(w, vec2<f32>(0.91 + 0.020 * sin(t * 0.08 + 4.0), fract(0.30 - t * 0.0050)), 0.046, t, blur);
+  col = col + bubble(w, vec2<f32>(0.12 + 0.015 * sin(t * 0.11 + 1.1), fract(0.72 - t * 0.0026)), 0.024, t, blur);
+  col = col + bubble(w, vec2<f32>(0.55 + 0.025 * sin(t * 0.09 + 5.3), fract(0.40 - t * 0.0019)), 0.017, t, blur);
   return col;
 }
 
@@ -313,7 +338,7 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
 
   if (u.mode < 0.5) {
     var col = sky(w, u.time, 0.0);
-    col = col + (hash2(p) - 0.5) * 0.008;
+    col = col + (hash2(p) - 0.5) * 0.010;
     return vec4<f32>(col, 1.0);
   }
 

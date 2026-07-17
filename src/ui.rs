@@ -1426,38 +1426,108 @@ impl SynthUI {
             painter.circle_filled(pos2(rect.left() + 40.0, rect.top() + 10.5), 2.0, CYAN);
         }
 
-        let samples: Vec<f32> = self.voice_manager.lock().scope.iter().copied().collect();
-        if samples.len() < 32 {
+        // Amplitude graticule at ±50% full scale; the center line is 0
+        for frac in [-0.5f32, 0.5] {
+            let y = inner.center().y - frac * inner.height() * 0.5;
+            painter.line_segment(
+                [pos2(inner.left(), y), pos2(inner.right(), y)],
+                Stroke::new(
+                    0.5,
+                    Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 12),
+                ),
+            );
+        }
+
+        let (samples, sample_rate) = {
+            let vm = self.voice_manager.lock();
+            (
+                vm.scope.iter().copied().collect::<Vec<f32>>(),
+                vm.sample_rate(),
+            )
+        };
+        if samples.len() < 64 {
             return;
         }
 
-        // Show half the buffer, starting at a rising zero crossing when one
-        // exists in the first half
+        // Trigger on the rising zero crossing with the steepest slope in
+        // the first half — locks onto the fundamental instead of whichever
+        // harmonic crosses first, so the trace holds still
         let window = samples.len() / 2;
         let mut start = 0;
+        let mut best_slope = 0.0f32;
         for i in 1..window {
             if samples[i - 1] <= 0.0 && samples[i] > 0.0 {
-                start = i;
-                break;
+                let slope = samples[i] - samples[i - 1];
+                if slope > best_slope {
+                    best_slope = slope;
+                    start = i;
+                }
             }
         }
 
-        let n = 256usize;
-        let points: Vec<Pos2> = (0..n)
-            .map(|i| {
-                let sample = samples[start + i * (window - 1) / (n - 1)];
-                pos2(
-                    inner.left() + inner.width() * i as f32 / (n - 1) as f32,
-                    inner.center().y - sample.clamp(-1.0, 1.0) * inner.height() * 0.5,
-                )
-            })
-            .collect();
+        // Time graticule: one tick per 5 ms of the displayed window
+        let window_ms = window as f32 / sample_rate * 1000.0;
+        let tick_count = (window_ms / 5.0).floor() as usize;
+        for k in 1..=tick_count {
+            let x = inner.left() + inner.width() * (k as f32 * 5.0) / window_ms;
+            if x < inner.right() {
+                painter.line_segment(
+                    [pos2(x, inner.bottom() - 5.0), pos2(x, inner.bottom())],
+                    Stroke::new(1.0, Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 30)),
+                );
+            }
+        }
+        painter.text(
+            pos2(inner.right(), rect.top() + 6.0),
+            Align2::RIGHT_TOP,
+            format!("{:.0} ms · ±1.0", window_ms),
+            FontId::monospace(8.5),
+            WELL_TXT,
+        );
 
+        // Accurate rendering: per-pixel-column min/max envelope, so no
+        // peak between columns is ever lost to subsampling, plus the mean
+        // as a crisp centre trace
+        let cols = inner.width().floor().max(32.0) as usize;
+        let y_of = |s: f32| inner.center().y - s.clamp(-1.0, 1.0) * inner.height() * 0.5;
+        let mut band = Vec::with_capacity(cols * 2);
+        let mut mean_pts = Vec::with_capacity(cols);
+        for cx in 0..cols {
+            let s0 = start + cx * window / cols;
+            let s1 = (start + (cx + 1) * window / cols).max(s0 + 1);
+            let (mut lo, mut hi, mut sum) = (f32::MAX, f32::MIN, 0.0f32);
+            for s in &samples[s0..s1.min(samples.len())] {
+                lo = lo.min(*s);
+                hi = hi.max(*s);
+                sum += *s;
+            }
+            let x = inner.left() + inner.width() * cx as f32 / (cols - 1) as f32;
+            band.push((x, y_of(hi)));
+            mean_pts.push(pos2(x, y_of(sum / (s1 - s0) as f32)));
+            // Envelope must cover at least one pixel so silence stays visible
+            let (top_y, bot_y) = (y_of(hi), y_of(lo));
+            let bot_y = if bot_y - top_y < 1.0 { top_y + 1.0 } else { bot_y };
+            band.push((x, bot_y));
+        }
+        // Filled min/max envelope as a translucent band
+        let mut mesh = Mesh::default();
+        let band_color = Color32::from_rgba_unmultiplied(0x6f, 0xe3, 0xf2, 70);
+        for (i, chunk) in band.chunks_exact(2).enumerate() {
+            let ((x, ty), (_, by)) = (chunk[0], chunk[1]);
+            mesh.colored_vertex(pos2(x, ty), band_color);
+            mesh.colored_vertex(pos2(x, by), band_color);
+            if i > 0 {
+                let b = (i * 2) as u32;
+                mesh.add_triangle(b - 2, b - 1, b);
+                mesh.add_triangle(b, b - 1, b + 1);
+            }
+        }
+        painter.add(Shape::mesh(mesh));
         painter.add(Shape::line(
-            points.clone(),
-            Stroke::new(3.5, Color32::from_rgba_premultiplied(0x6f, 0xe3, 0xf2, 36)),
+            mean_pts.clone(),
+            Stroke::new(3.0, Color32::from_rgba_unmultiplied(0x6f, 0xe3, 0xf2, 40)),
         ));
-        painter.add(Shape::line(points, Stroke::new(1.2, CYAN)));
+        painter.add(Shape::line(mean_pts, Stroke::new(1.3, CYAN)));
     }
 
     // -----------------------------------------------------------------------

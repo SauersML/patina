@@ -200,6 +200,11 @@ impl VoiceManager {
         self.substrate.force_warm();
     }
 
+    /// Sample rate the engine runs at, for UI time-axis labeling.
+    pub fn sample_rate(&self) -> f32 {
+        self.sample_rate
+    }
+
     /// Marks which MIDI notes are currently held, for the UI keyboard display.
     pub fn held_note_states(&self) -> [bool; 128] {
         let mut states = [false; 128];
