@@ -1,0 +1,7 @@
+#!/bin/sh
+# Auto-update the installed CLAP/VST3 bundles after every commit, in the
+# background so committing stays instant. Log: target/plugin-install.log
+# Enabled via: git config core.hooksPath .githooks
+mkdir -p target
+nohup scripts/install-plugins.sh >> target/plugin-install.log 2>&1 &
+exit 0
