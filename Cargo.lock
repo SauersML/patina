@@ -2833,7 +2833,6 @@ dependencies = [
  "nice-plug",
  "parking_lot",
  "rand",
- "reverb",
 ]
 
 [[package]]
@@ -3159,12 +3158,6 @@ name = "renderdoc-sys"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
-
-[[package]]
-name = "reverb"
-version = "1.0.47"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd3b8aaccb0168a5e793c8727141ab9a084f0487d40080a8bee93652dd5375ea"
 
 [[package]]
 name = "rustc-demangle"

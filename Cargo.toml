@@ -33,7 +33,6 @@ plugin = ["dep:nice-plug"]
 [dependencies]
 parking_lot = "0.12.1"
 rand = "0.8.5"
-reverb = "1.0.47"
 
 cpal = { version = "0.15.2", optional = true }
 # wgpu renderer: custom WGSL paint callbacks drive the animated aurora and

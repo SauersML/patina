@@ -12,6 +12,7 @@ use crate::aurora_gpu;
 use crate::chorus::ChorusMode;
 use crate::oscillator::{CircuitModel, Waveform};
 use crate::panel_render;
+use crate::song::{Curve, Param};
 use crate::voice_manager::VoiceManager;
 
 const OCTAVES: usize = 3;
@@ -296,6 +297,24 @@ fn fmt_x(v: f32) -> String {
 /// marks, a dome-shaded cap, a thin amber value arc (grown from 12 o'clock
 /// for bipolar ranges), and a quiet tabular readout. Drag vertically or
 /// scroll; Shift for fine control; double-click to reset.
+/// A knob bound to a `Param`: range and taper come from THE range table
+/// (`Param::range`), and changes flow through `Param::apply` — the same
+/// path songs, patches, and MIDI use. The UI is just another performer.
+fn param_knob(
+    ui: &mut egui::Ui,
+    vm: &Arc<Mutex<VoiceManager>>,
+    label: &str,
+    param: Param,
+    value: &mut f32,
+    default: f32,
+    fmt: impl Fn(f32) -> String,
+) {
+    let (lo, hi, curve) = param.range();
+    if knob(ui, label, value, lo, hi, default, curve == Curve::Log, fmt) {
+        param.apply(&mut vm.lock(), *value);
+    }
+}
+
 fn knob(
     ui: &mut egui::Ui,
     label: &str,
@@ -1241,35 +1260,72 @@ impl SynthUI {
                 ui.vertical(|ui| {
                     ui.add_space(10.0);
                     if waveform_selector(ui, "osc1wave", &mut self.waveform) {
-                        self.voice_manager.lock().set_waveform(self.waveform);
+                        Param::WaveformSel
+                            .apply(&mut self.voice_manager.lock(), self.waveform as u8 as f32);
                     }
                 });
-                if knob(ui, "Level", &mut self.volume, 0.0, 1.0, 0.5, false, fmt_pct) {
-                    self.voice_manager.lock().set_volume(self.volume);
-                }
-                if knob(ui, "Detune", &mut self.detune, 0.0, 30.0, 7.0, false, |v| {
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Level",
+                    Param::Volume,
+                    &mut self.volume,
+                    0.5,
+                    fmt_pct,
+                );
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Detune",
+                    Param::Detune,
+                    &mut self.detune,
+                    7.0,
+                    |v| {
                     format!("{:.0} ct", v)
-                }) {
-                    self.voice_manager.lock().set_detune(self.detune);
-                }
-                if knob(ui, "Sub", &mut self.sub, 0.0, 1.0, 0.0, false, fmt_pct) {
-                    self.voice_manager.lock().set_sub(self.sub);
-                }
-                if knob(ui, "Noise", &mut self.noise, 0.0, 1.0, 0.0, false, fmt_pct) {
-                    self.voice_manager.lock().set_noise(self.noise);
-                }
-                if knob(ui, "Width", &mut self.pulse_width, 0.05, 0.95, 0.5, false, fmt_pct) {
-                    self.voice_manager.lock().set_pulse_width(self.pulse_width);
-                }
-                if knob(ui, "Glide", &mut self.glide, 0.0, 5.0, 0.0, false, |v| {
+                },
+                );
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Sub",
+                    Param::SubLevel,
+                    &mut self.sub,
+                    0.0,
+                    fmt_pct,
+                );
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Noise",
+                    Param::NoiseLevel,
+                    &mut self.noise,
+                    0.0,
+                    fmt_pct,
+                );
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Width",
+                    Param::PulseWidth,
+                    &mut self.pulse_width,
+                    0.5,
+                    fmt_pct,
+                );
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Glide",
+                    Param::Glide,
+                    &mut self.glide,
+                    0.0,
+                    |v| {
                     if v < 0.001 {
                         "off".into()
                     } else {
                         fmt_time(v)
                     }
-                }) {
-                    self.voice_manager.lock().set_glide(self.glide);
-                }
+                },
+                );
             });
             // The other two oscillator sections: a voice is three
             // independent oscillators (waveform / interval / level each),
@@ -1287,17 +1343,25 @@ impl SynthUI {
                     ui.vertical(|ui| {
                         ui.add_space(10.0);
                         if waveform_selector(ui, id, wave) {
-                            self.voice_manager.lock().set_osc_wave(which, *wave);
+                            let p = if which == 1 { Param::Osc2Wave } else { Param::Osc3Wave };
+                            p.apply(&mut self.voice_manager.lock(), *wave as u8 as f32);
                         }
                     });
-                    if knob(ui, "Level", level, 0.0, 1.0, 0.72, false, fmt_pct) {
-                        self.voice_manager.lock().set_osc_level(which, *level);
-                    }
-                    if knob(ui, "Pitch", pitch, -24.0, 24.0, if which == 1 { 0.0 } else { -12.0 }, false, |v| {
-                        format!("{v:+.0} st")
-                    }) {
-                        self.voice_manager.lock().set_osc_pitch(which, *pitch);
-                    }
+                    let (p_level, p_pitch) = if which == 1 {
+                        (Param::Osc2Level, Param::Osc2Pitch)
+                    } else {
+                        (Param::Osc3Level, Param::Osc3Pitch)
+                    };
+                    param_knob(ui, &self.voice_manager, "Level", p_level, level, 0.72, fmt_pct);
+                    param_knob(
+                        ui,
+                        &self.voice_manager,
+                        "Pitch",
+                        p_pitch,
+                        pitch,
+                        if which == 1 { 0.0 } else { -12.0 },
+                        |v| format!("{v:+.0} st"),
+                    );
                     if which == 1 {
                         ui.add_space(10.0);
                     }
@@ -1307,14 +1371,18 @@ impl SynthUI {
                 let circ_sel = if self.circuit == CircuitModel::Arp { 1 } else { 0 };
                 if let Some(i) = segmented(ui, "circuit", &["MOOG", "ARP"], circ_sel) {
                     self.circuit = if i == 1 { CircuitModel::Arp } else { CircuitModel::Moog };
-                    self.voice_manager.lock().set_circuit(self.circuit);
+                    Param::CircuitSel.apply(&mut self.voice_manager.lock(), i as f32);
                 }
-                if knob(ui, "FM", &mut self.osc_fm, 0.0, 1.0, 0.0, false, fmt_pct) {
-                    self.voice_manager.lock().set_osc_fm(self.osc_fm);
-                }
-                if knob(ui, "Ring", &mut self.ring, 0.0, 1.0, 0.0, false, fmt_pct) {
-                    self.voice_manager.lock().set_ring(self.ring);
-                }
+                param_knob(ui, &self.voice_manager, "FM", Param::OscFm, &mut self.osc_fm, 0.0, fmt_pct);
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Ring",
+                    Param::RingAmount,
+                    &mut self.ring,
+                    0.0,
+                    fmt_pct,
+                );
                 if let Some(i) =
                     segmented(ui, "sync", &["FREE", "SYNC"], if self.sync { 1 } else { 0 })
                 {
@@ -1328,18 +1396,42 @@ impl SynthUI {
     fn draw_envelope_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>, fill: Option<f32>) {
         card(ui, "Envelope", tex, fill, |ui| {
             ui.horizontal(|ui| {
-                if knob(ui, "Attack", &mut self.attack, 0.01, 2.0, 0.1, true, fmt_time) {
-                    self.voice_manager.lock().set_attack(self.attack);
-                }
-                if knob(ui, "Decay", &mut self.decay, 0.01, 2.0, 0.1, true, fmt_time) {
-                    self.voice_manager.lock().set_decay(self.decay);
-                }
-                if knob(ui, "Sustain", &mut self.sustain, 0.0, 1.0, 0.7, false, fmt_pct) {
-                    self.voice_manager.lock().set_sustain(self.sustain);
-                }
-                if knob(ui, "Release", &mut self.release, 0.01, 2.0, 0.2, true, fmt_time) {
-                    self.voice_manager.lock().set_release(self.release);
-                }
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Attack",
+                    Param::Attack,
+                    &mut self.attack,
+                    0.1,
+                    fmt_time,
+                );
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Decay",
+                    Param::Decay,
+                    &mut self.decay,
+                    0.1,
+                    fmt_time,
+                );
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Sustain",
+                    Param::Sustain,
+                    &mut self.sustain,
+                    0.7,
+                    fmt_pct,
+                );
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Release",
+                    Param::Release,
+                    &mut self.release,
+                    0.2,
+                    fmt_time,
+                );
             });
         });
     }
@@ -1347,24 +1439,60 @@ impl SynthUI {
     fn draw_filter_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>, fill: Option<f32>) {
         card(ui, "Filter", tex, fill, |ui| {
             ui.horizontal(|ui| {
-                if knob(ui, "Cutoff", &mut self.filter_cutoff, 20.0, 20000.0, 15000.0, true, fmt_hz) {
-                    self.voice_manager.lock().set_filter_cutoff(self.filter_cutoff);
-                }
-                if knob(ui, "Reso", &mut self.filter_resonance, 0.0, 4.0, 0.0, false, fmt_x) {
-                    self.voice_manager.lock().set_filter_resonance(self.filter_resonance);
-                }
-                if knob(ui, "Drive", &mut self.filter_drive, 0.1, 5.0, 1.0, false, fmt_x) {
-                    self.voice_manager.lock().set_filter_drive(self.filter_drive);
-                }
-                if knob(ui, "Shape", &mut self.filter_saturation, 0.0, 2.0, 1.0, false, fmt_x) {
-                    self.voice_manager.lock().set_filter_saturation(self.filter_saturation);
-                }
-                if knob(ui, "Hi-Pass", &mut self.hpf_cutoff, 16.0, 8000.0, 16.0, true, fmt_hz) {
-                    self.voice_manager.lock().set_hpf_cutoff(self.hpf_cutoff);
-                }
-                if knob(ui, "Track", &mut self.key_track, 0.0, 1.0, 0.4, false, fmt_pct) {
-                    self.voice_manager.lock().set_key_track(self.key_track);
-                }
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Cutoff",
+                    Param::Cutoff,
+                    &mut self.filter_cutoff,
+                    15000.0,
+                    fmt_hz,
+                );
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Reso",
+                    Param::Resonance,
+                    &mut self.filter_resonance,
+                    0.0,
+                    fmt_x,
+                );
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Drive",
+                    Param::Drive,
+                    &mut self.filter_drive,
+                    1.0,
+                    fmt_x,
+                );
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Shape",
+                    Param::Saturation,
+                    &mut self.filter_saturation,
+                    1.0,
+                    fmt_x,
+                );
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Hi-Pass",
+                    Param::HpfCutoff,
+                    &mut self.hpf_cutoff,
+                    16.0,
+                    fmt_hz,
+                );
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Track",
+                    Param::KeyTrack,
+                    &mut self.key_track,
+                    0.4,
+                    fmt_pct,
+                );
             });
         });
     }
@@ -1372,23 +1500,53 @@ impl SynthUI {
     fn draw_filter_env_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>, fill: Option<f32>) {
         card(ui, "Filter Env", tex, fill, |ui| {
             ui.horizontal(|ui| {
-                if knob(ui, "Amount", &mut self.fenv_amount, -5.0, 5.0, 0.0, false, |v| {
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Amount",
+                    Param::FilterEnvAmount,
+                    &mut self.fenv_amount,
+                    0.0,
+                    |v| {
                     format!("{:+.1} oct", v)
-                }) {
-                    self.voice_manager.lock().set_filter_env_amount(self.fenv_amount);
-                }
-                if knob(ui, "Attack", &mut self.fenv_attack, 0.001, 2.0, 0.005, true, fmt_time) {
-                    self.voice_manager.lock().set_filter_attack(self.fenv_attack);
-                }
-                if knob(ui, "Decay", &mut self.fenv_decay, 0.01, 2.0, 0.3, true, fmt_time) {
-                    self.voice_manager.lock().set_filter_decay(self.fenv_decay);
-                }
-                if knob(ui, "Sustain", &mut self.fenv_sustain, 0.0, 1.0, 0.0, false, fmt_pct) {
-                    self.voice_manager.lock().set_filter_sustain(self.fenv_sustain);
-                }
-                if knob(ui, "Release", &mut self.fenv_release, 0.01, 2.0, 0.3, true, fmt_time) {
-                    self.voice_manager.lock().set_filter_release(self.fenv_release);
-                }
+                },
+                );
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Attack",
+                    Param::FilterAttack,
+                    &mut self.fenv_attack,
+                    0.005,
+                    fmt_time,
+                );
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Decay",
+                    Param::FilterDecay,
+                    &mut self.fenv_decay,
+                    0.3,
+                    fmt_time,
+                );
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Sustain",
+                    Param::FilterSustain,
+                    &mut self.fenv_sustain,
+                    0.0,
+                    fmt_pct,
+                );
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Release",
+                    Param::FilterRelease,
+                    &mut self.fenv_release,
+                    0.3,
+                    fmt_time,
+                );
             });
         });
     }
@@ -1396,12 +1554,25 @@ impl SynthUI {
     fn draw_lfo_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>, fill: Option<f32>) {
         card(ui, "LFO", tex, fill, |ui| {
             ui.horizontal(|ui| {
-                if knob(ui, "Rate", &mut self.lfo_rate, 0.1, 30.0, 1.0, true, |v| {
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Rate",
+                    Param::LfoRate,
+                    &mut self.lfo_rate,
+                    1.0,
+                    |v| {
                     format!("{:.2} Hz", v)
-                }) {
-                    self.voice_manager.lock().set_lfo_rate(self.lfo_rate);
-                }
-                if knob(ui, "Shape", &mut self.lfo_shape, 0.0, 1.0, 0.5, false, |v| {
+                },
+                );
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Shape",
+                    Param::LfoShape,
+                    &mut self.lfo_shape,
+                    0.5,
+                    |v| {
                     if v < 0.15 {
                         "saw".into()
                     } else if v > 0.85 {
@@ -1411,22 +1582,39 @@ impl SynthUI {
                     } else {
                         format!("{:.2}", v)
                     }
-                }) {
-                    self.voice_manager.lock().set_lfo_shape(self.lfo_shape);
-                }
-                if knob(ui, "Pitch", &mut self.lfo_pitch, 0.0, 200.0, 0.0, false, |v| {
+                },
+                );
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Pitch",
+                    Param::LfoPitch,
+                    &mut self.lfo_pitch,
+                    0.0,
+                    |v| {
                     format!("{:.0} ct", v)
-                }) {
-                    self.voice_manager.lock().set_lfo_pitch(self.lfo_pitch);
-                }
-                if knob(ui, "Filter", &mut self.lfo_filter, 0.0, 4.0, 0.0, false, |v| {
+                },
+                );
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Filter",
+                    Param::LfoFilter,
+                    &mut self.lfo_filter,
+                    0.0,
+                    |v| {
                     format!("{:.2} oct", v)
-                }) {
-                    self.voice_manager.lock().set_lfo_filter(self.lfo_filter);
-                }
-                if knob(ui, "PWM", &mut self.lfo_pwm, 0.0, 0.45, 0.0, false, fmt_pct) {
-                    self.voice_manager.lock().set_lfo_pwm(self.lfo_pwm);
-                }
+                },
+                );
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "PWM",
+                    Param::LfoPwm,
+                    &mut self.lfo_pwm,
+                    0.0,
+                    fmt_pct,
+                );
             });
         });
     }
@@ -1457,14 +1645,26 @@ impl SynthUI {
                     }
                     ui.add_space(2.0);
                     ui.horizontal(|ui| {
-                        if knob(ui, "Rate", &mut self.chorus_rate, 0.1, 10.0, 0.5, true, |v| {
+                        param_knob(
+                            ui,
+                            &self.voice_manager,
+                            "Rate",
+                            Param::ChorusRate,
+                            &mut self.chorus_rate,
+                            0.5,
+                            |v| {
                             format!("{:.1} Hz", v)
-                        }) {
-                            self.voice_manager.lock().set_chorus_rate(self.chorus_rate);
-                        }
-                        if knob(ui, "Depth", &mut self.chorus_depth, 0.0, 1.0, 0.3, false, fmt_pct) {
-                            self.voice_manager.lock().set_chorus_depth(self.chorus_depth);
-                        }
+                        },
+                        );
+                        param_knob(
+                            ui,
+                            &self.voice_manager,
+                            "Depth",
+                            Param::ChorusDepth,
+                            &mut self.chorus_depth,
+                            0.3,
+                            fmt_pct,
+                        );
                     });
                 });
                 vseparator(ui, 150.0);
@@ -1472,15 +1672,33 @@ impl SynthUI {
                     ui.label(sublegend("Reverb"));
                     ui.add_space(34.0);
                     ui.horizontal(|ui| {
-                        if knob(ui, "Decay", &mut self.reverb_decay, 0.0, 0.99, 0.5, false, fmt_pct) {
-                            self.voice_manager.lock().set_reverb_decay(self.reverb_decay);
-                        }
-                        if knob(ui, "Mix", &mut self.reverb_wet, 0.0, 1.0, 0.5, false, fmt_pct) {
-                            self.voice_manager.lock().set_reverb_wet(self.reverb_wet);
-                        }
-                        if knob(ui, "Spring", &mut self.spring, 0.0, 1.0, 0.0, false, fmt_pct) {
-                            self.voice_manager.lock().set_spring(self.spring);
-                        }
+                        param_knob(
+                            ui,
+                            &self.voice_manager,
+                            "Decay",
+                            Param::ReverbDecay,
+                            &mut self.reverb_decay,
+                            0.5,
+                            fmt_pct,
+                        );
+                        param_knob(
+                            ui,
+                            &self.voice_manager,
+                            "Mix",
+                            Param::ReverbWet,
+                            &mut self.reverb_wet,
+                            0.5,
+                            fmt_pct,
+                        );
+                        param_knob(
+                            ui,
+                            &self.voice_manager,
+                            "Spring",
+                            Param::SpringWet,
+                            &mut self.spring,
+                            0.0,
+                            fmt_pct,
+                        );
                     });
                 });
                 vseparator(ui, 150.0);
@@ -1488,27 +1706,57 @@ impl SynthUI {
                     ui.label(sublegend("Tape"));
                     ui.add_space(34.0);
                     ui.horizontal(|ui| {
-                        if knob(ui, "Wow", &mut self.tape_wow, 0.0, 1.0, 0.0, false, fmt_pct) {
-                            self.voice_manager.lock().set_tape_wow(self.tape_wow);
-                        }
-                        if knob(ui, "Flutter", &mut self.tape_flutter, 0.0, 1.0, 0.0, false, fmt_pct) {
-                            self.voice_manager.lock().set_tape_flutter(self.tape_flutter);
-                        }
-                        if knob(ui, "Drive", &mut self.tape_drive, 0.0, 1.0, 0.0, false, fmt_pct) {
-                            self.voice_manager.lock().set_tape_drive(self.tape_drive);
-                        }
-                        if knob(ui, "Age", &mut self.tape_age, 0.0, 1.0, 0.0, false, fmt_pct) {
-                            self.voice_manager.lock().set_tape_age(self.tape_age);
-                        }
+                        param_knob(
+                            ui,
+                            &self.voice_manager,
+                            "Wow",
+                            Param::TapeWow,
+                            &mut self.tape_wow,
+                            0.0,
+                            fmt_pct,
+                        );
+                        param_knob(
+                            ui,
+                            &self.voice_manager,
+                            "Flutter",
+                            Param::TapeFlutter,
+                            &mut self.tape_flutter,
+                            0.0,
+                            fmt_pct,
+                        );
+                        param_knob(
+                            ui,
+                            &self.voice_manager,
+                            "Drive",
+                            Param::TapeDrive,
+                            &mut self.tape_drive,
+                            0.0,
+                            fmt_pct,
+                        );
+                        param_knob(
+                            ui,
+                            &self.voice_manager,
+                            "Age",
+                            Param::TapeAge,
+                            &mut self.tape_age,
+                            0.0,
+                            fmt_pct,
+                        );
                     });
                 });
                 vseparator(ui, 150.0);
                 ui.vertical(|ui| {
                     ui.label(sublegend("Fuzz"));
                     ui.add_space(34.0);
-                    if knob(ui, "Germanium", &mut self.fuzz, 0.0, 1.0, 0.0, false, fmt_pct) {
-                        self.voice_manager.lock().set_fuzz(self.fuzz);
-                    }
+                    param_knob(
+                        ui,
+                        &self.voice_manager,
+                        "Germanium",
+                        Param::FuzzAmount,
+                        &mut self.fuzz,
+                        0.0,
+                        fmt_pct,
+                    );
                 });
             });
         });

@@ -60,6 +60,14 @@ use crate::voice_manager::VoiceManager;
 // Automation curves are sampled at this many points per beat
 const AUTOMATION_STEPS_PER_BEAT: f64 = 32.0;
 
+/// How a parameter's range is traversed by a fader or knob.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Curve {
+    Lin,
+    Log,
+    Step,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Param {
     Volume,
@@ -184,13 +192,22 @@ impl Param {
     }
 
     /// Map a normalized controller position (0..1) into this parameter's
-    /// native range — the same ranges the knobs use, logarithmic where the
-    /// knobs are logarithmic, stepped where the parameter is discrete.
+    /// native range, honoring its curve.
     pub fn midi_value(self, t: f32) -> f32 {
         let t = t.clamp(0.0, 1.0);
-        let lin = |lo: f32, hi: f32| lo + (hi - lo) * t;
-        let log = |lo: f32, hi: f32| lo * (hi / lo).powf(t);
-        let step = |n: f32| (t * n).round();
+        let (lo, hi, curve) = self.range();
+        match curve {
+            Curve::Lin => lo + (hi - lo) * t,
+            Curve::Log => lo * (hi / lo).powf(t),
+            Curve::Step => (lo + (hi - lo) * t).round(),
+        }
+    }
+
+    /// THE range table — the single source of truth for every parameter's
+    /// bounds and taper. Knobs, MIDI CCs, and any future surface all read
+    /// this, so a range change lands everywhere at once.
+    pub fn range(self) -> (f32, f32, Curve) {
+        use Curve::*;
         match self {
             Param::Volume | Param::Sustain | Param::FilterSustain
             | Param::SubLevel | Param::NoiseLevel | Param::OscFm
@@ -198,32 +215,31 @@ impl Param {
             | Param::TapeWow | Param::TapeFlutter | Param::TapeDrive
             | Param::TapeAge | Param::SpringWet | Param::KeyTrack
             | Param::FuzzAmount | Param::ModWheel | Param::LfoShape
-            | Param::SustainPedal => lin(0.0, 1.0),
-            Param::ReverbDecay => lin(0.0, 0.99),
-            Param::PulseWidth => lin(0.05, 0.95),
-            Param::Detune => lin(0.0, 30.0),
-            Param::Osc2Level | Param::Osc3Level => lin(0.0, 1.0),
-            Param::Osc2Pitch | Param::Osc3Pitch => lin(-24.0, 24.0).round(),
-            Param::Attack | Param::Decay | Param::Release => log(0.01, 2.0),
-            Param::FilterAttack => log(0.001, 2.0),
-            Param::FilterDecay | Param::FilterRelease => log(0.01, 2.0),
-            Param::FilterEnvAmount => lin(-5.0, 5.0),
-            Param::Cutoff => log(20.0, 20000.0),
-            Param::HpfCutoff => log(16.0, 8000.0),
-            Param::Resonance => lin(0.0, 4.0),
-            Param::Drive => lin(0.1, 5.0),
-            Param::Saturation => lin(0.0, 2.0),
-            Param::Glide => lin(0.0, 2.0),
-            Param::LfoRate => log(0.1, 30.0),
-            Param::LfoPitch => lin(0.0, 200.0),
-            Param::LfoFilter => lin(0.0, 4.0),
-            Param::LfoPwm => lin(0.0, 0.45),
-            Param::ChorusRate => log(0.1, 10.0),
-            Param::ChorusModeSel => step(4.0),
-            Param::WaveformSel | Param::Osc2Wave | Param::Osc3Wave => step(3.0),
-            Param::CircuitSel | Param::SyncSel => step(1.0),
-            Param::UiOctave => step(8.0),
-            Param::PitchBendSemis => lin(-2.0, 2.0),
+            | Param::SustainPedal | Param::Osc2Level | Param::Osc3Level => (0.0, 1.0, Lin),
+            Param::ReverbDecay => (0.0, 0.99, Lin),
+            Param::PulseWidth => (0.05, 0.95, Lin),
+            Param::Detune => (0.0, 30.0, Lin),
+            Param::Osc2Pitch | Param::Osc3Pitch => (-24.0, 24.0, Step),
+            Param::Attack | Param::Decay | Param::Release
+            | Param::FilterDecay | Param::FilterRelease => (0.01, 2.0, Log),
+            Param::FilterAttack => (0.001, 2.0, Log),
+            Param::FilterEnvAmount => (-5.0, 5.0, Lin),
+            Param::Cutoff => (20.0, 20000.0, Log),
+            Param::HpfCutoff => (16.0, 8000.0, Log),
+            Param::Resonance => (0.0, 4.0, Lin),
+            Param::Drive => (0.1, 5.0, Lin),
+            Param::Saturation => (0.0, 2.0, Lin),
+            Param::Glide => (0.0, 2.0, Lin),
+            Param::LfoRate => (0.1, 30.0, Log),
+            Param::LfoPitch => (0.0, 200.0, Lin),
+            Param::LfoFilter => (0.0, 4.0, Lin),
+            Param::LfoPwm => (0.0, 0.45, Lin),
+            Param::ChorusRate => (0.1, 10.0, Log),
+            Param::ChorusModeSel => (0.0, 4.0, Step),
+            Param::WaveformSel | Param::Osc2Wave | Param::Osc3Wave => (0.0, 3.0, Step),
+            Param::CircuitSel | Param::SyncSel => (0.0, 1.0, Step),
+            Param::UiOctave => (0.0, 8.0, Step),
+            Param::PitchBendSemis => (-2.0, 2.0, Lin),
         }
     }
 }

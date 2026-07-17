@@ -1,380 +1,234 @@
-use std::f32::consts::PI;
-use reverb::Reverb as SecondReverb;
+// The REVERB knob — Patina's own voice, deliberately modern.
+//
+// The spring (spring.rs) is the 1971 circuit, kept authentic down to its
+// flaws. This unit is the opposite commitment: the most beautiful tail we
+// can build, with no vintage hardware to be faithful to. Design is the
+// classic high-quality feedback-delay-network recipe (Jot's energy-exact
+// decay, Dattorro's input diffusion, modulated tank lines):
+//
+//   in -> pre-delay -> band-limit -> 4 series allpass diffusers
+//      -> 8-line tank, Householder unitary feedback
+//         each line: fractional read (4 lines slowly modulated),
+//         one-pole damping in the loop, per-line gain
+//         g_i = 10^(-3 L_i / (T60 sr))  -- every line decays at the SAME
+//         rate, so the tail's color stays constant as it fades
+//      -> stereo taps from disjoint line sets (real width, mono-safe)
+//
+// The line modulation is the load-bearing choice: a static FDN of any
+// size eventually exposes its modes as metallic ringing; a few cents of
+// slow, incommensurate delay modulation sweeps the modes continuously and
+// the ear hears "air" instead of "metal".
 
-pub struct Reverb {
-    // One instance of every stage per channel: pushing left and right
-    // through shared filter state interleaves the two signals and corrupts
-    // both (see the same note in chorus.rs)
-    early_reflections: [EarlyReflections; 2],
-    late_reflections: [LateReflections; 2],
-    modulation: [Modulation; 2],
-    eq: [Equalizer; 2],
-    wet: f32,
-    dry: f32,
-    second_reverb: SecondReverb,
-}
+use std::f32::consts::TAU;
 
-struct EarlyReflections {
-    delay_line: DelayLine,
-    taps: Vec<(usize, f32)>,
-}
+const N: usize = 8;
+/// Tank line lengths, ms — mutually non-commensurate, 31..74 ms spread.
+const LINE_MS: [f32; N] = [31.71, 37.11, 40.23, 44.14, 51.43, 58.22, 66.18, 73.66];
+/// Diffuser lengths, ms (Dattorro's figure-of-merit set).
+const DIFF_MS: [f32; 4] = [4.77, 3.60, 12.73, 9.30];
+const DIFF_G: f32 = 0.70;
+/// LFO rates for the modulated lines, Hz — incommensurate on purpose.
+const MOD_RATES: [f32; 4] = [0.071, 0.113, 0.167, 0.229];
+/// Modulation depth, ms (a few cents of pitch at these rates).
+const MOD_DEPTH_MS: f32 = 0.16;
 
-struct LateReflections {
-    delay_lines: Vec<DelayLine>,
-    feedback_matrix: Vec<Vec<f32>>,
-    filters: Vec<Biquad>,
-    decay: f32,
-    damping: f32,
-}
-
-struct Modulation {
-    lfos: Vec<LFO>,
-    depths: Vec<f32>,
-}
-
-struct Equalizer {
-    low_shelf: Biquad,
-    high_shelf: Biquad,
-}
 struct DelayLine {
     buffer: Vec<f32>,
-    write_pos: usize,
-    size: usize,
+    write: usize,
 }
 
-struct LFO {
-    phase: f32,
-    freq: f32,
-}
-
-struct Biquad {
-    b0: f32, b1: f32, b2: f32,
-    a1: f32, a2: f32,
-    x1: f32, x2: f32,
-    y1: f32, y2: f32,
-}
-
-
-
-
-impl LateReflections {
-    fn new(sample_rate: f32, num_channels: usize) -> Self {
-        let delay_times_ms = [29.0, 37.0, 43.0, 53.0];
-        let delay_lines = delay_times_ms.iter()
-            .map(|&ms| DelayLine::new((ms * sample_rate / 1000.0) as usize))
-            .collect();
-
-        let feedback_matrix = Self::create_feedback_matrix(num_channels);
-
-        let filters = (0..num_channels)
-            .map(|_| Biquad::new_lowpass(5000.0, 0.7, sample_rate))
-            .collect();
-
+impl DelayLine {
+    fn new(len: usize) -> Self {
         Self {
-            delay_lines,
-            feedback_matrix,
-            filters,
-            decay: 0.1,
-            damping: 0.5,
+            buffer: vec![0.0; len.max(4)],
+            write: 0,
         }
     }
 
-    fn create_feedback_matrix(size: usize) -> Vec<Vec<f32>> {
-        let mut matrix = vec![vec![0.0; size]; size];
-        for i in 0..size {
-            for j in 0..size {
-                if i != j {
-                    matrix[i][j] = 0.05 / (size as f32 - 1.0);
-                }
-            }
-        }
-        matrix
+    #[inline]
+    fn push(&mut self, x: f32) {
+        self.buffer[self.write] = x;
+        self.write = (self.write + 1) % self.buffer.len();
     }
 
-    fn process(&mut self, input: f32) -> f32 {
-        let mut output = 0.0;
-        let n = self.delay_lines.len().min(4);
-
-        // Read from delay lines and apply filtering.
-        // Fixed-size buffers: this runs per sample on the audio thread,
-        // so heap allocation here is not acceptable.
-        let mut temp_outputs = [0.0f32; 4];
-        for i in 0..n {
-            let delayed = self.delay_lines[i].read(0);
-            temp_outputs[i] = self.filters[i].process(delayed);
-        }
-
-        // Apply feedback matrix
-        let mut feedback_outputs = [0.0f32; 4];
-        for i in 0..n {
-            for j in 0..n {
-                feedback_outputs[i] += temp_outputs[j] * self.feedback_matrix[i][j];
-            }
-        }
-
-        // Update delay lines
-        for i in 0..n {
-            let new_sample = input + feedback_outputs[i] * self.decay;
-            self.delay_lines[i].write(new_sample);
-            output += new_sample;
-        }
-
-        // Apply damping
-        output = output * (1.0 - self.damping) + input * self.damping;
-
-        output * 0.25 // Attenuate output
+    /// Read `delay` samples back (fractional, linear interpolation).
+    #[inline]
+    fn read_frac(&self, delay: f32) -> f32 {
+        let len = self.buffer.len();
+        let delay = delay.clamp(1.0, (len - 2) as f32);
+        let d0 = delay as usize;
+        let frac = delay - d0 as f32;
+        let i0 = (len + self.write - 1 - d0) % len;
+        let i1 = (len + i0 - 1) % len;
+        self.buffer[i0] * (1.0 - frac) + self.buffer[i1] * frac
     }
 
+    #[inline]
+    fn read_int(&self, delay: usize) -> f32 {
+        let len = self.buffer.len();
+        let i = (len + self.write - 1 - delay.min(len - 2)) % len;
+        self.buffer[i]
+    }
+}
+
+/// Schroeder allpass diffuser.
+struct Diffuser {
+    line: DelayLine,
+    delay: usize,
+}
+
+impl Diffuser {
+    fn new(sample_rate: f32, ms: f32) -> Self {
+        let delay = (ms * 1e-3 * sample_rate) as usize;
+        Self {
+            line: DelayLine::new(delay + 2),
+            delay,
+        }
+    }
+
+    #[inline]
+    fn process(&mut self, x: f32) -> f32 {
+        let d = self.line.read_int(self.delay);
+        let v = x - DIFF_G * d;
+        self.line.push(v);
+        d + DIFF_G * v
+    }
+}
+
+struct OnePoleLp {
+    state: f32,
+    a: f32,
+}
+
+impl OnePoleLp {
+    fn new(cutoff: f32, sample_rate: f32) -> Self {
+        Self {
+            state: 0.0,
+            a: 1.0 - (-TAU * cutoff / sample_rate).exp(),
+        }
+    }
+
+    #[inline]
+    fn process(&mut self, x: f32) -> f32 {
+        self.state += self.a * (x - self.state);
+        self.state
+    }
+}
+
+pub struct Reverb {
+    sample_rate: f32,
+    pre_delay: DelayLine,
+    pre_delay_samples: usize,
+    in_lp: OnePoleLp,
+    in_hp_tracker: OnePoleLp,
+    diffusers: [Diffuser; 4],
+    lines: [DelayLine; N],
+    line_len: [f32; N],
+    damping: [OnePoleLp; N],
+    /// Per-line decay gain for the current T60 (Jot's condition).
+    gains: [f32; N],
+    lfo_phase: [f32; 4],
+    lfo_inc: [f32; 4],
+    mod_depth: f32,
+    /// Wet-path low cut so long tails don't accumulate mud.
+    out_hp_l: OnePoleLp,
+    out_hp_r: OnePoleLp,
+    wet: f32,
+    dry: f32,
 }
 
 impl Reverb {
     pub fn new(sample_rate: f32) -> Self {
-        let num_channels = 4;
-        let mut second_reverb = SecondReverb::new();
-
-        second_reverb.bandwidth(0.8);  // Increase bandwidth to soften the sound
-        second_reverb.damping(0.8);    // Increase damping to reduce high frequency resonances
-        second_reverb.decay(0.8);      // Reduce decay to shorten the reverb tail
-        second_reverb.diffusion(0.7, 0.7, 0.7, 0.7);  // Set diffusion to smooth out distinct echoes
-
-        Self {
-            early_reflections: [
-                EarlyReflections::new(sample_rate),
-                EarlyReflections::new(sample_rate),
-            ],
-            late_reflections: [
-                LateReflections::new(sample_rate, num_channels),
-                LateReflections::new(sample_rate, num_channels),
-            ],
-            modulation: [
-                Modulation::new(sample_rate, num_channels),
-                Modulation::new(sample_rate, num_channels),
-            ],
-            eq: [Equalizer::new(sample_rate), Equalizer::new(sample_rate)],
-            wet: 0.7,
-            dry: 0.3,
-            second_reverb,
-        }
+        let line_len =
+            core::array::from_fn(|i| (LINE_MS[i] * 1e-3 * sample_rate).max(8.0));
+        let lines = core::array::from_fn(|i| {
+            DelayLine::new(line_len[i] as usize + (MOD_DEPTH_MS * 1e-3 * sample_rate) as usize + 8)
+        });
+        let mut r = Self {
+            sample_rate,
+            pre_delay: DelayLine::new((0.014 * sample_rate) as usize + 2),
+            pre_delay_samples: (0.012 * sample_rate) as usize,
+            in_lp: OnePoleLp::new(9500.0, sample_rate),
+            in_hp_tracker: OnePoleLp::new(90.0, sample_rate),
+            diffusers: core::array::from_fn(|i| Diffuser::new(sample_rate, DIFF_MS[i])),
+            lines,
+            line_len,
+            damping: core::array::from_fn(|_| OnePoleLp::new(5500.0, sample_rate)),
+            gains: [0.0; N],
+            lfo_phase: [0.0, 0.25, 0.5, 0.75],
+            lfo_inc: core::array::from_fn(|i| MOD_RATES[i] / sample_rate),
+            mod_depth: MOD_DEPTH_MS * 1e-3 * sample_rate,
+            out_hp_l: OnePoleLp::new(60.0, sample_rate),
+            out_hp_r: OnePoleLp::new(60.0, sample_rate),
+            wet: 0.3,
+            dry: 0.7,
+        };
+        r.set_decay(0.55);
+        r
     }
 
-    pub fn process(&mut self, input_left: f32, input_right: f32) -> (f32, f32) {
-        let mut wet = [input_left, input_right];
-        for (ch, sample) in wet.iter_mut().enumerate() {
-            let early = self.early_reflections[ch].process(*sample);
-            let late = self.late_reflections[ch].process(early);
-            let modulated = self.modulation[ch].process(late);
-            *sample = self.eq[ch].process(modulated);
-        }
-
-        // The plate takes dry mono input once per sample frame and returns
-        // the averaged wet stereo taps
-        let plate = self
-            .second_reverb
-            .calc_sample((wet[0] + wet[1]) * 0.5, 0.6);
-
-        let output_left = input_left * self.dry + (wet[0] * 0.5 + plate * 0.5) * self.wet;
-        let output_right = input_right * self.dry + (wet[1] * 0.5 + plate * 0.5) * self.wet;
-
-        (output_left, output_right)
-    }
-
+    /// Map the panel's 0..1 to a T60 and set every line's gain so the
+    /// whole tank decays at exactly that rate.
     pub fn set_decay(&mut self, decay: f32) {
-        for late in &mut self.late_reflections {
-            late.decay = decay.clamp(0.0, 0.98);
+        let d = decay.clamp(0.0, 1.0);
+        let t60 = 0.25 + 5.0 * d * d; // 0.25 s .. 5.25 s
+        for i in 0..N {
+            self.gains[i] = 10f32.powf(-3.0 * self.line_len[i] / (t60 * self.sample_rate));
         }
-        self.second_reverb.decay(decay);
     }
 
     pub fn set_wet(&mut self, wet: f32) {
         self.wet = wet.clamp(0.0, 1.0);
         self.dry = 1.0 - self.wet;
     }
-}
 
-impl EarlyReflections {
-    fn new(sample_rate: f32) -> Self {
-        // Calculate delay times in samples
-        let delay_times = vec![
-            (0.007 * sample_rate) as usize,
-            (0.012243 * sample_rate) as usize,
-            (0.0154443 * sample_rate) as usize,
-            (0.023405 * sample_rate) as usize,
-        ];
-
-        let max_delay = *delay_times.iter().max().unwrap_or(&0);
-        let delay_line = DelayLine::new(max_delay + 1);
-
-        let taps = delay_times.into_iter()
-            .enumerate()
-            .map(|(i, delay)| (delay, 0.7f32.powf(i as f32)))
-            .collect();
-
-        Self {
-            delay_line,
-            taps,
+    pub fn process(&mut self, input_left: f32, input_right: f32) -> (f32, f32) {
+        // Feed: mono sum through pre-delay and band limits into the
+        // diffusion chain
+        let mono = (input_left + input_right) * 0.5;
+        self.pre_delay.push(mono);
+        let fed = self.pre_delay.read_int(self.pre_delay_samples);
+        let fed = self.in_lp.process(fed);
+        let fed = fed - self.in_hp_tracker.process(fed);
+        let mut diffused = fed;
+        for d in &mut self.diffusers {
+            diffused = d.process(diffused);
         }
-    }
 
-    fn process(&mut self, input: f32) -> f32 {
-        self.delay_line.write(input);
-        let reflection = self.taps.iter()
-            .map(|&(delay, gain)| self.delay_line.read(delay) * gain)
-            .sum::<f32>();
-        (reflection + input * 0.125) * 0.5  // Apply gain reduction
-    }
-}
-
-impl DelayLine {
-    fn new(size: usize) -> Self {
-        let size = size.max(1);  // Ensure size is at least 1
-        Self {
-            buffer: vec![0.0; size],
-            write_pos: 0,
-            size,
+        // Tank read: lines 0..3 modulated, 4..7 static
+        let mut outs = [0.0f32; N];
+        for i in 0..N {
+            let delay = if i < 4 {
+                self.lfo_phase[i] = (self.lfo_phase[i] + self.lfo_inc[i]) % 1.0;
+                self.line_len[i] + self.mod_depth * (TAU * self.lfo_phase[i]).sin()
+            } else {
+                self.line_len[i]
+            };
+            let v = self.lines[i].read_frac(delay);
+            outs[i] = self.damping[i].process(v) * self.gains[i];
         }
-    }
 
-    fn read(&self, delay: usize) -> f32 {
-        let delay = delay.min(self.size - 1);
-        let read_pos = (self.size + self.write_pos - delay) % self.size;
-        self.buffer[read_pos]
-    }
-
-    fn write(&mut self, input: f32) {
-        self.buffer[self.write_pos] = input;
-        self.write_pos = (self.write_pos + 1) % self.size;
-    }
-}
-
-
-
-impl Modulation {
-    fn new(sample_rate: f32, num_channels: usize) -> Self {
-        let lfos = (0..num_channels)
-            .map(|i| LFO::new(0.1 + i as f32 * 0.05, sample_rate))
-            .collect();
-        let depths = vec![0.0002, 0.0003, 0.0004, 0.0005];
-        Self { lfos, depths }
-    }
-
-    fn process(&mut self, input: f32) -> f32 {
-        self.lfos.iter_mut()
-            .zip(&self.depths)
-            .fold(input, |acc, (lfo, &depth)| {
-                acc * (1.0 + lfo.process() * depth)
-            })
-    }
-}
-
-impl Equalizer {
-    fn new(sample_rate: f32) -> Self {
-        Self {
-            low_shelf: Biquad::new_low_shelf(200.0, 0.0, sample_rate),
-            high_shelf: Biquad::new_high_shelf(4000.0, -2.0, sample_rate),
+        // Householder feedback: y_i = x_i - (2/N) * sum  (unitary, so the
+        // per-line gains alone set the decay)
+        let s = outs.iter().sum::<f32>() * (2.0 / N as f32);
+        for i in 0..N {
+            // Alternating injection signs decorrelate the lines from the
+            // shared mono feed
+            let inject = if i % 2 == 0 { diffused } else { -diffused };
+            self.lines[i].push(inject + outs[i] - s);
         }
-    }
 
-    fn process(&mut self, input: f32) -> f32 {
-        let low = self.low_shelf.process(input);
-        self.high_shelf.process(low)
-    }
-}
+        // Stereo taps from disjoint line sets: genuine width, and the mono
+        // sum keeps everything (no cancellation between L and R)
+        let wet_l = (outs[0] - outs[2] + outs[4] - outs[6]) * 0.6;
+        let wet_r = (outs[1] - outs[3] + outs[5] - outs[7]) * 0.6;
+        let wet_l = wet_l - self.out_hp_l.process(wet_l);
+        let wet_r = wet_r - self.out_hp_r.process(wet_r);
 
-
-impl LFO {
-    fn new(freq: f32, sample_rate: f32) -> Self {
-        Self {
-            phase: 0.0,
-            freq: freq / sample_rate,
-        }
-    }
-
-    fn process(&mut self) -> f32 {
-        self.phase += self.freq;
-        if self.phase >= 1.0 {
-            self.phase -= 1.0;
-        }
-        (self.phase * 2.0 * PI).sin()
-    }
-}
-
-impl Biquad {
-    fn new_low_shelf(freq: f32, gain_db: f32, sample_rate: f32) -> Self {
-        let (b0, b1, b2, a0, a1, a2) = Self::calc_low_shelf_coeffs(freq, gain_db, sample_rate);
-        Self::from_coeffs(b0, b1, b2, a0, a1, a2)
-    }
-
-    fn new_high_shelf(freq: f32, gain_db: f32, sample_rate: f32) -> Self {
-        let (b0, b1, b2, a0, a1, a2) = Self::calc_high_shelf_coeffs(freq, gain_db, sample_rate);
-        Self::from_coeffs(b0, b1, b2, a0, a1, a2)
-    }
-
-    fn from_coeffs(b0: f32, b1: f32, b2: f32, a0: f32, a1: f32, a2: f32) -> Self {
-        assert!(a0 != 0.0, "a0 coefficient cannot be zero");
-        Self {
-            b0: b0 / a0, b1: b1 / a0, b2: b2 / a0,
-            a1: a1 / a0, a2: a2 / a0,
-            x1: 0.0, x2: 0.0, y1: 0.0, y2: 0.0,
-        }
-    }
-
-    fn process(&mut self, input: f32) -> f32 {
-        let output = input * self.b0 + self.x1 * self.b1 + self.x2 * self.b2
-                     - self.y1 * self.a1 - self.y2 * self.a2;
-        self.x2 = self.x1;
-        self.x1 = input;
-        self.y2 = self.y1;
-        self.y1 = output;
-        output
-    }
-
-    fn calc_low_shelf_coeffs(freq: f32, gain_db: f32, sample_rate: f32) -> (f32, f32, f32, f32, f32, f32) {
-        let a = 10.0f32.powf(gain_db / 40.0);
-        let w0 = 2.0 * PI * freq / sample_rate;
-        let cos_w0 = w0.cos();
-        let sin_w0 = w0.sin();
-        let alpha = sin_w0 / 2.0 * (2.0f32).sqrt();
-
-        let b0 = a * ((a + 1.0) - (a - 1.0) * cos_w0 + 2.0 * a.sqrt() * alpha);
-        let b1 = 2.0 * a * ((a - 1.0) - (a + 1.0) * cos_w0);
-        let b2 = a * ((a + 1.0) - (a - 1.0) * cos_w0 - 2.0 * a.sqrt() * alpha);
-        let a0 = (a + 1.0) + (a - 1.0) * cos_w0 + 2.0 * a.sqrt() * alpha;
-        let a1 = -2.0 * ((a - 1.0) + (a + 1.0) * cos_w0);
-        let a2 = (a + 1.0) + (a - 1.0) * cos_w0 - 2.0 * a.sqrt() * alpha;
-
-        (b0, b1, b2, a0, a1, a2)
-    }
-
-    fn calc_high_shelf_coeffs(freq: f32, gain_db: f32, sample_rate: f32) -> (f32, f32, f32, f32, f32, f32) {
-        let a = 10.0f32.powf(gain_db / 40.0);
-        let w0 = 2.0 * PI * freq / sample_rate;
-        let cos_w0 = w0.cos();
-        let sin_w0 = w0.sin();
-        let alpha = sin_w0 / 2.0 * (2.0f32).sqrt();
-
-        let b0 = a * ((a + 1.0) + (a - 1.0) * cos_w0 + 2.0 * a.sqrt() * alpha);
-        let b1 = -2.0 * a * ((a - 1.0) + (a + 1.0) * cos_w0);
-        let b2 = a * ((a + 1.0) + (a - 1.0) * cos_w0 - 2.0 * a.sqrt() * alpha);
-        let a0 = (a + 1.0) - (a - 1.0) * cos_w0 + 2.0 * a.sqrt() * alpha;
-        let a1 = 2.0 * ((a - 1.0) - (a + 1.0) * cos_w0);
-        let a2 = (a + 1.0) - (a - 1.0) * cos_w0 - 2.0 * a.sqrt() * alpha;
-
-        (b0, b1, b2, a0, a1, a2)
-    }
-
-    fn new_lowpass(freq: f32, q: f32, sample_rate: f32) -> Self {
-        let w0 = 2.0 * PI * freq / sample_rate;
-        let alpha = w0.sin() / (2.0 * q);
-        let cos_w0 = w0.cos();
-
-        let b0 = (1.0 - cos_w0) / 2.0;
-        let b1 = 1.0 - cos_w0;
-        let b2 = (1.0 - cos_w0) / 2.0;
-        let a0 = 1.0 + alpha;
-        let a1 = -2.0 * cos_w0;
-        let a2 = 1.0 - alpha;
-
-        Self::from_coeffs(b0, b1, b2, a0, a1, a2)
+        (
+            input_left * self.dry + wet_l * self.wet,
+            input_right * self.dry + wet_r * self.wet,
+        )
     }
 }
 
@@ -394,21 +248,110 @@ mod tests {
         }
     }
 
-    /// Identical inputs must produce identical outputs. When the channels
-    /// shared one set of filter states this failed immediately (each call
-    /// interleaved into the other's history).
+    /// Impulse-response tail level must track the requested T60: with the
+    /// per-line gain law, level falls 60/T60 dB per second.
     #[test]
-    fn identical_inputs_stay_identical() {
-        let mut reverb = Reverb::new(48000.0);
+    fn tail_decays_at_the_requested_rate() {
+        let sr = 48000.0;
+        let mut reverb = Reverb::new(sr);
         reverb.set_wet(1.0);
-        for n in 0..48000 {
-            let x = (2.0 * PI * 220.0 * n as f32 / 48000.0).sin() * 0.3;
+        reverb.set_decay(0.55); // T60 = 0.25 + 5*0.55^2 ~ 1.76 s
+        let t60 = 0.25 + 5.0 * 0.55 * 0.55;
+        reverb.process(1.0, 1.0);
+        let n = (3.0 * sr) as usize;
+        let mut rms_a = 0.0f64;
+        let mut rms_b = 0.0f64;
+        for i in 0..n {
+            let (l, r) = reverb.process(0.0, 0.0);
+            assert!(l.is_finite() && r.is_finite());
+            let e = (l * l + r * r) as f64;
+            if ((0.4 * sr) as usize..(0.6 * sr) as usize).contains(&i) {
+                rms_a += e;
+            }
+            if ((1.4 * sr) as usize..(1.6 * sr) as usize).contains(&i) {
+                rms_b += e;
+            }
+        }
+        let drop_db = 10.0 * (rms_a / rms_b.max(1e-30)).log10() as f32;
+        let expected = 60.0 / t60; // dB per second, measured over 1 s
+        assert!(
+            (drop_db / expected - 1.0).abs() < 0.35,
+            "tail should drop ~{expected:.1} dB/s, measured {drop_db:.1}"
+        );
+    }
+
+    /// The tail must be dense and smooth — no discrete slap echoes. In any
+    /// late window the peak should not tower over the RMS.
+    #[test]
+    fn tail_is_dense_not_echoey() {
+        let sr = 48000.0;
+        let mut reverb = Reverb::new(sr);
+        reverb.set_wet(1.0);
+        reverb.set_decay(0.7);
+        reverb.process(1.0, 1.0);
+        let start = (0.3 * sr) as usize;
+        let end = (0.5 * sr) as usize;
+        let mut peak = 0.0f32;
+        let mut rms = 0.0f64;
+        for i in 0..end {
+            let (l, _) = reverb.process(0.0, 0.0);
+            if i >= start {
+                peak = peak.max(l.abs());
+                rms += (l * l) as f64;
+            }
+        }
+        let rms = ((rms / (end - start) as f64) as f32).sqrt();
+        assert!(rms > 1e-6, "tail should still be alive at 300-500 ms");
+        assert!(
+            peak < 8.0 * rms,
+            "tail should be diffuse: peak {peak:.5} vs rms {rms:.5}"
+        );
+    }
+
+    /// A mono impulse must come back with real stereo width: the L/R
+    /// tails read from disjoint tank lines and should decorrelate.
+    #[test]
+    fn tail_has_stereo_width() {
+        let sr = 48000.0;
+        let mut reverb = Reverb::new(sr);
+        reverb.set_wet(1.0);
+        reverb.set_decay(0.7);
+        reverb.process(1.0, 1.0);
+        let (mut ll, mut rr, mut lr) = (0.0f64, 0.0f64, 0.0f64);
+        for _ in 0..(sr as usize) {
+            let (l, r) = reverb.process(0.0, 0.0);
+            ll += (l * l) as f64;
+            rr += (r * r) as f64;
+            lr += (l * r) as f64;
+        }
+        let corr = lr / (ll * rr).sqrt().max(1e-30);
+        assert!(
+            corr.abs() < 0.6,
+            "L/R tails should decorrelate, correlation {corr:.3}"
+        );
+        // ...but both channels must carry comparable energy
+        let balance = ll / rr.max(1e-30);
+        assert!(
+            (0.25..4.0).contains(&balance),
+            "channel energy should be balanced, L/R ratio {balance:.2}"
+        );
+    }
+
+    /// Unitary feedback times sub-unity gains: bounded under sustained
+    /// hot input at maximum decay.
+    #[test]
+    fn stable_at_maximum_decay() {
+        let sr = 48000.0;
+        let mut reverb = Reverb::new(sr);
+        reverb.set_wet(1.0);
+        reverb.set_decay(1.0);
+        let mut peak = 0.0f32;
+        for n in 0..(5 * sr as usize) {
+            let x = (TAU * 180.0 * n as f32 / sr).sin() * 4.5;
             let (l, r) = reverb.process(x, x);
             assert!(l.is_finite() && r.is_finite());
-            assert!(
-                (l - r).abs() < 1e-6,
-                "channels diverged at sample {n}: {l} vs {r}"
-            );
+            peak = peak.max(l.abs().max(r.abs()));
         }
+        assert!(peak < 60.0, "reverb must stay bounded, peak {peak}");
     }
 }
