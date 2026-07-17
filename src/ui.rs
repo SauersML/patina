@@ -86,6 +86,7 @@ pub struct SynthUI {
     tape_age: f32,
     pressed_keys: HashSet<Key>,
     theme_applied: bool,
+    serif_pending: bool,
     serif_loaded: bool,
     notes_active: bool,
     time: f64,
@@ -601,6 +602,7 @@ impl SynthUI {
             tape_age: 0.0,
             pressed_keys: HashSet::new(),
             theme_applied: false,
+            serif_pending: false,
             serif_loaded: false,
             notes_active: false,
             time: 0.0,
@@ -663,7 +665,10 @@ impl SynthUI {
                     .families
                     .insert(egui::FontFamily::Name(SERIF.into()), family);
                 ctx.set_fonts(fonts);
-                self.serif_loaded = true;
+                // set_fonts takes effect at the NEXT frame's begin; using the
+                // named family this same frame panics in epaint. Mark pending
+                // and start using it one frame later.
+                self.serif_pending = true;
                 return;
             }
         }
@@ -734,6 +739,9 @@ impl SynthUI {
         if !self.theme_applied {
             self.apply_theme(ctx);
             self.theme_applied = true;
+        } else if self.serif_pending {
+            self.serif_pending = false;
+            self.serif_loaded = true;
         }
 
         // Pull the engine's canonical parameter values so the controls follow
