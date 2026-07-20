@@ -1,0 +1,124 @@
+# Perihelion — Aphelion's near, bright twin. Thirty-odd seconds.
+# Everything the BoC MIDI study taught, rebuilt as ours:
+#
+#   FORM (the arrival clock, miniaturized): bass alone (0-8), drums
+#   at 8, a one-time two-note HERALD at 14.5, lead + comp-pump at 16
+#   (the midpoint), the third octave joins at 32, and it ends FULL
+#   at 48 — no outro, the loop just stops existing.
+#
+#   MELODY: exactly two phrases, A and A', strictly alternating,
+#   built on the 1 / 0.5 / 2.5 cell — the long note is the arrival.
+#   Same three-note head every time; A settles low, A' peaks at B5
+#   and spends the piece's ONE sixteenth-note tumble. The lead is
+#   doubled in real octaves; a third octave enters for the back half.
+#
+#   HARMONY, ours: a two-chord wheel of C major and E major — the
+#   warm half of Aphelion's major-third cycle. G and G# shimmer a
+#   semitone apart in the comp as the wheel turns. The final phrase's
+#   E-chord half lands over the bass's C wait: the augmented blur,
+#   once, at the very end.
+#
+#   COMP PUMP: staccato eighth dyads (the ROYGBIV piano engine).
+#   BASS: dotted anchor, sixteenth pickup run, four-beat wait.
+#   DRUMS, from the decoded grid: double-pump kick (0 and 0.5),
+#   snare on 1 and 3, straight-eighth hats, and the ghost hit one
+#   sixteenth BEFORE each snare. Tape-crushed, velocities flat.
+
+bpm 88
+gate 0.9
+
+automate lfo_rate
+0.5
+automate lfo_pitch
+3
+automate lfo_shape
+0.5
+automate chorus_mode
+1
+automate chorus_depth
+0.2
+automate spring
+0.1
+automate reverb_decay
+0.6
+automate reverb_wet
+0.3
+automate tape_wow
+0.2
+automate tape_flutter
+0.1
+automate tape_drive
+0.6
+automate tape_age
+0.5
+automate bd_tune
+0.32
+automate bd_decay
+0.5
+automate bd_drive
+0.4
+automate sd_tone
+0.35
+automate sd_snappy
+0.5
+automate sd_decay
+0.45
+automate hh_level
+0.5
+automate hh_tune
+0.5
+automate ch_decay
+0.3
+automate dr_drive
+0.4
+
+track bass vel=0.75 patch=rawbass
+C2:1.75 G2:0.25 C3:0.25 E3:0.25 G2:0.5 C2:1
+E2:1.75 B2:0.25 E3:0.25 G#3:0.25 B2:0.5 E2:1
+C2:1.75 G2:0.25 C3:0.25 E3:0.25 G2:0.5 C2:1
+E2:1.75 B2:0.25 E3:0.25 G#3:0.25 B2:0.5 E2:1
+C2:1.75 G2:0.25 C3:0.25 E3:0.25 G2:0.5 C2:1
+E2:1.75 B2:0.25 E3:0.25 G#3:0.25 B2:0.5 E2:1
+C2:1.75 G2:0.25 C3:0.25 E3:0.25 G2:0.5 C2:1
+E2:1.75 B2:0.25 E3:0.25 G#3:0.25 B2:0.5 E2:1
+C2:1.75 G2:0.25 C3:0.25 E3:0.25 G2:0.5 C2:1
+E2:1.75 B2:0.25 E3:0.25 G#3:0.25 B2:0.5 E2:1
+C2:1.75 G2:0.25 C3:0.25 E3:0.25 G2:0.5 C2:1
+C2:4
+
+track beat kit=909
+R:8
+[BD CH]:0.5@0.75 [BD CH]:0.25@0.7 SD:0.25@0.3 [SD CH]:0.5@0.65 CH:0.5@0.35 [BD CH]:0.5@0.75 [BD CH]:0.25@0.7 SD:0.25@0.3 [SD CH]:0.5@0.65 CH:0.5@0.35
+[BD CH]:0.5@0.75 [BD CH]:0.25@0.7 SD:0.25@0.3 [SD CH]:0.5@0.65 CH:0.5@0.35 [BD CH]:0.5@0.75 [BD CH]:0.25@0.7 SD:0.25@0.3 [SD CH]:0.5@0.65 CH:0.5@0.35
+[BD CH]:0.5@0.75 [BD CH]:0.25@0.7 SD:0.25@0.3 [SD CH]:0.5@0.65 CH:0.5@0.35 [BD CH]:0.5@0.75 [BD CH]:0.25@0.7 SD:0.25@0.3 [SD CH]:0.5@0.65 CH:0.5@0.35
+[BD CH]:0.5@0.75 [BD CH]:0.25@0.7 SD:0.25@0.3 [SD CH]:0.5@0.65 CH:0.5@0.35 [BD CH]:0.5@0.75 [BD CH]:0.25@0.7 SD:0.25@0.3 [SD CH]:0.5@0.65 CH:0.5@0.35
+[BD CH]:0.5@0.75 [BD CH]:0.25@0.7 SD:0.25@0.3 [SD CH]:0.5@0.65 CH:0.5@0.35 [BD CH]:0.5@0.75 [BD CH]:0.25@0.7 SD:0.25@0.3 [SD CH]:0.5@0.65 CH:0.5@0.35
+[BD CH]:0.5@0.75 [BD CH]:0.25@0.7 SD:0.25@0.3 [SD CH]:0.5@0.65 CH:0.5@0.35 [BD CH]:0.5@0.75 [BD CH]:0.25@0.7 SD:0.25@0.3 [SD CH]:0.5@0.65 CH:0.5@0.35
+[BD CH]:0.5@0.75 [BD CH]:0.25@0.7 SD:0.25@0.3 [SD CH]:0.5@0.65 CH:0.5@0.35 [BD CH]:0.5@0.75 [BD CH]:0.25@0.7 SD:0.25@0.3 [SD CH]:0.5@0.65 CH:0.5@0.35
+[BD CH]:0.5@0.75 [BD CH]:0.25@0.7 SD:0.25@0.3 [SD CH]:0.5@0.65 CH:0.5@0.35 [BD CH]:0.5@0.75 [BD CH]:0.25@0.7 SD:0.25@0.3 [SD CH]:0.5@0.65 CH:0.5@0.35
+[BD CH]:0.5@0.75 [BD CH]:0.25@0.7 SD:0.25@0.3 [SD CH]:0.5@0.65 CH:0.5@0.35 [BD CH]:0.5@0.75 [BD CH]:0.25@0.7 SD:0.25@0.3 [SD CH]:0.5@0.65 CH:0.5@0.35
+[BD CH]:0.5@0.75 [BD CH]:0.25@0.7 SD:0.25@0.3 [SD CH]:0.5@0.65 CH:0.5@0.35 [BD CH]:0.5@0.75 [BD CH]:0.25@0.7 SD:0.25@0.3 [SD CH]:0.5@0.65 CH:0.5@0.35
+
+track comp vel=0.42 patch=quartz
+R:16
+[E4 G4]:0.5 C4:0.5 [E4 G4]:0.5 C4:0.5 [E4 G4]:0.5 C4:0.5 [E4 G4]:0.5 C4:0.5
+[E4 G#4]:0.5 B3:0.5 [E4 G#4]:0.5 B3:0.5 [E4 G#4]:0.5 B3:0.5 [E4 G#4]:0.5 B3:0.5
+[E4 G4]:0.5 C4:0.5 [E4 G4]:0.5 C4:0.5 [E4 G4]:0.5 C4:0.5 [E4 G4]:0.5 C4:0.5
+[E4 G#4]:0.5 B3:0.5 [E4 G#4]:0.5 B3:0.5 [E4 G#4]:0.5 B3:0.5 [E4 G#4]:0.5 B3:0.5
+[E4 G4]:0.5 C4:0.5 [E4 G4]:0.5 C4:0.5 [E4 G4]:0.5 C4:0.5 [E4 G4]:0.5 C4:0.5
+[E4 G#4]:0.5 B3:0.5 [E4 G#4]:0.5 B3:0.5 [E4 G#4]:0.5 B3:0.5 [E4 G#4]:0.5 B3:0.5
+[E4 G4]:0.5 C4:0.5 [E4 G4]:0.5 C4:0.5 [E4 G4]:0.5 C4:0.5 [E4 G4]:0.5 C4:0.5
+[E4 G4]:0.5 C4:0.5 [E4 G4]:0.5 C4:0.5 [E4 G4]:0.5 C4:0.5 [E4 G4]:0.5 C4:0.5
+
+track lead vel=0.72 patch=farvoice
+R:14.5
+[B3 B4]:0.5 [E4 E5]:1
+[E4 E5]:1 [G4 G5]:0.5 [D4 D5]:2.5 [B3 B4]:1 [G#3 G#4]:0.5 [E3 E4]:2.5
+[E4 E5]:1 [G4 G5]:0.5 [D4 D5]:1.5 [A4 A5]:1 [B4 B5]:1 [G#4 G#5]:0.25 [F#4 F#5]:0.25 [E4 E5]:0.5 [B3 B4]:2
+[E4 E5]:1 [G4 G5]:0.5 [D4 D5]:2.5 [B3 B4]:1 [G#3 G#4]:0.5 [E3 E4]:2.5
+[E4 E5]:1 [G4 G5]:0.5 [D4 D5]:1.5 [A4 A5]:1 [B4 B5]:1 [G#4 G#5]:0.25 [F#4 F#5]:0.25 [E4 E5]:0.5 [B3 B4]:2
+
+track hi vel=0.32 patch=farvoice
+R:32
+E6:1 G6:0.5 D6:2.5 B5:1 G#5:0.5 E5:2.5
+E6:1 G6:0.5 D6:1.5 A6:1 B6:1 G#6:0.25 F#6:0.25 E6:0.5 B5:2
