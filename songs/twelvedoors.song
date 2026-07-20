@@ -1,30 +1,39 @@
-# Twelve Doors — second draft: the lead tells the story now.
+# Twelve Doors — third draft. A machine's song, not an imitation of a
+# singer's.
 #
-# THE STORY, in the melody:
-#   A1  the question — a small rising motif enters off the beat,
-#       reaches A5, falls back shy. Second try reaches B5, falls to
-#       the uneasy F# over G minor(maj7).
-#   A2  development — the motif transposed up, entering ON the beat
-#       now (it has grown), climbing to D6, but still circling the
-#       shadow (A-G-F# over the Gm bar, never touching Bb).
-#   BR  the stammer — the motif broken to its first two notes,
-#       echoed downward, landing on the leading tone A# and unable
-#       to continue. The sync partial drops nasal here.
-#   A3  transformation — the question INVERTED (it falls now, it
-#       knows something), then the full climb to E6, and at the Gm
-#       bar the melody finally SINGS the Bb: four full beats on the
-#       borrowed note, sync partial rising underneath, chime above.
-#   CODA departure — it restates its first two notes an octave above
-#       where it was born, and stops mid-gesture.
+# HARMONY: the Andalusian cadence in B minor — Bm A G F#(major) —
+# four beats per chord, a wheel that has been catching ears for four
+# centuries. Dark by construction (that major V never resolves), so
+# the pad plays CLEAN low triads: no crunchy voicings pretending to
+# be deep. The dissonance budget is spent in exactly two places: the
+# hook's A# twist and the sky note's ache over the F# bar.
 #
-# The pad no longer competes: hollow pulse (spectral gaps where the
-# lead lives), top voice capped at C#4 — an octave-plus below the
-# melody — swelling inside each chord, dipping darker when the lead
-# speaks, thinning its velocity as the story intensifies. The
-# sawtooth rawness now belongs to the bass and the narrator.
+# HOOK: a 3+3+2 cell — D5, F#5, B5 held long-long-short — then a
+# tumbling answer, then the same cell landing on G, then the twist:
+# A#5, the major third of F#, the note that makes you rewind. Two
+# bars of material, repeated with one changing tail. It resolves to
+# the tonic exactly once, at the end of the last cycle.
+#
+# THE MAGIC (things this machine can do that others can't):
+#   A2  the synced partial climbs +5 -> +9 while the ladder's
+#       resonance rises — the voice brightens from inside.
+#   BR  FM clang blooms and dies; the sync partial drops pinched.
+#   A3  resonance reaches 3.6 with key-tracking at 1.0: the LADDER
+#       ITSELF starts singing a whistle partial that follows the
+#       melody — the filter becomes a second voice above the line.
+#       Then, mid-phrase at the second cycle: THE CIRCUIT SWAPS,
+#       Moog to ARP — the same notes continue but every board under
+#       them has changed, grit transfigured to glass. You cannot hot-
+#       swap a filter on hardware. Here the song does it as a chord
+#       change.
+#
+# LANDSCAPE: ground (gritty saw bass, dry) / bed (hollow pulse
+# triads, low, breathing) / voice (the hook) / sky (one sine D6 that
+# NEVER moves while the cadence descends underneath — consonant with
+# three chords, aching over the fourth, resolved at every return).
 
 bpm 104
-gate 0.9
+gate 0.88
 
 automate lfo_rate
 0.8
@@ -32,78 +41,84 @@ automate lfo_pitch
 3
 automate lfo_shape
 0.5
-automate lfo_pwm
-0.05
 automate chorus_depth
 0.35
 automate spring
 0.06
 automate reverb_decay
-0.6
+0.65
 automate tape_wow
 0.12
 automate tape_flutter
 0.08
 automate tape_drive
-0.15
+0.18
 
-track pads vel=0.55 patch=hollowpad
+track pads vel=0.5 patch=hollowpad
 [B2 F#3 D4]:8
-[B2 F#3 C#4]:8 [G2 F#3 B3]:8 [A2 E3 C#4]:8 [G2 F#3 Bb3]:8
-[B2 F#3 C#4]:8@0.45 [G2 F#3 B3]:8@0.45 [A2 E3 C#4]:8@0.45 [G2 F#3 Bb3]:8@0.45
-[E2 D3 G3]:8@0.5 [C#3 G3 B3]:4@0.5 [F#2 C#3 A#3]:4@0.5
-[B2 F#3 C#4]:8@0.5 [G2 F#3 B3]:8@0.5 [A2 E3 C#4]:8@0.5 [G2 F#3 Bb3]:8@0.5
-[B2 F#3 C#4]:12@0.4
+[B2 F#3 D4]:4 [A2 E3 C#4]:4 [G2 D3 B3]:4 [F#2 C#3 A#3]:4
+[B2 F#3 D4]:4 [A2 E3 C#4]:4 [G2 D3 B3]:4 [F#2 C#3 A#3]:4
+[B2 F#3 D4]:4@0.45 [A2 E3 C#4]:4@0.45 [G2 D3 B3]:4@0.45 [F#2 C#3 A#3]:4@0.45
+[B2 F#3 D4]:4@0.45 [A2 E3 C#4]:4@0.45 [G2 D3 B3]:4@0.45 [F#2 C#3 A#3]:4@0.45
+[G2 D3 B3]:4@0.5 [E2 B2 G3]:4@0.5 [C#3 G3 E4]:4@0.5 [F#2 C#3 A#3]:4@0.5
+[B2 F#3 D4]:4@0.55 [A2 E3 C#4]:4@0.55 [G2 D3 B3]:4@0.55 [F#2 C#3 A#3]:4@0.55
+[B2 F#3 D4]:4@0.55 [A2 E3 C#4]:4@0.55 [G2 D3 B3]:4@0.55 [F#2 C#3 A#3]:4@0.55
+[B2 F#3 D4]:12@0.4
 
-track bass vel=0.72 patch=rawbass
-B1:5.5 R:0.5 B1:1 F#2:1
-B1:5.5 R:0.5 B1:1 F#2:1 | G1:5.5 R:0.5 G1:1 D2:1 | A1:5.5 R:0.5 A1:1 E2:1 | G1:5.5 R:0.5 G1:1 D2:1
-B1:5.5 R:0.5 B1:1 F#2:1 | G1:5.5 R:0.5 G1:1 D2:1 | A1:5.5 R:0.5 A1:1 E2:1 | G1:5.5 R:0.5 G1:1 D2:1
-E2:5.5 R:0.5 E2:1 B1:1 | C#2:4 F#1:4
-B1:5.5 R:0.5 B1:1 F#2:1 | G1:5.5 R:0.5 G1:1 D2:1 | A1:5.5 R:0.5 A1:1 E2:1 | G1:5.5 R:0.5 G1:1 D2:1
+track bass vel=0.75 patch=rawbass
+B1:3 F#2:0.5 B1:0.5 B1:3 F#1:1
+B1:3 F#2:0.5 B1:0.5 | A1:3 E2:0.5 A1:0.5 | G1:3 D2:0.5 G1:0.5 | F#1:3 C#2:0.5 F#1:0.5
+B1:3 F#2:0.5 B1:0.5 | A1:3 E2:0.5 A1:0.5 | G1:3 D2:0.5 G1:0.5 | F#1:3 C#2:0.5 F#1:0.5
+B1:3 F#2:0.5 B1:0.5 | A1:3 E2:0.5 A1:0.5 | G1:3 D2:0.5 G1:0.5 | F#1:3 C#2:0.5 F#1:0.5
+B1:3 F#2:0.5 B1:0.5 | A1:3 E2:0.5 A1:0.5 | G1:3 D2:0.5 G1:0.5 | F#1:3 C#2:0.5 F#1:0.5
+G1:3 D2:0.5 G1:0.5 | E1:3 B1:0.5 E2:0.5 | C#2:3 G#1:0.5 C#2:0.5 | F#1:3 C#2:0.5 F#1:0.5
+B1:3 F#2:0.5 B1:0.5 | A1:3 E2:0.5 A1:0.5 | G1:3 D2:0.5 G1:0.5 | F#1:3 C#2:0.5 F#1:0.5
+B1:3 F#2:0.5 B1:0.5 | A1:3 E2:0.5 A1:0.5 | G1:3 D2:0.5 G1:0.5 | F#1:3 C#2:0.5 F#1:0.5
 B1:12
 
-track lead vel=0.62 patch=storylead
+track lead vel=0.66 patch=storylead
 R:8
-R:2.5 D5:0.5 F#5:1.5 G5:0.5 A5:3
-G5:1 F#5:1 E5:4 R:2
-R:2.5 D5:0.5 F#5:1.5 G5:0.5 B5:3
-A5:1 G5:1 F#5:4 R:2
-F#5:1 A5:1 B5:1 D6:3 C#6:1 B5:1
-B5:1 A5:1 G5:2 E5:3 R:1
-R:1 D5:1 F#5:1 A5:1 D6:2 C#6:1 B5:1
-A5:2 G5:2 F#5:3 R:1
-R:1 E5:0.5 G5:1.5 R:2 B4:0.5 D5:1.5 R:1
-C#5:0.5 E5:1.5 R:2 A#4:0.5 C#5:1.5 R:2
-R:2.5 A5:0.5 F#5:1.5 E5:0.5 D5:3
-R:1 D5:1 F#5:1 A5:1 B5:1 C#6:1 D6:2
-E6:3 D6:1 B5:1 A5:1 F#5:2
-Bb5:4 A5:1.5 F#5:2.5
-R:2 D6:1.5 F#6:2.5 R:6
+D5:1.5 F#5:1.5 B5:1 | A5:0.5 F#5:0.5 E5:1.5 C#5:0.5 D5:1 | D5:1.5 G5:1.5 B5:1 | A#5:1.5 F#5:1 C#5:1.5
+D5:1.5 F#5:1.5 B5:1 | A5:0.5 F#5:0.5 E5:1.5 C#5:0.5 D5:1 | D5:1.5 G5:1.5 B5:1 | A#5:1 B5:1 C#6:1 F#5:1
+F#5:1.5 A5:1.5 D6:1 | C#6:0.5 A5:0.5 E5:1.5 C#5:0.5 D5:1 | D5:1.5 G5:1.5 B5:1 | A#5:1.5 F#5:1 C#5:1.5
+D5:1.5 F#5:1.5 B5:1 | A5:0.5 F#5:0.5 E5:1.5 C#5:0.5 D5:1 | D5:1.5 G5:1.5 B5:1 | A#5:1 B5:1 C#6:2
+B4:1.5 D5:1.5 G5:1 | R:1 E5:1.5 G5:1.5 | C#5:1.5 E5:1.5 G5:1 | R:0.5 A#4:1.5 C#5:2
+D5:1.5 F#5:1.5 B5:1 | A5:0.5 F#5:0.5 E5:1.5 C#5:0.5 D5:1 | D5:1.5 G5:1.5 B5:1 | A#5:1.5 F#5:1 C#5:1.5
+D5:1.5 F#5:1.5 B5:1 | A5:0.5 F#5:0.5 E5:1.5 C#5:0.5 D5:1 | D5:1.5 G5:1.5 B5:1 | A#5:1 B5:2 R:1
+R:2 D5:1.5 F#5:1.5 B5:7
 
-track chime vel=0.3 patch=doorchime
-R:34 F#6:4
-R:46 A#5:4
-R:24 Bb6:4
-R:16
-
-automate pads.cutoff
-1500 R:8 1700:8@smooth R:24 1200:8@smooth R:24 1500:8@smooth R:8 1600:16@smooth R:16 900:12@exp
-
-automate lead.cutoff
-2400 R:40 2800:16@smooth 2400:16@smooth 2000:16@smooth 3200:24@smooth R:8 2000:12@smooth
+track sky vel=0.22 patch=skynote
+R:8 D6:64 R:16 D6:32 D6:12
 
 automate lead.osc2_pitch
-5 R:40 7:0.1@step R:31.9 3:0.1@step R:15.9 7:0.1@step 12:23.9@lin R:8 R:12
+5 R:40 9:32@lin 4:0.1@step R:15.9 9:0.1@step 12:31.9@lin R:12
+
+automate lead.resonance
+1.2 R:40 2.4:32@lin R:16 3.6:16@lin R:16 2.0:12@smooth
+
+automate lead.osc_fm
+0 R:72 0.22:8@smooth 0:8@smooth R:44
+
+automate lead.circuit
+0 R:104 1 R:28
+
+automate lead.drive
+2.2 R:40 2.6:32@lin R:16 3.0:16@lin 1.6:0.1@step R:15.9 R:12
+
+automate lead.cutoff
+1400 R:40 1800:32@smooth R:16 2400:16@smooth R:16 1200:12@smooth
+
+automate pads.cutoff
+1400 R:8 1600:32@smooth 1100:32@smooth 1400:16@smooth 1700:16@smooth R:16 800:12@exp
 
 automate bass.cutoff
-900 R:72 750:16@smooth 1000:32@lin 700:12@smooth
+850 R:72 700:16@smooth 1000:32@lin 650:12@smooth
 
 automate chorus_mode
 0 R:72 1 R:16 0 R:44
 
 automate reverb_wet
-0.22 R:72 0.32:12@smooth 0.24:4@smooth R:32 0.45:12@smooth
+0.25 R:72 0.35:16@smooth R:32 0.5:12@smooth
 
 automate tape_age
-0.35 R:88 0.45:0.1@step R:31.9 0.55:12@lin
+0.35 R:88 0.45:0.1@step R:31.9 0.5:12@lin

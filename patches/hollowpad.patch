@@ -18,13 +18,13 @@ osc_fm 0
 sync 0
 ring 0
 glide 0
-attack 0.25
+attack 0.15
 decay 0.8
 sustain 0.75
-release 1.2
+release 1.0
 filter_env 0.6
-filter_attack 0.5
-filter_decay 1.2
+filter_attack 0.25
+filter_decay 0.9
 filter_sustain 0.5
 filter_release 0.9
 cutoff 1500
