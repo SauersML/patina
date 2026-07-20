@@ -44,9 +44,9 @@ automate tape_wow
 automate tape_flutter
 0.1
 automate tape_drive
-0.22
-automate tape_age
 0.5
+automate tape_age
+0.58
 
 track ground vel=0.7 patch=tidal
 C2:8
@@ -128,7 +128,7 @@ automate ch_decay
 automate oh_decay
 0.4
 automate dr_drive
-0.35
+0.5
 
 automate pads.cutoff
 1200 R:8 1500:24@smooth 1800:24@smooth 2200:24@smooth 1900:24@smooth 1000:16@exp
