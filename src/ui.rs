@@ -2,9 +2,9 @@ use eframe::egui::{
     self, pos2, vec2, Align2, Color32, CornerRadius, CursorIcon, FontId, Key, Pos2, Rect, RichText,
     Sense, Shape, Stroke, TextureHandle, TextureOptions, Vec2,
 };
-use eframe::egui::epaint::Mesh;
+use eframe::egui::epaint::{EllipseShape, Mesh};
 use parking_lot::Mutex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 
@@ -18,6 +18,24 @@ use crate::voice_manager::VoiceManager;
 const OCTAVES: usize = 3;
 const WHITE_KEY_INDICES: [usize; 7] = [0, 2, 4, 5, 7, 9, 11];
 const BLACK_KEY_INDICES: [usize; 5] = [1, 3, 6, 8, 10];
+
+/// The right-hand 909 pad grid on the QWERTY keyboard, mirrored as
+/// clickable pads beside the piano: (drum name, key hint, key, base
+/// velocity, glyph/activity index, ghost). Top row K L ; ' sits over
+/// bottom row , . / — hats and colors above, kick/snare/clap backbone
+/// below. Shift is the accent line; the ' pad is a ghost snare for
+/// rolls. Pads carry pictographic glyphs, not abbreviations.
+const PAD_TOP: [(&str, &str, Key, f32, usize, bool); 4] = [
+    ("CH", "K", Key::K, 0.7, 4, false),
+    ("OH", "L", Key::L, 0.7, 5, false),
+    ("RS", ";", Key::Semicolon, 0.75, 2, false),
+    ("SD", "'", Key::Quote, 0.35, 1, true),
+];
+const PAD_BOTTOM: [(&str, &str, Key, f32, usize, bool); 3] = [
+    ("BD", ",", Key::Comma, 0.85, 0, false),
+    ("SD", ".", Key::Period, 0.8, 1, false),
+    ("CP", "/", Key::Slash, 0.8, 3, false),
+];
 
 // ---------------------------------------------------------------------------
 // Design system: light Frutiger Aero. A luminous animated sky, white
@@ -251,6 +269,15 @@ pub struct SynthUI {
     /// QWERTY keys currently sounding, mapped to the MIDI note each one
     /// started (so note-off always matches, even if the octave changed).
     pressed_keys: HashMap<Key, u8>,
+    /// Drum-pad keys currently held (edge detection only — drum voices
+    /// are one-shots with no note-off).
+    pressed_drum_keys: HashSet<Key>,
+    /// Which on-screen pad the mouse is currently striking.
+    mouse_pad_down: Option<usize>,
+    /// Strike flash for the ghost-snare pad: it shares the snare VOICE,
+    /// so lighting it from voice activity would double-light with the
+    /// main snare pad — it flashes only on its own strikes.
+    ghost_flash: f32,
     theme_applied: bool,
     notes_active: bool,
     textures: Option<Textures>,
@@ -338,6 +365,32 @@ fn param_knob(
     }
 }
 
+/// Compact knob bound to a `Param` — the rhythm card's 21 controls fit a
+/// single row only at this density.
+fn param_knob_sm(
+    ui: &mut egui::Ui,
+    vm: &Arc<Mutex<VoiceManager>>,
+    label: &str,
+    param: Param,
+    value: &mut f32,
+    default: f32,
+) {
+    let (lo, hi, curve) = param.range();
+    if knob_sized(
+        ui,
+        label,
+        value,
+        lo,
+        hi,
+        default,
+        curve == Curve::Log,
+        fmt_pct,
+        true,
+    ) {
+        param.apply(&mut vm.lock(), *value);
+    }
+}
+
 fn knob(
     ui: &mut egui::Ui,
     label: &str,
@@ -348,7 +401,28 @@ fn knob(
     logarithmic: bool,
     fmt: impl Fn(f32) -> String,
 ) -> bool {
-    let (rect, response) = ui.allocate_exact_size(vec2(59.0, 88.0), Sense::click_and_drag());
+    knob_sized(ui, label, value, min, max, default, logarithmic, fmt, false)
+}
+
+fn knob_sized(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut f32,
+    min: f32,
+    max: f32,
+    default: f32,
+    logarithmic: bool,
+    fmt: impl Fn(f32) -> String,
+    compact: bool,
+) -> bool {
+    // Geometry per density: (w, h, center_y, tick r0, tick major, tick
+    // minor, arc r, disc r, pointer in/out, label pt, value pt)
+    let g = if compact {
+        (48.0, 74.0, 34.0, 16.0, 20.0, 18.5, 13.5, 10.5, 3.5, 9.5, 7.6, 8.5)
+    } else {
+        (59.0, 78.0, 38.0, 20.0, 24.0, 22.0, 17.0, 13.0, 4.5, 11.5, 9.0, 10.0)
+    };
+    let (rect, response) = ui.allocate_exact_size(vec2(g.0, g.1), Sense::click_and_drag());
     let mut changed = false;
 
     let to_t = |v: f32| -> f32 {
@@ -394,16 +468,16 @@ fn knob(
     let engaged = response.hovered() || response.dragged();
 
     let painter = ui.painter();
-    let center = pos2(rect.center().x, rect.top() + 42.0);
+    let center = pos2(rect.center().x, rect.top() + g.2);
     let start = 135.0_f32.to_radians();
     let sweep = 270.0_f32.to_radians();
     let t = to_t(*value);
 
     painter.text(
-        pos2(rect.center().x, rect.top() + 4.0),
+        pos2(rect.center().x, rect.top() + 3.0),
         Align2::CENTER_TOP,
         tracked(label),
-        FontId::proportional(9.0),
+        FontId::proportional(g.10),
         if engaged { TXT_MID } else { TXT_LOW },
     );
 
@@ -411,7 +485,7 @@ fn knob(
     for i in 0..=10 {
         let a = start + sweep * i as f32 / 10.0;
         let dir = vec2(a.cos(), a.sin());
-        let (r0, r1) = if i % 5 == 0 { (21.0, 25.5) } else { (21.0, 23.5) };
+        let (r0, r1) = if i % 5 == 0 { (g.3, g.4) } else { (g.3, g.5) };
         painter.line_segment(
             [center + dir * r0, center + dir * r1],
             Stroke::new(1.0, HAIRLINE_HI),
@@ -419,7 +493,7 @@ fn knob(
     }
 
     // Value arc — from 12 o'clock for bipolar ranges, from min otherwise
-    let arc_r = 18.0;
+    let arc_r = g.6;
     let t_origin = if min < 0.0 { to_t(0.0) } else { 0.0 };
     let (a0, a1) = (t_origin.min(t), t_origin.max(t));
     if a1 - a0 > 0.004 {
@@ -449,10 +523,10 @@ fn knob(
     } else {
         Color32::from_rgb(0x20, 0x29, 0x31)
     };
-    painter.circle_filled(center, 14.0, disc);
+    painter.circle_filled(center, g.7, disc);
     painter.circle_stroke(
         center,
-        14.0,
+        g.7,
         if engaged {
             Stroke::new(1.2, Color32::from_rgba_unmultiplied(0x1e, 0xc2, 0xe8, 150))
         } else {
@@ -462,7 +536,7 @@ fn knob(
 
     let dir = vec2(end_angle.cos(), end_angle.sin());
     painter.line_segment(
-        [center + dir * 5.0, center + dir * 12.5],
+        [center + dir * g.8, center + dir * g.9],
         Stroke::new(
             2.0,
             if engaged { TOUCH_HI } else { Color32::from_rgb(0xee, 0xf4, 0xf6) },
@@ -470,14 +544,130 @@ fn knob(
     );
 
     painter.text(
-        pos2(rect.center().x, rect.bottom() - 3.0),
+        pos2(rect.center().x, rect.bottom() - 2.0),
         Align2::CENTER_BOTTOM,
         fmt(*value),
-        FontId::monospace(10.0),
+        FontId::monospace(g.11),
         if engaged { TOUCH_HI } else { TXT_LOW },
     );
 
     changed
+}
+
+/// Pictographic drum-voice glyphs, drawn in the same hand as the wave
+/// glyphs: 0 kick head, 1 snare shell with wires, 2 stick on the rim,
+/// 3 clap burst, 4 closed hats kissed on the stand, 5 open hats lifted,
+/// 6 the bus-drive saturation curve. `ghost` fades the glyph (the soft
+/// snare pad for rolls).
+fn drum_glyph(painter: &egui::Painter, rect: Rect, which: usize, color: Color32, ghost: bool) {
+    let color = if ghost { color.gamma_multiply(0.5) } else { color };
+    let s = Stroke::new(1.7, color);
+    let thin = Stroke::new(1.2, color);
+    let c = rect.center();
+    let w = rect.width().min(rect.height() * 1.6);
+    match which {
+        0 => {
+            // Kick: a front-facing bass drum — big round shell on its two
+            // floor spurs, dot for the beater pad
+            let r = w * 0.36;
+            let dc = c - vec2(0.0, 1.0);
+            painter.circle_stroke(dc, r, s);
+            painter.circle_filled(dc, 1.8, color);
+            for sx in [-1.0f32, 1.0] {
+                painter.line_segment(
+                    [
+                        dc + vec2(sx * r * 0.6, r * 0.75),
+                        dc + vec2(sx * r * 0.95, r + 3.0),
+                    ],
+                    thin,
+                );
+            }
+        }
+        1 => {
+            // Snare: crossed sticks over the shallow shell — the classic
+            // percussion mark, unmistakable at pad size
+            let shell = Rect::from_center_size(
+                c + vec2(0.0, w * 0.22),
+                vec2(w * 0.85, w * 0.30),
+            );
+            painter.rect_stroke(shell, CornerRadius::same(2), s, egui::StrokeKind::Inside);
+            let top = shell.top() - 1.0;
+            painter.line_segment(
+                [pos2(c.x - w * 0.42, c.y - w * 0.44), pos2(c.x + w * 0.20, top)],
+                Stroke::new(1.8, color),
+            );
+            painter.line_segment(
+                [pos2(c.x + w * 0.42, c.y - w * 0.44), pos2(c.x - w * 0.20, top)],
+                Stroke::new(1.8, color),
+            );
+        }
+        2 => {
+            // Rim shot: the stick striking down onto the drum's edge
+            let shell = Rect::from_center_size(
+                c + vec2(0.0, w * 0.18),
+                vec2(w * 0.9, w * 0.34),
+            );
+            painter.rect_stroke(shell, CornerRadius::same(2), s, egui::StrokeKind::Inside);
+            painter.line_segment(
+                [
+                    pos2(c.x + w * 0.45, c.y - w * 0.42),
+                    pos2(c.x - w * 0.05, shell.top() + 1.0),
+                ],
+                Stroke::new(2.2, color),
+            );
+            painter.circle_filled(pos2(c.x - w * 0.05, shell.top() + 1.0), 1.8, color);
+        }
+        3 => {
+            // Clap: a bold eight-ray burst, long and short rays alternating
+            for k in 0..8 {
+                let a = std::f32::consts::TAU * k as f32 / 8.0 + std::f32::consts::FRAC_PI_8;
+                let d = vec2(a.cos(), a.sin());
+                let reach = if k % 2 == 0 { w * 0.42 } else { w * 0.27 };
+                painter.line_segment([c + d * (w * 0.10), c + d * reach], s);
+            }
+        }
+        4 => {
+            // Closed hat: two cymbal lenses kissed together on the stand
+            let rx = w * 0.42;
+            let ry = (w * 0.10).max(2.0);
+            painter.line_segment([c + vec2(0.0, 2.0), c + vec2(0.0, w * 0.42)], thin);
+            for dy in [-2.5f32, 2.0] {
+                painter.add(Shape::Ellipse(EllipseShape {
+                    center: c + vec2(0.0, dy),
+                    radius: vec2(rx, ry),
+                    fill: color,
+                    stroke: Stroke::NONE,
+                }));
+            }
+        }
+        5 => {
+            // Open hat: the top cymbal lifted clear off the bottom one
+            let rx = w * 0.42;
+            let ry = (w * 0.10).max(2.0);
+            painter.line_segment([c + vec2(0.0, 4.0), c + vec2(0.0, w * 0.46)], thin);
+            for dy in [-w * 0.34, 3.5] {
+                painter.add(Shape::Ellipse(EllipseShape {
+                    center: c + vec2(0.0, dy),
+                    radius: vec2(rx, ry),
+                    fill: color,
+                    stroke: Stroke::NONE,
+                }));
+            }
+        }
+        _ => {
+            // Bus drive: a tanh curve pressed into the rails
+            let n = 14;
+            let pts: Vec<Pos2> = (0..=n)
+                .map(|i| {
+                    let t = i as f32 / n as f32;
+                    let x = (t - 0.5) * w * 0.9;
+                    let y = -(x * 0.24).tanh() * w * 0.36;
+                    pos2(c.x + x, c.y + y)
+                })
+                .collect();
+            painter.add(Shape::line(pts, s));
+        }
+    }
 }
 
 fn wave_glyph(painter: &egui::Painter, rect: Rect, waveform: Waveform, color: Color32) {
@@ -673,8 +863,8 @@ fn card<R>(
         .inner_margin(egui::Margin {
             left: 12,
             right: 12,
-            top: 9,
-            bottom: 10,
+            top: 7,
+            bottom: 8,
         })
         .show(ui, |ui| {
             // The card sizes to its content — measured widths only, never
@@ -684,7 +874,7 @@ fn card<R>(
                 ui.set_min_width((w - 28.0).max(60.0));
             }
             ui.label(legend(title));
-            ui.add_space(8.0);
+            ui.add_space(6.0);
             add_contents(ui);
         });
     let rect = inner.response.rect;
@@ -815,6 +1005,9 @@ impl SynthUI {
             oh_decay: 0.5,
             dr_drive: 0.0,
             pressed_keys: HashMap::new(),
+            pressed_drum_keys: HashSet::new(),
+            mouse_pad_down: None,
+            ghost_flash: 0.0,
             theme_applied: false,
             notes_active: false,
             textures: None,
@@ -987,6 +1180,10 @@ impl SynthUI {
     pub fn update(&mut self, ctx: &egui::Context) {
         if !self.theme_applied {
             Self::apply_theme(ctx);
+            // Claim keyboard focus at launch: apps started from a
+            // terminal otherwise leave key events with the terminal
+            // until the window is clicked — "the keys don't work"
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             self.theme_applied = true;
         }
         self.ensure_textures(ctx);
@@ -1164,7 +1361,7 @@ impl SynthUI {
                 bottom: 8,
             }))
             .show(ctx, |ui| {
-                ui.spacing_mut().item_spacing = vec2(11.0, 10.0);
+                ui.spacing_mut().item_spacing = vec2(11.0, 7.0);
                 self.draw_preset_strip(ui);
                 let top = egui::Layout::left_to_right(egui::Align::TOP);
                 let full = ui.available_width();
@@ -1180,6 +1377,7 @@ impl SynthUI {
                     let rest = ui.available_width();
                     self.draw_effects_card(ui, tex.as_mut(), Some(rest));
                 });
+                self.draw_rhythm_card(ui, tex.as_mut(), Some(full + 28.0));
                 self.draw_scope(ui);
             });
         self.textures = tex;
@@ -1189,7 +1387,7 @@ impl SynthUI {
     /// (US 3,981,218): one click retunes every functional block at once.
     /// Patches apply live, so you can morph a held chord between them.
     fn draw_preset_strip(&mut self, ui: &mut egui::Ui) {
-        let height = 30.0;
+        let height = 26.0;
         let (bar, _) =
             ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
         let painter = ui.painter();
@@ -1828,11 +2026,79 @@ impl SynthUI {
         });
     }
 
+    /// The rhythm section: the 909 board's 21 knobs in one dense row
+    /// (voice names ride the knob labels; the pads live on the keyboard
+    /// shelf, under the right hand where the QWERTY cluster is).
+    fn draw_rhythm_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>, fill: Option<f32>) {
+        card(ui, "Rhythm 909", tex, fill, |ui| {
+            ui.spacing_mut().item_spacing.x = 3.0;
+            // Full-word group headers; the pictographic glyphs live only
+            // on the pads by the keyboard
+            let vm = self.voice_manager.clone();
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(sublegend("Kick"));
+                    ui.horizontal(|ui| {
+                        param_knob_sm(ui, &vm, "Level", Param::BdLevel, &mut self.bd_level, 0.8);
+                        param_knob_sm(ui, &vm, "Tune", Param::BdTune, &mut self.bd_tune, 0.35);
+                        param_knob_sm(ui, &vm, "Attack", Param::BdAttack, &mut self.bd_attack, 0.5);
+                        param_knob_sm(ui, &vm, "Decay", Param::BdDecay, &mut self.bd_decay, 0.45);
+                        param_knob_sm(ui, &vm, "Sweep", Param::BdSweep, &mut self.bd_sweep, 0.5);
+                        param_knob_sm(ui, &vm, "Drive", Param::BdDrive, &mut self.bd_drive, 0.25);
+                    });
+                });
+                vseparator(ui, 74.0);
+                ui.vertical(|ui| {
+                    ui.label(sublegend("Snare"));
+                    ui.horizontal(|ui| {
+                        param_knob_sm(ui, &vm, "Level", Param::SdLevel, &mut self.sd_level, 0.75);
+                        param_knob_sm(ui, &vm, "Tune", Param::SdTune, &mut self.sd_tune, 0.4);
+                        param_knob_sm(ui, &vm, "Tone", Param::SdTone, &mut self.sd_tone, 0.5);
+                        param_knob_sm(ui, &vm, "Snappy", Param::SdSnappy, &mut self.sd_snappy, 0.6);
+                        param_knob_sm(ui, &vm, "Decay", Param::SdDecay, &mut self.sd_decay, 0.5);
+                    });
+                });
+                vseparator(ui, 74.0);
+                ui.vertical(|ui| {
+                    ui.label(sublegend("Rim"));
+                    ui.horizontal(|ui| {
+                        param_knob_sm(ui, &vm, "Level", Param::RsLevel, &mut self.rs_level, 0.7);
+                        param_knob_sm(ui, &vm, "Tune", Param::RsTune, &mut self.rs_tune, 0.5);
+                    });
+                });
+                vseparator(ui, 74.0);
+                ui.vertical(|ui| {
+                    ui.label(sublegend("Clap"));
+                    ui.horizontal(|ui| {
+                        param_knob_sm(ui, &vm, "Level", Param::CpLevel, &mut self.cp_level, 0.75);
+                        param_knob_sm(ui, &vm, "Decay", Param::CpDecay, &mut self.cp_decay, 0.5);
+                    });
+                });
+                vseparator(ui, 74.0);
+                ui.vertical(|ui| {
+                    ui.label(sublegend("Hi-Hat"));
+                    ui.horizontal(|ui| {
+                        param_knob_sm(ui, &vm, "Level", Param::HhLevel, &mut self.hh_level, 0.7);
+                        param_knob_sm(ui, &vm, "Tune", Param::HhTune, &mut self.hh_tune, 0.5);
+                        param_knob_sm(ui, &vm, "Metal", Param::HhMetal, &mut self.hh_metal, 0.65);
+                        param_knob_sm(ui, &vm, "Closed", Param::ChDecay, &mut self.ch_decay, 0.35);
+                        param_knob_sm(ui, &vm, "Open", Param::OhDecay, &mut self.oh_decay, 0.5);
+                    });
+                });
+                vseparator(ui, 74.0);
+                ui.vertical(|ui| {
+                    ui.label(sublegend("Bus"));
+                    param_knob_sm(ui, &vm, "Drive", Param::DrumDrive, &mut self.dr_drive, 0.0);
+                });
+            });
+        });
+    }
+
     /// Output oscilloscope. The one place the interface goes cyan: the
     /// signal itself, trigger-stabilized on a rising zero crossing.
     fn draw_scope(&self, ui: &mut egui::Ui) {
         let width = ui.available_width();
-        let height = ui.available_height().clamp(58.0, 170.0);
+        let height = ui.available_height().clamp(48.0, 170.0);
         let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
         let painter = ui.painter();
         painter.rect_filled(rect, CornerRadius::same(10), INSET);
@@ -1928,32 +2194,52 @@ impl SynthUI {
     // -----------------------------------------------------------------------
 
     /// Computer-key hint for a note, if the note is reachable from the
-    /// QWERTY mapping at the current octave.
+    /// QWERTY mapping at the current octave. The whole keyboard is an
+    /// instrument now: the Z row (with home-row sharps) is the lower
+    /// manual, the Q row (with number-row sharps) runs a full octave and
+    /// a fifth above it, and the right-hand cluster K L ; ' , . / is the
+    /// 909 pad grid (drawn beside the piano, not on it).
     fn key_hint(&self, visual_octave: usize, key_index: usize) -> Option<&'static str> {
         const LOWER: [&str; 12] = ["Z", "S", "X", "D", "C", "V", "G", "B", "H", "N", "J", "M"];
-        const UPPER: [&str; 12] = ["Q", "2", "W", "3", "E", "R", "5", "T", "6", "Y", "7", "U"];
+        const UPPER1: [&str; 12] = ["Q", "2", "W", "3", "E", "R", "5", "T", "6", "Y", "7", "U"];
+        const UPPER2: [Option<&str>; 12] = [
+            Some("I"), Some("9"), Some("O"), Some("0"), Some("P"), Some("["),
+            Some("="), Some("]"), None, None, None, None,
+        ];
         match visual_octave {
             0 => Some(LOWER[key_index]),
-            1 => Some(UPPER[key_index]),
+            1 => Some(UPPER1[key_index]),
+            2 => UPPER2[key_index],
             _ => None,
         }
     }
 
     fn draw_keyboard(&mut self, ui: &mut egui::Ui) {
         let available_width = ui.available_width();
-        let white_key_width = available_width / (7.0 * OCTAVES as f32);
-        let white_key_height = 118.0;
+        let white_key_height = 94.0;
+        // The shelf is split: piano on the left, the 909 pad grid under
+        // the right hand — exactly the way the QWERTY layer is arranged
+        let pads_width = 300.0f32.min(available_width * 0.26);
+        let gap = 12.0;
+        let piano_width = available_width - pads_width - gap;
+        let white_key_width = piano_width / (7.0 * OCTAVES as f32);
         let black_key_width = white_key_width * 0.6;
         let black_key_height = white_key_height * 0.6;
 
-        let (rect, response) = ui.allocate_exact_size(
+        let (full_rect, response) = ui.allocate_exact_size(
             Vec2::new(available_width, white_key_height),
             egui::Sense::click_and_drag(),
         );
         // The piano is pointer-only: surrendering focus kills egui's focus
         // ring and keeps arrow keys free for octave shifting
         response.surrender_focus();
+        let rect = Rect::from_min_size(full_rect.min, Vec2::new(piano_width, white_key_height));
+        let pads_rect = Rect::from_min_max(
+            pos2(rect.right() + gap, full_rect.top()),
+            full_rect.max,
+        );
         self.handle_mouse_input(ui, rect, &response);
+        self.draw_drum_pads(ui, pads_rect, &response);
 
         // Light keys from the engine's live voice state, so song playback,
         // MIDI, QWERTY, and mouse input all show up on the keyboard
@@ -2133,7 +2419,144 @@ impl SynthUI {
         }
     }
 
+    /// The 909 pad grid beside the piano: seven strike pads mirroring the
+    /// K L ; ' / , . / QWERTY cluster, lit by the board's actual VCA
+    /// envelopes. Click velocity follows strike depth, like the keys.
+    fn draw_drum_pads(&mut self, ui: &egui::Ui, rect: Rect, response: &egui::Response) {
+        let activity = {
+            let vm = self.voice_manager.lock();
+            vm.drums.activity()
+        };
+        self.ghost_flash *= 0.88;
+        let painter = ui.painter();
+        painter.rect_filled(rect.expand(3.0), CornerRadius::same(6), INSET);
+
+        let gap = 5.0;
+        let row_h = (rect.height() - gap) / 2.0 - 2.0;
+        let top_w = (rect.width() - 3.0 * gap) / 4.0;
+        let bot_w = (rect.width() - 2.0 * gap) / 3.0;
+
+        let pointer = ui.input(|i| i.pointer.interact_pos());
+        let down = response.is_pointer_button_down_on();
+        let mut struck: Option<usize> = None;
+
+        let mut draw_pad = |painter: &egui::Painter,
+                            pad_rect: Rect,
+                            glyph: usize,
+                            ghost: bool,
+                            hint: &str,
+                            act: f32,
+                            idx: usize| {
+            let hovered = pointer.map_or(false, |p| pad_rect.contains(p));
+            let lit = act.min(1.0);
+            // Graphite pad, sinking as its voice speaks
+            let sink = lit * 1.5;
+            let r = Rect::from_min_max(pad_rect.min + vec2(0.0, sink), pad_rect.max);
+            painter.rect_filled(r, CornerRadius::same(5), EBONY);
+            if lit > 0.01 {
+                painter.rect_filled(
+                    r,
+                    CornerRadius::same(5),
+                    Color32::from_rgba_unmultiplied(0x2b, 0xc6, 0xe6, (lit * 110.0) as u8),
+                );
+            }
+            if hovered {
+                painter.rect_filled(
+                    r,
+                    CornerRadius::same(5),
+                    Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 14),
+                );
+            }
+            // Lit top face, like the ebony keys
+            painter.add(gradient_quad(
+                Rect::from_min_max(r.min + vec2(1.0, 0.0), pos2(r.right() - 1.0, r.top() + 12.0)),
+                Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 26),
+                Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 0),
+            ));
+            painter.rect_stroke(
+                r,
+                CornerRadius::same(5),
+                Stroke::new(1.0, if lit > 0.3 { TOUCH } else { EBONY_EDGE }),
+                egui::StrokeKind::Inside,
+            );
+            let glyph_rect = Rect::from_center_size(
+                pos2(r.center().x, r.top() + r.height() * 0.42),
+                vec2(24.0, r.height() * 0.55),
+            );
+            drum_glyph(
+                painter,
+                glyph_rect,
+                glyph,
+                if lit > 0.25 {
+                    CYAN_BRIGHT
+                } else {
+                    Color32::from_rgb(0xd8, 0xdd, 0xe2)
+                },
+                ghost,
+            );
+            painter.text(
+                pos2(r.center().x, r.bottom() - 8.0),
+                Align2::CENTER_CENTER,
+                hint,
+                FontId::monospace(8.5),
+                if lit > 0.25 { CYAN } else { WELL_TXT },
+            );
+            if hovered && down {
+                struck = Some(idx);
+            }
+        };
+
+        for (i, &(_, hint, _, _, act_idx, ghost)) in PAD_TOP.iter().enumerate() {
+            let pad_rect = Rect::from_min_size(
+                pos2(rect.left() + i as f32 * (top_w + gap), rect.top() + 2.0),
+                vec2(top_w, row_h),
+            );
+            let act = if ghost { self.ghost_flash } else { activity[act_idx] };
+            draw_pad(painter, pad_rect, act_idx, ghost, hint, act, i);
+        }
+        for (i, &(_, hint, _, _, act_idx, ghost)) in PAD_BOTTOM.iter().enumerate() {
+            let pad_rect = Rect::from_min_size(
+                pos2(
+                    rect.left() + i as f32 * (bot_w + gap),
+                    rect.top() + 2.0 + row_h + gap,
+                ),
+                vec2(bot_w, row_h),
+            );
+            draw_pad(painter, pad_rect, act_idx, ghost, hint, activity[act_idx], 4 + i);
+        }
+
+        // Strike on press edge; dragging across pads re-strikes, drummily
+        match struck {
+            Some(idx) if self.mouse_pad_down != Some(idx) => {
+                let (name, _, _, base_vel, _, _) = if idx < 4 {
+                    PAD_TOP[idx]
+                } else {
+                    PAD_BOTTOM[idx - 4]
+                };
+                let depth = pointer
+                    .map(|p| ((p.y - rect.top()) / rect.height()).clamp(0.0, 1.0))
+                    .unwrap_or(0.7);
+                let vel = (base_vel * (0.6 + 0.6 * depth)).clamp(0.1, 1.0);
+                if let Some(note) = crate::drums::note_from_name(name) {
+                    self.voice_manager
+                        .lock()
+                        .note_on_channel(note, vel, crate::drums::DRUM_CHANNEL);
+                    if idx == 3 {
+                        self.ghost_flash = 1.0;
+                    }
+                }
+                self.mouse_pad_down = Some(idx);
+            }
+            Some(_) => {}
+            None => self.mouse_pad_down = None,
+        }
+    }
+
     fn get_note_from_pointer(&self, pos: egui::Pos2, rect: Rect) -> Option<u8> {
+        // The pointer may be over the pad grid to the right of the piano
+        if pos.x >= rect.right() || pos.y < rect.top() {
+            return None;
+        }
         let rel_pos = pos - rect.min;
         let octave_width = rect.width() / (OCTAVES as f32);
         let x_in_keyboard = rel_pos.x;
@@ -2173,15 +2596,20 @@ impl SynthUI {
     }
 
     fn handle_keyboard_input(&mut self, ctx: &egui::Context) {
-        const KEYS: [Key; 24] = [
+        // The two manuals: Z row + home-row sharps (one octave), Q row +
+        // number-row sharps (an octave and a fifth, one octave up)
+        const KEYS: [Key; 32] = [
             Key::Z, Key::S, Key::X, Key::D, Key::C, Key::V, Key::G, Key::B, Key::H, Key::N, Key::J, Key::M,
             Key::Q, Key::Num2, Key::W, Key::Num3, Key::E, Key::R, Key::Num5, Key::T, Key::Num6, Key::Y, Key::Num7, Key::U,
+            Key::I, Key::Num9, Key::O, Key::Num0, Key::P, Key::OpenBracket, Key::Equals, Key::CloseBracket,
         ];
 
-        if ctx.input(|i| i.key_pressed(Key::ArrowUp) || i.key_pressed(Key::Plus) || i.key_pressed(Key::Equals)) {
+        // Octave switching lives on the arrows alone now — every other
+        // key is an instrument
+        if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
             self.shift_octave(1);
         }
-        if ctx.input(|i| i.key_pressed(Key::ArrowDown) || i.key_pressed(Key::Minus)) {
+        if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
             self.shift_octave(-1);
         }
 
@@ -2208,6 +2636,28 @@ impl SynthUI {
             }
         }
 
+        // The right-hand 909 pads: K L ; ' over , . / — one-shots on the
+        // drum channel, Shift is the accent line
+        let shift = ctx.input(|i| i.modifiers.shift);
+        for &(name, _, key, base_vel, _, _) in PAD_TOP.iter().chain(PAD_BOTTOM.iter()) {
+            if ctx.input(|i| i.key_pressed(key)) && !chord && !self.pressed_drum_keys.contains(&key)
+            {
+                self.pressed_drum_keys.insert(key);
+                if let Some(note) = crate::drums::note_from_name(name) {
+                    let vel = if shift { (base_vel + 0.3).min(1.0) } else { base_vel };
+                    self.voice_manager
+                        .lock()
+                        .note_on_channel(note, vel, crate::drums::DRUM_CHANNEL);
+                    if key == Key::Quote {
+                        self.ghost_flash = 1.0;
+                    }
+                }
+            }
+            if ctx.input(|i| i.key_released(key)) {
+                self.pressed_drum_keys.remove(&key);
+            }
+        }
+
         // Release events can be lost (focus loss, OS dialogs, shortcuts).
         // Reconcile with the live key state so no note drones on and no key
         // is left "pressed" and refusing to retrigger.
@@ -2222,6 +2672,16 @@ impl SynthUI {
             if let Some(note) = self.pressed_keys.remove(&key) {
                 self.stop_note(note);
             }
+        }
+        let stale_pads: Vec<Key> = ctx.input(|i| {
+            self.pressed_drum_keys
+                .iter()
+                .copied()
+                .filter(|k| !i.keys_down.contains(k))
+                .collect()
+        });
+        for key in stale_pads {
+            self.pressed_drum_keys.remove(&key);
         }
     }
 
@@ -2284,6 +2744,8 @@ impl SynthUI {
             Key::G => 6, Key::B => 7, Key::H => 8, Key::N => 9, Key::J => 10, Key::M => 11,
             Key::Q => 12, Key::Num2 => 13, Key::W => 14, Key::Num3 => 15, Key::E => 16, Key::R => 17,
             Key::Num5 => 18, Key::T => 19, Key::Num6 => 20, Key::Y => 21, Key::Num7 => 22, Key::U => 23,
+            Key::I => 24, Key::Num9 => 25, Key::O => 26, Key::Num0 => 27, Key::P => 28,
+            Key::OpenBracket => 29, Key::Equals => 30, Key::CloseBracket => 31,
             _ => return None,
         };
 

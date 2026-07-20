@@ -89,8 +89,9 @@ fn xorshift(state: &mut u32) -> u32 {
     x
 }
 
-/// White noise in -1..1 (full bandwidth, unlike the ARP-style NoiseSource
-/// whose amplifier rolls off ~6 kHz — the hats need the top octaves).
+/// White noise in -1..1, full bandwidth. The 909's own noise generator is
+/// digital — cascaded 4006 shift registers XOR-clocked (IC31-33) — so a
+/// modern PRNG is the same instrument, not an approximation of one.
 #[inline]
 fn white(state: &mut u32) -> f32 {
     (xorshift(state) >> 8) as f32 / (1u32 << 23) as f32 - 1.0
@@ -694,6 +695,20 @@ impl DrumMachine {
         }
     }
 
+    /// Momentary per-voice envelope levels [BD, SD, RS, CP, CH, OH] for
+    /// the panel pads — they glow with the actual VCA state, the same
+    /// truth the LEDs on a hardware panel report.
+    pub fn activity(&self) -> [f32; 6] {
+        [
+            (self.kick.amp + self.kick.click).min(1.0),
+            self.snare.amp.max(self.snare.noise_env),
+            self.rim.amps[0],
+            (self.clap.burst + self.clap.tail).min(1.0),
+            self.hats.ch_env,
+            self.hats.oh_env,
+        ]
+    }
+
     /// True while any voice is still audibly ringing.
     pub fn is_active(&self) -> bool {
         self.kick.amp > 1e-4
@@ -949,30 +964,20 @@ mod tests {
         dm.set_cp_decay(0.5);
         dm.trigger_note(39, 1.0);
         let out = render(&mut dm, (0.4 * SR) as usize);
-        // Envelope follower; the three palms make local maxima ~10 ms apart
-        let mut env = 0.0f32;
-        let envelope: Vec<f32> = out
-            .iter()
-            .map(|s| {
-                let r = s.abs();
-                env = if r > env { r } else { env * 0.9993 };
-                env
-            })
+        // Bin the first 32 ms into 2 ms RMS windows: the palms at ~0, 10,
+        // and 20 ms stand as separated local maxima (an envelope follower
+        // is too sluggish to resolve the 10 ms gaps under flat noise)
+        let bin = (0.002 * SR) as usize;
+        let rms: Vec<f32> = out[..(0.032 * SR) as usize]
+            .chunks(bin)
+            .map(|c| (c.iter().map(|s| s * s).sum::<f32>() / c.len() as f32).sqrt())
             .collect();
-        // Count re-attacks: envelope rising by >20% after having fallen
         let mut reattacks = 0;
-        let mut peak = 0.0f32;
-        let mut fallen = false;
-        for &e in &envelope[..(0.06 * SR) as usize] {
-            if e > peak {
-                if fallen && e > peak * 1.02 {
-                    reattacks += 1;
-                    fallen = false;
-                }
-                peak = e;
-            } else if e < peak * 0.75 {
-                fallen = true;
-                peak = e / 1.02;
+        for i in 1..rms.len() - 1 {
+            // A re-attack: this window rises clearly above the previous
+            // (the burst envelope decays ~4x over each 10 ms gap)
+            if rms[i] > rms[i - 1] * 1.5 && rms[i] > rms[i + 1] {
+                reattacks += 1;
             }
         }
         assert!(reattacks >= 2, "the flam should retrigger, got {reattacks} re-attacks");

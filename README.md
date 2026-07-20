@@ -16,6 +16,7 @@ format for programmatic playback and parameter automation.
 - 🎛️ Moog-inspired ladder filter: 4 tanh stages, 2× oversampled, resonance to self-oscillation, drive, saturation, transistor mismatch, thermal drift
 - 🧈 Per-sample parameter smoothing — no zipper noise under automation
 - 🌀 Juno-style chorus (modes I–IV), stereo reverb, a 905-style dual-spring reverb (dispersive, fixed mechanical decay, wet/dry only), and a physically-modeled cassette tape stage (wow, flutter, saturation, age)
+- 🥁 A TR-909 rhythm section built from the service-manual circuits — swept bridged-T kick with click path and waveshaper, twin-shell snare with snappy noise, three-mode rim knock, flam-envelope clap, and a no-samples hi-hat (six-oscillator metal bank through the 909's swept high-pass and choke VCAs) — living on the same volt bus, effects, and power rail as the keyboard voices. Modern range extensions: kick DRIVE from clean sub to full grit, SWEEP depth, rumble-length decays, and an antialiased bus drive. Triggered from drum tracks in songs (`track beat kit=909` with `BD SD RS CP CH OH`), MIDI channel 10 (GM map), pads on the panel, or the plugin
 - 🖥️ Studio-hardware GUI: knobs, ADSR graph, live oscilloscope, keys that light from the engine's real voice state
 - ⌨️ QWERTY keyboard input · 🖱️ click-and-drag keys · 🎹 MIDI input
 - 📜 Text-based song files with per-track sequencing and full parameter automation
@@ -55,8 +56,9 @@ Once Patina is running, you'll see the GUI with various controls:
 
 - Use the sliders to adjust volume, ADSR envelope parameters, filter, chorus, and reverb.
 - Select different waveforms.
-- Play notes using your computer keyboard (Z-M for lower octave, Q-P for higher octave).
-- Click or drag on the on-screen keyboard to play notes with your mouse.
+- Play notes using your whole computer keyboard: the Z row (with home-row sharps S D G H J) is the lower manual; the Q row runs from one octave up through `]`, with sharps on 2 3 5 6 7 9 0 and `=`. Arrow keys shift the octave.
+- The right-hand cluster is the 909 pad grid, mirrored as glowing pads beside the on-screen keys: `,` kick, `.` snare, `/` clap on the bottom row; `K` closed hat, `L` open hat, `;` rim, `'` ghost snare above. Hold Shift for accent.
+- Click or drag on the on-screen keyboard to play notes with your mouse — pads click too, with strike depth as velocity.
 - Connect a MIDI keyboard (or enable the macOS IAC Driver for virtual MIDI).
 
 ## 🎹 MIDI

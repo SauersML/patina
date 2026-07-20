@@ -1,0 +1,151 @@
+# Pressure Lines — the 909 board's first shift.
+#
+# 128 BPM techno in five movements: the kick walks from nearly-clean sub
+# (bd_drive low) through the stock knock into full grit at the drop, the
+# closed hats choke the opens all night, the clap flams on 2 and 4, and
+# during the break the kick decay opens into a rumble the original panel
+# never reached. The bass and stabs are the same keyboard voices as ever —
+# one instrument, one bus, one tape.
+
+bpm 128
+gate 0.9
+
+# ---- kick: four to the floor, absent only in the break -------------------
+track kick kit=909 vel=0.95
+  BD BD BD BD | BD BD BD BD | BD BD BD BD | BD BD BD BD
+  BD BD BD BD | BD BD BD BD | BD BD BD BD | BD BD BD BD
+  BD BD BD BD | BD BD BD BD | BD BD BD BD | BD BD BD BD
+  BD BD BD BD | BD BD BD BD | BD BD BD BD | BD BD BD BD
+  BD BD BD BD | BD BD BD BD | BD BD BD BD | BD BD BD BD
+  BD BD BD BD | BD BD BD BD | BD BD BD BD | BD BD BD:0.75 BD:0.25@0.7
+# break: two rumble hits, then a bar of silence before the drop
+  BD:8@1 | R:8 BD:8@1 | R:7 BD:0.5@0.6 BD:0.5@0.8
+# drop: 24 bars
+  BD BD BD BD | BD BD BD BD | BD BD BD BD | BD BD BD BD
+  BD BD BD BD | BD BD BD BD | BD BD BD BD | BD BD BD BD
+  BD BD BD BD | BD BD BD BD | BD BD BD BD | BD BD BD BD
+  BD BD BD BD | BD BD BD BD | BD BD BD BD | BD BD BD BD
+  BD BD BD BD | BD BD BD BD | BD BD BD BD | BD BD BD BD
+  BD BD BD BD | BD BD BD BD | BD BD BD BD | BD BD BD:0.75 BD:0.25@0.7
+# outro
+  BD BD BD BD | BD BD BD BD | BD BD BD BD | BD BD BD BD
+  BD BD BD BD | BD BD BD BD | BD BD BD BD | BD:2 BD:2@0.6
+
+# ---- hats: offbeat opens, sixteenth closes carrying the drive ------------
+track hats kit=909 len=0.5 vel=0.55
+  R:16
+# bars 5-8: closed eighths sneak in
+  CH@0.35 CH CH@0.35 CH CH@0.35 CH CH@0.35 CH | CH@0.35 CH CH@0.35 CH CH@0.35 CH CH@0.35 CH
+  CH@0.35 CH CH@0.35 CH CH@0.35 CH CH@0.35 CH | CH@0.35 CH CH@0.35 CH CH@0.35 CH CH@0.35 OH@0.7
+# groove A (16 bars): the classic — open on the off, closed chokes it
+  R OH@0.7 R OH@0.7 R OH@0.7 R OH@0.7 | R OH@0.7 R OH@0.7 R OH@0.7 R OH@0.7
+  R OH@0.7 R OH@0.7 R OH@0.7 R OH@0.7 | R OH@0.7 R OH@0.7 R OH@0.7 R OH@0.7
+  CH@0.4 OH@0.7 CH@0.4 OH@0.7 CH@0.4 OH@0.7 CH@0.4 OH@0.7 | CH@0.4 OH@0.7 CH@0.4 OH@0.7 CH@0.4 OH@0.7 CH@0.4 OH@0.7
+  CH@0.4 OH@0.7 CH@0.4 OH@0.7 CH@0.4 OH@0.7 CH@0.4 OH@0.7 | CH@0.4 OH@0.7 CH@0.4 OH@0.7 CH@0.4 OH@0.7 CH@0.4 OH@0.7
+  R OH@0.7 R OH@0.7 R OH@0.7 R OH@0.7 | R OH@0.7 R OH@0.7 R OH@0.7 R OH@0.7
+  R OH@0.7 R OH@0.7 R OH@0.7 R OH@0.7 | R OH@0.7 R OH@0.7 R OH@0.7 OH:0.25@0.5 OH:0.25@0.8
+  CH@0.4 OH@0.7 CH@0.4 OH@0.7 CH@0.4 OH@0.7 CH@0.4 OH@0.7 | CH@0.4 OH@0.7 CH@0.4 OH@0.7 CH@0.4 OH@0.7 CH@0.4 OH@0.7
+  CH@0.4 OH@0.7 CH@0.4 OH@0.7 CH@0.4 OH@0.7 CH@0.4 OH@0.7 | CH@0.4 OH@0.7 CH@0.4 OH@0.7 CH@0.4 OH@0.7 CH@0.4 OH@0.7
+# break: hats rest, one open swells the re-entry
+  R:30 OH:2@0.9
+# drop (24 bars): sixteenth closed hats under offbeat opens
+  CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75 CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75 CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75 CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75
+  CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75 CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75 CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75 CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75
+  CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75 CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75 CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75 CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75
+  CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75 CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75 CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75 CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75
+  R OH@0.75 R OH@0.75 R OH@0.75 R OH@0.75 | R OH@0.75 R OH@0.75 R OH@0.75 R OH@0.75
+  R OH@0.75 R OH@0.75 R OH@0.75 R OH@0.75 | R OH@0.75 R OH@0.75 R OH@0.75 R OH@0.75
+  CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75 CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75 CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75 CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75
+  CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75 CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75 CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75 CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75
+  R OH@0.75 R OH@0.75 R OH@0.75 R OH@0.75 | R OH@0.75 R OH@0.75 R OH@0.75 R OH@0.75
+  R OH@0.75 R OH@0.75 R OH@0.75 R OH@0.75 | R OH@0.75 R OH@0.75 R OH@0.75 OH:0.25@0.5 OH:0.25@0.85
+  CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75 CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75 CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75 CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75
+  CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75 CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75 CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75 CH:0.25@0.3 CH:0.25@0.5 OH:0.5@0.75
+# outro: back to bare eighths, fading
+  CH@0.45 CH@0.3 CH@0.45 CH@0.3 CH@0.45 CH@0.3 CH@0.45 CH@0.3 | CH@0.4 CH@0.28 CH@0.4 CH@0.28 CH@0.4 CH@0.28 CH@0.4 CH@0.28
+  CH@0.35 CH@0.25 CH@0.35 CH@0.25 CH@0.35 CH@0.25 CH@0.35 CH@0.25 | CH@0.3 R CH@0.3 R CH@0.25 R OH:2@0.5
+
+# ---- backbeat: clap on 2 and 4, snare layers in at the drop --------------
+track backbeat kit=909
+  R:16
+  R CP@0.8 R CP@0.8 | R CP@0.8 R CP@0.8 | R CP@0.8 R CP@0.8 | R CP@0.8 R CP@0.8
+  R CP@0.8 R CP@0.8 | R CP@0.8 R CP@0.8 | R CP@0.8 R CP@0.8 | R CP@0.8 R CP@0.8
+  R CP@0.8 R CP@0.8 | R CP@0.8 R CP@0.8 | R CP@0.8 R CP@0.8 | R CP@0.8 R CP@0.8
+  R CP@0.8 R CP@0.8 | R CP@0.8 R CP@0.8 | R CP@0.8 R CP@0.8 | R CP@0.8 R CP@0.85
+# break: the snare roll that pulls the drop in
+  R:16
+  R:8 | SD:0.5@0.3 SD:0.5@0.32 SD:0.5@0.35 SD:0.5@0.38 SD:0.5@0.42 SD:0.5@0.46 SD:0.5@0.5 SD:0.5@0.55
+  SD:0.25@0.55 SD:0.25@0.58 SD:0.25@0.6 SD:0.25@0.63 SD:0.25@0.66 SD:0.25@0.7 SD:0.25@0.73 SD:0.25@0.76 SD:0.25@0.8 SD:0.25@0.83 SD:0.25@0.86 SD:0.25@0.9 SD:0.25@0.93 SD:0.25@0.96 SD:0.5@1 R:0.5
+# drop: clap + snare together, the 909 backbeat
+  R [CP SD]@0.85 R [CP SD]@0.85 | R [CP SD]@0.85 R [CP SD]@0.85 | R [CP SD]@0.85 R [CP SD]@0.85 | R [CP SD]@0.85 R [CP SD]@0.85
+  R [CP SD]@0.85 R [CP SD]@0.85 | R [CP SD]@0.85 R [CP SD]@0.85 | R [CP SD]@0.85 R [CP SD]@0.85 | R [CP SD]@0.85 R [CP SD]@0.85
+  R [CP SD]@0.85 R [CP SD]@0.85 | R [CP SD]@0.85 R [CP SD]@0.85 | R [CP SD]@0.85 R [CP SD]@0.85 | R [CP SD]@0.85 R [CP SD]@0.85
+  R [CP SD]@0.85 R [CP SD]@0.85 | R [CP SD]@0.85 R [CP SD]@0.85 | R [CP SD]@0.85 R [CP SD]@0.85 | R [CP SD]@0.85 R [CP SD]@0.85
+  R [CP SD]@0.85 R [CP SD]@0.85 | R [CP SD]@0.85 R [CP SD]@0.85 | R [CP SD]@0.85 R [CP SD]@0.85 | R [CP SD]@0.85 R [CP SD]@0.85
+  R [CP SD]@0.85 R [CP SD]@0.85 | R [CP SD]@0.85 R [CP SD]@0.85 | R [CP SD]@0.85 R [CP SD]@0.85 | R [CP SD]@0.85 SD:0.5@0.6 SD:0.5@0.9
+# outro: clap thins out
+  R CP@0.7 R CP@0.7 | R CP@0.6 R CP@0.6 | R CP@0.5 R R:1 | R CP@0.4 R:2
+
+# ---- rim: ghost notes riding the drop's second half ----------------------
+track rim kit=909 len=0.5 vel=0.45
+  R:224
+  R:96
+  R R R RS R R RS R | R R R RS R R R RS | R R R RS R R RS R | R R R RS R R R R
+  R R R RS R R RS R | R R R RS R R R RS | R R R RS R R RS R | R R R RS R R R R
+  R R R RS R R RS R | R R R RS R R R RS | R R R RS R R RS R | R R R RS@0.6 RS@0.5 RS@0.4 R R
+  R:32
+
+# ---- bass: rolling offbeat eighths, the synth half of the machine --------
+track bass patch=rawbass vel=0.75 len=0.5
+  R:32
+  R G1 R G1 R G1 R G1 | R G1 R G1 R G1 R G1 | R G1 R G1 R G1 R G1 | R G1 R G1 R Bb1 R F1
+  R G1 R G1 R G1 R G1 | R G1 R G1 R G1 R G1 | R G1 R G1 R G1 R G1 | R G1 R G1 R Bb1 R F1
+  R G1 R G1 R G1 R G1 | R G1 R G1 R G1 R G1 | R G1 R G1 R G1 R G1 | R G1 R G1 R Bb1 R F1
+  R G1 R G1 R G1 R G1 | R G1 R G1 R G1 R G1 | R G1 R G1 R G1 R G1 | R G1 R G1 R Bb1 R C2
+# break: one long held sub note under the rumble kicks
+  G1:24@0.55 R:8
+# drop
+  R G1 R G1 R G1 R G1 | R G1 R G1 R G1 R G1 | R G1 R G1 R G1 R G1 | R G1 R G1 R Bb1 R F1
+  R G1 R G1 R G1 R G1 | R G1 R G1 R G1 R G1 | R G1 R G1 R G1 R G1 | R G1 R G1 R Bb1 R F1
+  R G1 R G1 R G1 R G1 | R G1 R G1 R G1 R G1 | R G1 R G1 R G1 R G1 | R G1 R G1 R Bb1 R F1
+  R G1 R G1 R G1 R G1 | R G1 R G1 R G1 R G1 | R G1 R G1 R G1 R G1 | R G1 R G1 R Bb1 R C2
+  R G1 R G1 R G1 R G1 | R G1 R G1 R G1 R G1 | R G1 R G1 R G1 R G1 | R G1 R G1 R Bb1 R F1
+  R G1 R G1 R G1 R G1 | R G1 R G1 R G1 R G1 | R G1 R G1 R G1 R G1 | R G1 R G1 R Bb1 R C2
+# outro
+  R G1 R G1 R G1 R G1 | R G1 R G1 R G1 R G1 | G1:4@0.5 | G1:4@0.35
+
+# ---- stabs: minor chords answering the clap, drop only -------------------
+track stabs patch=pulsechord vel=0.65 len=0.5
+  R:256
+  R:2 [G3 Bb3 D4]:0.5 R:1.5 | R:2 [G3 Bb3 D4]:0.5 R:1.5 | R:2 [F3 A3 C4]:0.5 R:1.5 | R:2 [G3 Bb3 D4]:0.5 R:1.5
+  R:2 [G3 Bb3 D4]:0.5 R:1.5 | R:2 [G3 Bb3 D4]:0.5 R:1.5 | R:2 [F3 A3 C4]:0.5 R:1.5 | R:2 [Bb3 D4 F4]:0.5 R:1.5
+  R:2 [G3 Bb3 D4]:0.5 R:1.5 | R:2 [G3 Bb3 D4]:0.5 R:1.5 | R:2 [F3 A3 C4]:0.5 R:1.5 | R:2 [G3 Bb3 D4]:0.5 R:1.5
+  R:2 [G3 Bb3 D4]:0.5 R:1.5 | R:2 [G3 Bb3 D4]:0.5 R:1.5 | R:2 [F3 A3 C4]:0.5 R:1.5 | R:2 [Bb3 D4 F4]:0.5 R:1.5
+  R:2 [G3 Bb3 D4]:0.5 R:1.5 | R:2 [G3 Bb3 D4]:0.5 R:1.5 | R:2 [F3 A3 C4]:0.5 R:1.5 | R:2 [G3 Bb3 D4]:0.5 R:1.5
+  R:2 [G3 Bb3 D4]:0.5 R:1.5 | R:2 [G3 Bb3 D4]:0.5 R:1.5 | R:2 [F3 A3 C4]:0.5 R:1.5 | R:2 [Bb3 D4 F4]:1.5 R:0.5
+  R:32
+
+# ---- the automation: the story of the kick -------------------------------
+# Clean sub in the intro, stock knock for the groove, grit for the drop,
+# back down for the outro. This is the range the original panel never had.
+automate bd_drive
+  0.12 R:32 0.3:32@smooth R:64 R:2 0.45:26@lin 0.75:4@smooth R:92 0.3:16@smooth
+
+# The break's rumble: decay opens wide, then snaps back for the drop
+automate bd_decay
+  0.45 R:96 0.95:2@smooth R:26 0.45:1@step R:100
+
+# Bus drive rides up for the drop, eases off after
+automate dr_drive
+  0 R:126 0.35:2@smooth R:96 0.1:16@lin
+
+# Hats open slightly as the drop runs
+automate oh_decay
+  0.5 R:128 R:48 0.65:16@lin R:64
+
+# The room appears at the break and stays for the drop
+automate reverb_wet
+  0.22 R:96 0.5:8@smooth R:24 0.3:4@lin R:100
+
+automate tape_drive
+  0.15 R:128 0.3:8@lin R:100

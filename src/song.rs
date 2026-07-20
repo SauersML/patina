@@ -1146,6 +1146,7 @@ mod tests {
             include_str!("../songs/grid-runner.song"),
             include_str!("../songs/tide-engine.song"),
             include_str!("../songs/polaris.song"),
+            include_str!("../songs/pressure-lines.song"),
         ] {
             let events = parse_song(text).unwrap().events;
             assert!(!events.is_empty());
@@ -1210,5 +1211,65 @@ mod tests {
         assert!(parse_song("track a\nnot_a_note\n").is_err());
         assert!(parse_song("C4\n").is_err()); // notes before any track
         assert!(parse_song("bpm 100\n").is_err()); // no events at all
+    }
+
+    /// Drum tracks: `kit=` routes the track to the rhythm section, drum
+    /// names parse to GM notes, and the whole path — DSL to board to bus —
+    /// produces audio through the ordinary offline render.
+    #[test]
+    fn drum_tracks_trigger_the_rhythm_section() {
+        let song = parse_song(
+            "bpm 120\n\
+             track beat kit=909 len=0.5\n\
+             BD CH SD [BD OH]@1 | RS CP BD:1\n",
+        )
+        .unwrap();
+        // Every note event carries the drum channel
+        let all_drum = song.events.iter().all(|e| match e.kind {
+            EventKind::NoteOn { channel, .. } | EventKind::NoteOff { channel, .. } => {
+                channel == crate::drums::DRUM_CHANNEL
+            }
+            _ => true,
+        });
+        assert!(all_drum, "kit= tracks must route every note to the board");
+        // Drum names outside a kit= track stay errors
+        assert!(parse_song("bpm 120\ntrack a\nBD\n").is_err());
+
+        let frames = render_offline(&song, 48000.0);
+        let peak = frames
+            .iter()
+            .fold(0.0f32, |a, &(l, r)| a.max(l.abs()).max(r.abs()));
+        assert!(peak > 0.05, "the beat should be audible, peak={peak}");
+    }
+
+    /// Drum knobs are ordinary parameters: patch lines, automation, and
+    /// the live panel all reach the same board.
+    #[test]
+    fn drum_params_automate_globally() {
+        let song = parse_song(
+            "bpm 120\n\
+             track beat kit=909\n\
+             BD:8\n\
+             automate bd_drive\n\
+             0.1 0.9:4@lin\n",
+        )
+        .unwrap();
+        let mut vm = VoiceManager::new(48000.0, 4);
+        for e in &song.events {
+            match e.kind {
+                EventKind::NoteOn { note, velocity, channel } => {
+                    vm.note_on_channel(note, velocity, channel)
+                }
+                EventKind::NoteOff { note, channel } => vm.note_off_channel(note, channel),
+                EventKind::Param { param, value, channel } => {
+                    vm.set_channel_param(channel, param, value)
+                }
+            }
+        }
+        assert!(
+            (vm.params.bd_drive - 0.9).abs() < 1e-3,
+            "bd_drive automation should land on the shared panel, got {}",
+            vm.params.bd_drive
+        );
     }
 }
