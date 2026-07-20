@@ -1,0 +1,137 @@
+# Four Rooms — one handshape, four meanings, one beat of true silence.
+#
+# HARMONY: a single quartal stack, D4-G4-C5, that NEVER changes,
+# while the bass walks Bb - G - Eb - F underneath. Same three notes
+# become Bb6/9 (glow), Gm11 (shade), Ebmaj13 (wonder — the high
+# voice's E natural is a #11 that exists only in this room), and
+# F9sus (the door back). Richness from context, not from more notes.
+#
+# DRUMS MADE OF FILTER: the pingkit patch is the Moog ladder at
+# resonance 3.4 with a five-octave envelope over 45 ms — each "drum"
+# is the filter ringing at a pitch chosen by key tracking. No
+# samples, no noise: percussion as a property of the circuit.
+#
+# A DUET, NOT A MELODY: the low Moog voice asserts (short, driven,
+# third octave), the high ARP voice answers (clean, sixth octave).
+# At the drop they HOCKET — alternating beats interlock into one
+# composite line neither could play alone; in the second cycle they
+# swap roles.
+#
+# DYNAMICS, actually: chords are gated STABS for half the piece and
+# become held richness only at the drop. The build slams fuzz,
+# drive, and stab-resonance upward for eight bars and then —
+# beat 48 — NOTHING. One full beat of dry silence. Then the drop
+# blooms with chorus and reverb switching on in the same instant.
+# The fuzz decays away through the outro like heat leaving metal.
+
+bpm 112
+gate 0.9
+
+automate lfo_rate
+0.6
+automate lfo_pitch
+2
+automate lfo_shape
+0.5
+automate chorus_depth
+0.35
+automate spring
+0.12
+automate reverb_decay
+0.6
+automate tape_wow
+0.15
+automate tape_flutter
+0.08
+automate tape_drive
+0.28
+
+track pings vel=0.75 patch=pingkit
+C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5 C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5
+C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5 C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5
+C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5 C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5
+C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5 C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5
+C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5 C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5
+C2:0.25 C2:0.25 R:0.5 C2:0.5 C3:0.25 C3:0.25 R:0.5 G2:0.5 C2:0.25 C2:0.25 R:0.5 C2:0.25 C2:0.25 R:0.5 C2:0.5 C3:0.25 C3:0.25 R:0.5 G2:0.5 C2:0.25 C2:0.25 R:0.5
+R:1
+R:1 C2:0.5 R:1.5 G2:0.5 R:0.5 R:1 C2:0.5 R:1.5 G2:0.5 R:0.5 R:1 C2:0.5 R:1.5 G2:0.5 R:0.5 R:1 C2:0.5 R:1.5 G2:0.5 R:0.5
+R:1 C2:0.5 R:1.5 G2:0.5 R:0.5 R:1 C2:0.5 R:1.5 G2:0.5 R:0.5 R:1 C2:0.5 R:1.5 G2:0.5 R:0.5 R:1 C2:0.5 R:1.5 G2:0.5 R:0.5
+C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5 C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5
+C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5 C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5
+R:8
+
+track bass vel=0.75 patch=rawbass
+Bb1:0.75 Bb1:0.25 R:1 Bb1:0.5 R:0.5 Bb1:1 | G1:0.75 G1:0.25 R:1 G1:0.5 R:0.5 G1:1
+Bb1:0.75 Bb1:0.25 R:1 Bb1:0.5 R:0.5 Bb1:1 | G1:0.75 G1:0.25 R:1 G1:0.5 R:0.5 G1:1 | Eb1:0.75 Eb1:0.25 R:1 Eb1:0.5 R:0.5 Eb1:1 | F1:0.75 F1:0.25 R:1 F1:0.5 R:0.5 F1:1
+Bb1:0.75 Bb1:0.25 R:1 Bb1:0.5 R:0.5 Bb1:1 | G1:0.75 G1:0.25 R:1 G1:0.5 R:0.5 G1:1 | Eb1:0.75 Eb1:0.25 R:1 Eb1:0.5 R:0.5 Eb1:1 | F1:0.75 F1:0.25 R:1 F1:0.5 R:0.5 F1:1
+Eb1:0.5 Eb1:0.5 Eb1:0.5 Eb1:0.5 Eb1:0.5 Eb1:0.5 Eb1:0.5 Eb1:0.5 F1:0.5 F1:0.5 F1:0.5 F1:0.5 F1:0.5 F1:0.5 F1:0.5 R:0.5
+R:1
+Bb1:3.5 F2:0.5 | G1:4 | Eb1:3.5 Bb1:0.5 | F1:4
+Bb1:3.5 F2:0.5 | G1:4 | Eb1:3.5 Bb1:0.5 | F1:4
+Bb1:0.75 Bb1:0.25 R:1 Bb1:0.5 R:0.5 Bb1:1 | G1:0.75 G1:0.25 R:1 G1:0.5 R:0.5 G1:1 | Eb1:0.75 Eb1:0.25 R:1 Eb1:0.5 R:0.5 Eb1:1 | F1:0.75 F1:0.25 R:1 F1:0.5 R:0.5 F1:1
+Bb1:8
+
+track stabs vel=0.6 patch=quartz
+R:8
+R:0.5 [D4 G4 C5]:1 R:1 [D4 G4 C5]:1 R:0.5 R:0.5 [D4 G4 C5]:1 R:1 [D4 G4 C5]:1 R:0.5
+R:0.5 [D4 G4 C5]:1 R:1 [D4 G4 C5]:1 R:0.5 R:0.5 [D4 G4 C5]:1 R:1 [D4 G4 C5]:1 R:0.5
+R:0.5 [D4 G4 C5]:1 R:1 [D4 G4 C5]:1 R:0.5 R:0.5 [D4 G4 C5]:1 R:1 [D4 G4 C5]:1 R:0.5
+R:0.5 [D4 G4 C5]:1 R:1 [D4 G4 C5]:1 R:0.5 R:0.5 [D4 G4 C5]:1 R:1 [D4 G4 C5]:1 R:0.5
+R:0.5 [D4 G4 C5]:1 R:1 [D4 G4 C5]:1 R:0.5 R:0.5 [D4 G4 C5]:1 R:1 [D4 G4 C5]:1 R:0.5
+R:1
+[D4 G4 C5 F5]:4 [D4 G4 C5 F5]:4 [D4 G4 C5 F5]:4 [D4 G4 C5 F5]:4
+[D4 G4 C5 F5]:4 [D4 G4 C5 F5]:4 [D4 G4 C5 F5]:4 [D4 G4 C5 F5]:4
+R:0.5 [D4 G4 C5]:1 R:1 [D4 G4 C5]:1 R:0.5 R:0.5 [D4 G4 C5]:1 R:1 [D4 G4 C5]:1 R:0.5
+R:8
+[Bb2 D4 G4 C5]:8
+
+track low vel=0.68 patch=gritlow
+R:8
+R:1 Bb2:0.5 D3:0.5 F3:1 G3:1 | R:0.5 G3:0.5 F3:0.5 D3:0.5 C3:2
+R:1 Eb3:0.5 F3:0.5 G3:1 Bb3:1 | R:0.5 C3:0.5 D3:0.5 F3:0.5 F3:2
+R:1 Bb2:0.5 D3:0.5 F3:1 G3:1 | R:0.5 G3:0.5 F3:0.5 D3:0.5 C3:2
+R:1 Eb3:0.5 F3:0.5 G3:1 Bb3:1 | R:0.5 C3:0.5 D3:0.5 F3:0.5 F3:2
+D3:0.5 F3:0.5 G3:0.5 Bb3:0.5 D3:0.5 F3:0.5 G3:0.5 Bb3:0.5 | G3:0.5 Bb3:0.5 C4:0.5 D4:0.5 C4:0.5 Bb3:0.5 G3:0.5 R:0.5
+R:1
+Bb2:0.5 D3:0.5 R:3 | G2:0.5 Bb2:0.5 R:3 | Eb3:0.5 G3:0.5 R:3 | F3:0.5 C3:0.5 R:3
+R:2 D3:1 F3:1 | R:2 Bb2:1 D3:1 | R:2 G3:1 Bb3:1 | R:2 F3:1 C3:1
+R:1 Bb2:0.5 D3:0.5 F3:1 G3:1 | R:0.5 G3:0.5 F3:0.5 D3:0.5 C3:2
+R:8
+R:8
+
+track high vel=0.6 patch=glasshigh
+R:24
+R:1 D6:1 C6:1 G5:1 | R:1 Bb5:1.5 G5:1.5 | R:0.5 E6:1.5 C6:1 G5:1 | R:1 C6:1 D6:1 R:1
+G5:1 Bb5:1 C6:1 D6:1 | E6:0.5 D6:0.5 E6:0.5 F6:0.5 G6:1.5 R:0.5
+R:1
+R:1 G5:1 Bb5:1 C6:1 | R:1 D6:1 Bb5:1 G5:1 | R:1 E6:1 C6:1 G5:1 | R:1 C6:1.5 D6:1.5
+D6:1 C6:1 R:2 | Bb5:1 G5:1 R:2 | E6:1 G6:1 R:2 | D6:1 C6:1 R:2
+R:4 E6:1 C6:1 R:10
+C6:6 R:2
+
+automate stabs.cutoff
+1800 R:40 3200:8@lin R:1 2600:0.1@step R:31.9 R:16 900:8@exp
+
+automate stabs.resonance
+0.6 R:40 2.2:8@lin R:1 0.8:0.1@step R:55.9
+
+automate fuzz
+0 R:40 0.35:8@lin 0:0.1@step R:0.9 0.25:0.1@step R:31.9 0:16@lin R:8
+
+automate low.drive
+2.0 R:40 3.2:8@lin R:1 2.6:0.1@step R:39.9 2.0:16@smooth
+
+automate high.cutoff
+4200 R:49 5200:16@smooth 4400:16@smooth R:16 3200:8@smooth
+
+automate bass.cutoff
+750 R:40 1100:8@lin R:1 900:0.1@step R:39.9 650:16@smooth
+
+automate chorus_mode
+0 R:49 2 R:56
+
+automate reverb_wet
+0.15 R:49 0.42:4@smooth R:28 0.6:12@smooth R:12
+
+automate tape_age
+0.4 R:49 0.5:0.1@step R:55.9
