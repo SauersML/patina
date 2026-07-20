@@ -16,10 +16,10 @@ sync 0
 ring 0
 glide 0.04
 pulse_width 0.5
-attack 0.09
-decay 0.5
+attack 0.03
+decay 0.45
 sustain 0.75
-release 1.1
+release 0.7
 filter_env 0.4
 filter_attack 0.01
 filter_decay 0.4
