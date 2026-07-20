@@ -1,0 +1,59 @@
+# One Electrical Object
+#
+# Five channels. One patch, used identically by all five. One note,
+# held by all five from the first second. Detune 0. Chorus off. LFO
+# off. No automation curve anywhere in this file moves anything.
+#
+# "A hardware synthesizer is not a set of independent processors --
+# it is one electrical object" (substrate.rs). Every voice here reads
+# the same rail sag and the same chassis heat, and every voice ALSO
+# carries its own fixed, tiny component tolerance and its own
+# independent drift, both baked in at construction, neither visible
+# from a patch file. Five boards commanded to do the exact same
+# thing will not do the exact same thing, and nothing here is
+# telling them to differ. This piece is just holding the note down
+# long enough to hear that be true -- and, near the end, one more
+# board joins, an octave up, the only thing that happens on purpose.
+
+bpm 60
+gate 0.98
+
+automate lfo_pitch
+0
+automate lfo_filter
+0
+automate lfo_pwm
+0
+automate chorus_mode
+0
+automate spring
+0
+automate reverb_decay
+0.6
+automate reverb_wet
+0.18
+automate tape_wow
+0
+automate tape_flutter
+0
+automate tape_drive
+0
+automate tape_age
+0
+automate noise
+0.012
+
+track board1 vel=0.5 len=1 patch=commonrail
+50:150
+
+track board2 vel=0.5 len=1 patch=commonrail
+50:150
+
+track board3 vel=0.5 len=1 patch=commonrail
+50:150
+
+track board4 vel=0.5 len=1 patch=commonrail
+50:150
+
+track board5 vel=0.5 len=1 patch=commonrail
+R:100 62:50

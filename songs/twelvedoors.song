@@ -1,0 +1,97 @@
+# Twelve Doors — the sawtooth, unhidden. Reverb stays low the whole
+# piece; the richness is two detuned saws per voice and register
+# space, not wash.
+#
+# The harmony is one trick done patiently: D4 and F#4 are pedal tones
+# through the entire cycle while the top voice walks C#5 - B4 - A4 -
+# and then Bb4, turning G major into G minor(maj7) with a single
+# semitone. Only one voice ever moves into the darkness, which is why
+# it feels inevitable instead of theatrical. The bridge finally spends
+# the A# leading tone it has been withholding.
+#
+# The melody never announces itself: it enters after the chords have
+# played a full cycle alone, on the "and" of the beat, soft attack,
+# darker filter than the chords — and then it HOLDS while the harmony
+# moves underneath, so the suspensions do the demanding for it. Its
+# one big gesture: in the last cycle it lands directly on Bb5, the
+# borrowed note, doubled an octave up by the chime.
+#
+# Effects move at section scale (chorus exists only in the bridge,
+# one tape splice before the last cycle, reverb blooms only for the
+# coda) — dynamic, but every sound is recognizably the same machine.
+
+bpm 104
+gate 0.9
+
+automate lfo_rate
+0.8
+automate lfo_pitch
+3
+automate lfo_shape
+0.5
+automate chorus_depth
+0.35
+automate spring
+0.06
+automate reverb_decay
+0.6
+automate tape_wow
+0.12
+automate tape_flutter
+0.08
+automate tape_drive
+0.15
+
+track chords vel=0.6 patch=rawchord
+[B2 D4 F#4]:8
+[B2 D4 F#4 C#5]:8 [G2 D4 F#4 B4]:8 [A2 D4 F#4 A4]:8 [G2 D4 F#4 Bb4]:8
+[B2 D4 F#4 C#5]:8 [G2 D4 F#4 B4]:8 [A2 D4 F#4 A4]:8 [G2 D4 F#4 Bb4]:8
+[E2 D4 G4 B4]:8 [C#3 E4 G4 B4]:4 [F#2 C#4 F#4 A#4]:4
+[B2 D4 F#4 C#5]:8 [G2 D4 F#4 B4]:8 [A2 D4 F#4 A4]:8 [G2 D4 F#4 Bb4]:8
+[B2 D4 F#4 C#5]:12
+
+track bass vel=0.72 patch=rawbass
+B1:5.5 R:0.5 B1:1 F#2:1
+B1:5.5 R:0.5 B1:1 F#2:1 | G1:5.5 R:0.5 G1:1 D2:1 | A1:5.5 R:0.5 A1:1 E2:1 | G1:5.5 R:0.5 G1:1 D2:1
+B1:5.5 R:0.5 B1:1 F#2:1 | G1:5.5 R:0.5 G1:1 D2:1 | A1:5.5 R:0.5 A1:1 E2:1 | G1:5.5 R:0.5 G1:1 D2:1
+E2:5.5 R:0.5 E2:1 B1:1 | C#2:4 F#1:4
+B1:5.5 R:0.5 B1:1 F#2:1 | G1:5.5 R:0.5 G1:1 D2:1 | A1:5.5 R:0.5 A1:1 E2:1 | G1:5.5 R:0.5 G1:1 D2:1
+B1:12
+
+track lead vel=0.5 patch=quietlead
+R:40
+R:2.5 D5:0.5 F#5:5
+E5:3 D5:1 B4:4
+R:1 A4:1.5 D5:1.5 F#5:2 A5:2
+A5:1 G5:1 F#5:6
+G5:2.5 F#5:0.5 E5:5
+E5:2 C#5:2 R:1 A#4:1 C#5:2
+R:2.5 D5:0.5 F#5:3 A5:2
+B5:3 A5:1 F#5:4
+R:1 A4:1.5 D5:1.5 F#5:2 A5:2
+Bb5:3 A5:1 F#5:4
+R:2 F#5:2 C#5:8
+
+track chime vel=0.3 patch=doorchime
+R:66 F#6:6
+R:16
+R:24 Bb6:3 A6:1 F#6:4
+R:2 C#6:10
+
+automate chords.cutoff
+2200 R:8 2800:16@smooth R:16 3000:8@smooth R:24 2400:8@smooth R:8 3400:16@smooth R:16 1400:12@exp
+
+automate lead.cutoff
+2000 R:40 2400:12@smooth 2000:12@smooth R:8 2200:8@smooth R:8 2800:24@smooth R:8 1600:12@smooth
+
+automate bass.cutoff
+900 R:72 750:16@smooth 1050:32@lin 700:12@smooth
+
+automate chorus_mode
+0 R:72 1 R:16 0 R:44
+
+automate reverb_wet
+0.22 R:72 0.35:12@smooth 0.25:4@smooth R:32 0.5:12@smooth
+
+automate tape_age
+0.35 R:88 0.45:0.1@step R:31.9 0.55:12@lin

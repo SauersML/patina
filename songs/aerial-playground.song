@@ -1,0 +1,83 @@
+# Aerial Playground -- Boards of Canada, built on one haunting hook.
+#
+# Entirely diatonic to D dorian -- no chromatic notes anywhere -- but
+# dorian hands you a real tritone (F to B) that major or natural minor
+# doesn't give you so plainly, and the melody leans right into it: a
+# bald leap from B down to F is the whole climax. Every phrase is a
+# different length (7, 8, 6, 9.5 beats) so nothing sits in a square
+# bar, and the tune opens on the 5th, not the tonic -- it takes the
+# whole piece to find its way back to D, arriving through F (the
+# tritone's own partner) on a long held tonic at the very end.
+#
+# The lead patch is stripped to one exposed oscillator -- no unison
+# stack -- with a second oscillator sitting silently a tritone up,
+# feeding only the ring modulator: every note gets a faint inharmonic
+# shimmer at its own tritone, echoing the melodic interval in the
+# timbre itself, never a wrong note.
+#
+# On the final pass the tritone phrase is thrown up a full octave --
+# the one place the piece reaches -- before the same road home.
+# Tape wow/flutter and chorus sit on constantly at a moderate level:
+# here the haze is the room the piece lives in, not a destination.
+
+bpm 88
+gate 0.88
+
+automate lfo_rate
+4.5
+automate lfo_shape
+0.5
+automate lfo_pitch
+3
+automate lfo_pwm
+0.05
+automate chorus_mode
+2
+automate chorus_depth
+0.3
+automate chorus_rate
+0.4
+automate spring
+0.1
+automate reverb_decay
+0.7
+automate tape_wow
+0.22
+automate tape_flutter
+0.13
+automate tape_drive
+0.22
+automate tape_age
+0.32
+automate noise
+0.015
+
+track pad vel=0.5 len=1 patch=aerial-pad
+[57 72 76]:7 [55 71 74]:8 [53 69 72]:6 [50 65 69]:9.5 [57 72 76]:7 [55 71 74]:8 [53 69 72]:6 [50 65 69]:9.5
+[57 72 76]:7 [55 71 74]:8 [53 69 72]:6 [50 65 69]:9.5
+
+track bass vel=0.75 len=1 patch=aerial-bass
+33:2 R:5 31:2 R:6 29:2 R:4 26:2 R:7.5 33:2 R:5 31:2 R:6
+29:2 R:4 26:2 R:7.5 33:2 R:5 31:2 R:6 29:2 R:4 26:2 R:7.5
+
+track bell vel=0.4 len=1 patch=sunbell
+R:36.5 R:1 [71]:1.5 R:1.5 [65]:1.5 R:2.5 R:40.5
+
+track lead vel=0.72 len=1 patch=nostalgia-lead
+R:6 69:3 67:1 64:1.5 R:1.5 71:3 R:1 65:2.5 R:1.5
+74:0.5 72:0.5 74:0.5 71:1 69:1 R:2.5 67:1.5 64:1 62:0.5
+R:1 65:1.5 64:1 62:3 R:8 69:3 67:1 64:1.5 R:1.5
+83:3 R:1 77:2.5 R:1.5 74:0.5 72:0.5 74:0.5 71:1 69:1
+R:2.5 67:1.5 64:1 62:0.5 R:1 65:1.5 64:1 62:3 R:10
+
+automate pad.cutoff
+950 1650:77@smooth 1350:8@smooth
+
+automate bass.cutoff
+480 620:42.5@smooth 500:42.5@smooth
+
+automate lead.cutoff
+1700 R:51.5 2700:8@smooth 1500:25.5@smooth
+
+automate reverb_wet
+0.32 R:51.5 0.52:8@smooth 0.4:25.5@smooth
