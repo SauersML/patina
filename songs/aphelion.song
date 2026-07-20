@@ -1,28 +1,26 @@
-# Aphelion — third draft: the fingerprint, strengthened.
+# Aphelion — fourth draft: pads instead of water, a motif instead of
+# a lead. Same planet-harmony. A modification, not a new piece.
 #
-# The unique thing this piece owns: the major-third cycle (C - Ab -
-# E), seven seconds per chord, and a wash-arp so wide it IS the
-# harmony. This draft doubles down on exactly that.
+# What stays: the major-third cycle at 68 (C - Ab - E, one common
+# tone surviving each move), the CANTUS — long mid-register tones
+# breathing by semitone, holding G#4 straight through the change
+# into Ab4 — the tidal drone, the deep drums.
 #
-# - THE ARP HAS ITS FULL RANGE EVERYWHERE: C2 up to C6/E6 in every
-#   section, rising wash, inverted falling wash, sixteenths in the
-#   reversed-cycle departure, and a slowing augmented reveal at the
-#   end.
-# - THE MELODY IS NOT A SINGER. Two machine-native voices replace
-#   it: (1) an EMERGENT melody made of velocity accents inside the
-#   arp — the accented peaks spell C6, Ab5, E6: the cycle sung by
-#   the pattern itself; (2) a CANTUS of pure held tones, one or two
-#   per chord, low and dark, breathing by semitone (E - Eb - E) —
-#   and in the departure holding G#4 straight through the chord
-#   change into Ab4: the same key pressed twice while the ground
-#   underneath becomes a different planet.
-# - THE ENDING SAYS THE QUIET PART: C, E, Ab — the three roots —
-#   are themselves an augmented triad. The final section arpeggiates
-#   all three grounds AT ONCE, quarters slowing to halves: the
-#   structure of the whole piece revealed as a single alien chord.
-#
-# Slowness kept at 68. Drums keep the candy's old job (rolls at the
-# seams) and leave a heartbeat at the end.
+# What changes:
+# - The arp is deleted. In its place, BoC-hollow PADS: parallel
+#   add9 voicings with no third (C-G-D, Ab-Eb-Bb, E-B-F#), narrow
+#   pulse through a swelling filter — open fifths wearing a ninth,
+#   warm and slightly vacant, moving in parallel like weather.
+# - The high voice is a MOTIF, not a lead: three notes, twice per
+#   chord. Its two FIXED tones are E5 and C6 — precisely the pitches
+#   the augmented cycle shares among all three chords (E is the 3rd
+#   of C, the #5 of Ab, the root of E; C is the root, 3rd, #5). The
+#   motif literally cannot leave the harmony; only its first note
+#   bends to each planet: G5, then G#5, then Ab5. Same phrase,
+#   endlessly recolored.
+# - The ending's augmented reveal is now a CHORD: the final pad is
+#   C-E-G# held sixteen beats while the motif plays at half speed —
+#   slowness deepening exactly at the reveal.
 
 bpm 68
 gate 0.92
@@ -58,22 +56,13 @@ C2:8 E2:8 Ab1:8
 C2:8 Ab1:8 E2:8
 C2:16
 
-track arp vel=0.5 patch=arpwash
-C2:1 G2:1 C3:1 E3:1 G3:1 C4:1 E4:1 G4:1
-C2:0.5 G2:0.5 C3:0.5 E3:0.5 G3:0.5 C4:0.5 E4:0.5 G4:0.5 C5:0.5 E5:0.5 G5:0.5 C6:0.5@0.78 G5:0.5 E5:0.5 C5:0.5 G4:0.5
-Ab1:0.5 Eb2:0.5 Ab2:0.5 C3:0.5 Eb3:0.5 Ab3:0.5 C4:0.5 Eb4:0.5 Ab4:0.5 C5:0.5 Eb5:0.5 Ab5:0.5@0.78 Eb5:0.5 C5:0.5 Ab4:0.5 Eb4:0.5
-E2:0.5 B2:0.5 E3:0.5 G#3:0.5 B3:0.5 E4:0.5 G#4:0.5 B4:0.5 E5:0.5 G#5:0.5 B5:0.5 E6:0.5@0.78 B5:0.5 G#5:0.5 E5:0.5 B4:0.5
-C6:0.5@0.78 G5:0.5 E5:0.5 C5:0.5 G4:0.5 E4:0.5 C4:0.5 G3:0.5 E3:0.5 C3:0.5 G2:0.5 C2:0.5 G2:0.5 C3:0.5 E3:0.5 G3:0.5
-Ab5:0.5@0.78 Eb5:0.5 C5:0.5 Ab4:0.5 Eb4:0.5 C4:0.5 Ab3:0.5 Eb3:0.5 C3:0.5 Ab2:0.5 Eb2:0.5 Ab1:0.5 Eb2:0.5 Ab2:0.5 C3:0.5 Eb3:0.5
-B5:0.5@0.78 G#5:0.5 E5:0.5 B4:0.5 G#4:0.5 E4:0.5 B3:0.5 G#3:0.5 E3:0.5 B2:0.5 E2:0.5 B2:0.5 E3:0.5 G#3:0.5 B3:0.5 E4:0.5
-C2:0.25 G2:0.25 C3:0.25 E3:0.25 G3:0.25 C4:0.25 E4:0.25 G4:0.25 C5:0.25 E5:0.25 G5:0.25 C6:0.25 E6:0.25@0.78 C6:0.25 G5:0.25 E5:0.25 C2:0.25 G2:0.25 C3:0.25 E3:0.25 G3:0.25 C4:0.25 E4:0.25 G4:0.25 C5:0.25 E5:0.25 G5:0.25 C6:0.25 E6:0.25@0.78 C6:0.25 G5:0.25 E5:0.25
-E2:0.25 B2:0.25 E3:0.25 G#3:0.25 B3:0.25 E4:0.25 G#4:0.25 B4:0.25 E5:0.25 G#5:0.25 B5:0.25 E6:0.25@0.78 B5:0.25 G#5:0.25 E5:0.25 B4:0.25 E2:0.25 B2:0.25 E3:0.25 G#3:0.25 B3:0.25 E4:0.25 G#4:0.25 B4:0.25 E5:0.25 G#5:0.25 B5:0.25 E6:0.25@0.78 B5:0.25 G#5:0.25 E5:0.25 B4:0.25
-Ab1:0.25 Eb2:0.25 Ab2:0.25 C3:0.25 Eb3:0.25 Ab3:0.25 C4:0.25 Eb4:0.25 Ab4:0.25 C5:0.25 Eb5:0.25 Ab5:0.25 C6:0.25@0.78 Ab5:0.25 Eb5:0.25 C5:0.25 Ab1:0.25 Eb2:0.25 Ab2:0.25 C3:0.25 Eb3:0.25 Ab3:0.25 C4:0.25 Eb4:0.25 Ab4:0.25 C5:0.25 Eb5:0.25 Ab5:0.25 C6:0.25@0.78 Ab5:0.25 Eb5:0.25 C5:0.25
-C2:0.25 G2:0.25 C3:0.25 E3:0.25 G3:0.25 C4:0.25 E4:0.25 G4:0.25 C5:0.25 E5:0.25 G5:0.25 C6:0.25 E6:0.25@0.78 C6:0.25 G5:0.25 E5:0.25 C2:0.25 G2:0.25 C3:0.25 E3:0.25 G3:0.25 C4:0.25 E4:0.25 G4:0.25 C5:0.25 E5:0.25 G5:0.25 C6:0.25 E6:0.25@0.78 C6:0.25 G5:0.25 E5:0.25
-Ab1:0.25 Eb2:0.25 Ab2:0.25 C3:0.25 Eb3:0.25 Ab3:0.25 C4:0.25 Eb4:0.25 Ab4:0.25 C5:0.25 Eb5:0.25 Ab5:0.25 C6:0.25@0.78 Ab5:0.25 Eb5:0.25 C5:0.25 Ab1:0.25 Eb2:0.25 Ab2:0.25 C3:0.25 Eb3:0.25 Ab3:0.25 C4:0.25 Eb4:0.25 Ab4:0.25 C5:0.25 Eb5:0.25 Ab5:0.25 C6:0.25@0.78 Ab5:0.25 Eb5:0.25 C5:0.25
-E2:0.5 B2:0.5 E3:0.5 G#3:0.5 B3:0.5 E4:0.5 G#4:0.5 B4:0.5 E5:0.5 G#5:0.5 B5:0.5 E6:0.5@0.78 B5:0.5 G#5:0.5 E5:0.5 B4:0.5
-C2:1 E2:1 G#2:1 C3:1 E3:1 G#3:1 C4:1 E4:1
-G#4:2 C5:2 E5:2 G#5:2@0.78
+track pads vel=0.55 patch=hollowpad
+[C3 G3 D4]:8
+[C3 G3 D4]:8 [Ab2 Eb3 Bb3]:8 [E3 B3 F#4]:8
+[C3 G3 D4]:8 [Ab2 Eb3 Bb3]:8 [E3 B3 F#4]:8
+[C3 G3 D4]:8 [E3 B3 F#4]:8 [Ab2 Eb3 Bb3]:8
+[C3 G3 D4]:8 [Ab2 Eb3 Bb3]:8 [E3 B3 F#4]:8
+[C3 E3 G#3 C4]:16@0.5
 
 track cantus vel=0.5 patch=warmvoice
 R:32
@@ -81,6 +70,17 @@ E4:8 Eb4:8 E4:8
 G4:8 G#4:8 Ab4:8
 E4:4 G4:4 Eb4:8 B3:8
 C4:12 R:4
+
+track motif vel=0.5 patch=glasshigh
+R:56
+R:1 G5:0.75 E5:0.25 C6:2 R:1 G5:0.75 E5:0.25 C6:2
+R:1 G#5:0.75 E5:0.25 C6:2 R:1 G#5:0.75 E5:0.25 C6:2
+R:1 Ab5:0.75 E5:0.25 C6:2 R:1 Ab5:0.75 E5:0.25 C6:2
+R:1 G5:0.75 E5:0.25 C6:2 R:1 G5:0.75 E5:0.25 C6:2
+R:1 Ab5:0.75 E5:0.25 C6:2 R:1 Ab5:0.75 E5:0.25 C6:2
+R:1 G#5:0.75 E5:0.25 C6:2 R:1 G#5:0.75 E5:0.25 C6:2
+R:2 G#5:1.5 E5:0.5 C6:4
+R:2 E5:2 C6:4
 
 track drums vel=0.8 patch=slowkit
 R:16
@@ -98,8 +98,8 @@ C2:0.5@0.85 R:1.5 G2:0.5@0.7 R:1.5 C2:0.5@0.85 R:1.5 G2:0.5@0.7 R:1.5
 C2:0.5@0.8 R:3.5 C2:0.5@0.7 R:3.5
 R:8
 
-automate arp.cutoff
-1400 R:8 2000:24@smooth 2400:24@smooth 3600:24@smooth 2800:24@smooth 1200:16@exp
+automate pads.cutoff
+1200 R:8 1500:24@smooth 1800:24@smooth 2200:24@smooth 1900:24@smooth 1000:16@exp
 
 automate ground.cutoff
 450 R:32 600:24@smooth 800:24@smooth 700:24@smooth 400:16@smooth
