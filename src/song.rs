@@ -530,7 +530,7 @@ fn register_channels(vm: &mut VoiceManager, song: &Song) {
 /// engine, no audio device. Returns interleaved-by-frame stereo samples,
 /// with a few seconds of tail for reverb and tape print-through to ring out.
 pub fn render_offline(song: &Song, sample_rate: f32) -> Vec<(f32, f32)> {
-    let mut vm = VoiceManager::new(sample_rate, 8);
+    let mut vm = VoiceManager::new(sample_rate, 10);
     // A bounce records a warmed-up instrument, not a cold power-on
     vm.warm_up();
     register_channels(&mut vm, song);

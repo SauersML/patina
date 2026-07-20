@@ -1,28 +1,24 @@
-# Four Rooms — one handshape, four meanings, one beat of true silence.
+# Four Rooms — draft two: cohesive, candied, nothing quirky.
 #
-# HARMONY: a single quartal stack, D4-G4-C5, that NEVER changes,
-# while the bass walks Bb - G - Eb - F underneath. Same three notes
-# become Bb6/9 (glow), Gm11 (shade), Ebmaj13 (wonder — the high
-# voice's E natural is a #11 that exists only in this room), and
-# F9sus (the door back). Richness from context, not from more notes.
+# ONE HANDSHAPE: the quartal stack D4-G4-C5 never changes; the bass
+# walks Bb - G - Eb - F and the same three notes become Bb6/9, Gm11,
+# Ebmaj13, F9sus. (The old #11 "wonder note" is gone — the color
+# now comes from in-room tones only: F6 and G6 in the Eb room.)
 #
-# DRUMS MADE OF FILTER: the pingkit patch is the Moog ladder at
-# resonance 3.4 with a five-octave envelope over 45 ms — each "drum"
-# is the filter ringing at a pitch chosen by key tracking. No
-# samples, no noise: percussion as a property of the circuit.
+# ONE MOTIF: the low voice's call (rise Bb-D-F-G, settle through
+# G-F-D-C) IS the high voice's answer — same phrase, same rhythm,
+# two octaves apart. The intro foreshadows the answer's tail before
+# anything else happens; every section speaks the same sentence.
 #
-# A DUET, NOT A MELODY: the low Moog voice asserts (short, driven,
-# third octave), the high ARP voice answers (clean, sixth octave).
-# At the drop they HOCKET — alternating beats interlock into one
-# composite line neither could play alone; in the second cycle they
-# swap roles.
+# THE UNSETTLING, without wrong notes: after the drop, one C6 holds
+# for FOURTEEN BEATS while the rooms change around it. It is
+# consonant in every room — ninth, eleventh, thirteenth, fifth —
+# and its refusal to move is the eeriest thing in the piece.
 #
-# DYNAMICS, actually: chords are gated STABS for half the piece and
-# become held richness only at the drop. The build slams fuzz,
-# drive, and stab-resonance upward for eight bars and then —
-# beat 48 — NOTHING. One full beat of dry silence. Then the drop
-# blooms with chorus and reverb switching on in the same instant.
-# The fuzz decays away through the outro like heat leaving metal.
+# CANDY: harmony-tracking ping fills at every cycle's end (the
+# ladder-drum rolls up Bb-C-Eb-G), a pentatonic sixteenth riser that
+# throws itself into the one-beat silence, and a sparkle layer of
+# quick D6-G6-C7 glitter — a twinkle after the final chord lands.
 
 bpm 112
 gate 0.9
@@ -47,17 +43,17 @@ automate tape_drive
 0.28
 
 track pings vel=0.75 patch=pingkit
+C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5 C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 Bb2:0.25 C3:0.25 Eb3:0.25 G3:0.25
 C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5 C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5
+C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5 C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 Bb2:0.25 C3:0.25 Eb3:0.25 G3:0.25
 C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5 C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5
-C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5 C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5
-C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5 C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5
-C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5 C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5
-C2:0.25 C2:0.25 R:0.5 C2:0.5 C3:0.25 C3:0.25 R:0.5 G2:0.5 C2:0.25 C2:0.25 R:0.5 C2:0.25 C2:0.25 R:0.5 C2:0.5 C3:0.25 C3:0.25 R:0.5 G2:0.5 C2:0.25 C2:0.25 R:0.5
+C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5 C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 Bb2:0.25 C3:0.25 Eb3:0.25 G3:0.25
+C2:0.25 C2:0.25 R:0.5 C2:0.5 C3:0.25 C3:0.25 R:0.5 G2:0.5 C2:0.25 C2:0.25 R:0.5 C2:0.25 C2:0.25 R:0.5 C2:0.5 C3:0.25 C3:0.25 R:0.5 G2:0.5 Bb2:0.25 C3:0.25 Eb3:0.25 G3:0.25 R:0.5
 R:1
 R:1 C2:0.5 R:1.5 G2:0.5 R:0.5 R:1 C2:0.5 R:1.5 G2:0.5 R:0.5 R:1 C2:0.5 R:1.5 G2:0.5 R:0.5 R:1 C2:0.5 R:1.5 G2:0.5 R:0.5
 R:1 C2:0.5 R:1.5 G2:0.5 R:0.5 R:1 C2:0.5 R:1.5 G2:0.5 R:0.5 R:1 C2:0.5 R:1.5 G2:0.5 R:0.5 R:1 C2:0.5 R:1.5 G2:0.5 R:0.5
 C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5 C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5
-C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5 C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5
+C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 C2:0.5 R:0.5 C2:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 G2:0.5 Bb2:0.25 C3:0.25 Eb3:0.25 G3:0.25
 R:8
 
 track bass vel=0.75 patch=rawbass
@@ -89,8 +85,8 @@ track low vel=0.68 patch=gritlow
 R:8
 R:1 Bb2:0.5 D3:0.5 F3:1 G3:1 | R:0.5 G3:0.5 F3:0.5 D3:0.5 C3:2
 R:1 Eb3:0.5 F3:0.5 G3:1 Bb3:1 | R:0.5 C3:0.5 D3:0.5 F3:0.5 F3:2
-R:1 Bb2:0.5 D3:0.5 F3:1 G3:1 | R:0.5 G3:0.5 F3:0.5 D3:0.5 C3:2
-R:1 Eb3:0.5 F3:0.5 G3:1 Bb3:1 | R:0.5 C3:0.5 D3:0.5 F3:0.5 F3:2
+R:1 Bb2:0.5 D3:0.5 F3:1 G3:1 | R:4
+R:1 Eb3:0.5 F3:0.5 G3:1 Bb3:1 | R:4
 D3:0.5 F3:0.5 G3:0.5 Bb3:0.5 D3:0.5 F3:0.5 G3:0.5 Bb3:0.5 | G3:0.5 Bb3:0.5 C4:0.5 D4:0.5 C4:0.5 Bb3:0.5 G3:0.5 R:0.5
 R:1
 Bb2:0.5 D3:0.5 R:3 | G2:0.5 Bb2:0.5 R:3 | Eb3:0.5 G3:0.5 R:3 | F3:0.5 C3:0.5 R:3
@@ -100,14 +96,25 @@ R:8
 R:8
 
 track high vel=0.6 patch=glasshigh
-R:24
-R:1 D6:1 C6:1 G5:1 | R:1 Bb5:1.5 G5:1.5 | R:0.5 E6:1.5 C6:1 G5:1 | R:1 C6:1 D6:1 R:1
-G5:1 Bb5:1 C6:1 D6:1 | E6:0.5 D6:0.5 E6:0.5 F6:0.5 G6:1.5 R:0.5
+R:4 G5:1 Bb5:1 C6:2
+R:16
+R:4 R:1 Bb5:0.5 D6:0.5 F6:1 G5:1 R:4 R:0.5 G5:0.5 F5:0.5 D5:0.5 C6:2
+G5:1 Bb5:1 C6:1 D6:1 | R:1.75 F5:0.25 G5:0.25 Bb5:0.25 C6:0.25 D6:0.25 F6:0.25 G6:0.25 Bb6:0.5
 R:1
-R:1 G5:1 Bb5:1 C6:1 | R:1 D6:1 Bb5:1 G5:1 | R:1 E6:1 C6:1 G5:1 | R:1 C6:1.5 D6:1.5
-D6:1 C6:1 R:2 | Bb5:1 G5:1 R:2 | E6:1 G6:1 R:2 | D6:1 C6:1 R:2
-R:4 E6:1 C6:1 R:10
+R:1 G5:1 Bb5:1 C6:1 | R:1 D6:1 Bb5:1 G5:1 | R:1 F6:1 C6:1 G5:1 | R:1 C6:1.5 D6:1.5
+D6:1 C6:1 R:2 | Bb5:1 G5:1 R:2 | F6:1 G6:1 R:2 | D6:1 C6:1 R:2
+C6:14 R:2
 C6:6 R:2
+
+track sparkle vel=0.32 patch=doorchime
+R:7 D6:0.25 G6:0.25 C7:0.5
+R:14 D6:0.25 G6:0.25 C7:0.25 R:1.25
+R:14 D6:0.25 G6:0.25 C7:0.25 R:1.25
+R:8
+R:1
+R:7.5 [D6 G6]:0.5 R:7.5 [D6 G6]:0.5 R:7.5 [D6 G6]:0.5 R:7.5 [D6 G6]:0.5
+R:16
+R:2 D6:0.25 G6:0.25 C7:0.5 R:5
 
 automate stabs.cutoff
 1800 R:40 3200:8@lin R:1 2600:0.1@step R:31.9 R:16 900:8@exp

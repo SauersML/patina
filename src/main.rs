@@ -33,7 +33,7 @@ where
     let sample_rate = config.sample_rate.0 as f32;
     let channels = config.channels as usize;
 
-    let voice_manager = Arc::new(Mutex::new(VoiceManager::new(sample_rate, 8))); // 8 voices
+    let voice_manager = Arc::new(Mutex::new(VoiceManager::new(sample_rate, 10))); // 10 voices
     let (mut midi_handler, _midi_rx) = MidiHandler::new()?;
     midi_handler.set_voice_manager(Arc::clone(&voice_manager));
     let running = Arc::new(AtomicBool::new(true));
