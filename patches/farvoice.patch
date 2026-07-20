@@ -6,7 +6,7 @@ osc2_pitch 0
 osc2_level 0.45
 osc3_wave 0
 osc3_pitch 12
-osc3_level 0.2
+osc3_level 0.55
 detune 5
 sub 0.15
 circuit 1

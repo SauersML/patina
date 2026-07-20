@@ -34,7 +34,7 @@ automate lfo_shape
 automate chorus_mode
 2
 automate chorus_depth
-0.3
+0.16
 automate spring
 0.08
 automate reverb_decay
@@ -44,7 +44,7 @@ automate tape_wow
 automate tape_flutter
 0.1
 automate tape_drive
-0.5
+0.7
 automate tape_age
 0.58
 
@@ -71,17 +71,17 @@ G4:8 G#4:8 Ab4:8
 E4:4 G4:4 Eb4:8 B3:8
 C4:12 R:4
 
-track motif vel=0.55 patch=farvoice
+track motif vel=0.72 patch=farvoice
 R:32
-R:1 C5:0.5 G4:0.5 E4:1 R:2 E4:1@0.38 R:2
+R:1 C5:0.5 G4:0.5 E4:1 R:2 E4:1@0.5 R:2
 R:8
-R:1 B4:0.5 G#4:0.5 E4:1 R:2 E4:1@0.38 R:2
-R:1 C5:0.5 G4:0.5 E4:1 R:2 E4:1@0.38 R:2
+R:1 B4:0.5 G#4:0.5 E4:1 R:2 E4:1@0.5 R:2
+R:1 C5:0.5 G4:0.5 E4:1 R:2 E4:1@0.5 R:2
 R:8
-R:1 C5:0.5 Ab4:0.5 Eb4:1 R:2 Eb4:1@0.38 R:2
-R:1 C5:0.5 G4:0.5 E4:1 R:2 E4:1@0.38 R:2
+R:1 C5:0.5 Ab4:0.5 Eb4:1 R:2 Eb4:1@0.5 R:2
+R:1 C5:0.5 G4:0.5 E4:1 R:2 E4:1@0.5 R:2
 R:8
-R:1 B4:0.5 G#4:0.5 E4:1 R:2 E4:1@0.38 R:2
+R:1 B4:0.5 G#4:0.5 E4:1 R:2 E4:1@0.5 R:2
 R:2 C5:1 G4:1 E4:4 R:8
 
 track beat kit=909
