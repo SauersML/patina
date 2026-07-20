@@ -1,0 +1,114 @@
+# Dear Listener —
+#
+# This one is a letter. What it says, as plainly as I can put it:
+# the tape is always running out while we play, and that is not the
+# sad part — it is why any of this glows.
+#
+# How it says it:
+# - The voice speaks FIRST, alone, before any bed. Eight beats of
+#   one melody in an empty room. Vulnerability before structure.
+# - The ground arrives like someone sitting down to listen.
+# - The verse is plain human harmony: F, Am, Bb — and then Bb MINOR,
+#   the letting-go chord, one voice sliding D to Db under a melody
+#   that refuses to move off its F. Every time that chord arrives,
+#   the heartbeat stops for the whole bar. The breath catches. Every
+#   time.
+# - The middle is the speech: the longest phrases in the piece,
+#   the arp rising around them to sixteenths at the C chord — saying
+#   it all while there is still tape.
+# - Then the return: the OPENING PHRASE, note for note, but over
+#   Bb minor now. The same words after everything, meaning something
+#   else. The tape audibly starts to age here — wow rising, the
+#   splice-less slow goodbye — while the arp thins back to quarters.
+# - The last melody note is G over F: the ninth. Not the tonic. Not
+#   finished. Still here.
+# - After the music ends, the heartbeat plays four beats alone.
+#
+bpm 72
+gate 0.92
+
+automate lfo_rate
+0.35
+automate lfo_pitch
+3
+automate lfo_shape
+0.5
+automate chorus_mode
+2
+automate chorus_depth
+0.3
+automate spring
+0.08
+automate reverb_decay
+0.8
+automate tape_flutter
+0.1
+automate tape_drive
+0.2
+
+track melody vel=0.66 patch=warmvoice
+A4:1.5@0.7 C5:0.5@0.7 D5:1@0.7 C5:1@0.7 A4:1@0.7 G4:2@0.7 F4:1@0.7
+R:8
+A4:1.5 C5:0.5 D5:1 C5:1 R:4
+R:1 A4:1 G4:1 E4:2 R:3
+R:1 D5:1 F5:2 G5:1 R:3
+F5:6 R:2
+A5:1.5 G5:0.5 F5:2 D5:1 E5:1 F5:2
+G5:1.5 F5:0.5 D5:2 Bb4:1 C5:1 D5:2
+E5:1 G5:1 C6:2 C6:1 A5:1 G5:2
+A4:1.5 C5:0.5 D5:1 C5:1 A4:1 G4:2 F4:1
+A4:1.5 C5:0.5 D5:1 C5:1 A4:1 G4:3
+G4:8 R:4
+R:4
+
+track ground vel=0.7 patch=tidal
+R:8
+F2:8
+F2:8 A2:8 Bb1:8 Bb1:8
+D2:8 Bb1:8 C2:8
+F2:8 Bb1:8
+F2:12
+R:4
+
+track arp vel=0.48 patch=arpwash
+R:32
+Bb1:0.5 F2:0.5 Bb2:0.5 D3:0.5 F3:0.5 Bb3:0.5 D4:0.5 F4:0.5 Bb4:0.5 D5:0.5 F5:0.5 D5:0.5 Bb4:0.5 F4:0.5 D4:0.5 F3:0.5
+Bb1:0.5 F2:0.5 Bb2:0.5 Db3:0.5 F3:0.5 Bb3:0.5 Db4:0.5 F4:0.5 Bb4:0.5 Db5:0.5 F5:0.5 Db5:0.5 Bb4:0.5 F4:0.5 Db4:0.5 F3:0.5
+D2:0.5 A2:0.5 D3:0.5 F3:0.5 A3:0.5 D4:0.5 F4:0.5 A4:0.5 D5:0.5 F5:0.5 A5:0.5 F5:0.5 D5:0.5 A4:0.5 F4:0.5 A3:0.5
+Bb1:0.5 F2:0.5 Bb2:0.5 D3:0.5 F3:0.5 Bb3:0.5 D4:0.5 F4:0.5 Bb4:0.5 D5:0.5 F5:0.5 D5:0.5 Bb4:0.5 F4:0.5 D4:0.5 F3:0.5
+C2:0.25 G2:0.25 C3:0.25 E3:0.25 G3:0.25 C4:0.25 E4:0.25 G4:0.25 C5:0.25 E5:0.25 G5:0.25 C6:0.25 G5:0.25 E5:0.25 C5:0.25 G4:0.25 C2:0.25 G2:0.25 C3:0.25 E3:0.25 G3:0.25 C4:0.25 E4:0.25 G4:0.25 C5:0.25 E5:0.25 G5:0.25 C6:0.25 G5:0.25 E5:0.25 C5:0.25 G4:0.25
+F2:0.5 C3:0.5 F3:0.5 A3:0.5 C4:0.5 F4:0.5 A4:0.5 C5:0.5 F5:0.5 A5:0.5 C6:0.5 A5:0.5 F5:0.5 C5:0.5 A4:0.5 C4:0.5
+Bb1:0.5 F2:0.5 Bb2:0.5 Db3:0.5 F3:0.5 Bb3:0.5 Db4:0.5 F4:0.5 Bb4:0.5 Db5:0.5 F5:0.5 Db5:0.5 Bb4:0.5 F4:0.5 Db4:0.5 F3:0.5
+F2:1 C3:1 F3:1 A3:1 C4:1 F4:1 A4:1 C5:1 F5:2 C5:2
+R:4
+
+track drums vel=0.8 patch=slowkit
+R:24
+C2:0.5@0.8 R:3.5 C2:0.5@0.7 R:3.5
+C2:0.5@0.8 R:3.5 C2:0.5@0.7 R:3.5
+R:8
+C2:0.5@0.8 R:1.5 G2:0.5@0.65 R:1.5 C2:0.5@0.8 R:1.5 G2:0.5@0.65 R:1.5
+C2:0.5@0.8 R:1.5 G2:0.5@0.65 R:1.5 C2:0.5@0.8 R:1.5 G2:0.5@0.65 R:1.5
+C2:0.5@0.8 R:1.5 G2:0.5@0.65 R:1.5 C2:0.5@0.8 R:1.5 G2:0.5@0.65 R:1.5
+C2:0.5@0.8 R:3.5 C2:0.5@0.7 R:3.5
+R:8
+R:12
+C2:0.5@0.6 R:1.5 C2:0.5@0.5 R:1.5
+
+automate melody.cutoff
+2800 R:48 3400:24@smooth R:8 2000:24@smooth
+
+automate arp.cutoff
+1600 R:32 2200:16@smooth 3000:24@smooth 1600:32@smooth
+
+automate ground.cutoff
+500 R:48 700:24@smooth 400:32@smooth
+
+automate reverb_wet
+0.35 R:48 0.5:24@smooth 0.65:32@smooth
+
+automate tape_age
+0.42 R:72 0.6:16@lin 0.78:16@lin
+
+automate tape_wow
+0.15 R:72 0.3:32@lin
