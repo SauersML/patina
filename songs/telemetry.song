@@ -1,0 +1,106 @@
+# Telemetry — hypnosis with a flaw you can't find.
+#
+# No minor key, no haunted house. A mixolydian, two warm chords (A, G,
+# with an Em every fourth bar), and three cycles of PRIME lengths
+# running against each other:
+#     harmony changes every 4 beats
+#     the melody is a 7-beat mantra, identical every pass
+#     a beacon tone repeats every 5 beats, exactly
+# 4, 7, 5 only align once every 140 beats — the length of the piece.
+# The loop never shows you its seam. The melody's C# is consonant over
+# A and lydian-strange over G, and because the 7-cycle slides against
+# the harmony, that strangeness lands somewhere new every single pass:
+# the same seven notes, never meaning the same thing twice.
+#
+# The melody does not develop. Its TIMBRE develops: pulse width
+# narrows from 0.42 to 0.25 over eighty bars, the filter arcs open
+# and closed, and at the splice the circuit swaps Moog to ARP. The
+# bass stumbles half a beat late every fourth bar — you feel it
+# before you can count it.
+#
+# Effects as weather: germanium fuzz grows over everything like
+# broadcast grit and lets go at the end; tape drive is always on;
+# one splice. And the beacon keeps transmitting after the song ends.
+
+bpm 96
+gate 0.9
+
+automate lfo_rate
+0.5
+automate lfo_pitch
+2
+automate lfo_shape
+0.5
+automate lfo_pwm
+0.04
+automate chorus_mode
+1
+automate chorus_depth
+0.3
+automate spring
+0.1
+automate reverb_decay
+0.7
+automate tape_flutter
+0.1
+automate tape_drive
+0.3
+
+track pads vel=0.5 patch=hollowpad
+[A2 E3 C#4]:8 [G2 D3 B3]:8 [A2 E3 C#4]:8 [E2 B2 G3]:8
+[A2 E3 C#4]:8 [G2 D3 B3]:8 [A2 E3 C#4]:8 [E2 B2 G3]:8
+[A2 E3 C#4]:8 [G2 D3 B3]:8 [A2 E3 C#4]:8 [E2 B2 G3]:8
+R:8
+[A2 E3 C#4]:8@0.45 [G2 D3 B3]:8@0.45 [A2 E3 C#4]:8@0.45 [E2 B2 G3]:8@0.45
+R:4
+
+track bass vel=0.72 patch=rawbass
+A1:1.5 A1:0.5 R:2 A1:1 R:2.5 E2:0.5 | G1:1.5 G1:0.5 R:2 G1:1 R:2.5 D2:0.5 | A1:1.5 A1:0.5 R:2 A1:1 R:2.5 E2:0.5 | R:0.5 E1:1.5 E2:0.5 R:2 E1:1 R:2.5
+A1:1.5 A1:0.5 R:2 A1:1 R:2.5 E2:0.5 | G1:1.5 G1:0.5 R:2 G1:1 R:2.5 D2:0.5 | A1:1.5 A1:0.5 R:2 A1:1 R:2.5 E2:0.5 | R:0.5 E1:1.5 E2:0.5 R:2 E1:1 R:2.5
+A1:1.5 A1:0.5 R:2 A1:1 R:2.5 E2:0.5 | G1:1.5 G1:0.5 R:2 G1:1 R:2.5 D2:0.5 | A1:1.5 A1:0.5 R:2 A1:1 R:2.5 E2:0.5 | R:0.5 E1:1.5 E2:0.5 R:2 E1:1 R:2.5
+A1:1.5 A1:0.5 R:2 A1:1 R:2.5 E2:0.5 | G1:1.5 G1:0.5 R:2 G1:1 R:2.5 D2:0.5 | A1:1.5 A1:0.5 R:2 A1:1 R:2.5 E2:0.5 | R:0.5 E1:1.5 E2:0.5 R:2 E1:1 R:2.5
+A1:4 R:8
+
+track voice vel=0.62 patch=loopvoice
+R:16
+E5:1 D5:0.5 E5:1.5 B4:1 C#5:1 A4:2 E5:1 D5:0.5 E5:1.5 B4:1 C#5:1 A4:2 E5:1 D5:0.5 E5:1.5 B4:1 C#5:1 A4:2
+E5:1 D5:0.5 E5:1.5 B4:1 C#5:1 A4:2 E5:1 D5:0.5 E5:1.5 B4:1 C#5:1 A4:2 E5:1 D5:0.5 E5:1.5 B4:1 C#5:1 A4:2
+E5:1 D5:0.5 E5:1.5 B4:1 C#5:1 A4:2 E5:1 D5:0.5 E5:1.5 B4:1 C#5:1 A4:2 E5:1 D5:0.5 E5:1.5 B4:1 C#5:1 A4:2
+E5:1 D5:0.5 E5:1.5 B4:1 C#5:1 A4:2 E5:1 D5:0.5 E5:1.5 B4:1 C#5:1 A4:2 E5:1 D5:0.5 E5:1.5 B4:1 C#5:1 A4:2
+E5:1 D5:0.5 E5:1.5 B4:1 C#5:1 A4:2 E5:1 D5:0.5 E5:1.5 B4:1 C#5:1 A4:2 E5:1 D5:0.5 E5:1.5 B4:1 C#5:1 A4:2
+E5:1 D5:0.5 E5:1.5 R:16
+
+track beacon vel=0.28 patch=beacon
+R:10
+E6:0.5 R:4.5 E6:0.5 R:4.5 E6:0.5 R:4.5 E6:0.5 R:4.5 E6:0.5 R:4.5 E6:0.5 R:4.5
+E6:0.5 R:4.5 E6:0.5 R:4.5 E6:0.5 R:4.5 E6:0.5 R:4.5 E6:0.5 R:4.5 E6:0.5 R:4.5
+E6:0.5 R:4.5 E6:0.5 R:4.5 E6:0.5 R:4.5 E6:0.5 R:4.5 E6:0.5 R:4.5 E6:0.5 R:4.5
+E6:0.5 R:4.5 E6:0.5 R:4.5 E6:0.5 R:4.5 E6:0.5 R:4.5 E6:0.5 R:4.5 E6:0.5 R:4.5
+E6:0.5 R:4.5 E6:0.5 R:4.5
+
+automate fuzz
+0 R:32 0.18:48@lin R:16 0.28:24@lin 0:20@smooth
+
+automate voice.cutoff
+1600 R:16 2200:40@smooth 2600:24@smooth R:16 2000:24@smooth 1400:20@smooth
+
+automate voice.pulse_width
+0.42 R:16 0.3:56@lin R:24 0.25:24@lin R:20
+
+automate voice.circuit
+0 R:96 1 R:44
+
+automate pads.cutoff
+1300 R:16 1700:56@smooth R:24 1200:16@smooth R:28
+
+automate bass.cutoff
+800 R:64 950:32@lin 700:44@smooth
+
+automate reverb_wet
+0.3 R:104 0.4:24@smooth 0.55:12@smooth
+
+automate tape_wow
+0.18 R:96 0.32:8@smooth 0.22:8@smooth R:28
+
+automate tape_age
+0.45 R:96 0.58:0.1@step R:43.9
