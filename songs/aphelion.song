@@ -1,0 +1,112 @@
+# Aphelion — slowness as the instrument. 68 BPM, seven seconds per
+# chord, and a harmony this project has never used: the MAJOR-THIRD
+# CYCLE, C - Ab - E - and around again. No diatonic gravity at all:
+# each move keeps exactly one common tone (C stays into Ab; Ab
+# becomes G# into E; E stays into C) while every other voice slides
+# by a semitone. Lush, floating, and quietly wrong with zero wrong
+# notes — the ground keeps becoming a different planet's ground.
+#
+# THE ARP IS THE HARMONY: no chord track. A 3.7-octave arpeggio
+# (C2 to G5) in slow eighths, every note ringing 1.4 seconds past
+# its step, so the line stacks into a rolling wash — chords emerge
+# from overlap. It enters at QUARTER note speed, doubles into the
+# body, and slows back to quarters to end: slowness framing motion.
+#
+# The bass is gone as a pattern: one TIDAL drone note per chord,
+# swelling in over a second. Deep halftime drums (boom and thud
+# only, no ticks). The melody is wide-interval and long-toned —
+# leaps of sixths and octaves, held across chord boundaries so the
+# cycle reharmonizes it. Candy keeps its sparkle exemption: each
+# twinkle in section IV is the NEXT chord's root, arriving early.
+
+bpm 68
+gate 0.92
+
+automate lfo_rate
+0.4
+automate lfo_pitch
+3
+automate lfo_shape
+0.5
+automate chorus_mode
+2
+automate chorus_depth
+0.3
+automate spring
+0.08
+automate reverb_decay
+0.85
+automate tape_wow
+0.18
+automate tape_flutter
+0.1
+automate tape_drive
+0.22
+automate tape_age
+0.5
+
+track ground vel=0.7 patch=tidal
+C2:8
+C2:8 Ab1:8 E2:8
+C2:8 Ab1:8 E2:8
+C2:8 Ab1:8 E2:8
+C2:16
+
+track arp vel=0.5 patch=arpwash
+C2:1 G2:1 C3:1 E3:1 G3:1 C4:1 E4:1 G4:1
+C2:0.5 G2:0.5 C3:0.5 E3:0.5 G3:0.5 C4:0.5 E4:0.5 G4:0.5 C5:0.5 E5:0.5 G5:0.5 E5:0.5 C5:0.5 G4:0.5 E4:0.5 G3:0.5
+Ab1:0.5 Eb2:0.5 Ab2:0.5 C3:0.5 Eb3:0.5 Ab3:0.5 C4:0.5 Eb4:0.5 Ab4:0.5 C5:0.5 Eb5:0.5 C5:0.5 Ab4:0.5 Eb4:0.5 C4:0.5 Eb3:0.5
+E2:0.5 B2:0.5 E3:0.5 G#3:0.5 B3:0.5 E4:0.5 G#4:0.5 B4:0.5 E5:0.5 G#5:0.5 B5:0.5 G#5:0.5 E5:0.5 B4:0.5 G#4:0.5 B3:0.5
+C2:0.5 G2:0.5 C3:0.5 E3:0.5 G3:0.5 C4:0.5 E4:0.5 G4:0.5 C5:0.5 E5:0.5 G5:0.5 E5:0.5 C5:0.5 G4:0.5 E4:0.5 G3:0.5
+Ab1:0.5 Eb2:0.5 Ab2:0.5 C3:0.5 Eb3:0.5 Ab3:0.5 C4:0.5 Eb4:0.5 Ab4:0.5 C5:0.5 Eb5:0.5 C5:0.5 Ab4:0.5 Eb4:0.5 C4:0.5 Eb3:0.5
+E2:0.5 B2:0.5 E3:0.5 G#3:0.5 B3:0.5 E4:0.5 G#4:0.5 B4:0.5 E5:0.5 G#5:0.5 B5:0.5 G#5:0.5 E5:0.5 B4:0.5 G#4:0.5 B3:0.5
+C2:0.5 G2:0.5 C3:0.5 E3:0.5 G3:0.5 C4:0.5 E4:0.5 G4:0.5 C5:0.5 E5:0.5 G5:0.5 E5:0.5 C5:0.5 G4:0.5 E4:0.5 G3:0.5
+Ab1:0.5 Eb2:0.5 Ab2:0.5 C3:0.5 Eb3:0.5 Ab3:0.5 C4:0.5 Eb4:0.5 Ab4:0.5 C5:0.5 Eb5:0.5 C5:0.5 Ab4:0.5 Eb4:0.5 C4:0.5 Eb3:0.5
+E2:0.5 B2:0.5 E3:0.5 G#3:0.5 B3:0.5 E4:0.5 G#4:0.5 B4:0.5 E5:0.5 G#5:0.5 B5:0.5 G#5:0.5 E5:0.5 B4:0.5 G#4:0.5 B3:0.5
+C2:1 G2:1 C3:1 E3:1 G3:1 C4:1 E4:1 G4:1
+C5:2 E5:2 G5:4
+
+track melody vel=0.62 patch=warmvoice
+R:32
+R:2 E5:3 G5:2 C6:1
+C6:2 Eb5:4 R:2
+R:1 B5:3 G#5:3 E5:1
+R:1 G5:2 C6:2 D6:2 E6:1
+Eb6:3 C6:3 Ab5:2
+B5:2 G#5:2 E5:2 R:2
+R:2 G5:2 E5:4 C6:8
+
+track drums vel=0.8 patch=slowkit
+R:16
+C2:0.5@0.85 R:1.5 G2:0.5@0.7 R:1.5 C2:0.5@0.85 R:1.5 G2:0.5@0.7 R:1.5
+C2:0.5@0.85 R:1.5 G2:0.5@0.7 R:1.5 C2:0.5@0.85 R:1.5 G2:0.5@0.7 R:1.5
+C2:0.5@0.85 R:1.5 G2:0.5@0.7 R:1.5 C2:0.5@0.85 R:1.5 G2:0.5@0.7 R:1.5
+C2:0.5@0.85 R:1.5 G2:0.5@0.7 R:1.5 C2:0.5@0.85 R:1.5 G2:0.5@0.7 R:1.5
+C2:0.5@0.85 R:1.5 G2:0.5@0.7 R:1.5 C2:0.5@0.85 R:1.5 G2:0.5@0.7 R:1.5
+C2:0.5@0.85 R:1 C2:0.5@0.6 G2:0.5@0.7 R:1.5 C2:0.5@0.85 R:1 C2:0.5@0.6 G2:0.5@0.7 R:1.5
+C2:0.5@0.85 R:1 C2:0.5@0.6 G2:0.5@0.7 R:1.5 C2:0.5@0.85 R:1 C2:0.5@0.6 G2:0.5@0.7 R:1.5
+C2:0.5@0.85 R:1 C2:0.5@0.6 G2:0.5@0.7 R:1.5 C2:0.5@0.85 R:1 C2:0.5@0.6 G2:0.5@0.7 R:1.5
+C2:0.5@0.85 R:1.5 G2:0.5@0.7 R:1.5 C2:0.5@0.85 R:1.5 G2:0.5@0.7 R:1.5
+R:8
+
+track sparkle vel=0.32 patch=doorchime
+R:56
+R:7.5 C7:0.5
+R:7.5 Ab6:0.5
+R:7.5 B6:0.5
+R:6 [C6 G6]:2 R:8
+
+automate arp.cutoff
+1400 R:8 2000:24@smooth 2600:24@smooth 3200:24@smooth 1200:16@exp
+
+automate ground.cutoff
+450 R:32 600:24@smooth 750:24@smooth 400:16@smooth
+
+automate melody.cutoff
+2600 R:32 3000:24@smooth 3600:24@smooth 2200:16@smooth
+
+automate fuzz
+0 R:56 0.15:24@lin 0:16@smooth
+
+automate reverb_wet
+0.4 R:56 0.55:24@smooth 0.7:16@smooth
