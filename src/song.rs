@@ -14,6 +14,11 @@
 //                                # len = default token duration in beats (default 1)
 //     E5:2 D5 C5 R:4 [C4 E4 G4]:2@0.6  | A4
 //
+//   track beat kit=909 len=0.5   # a drum track: kit= routes it to the
+//     BD SD:0.5 [BD CH] OH@0.6   # rhythm section. Tokens are drum names
+//                                # (BD SD RS CP CH OH) or GM notes; velocity
+//                                # is the accent bus (@1 = full accent).
+//
 // Note-track tokens:
 //   C4  F#3  Eb5  60      note names (C4 = MIDI 60) or raw MIDI numbers
 //   [C4 E4 G4]            chord (notes start and stop together)
@@ -46,6 +51,11 @@
 // filter_decay, filter_sustain, filter_release, reverb_decay, reverb_wet,
 // chorus_mode (0=off..4=IV, use plain sets), chorus_rate, chorus_depth,
 // tape_wow, tape_flutter, tape_drive, tape_age.
+//
+// Rhythm section (the 909 board; all 0..1 panel knobs): bd_level, bd_tune,
+// bd_attack, bd_decay, bd_sweep, bd_drive, sd_level, sd_tune, sd_tone,
+// sd_snappy, sd_decay, rs_level, rs_tune, cp_level, cp_decay, hh_level,
+// hh_tune, hh_metal, ch_decay, oh_decay, dr_drive.
 
 use std::sync::Arc;
 use std::thread;
@@ -122,6 +132,29 @@ pub enum Param {
     TapeFlutter,
     TapeDrive,
     TapeAge,
+    // The rhythm section: one shared 909 board, so like the effects and
+    // the LFO these are bus-level parameters (0..1 panel knobs)
+    BdLevel,
+    BdTune,
+    BdAttack,
+    BdDecay,
+    BdSweep,
+    BdDrive,
+    SdLevel,
+    SdTune,
+    SdTone,
+    SdSnappy,
+    SdDecay,
+    RsLevel,
+    RsTune,
+    CpLevel,
+    CpDecay,
+    HhLevel,
+    HhTune,
+    HhMetal,
+    ChDecay,
+    OhDecay,
+    DrumDrive,
 }
 
 pub(crate) fn waveform_from_value(value: f32) -> Waveform {
@@ -142,6 +175,29 @@ impl Param {
     pub fn from_cc(cc: u8) -> Option<Param> {
         Some(match cc {
             1 => Param::ModWheel,
+            // The rhythm section claims the 20-31 general-purpose block
+            // plus 52-60 — every 909 knob is a controller away
+            20 => Param::BdLevel,
+            21 => Param::BdTune,
+            22 => Param::BdAttack,
+            23 => Param::BdDecay,
+            24 => Param::BdSweep,
+            25 => Param::BdDrive,
+            26 => Param::SdLevel,
+            27 => Param::SdTune,
+            28 => Param::SdTone,
+            29 => Param::SdSnappy,
+            30 => Param::SdDecay,
+            31 => Param::RsLevel,
+            52 => Param::RsTune,
+            53 => Param::CpLevel,
+            54 => Param::CpDecay,
+            55 => Param::HhLevel,
+            56 => Param::HhTune,
+            57 => Param::HhMetal,
+            58 => Param::ChDecay,
+            59 => Param::OhDecay,
+            60 => Param::DrumDrive,
             5 => Param::Glide,
             7 => Param::Volume,
             64 => Param::SustainPedal,
@@ -215,7 +271,16 @@ impl Param {
             | Param::TapeWow | Param::TapeFlutter | Param::TapeDrive
             | Param::TapeAge | Param::SpringWet | Param::KeyTrack
             | Param::FuzzAmount | Param::ModWheel | Param::LfoShape
-            | Param::SustainPedal | Param::Osc2Level | Param::Osc3Level => (0.0, 1.0, Lin),
+            | Param::SustainPedal | Param::Osc2Level | Param::Osc3Level
+            // 909 panel knobs are all unitless 0..1 rotations; the
+            // circuits map them onto their electrical ranges
+            | Param::BdLevel | Param::BdTune | Param::BdAttack
+            | Param::BdDecay | Param::BdSweep | Param::BdDrive
+            | Param::SdLevel | Param::SdTune | Param::SdTone
+            | Param::SdSnappy | Param::SdDecay | Param::RsLevel
+            | Param::RsTune | Param::CpLevel | Param::CpDecay
+            | Param::HhLevel | Param::HhTune | Param::HhMetal
+            | Param::ChDecay | Param::OhDecay | Param::DrumDrive => (0.0, 1.0, Lin),
             Param::ReverbDecay => (0.0, 0.99, Lin),
             Param::PulseWidth => (0.05, 0.95, Lin),
             Param::Detune => (0.0, 30.0, Lin),
@@ -299,6 +364,27 @@ impl Param {
             "tape_flutter" => Param::TapeFlutter,
             "tape_drive" => Param::TapeDrive,
             "tape_age" => Param::TapeAge,
+            "bd_level" => Param::BdLevel,
+            "bd_tune" => Param::BdTune,
+            "bd_attack" => Param::BdAttack,
+            "bd_decay" => Param::BdDecay,
+            "bd_sweep" => Param::BdSweep,
+            "bd_drive" => Param::BdDrive,
+            "sd_level" => Param::SdLevel,
+            "sd_tune" => Param::SdTune,
+            "sd_tone" => Param::SdTone,
+            "sd_snappy" => Param::SdSnappy,
+            "sd_decay" => Param::SdDecay,
+            "rs_level" => Param::RsLevel,
+            "rs_tune" => Param::RsTune,
+            "cp_level" => Param::CpLevel,
+            "cp_decay" => Param::CpDecay,
+            "hh_level" => Param::HhLevel,
+            "hh_tune" => Param::HhTune,
+            "hh_metal" => Param::HhMetal,
+            "ch_decay" => Param::ChDecay,
+            "oh_decay" => Param::OhDecay,
+            "dr_drive" => Param::DrumDrive,
             _ => return None,
         })
     }
@@ -370,6 +456,27 @@ impl Param {
             Param::TapeFlutter => vm.set_tape_flutter(value),
             Param::TapeDrive => vm.set_tape_drive(value),
             Param::TapeAge => vm.set_tape_age(value),
+            Param::BdLevel => vm.set_bd_level(value),
+            Param::BdTune => vm.set_bd_tune(value),
+            Param::BdAttack => vm.set_bd_attack(value),
+            Param::BdDecay => vm.set_bd_decay(value),
+            Param::BdSweep => vm.set_bd_sweep(value),
+            Param::BdDrive => vm.set_bd_drive(value),
+            Param::SdLevel => vm.set_sd_level(value),
+            Param::SdTune => vm.set_sd_tune(value),
+            Param::SdTone => vm.set_sd_tone(value),
+            Param::SdSnappy => vm.set_sd_snappy(value),
+            Param::SdDecay => vm.set_sd_decay(value),
+            Param::RsLevel => vm.set_rs_level(value),
+            Param::RsTune => vm.set_rs_tune(value),
+            Param::CpLevel => vm.set_cp_level(value),
+            Param::CpDecay => vm.set_cp_decay(value),
+            Param::HhLevel => vm.set_hh_level(value),
+            Param::HhTune => vm.set_hh_tune(value),
+            Param::HhMetal => vm.set_hh_metal(value),
+            Param::ChDecay => vm.set_ch_decay(value),
+            Param::OhDecay => vm.set_oh_decay(value),
+            Param::DrumDrive => vm.set_drum_drive(value),
         }
     }
 
@@ -623,6 +730,10 @@ fn parse_song(text: &str) -> Result<Song, String> {
                         vel = v.parse::<f32>().map_err(|_| err(format!("invalid vel '{}'", v)))?;
                     } else if let Some(v) = opt.strip_prefix("len=") {
                         len = v.parse::<f64>().map_err(|_| err(format!("invalid len '{}'", v)))?;
+                    } else if opt.strip_prefix("kit=").is_some() {
+                        // A drum track: notes route to the rhythm section
+                        // (there is one board, so no per-track patches here)
+                        channel = crate::drums::DRUM_CHANNEL;
                     } else if let Some(v) = opt.strip_prefix("patch=") {
                         // A private patch for this track: the file's
                         // voice-level parameters become this channel
@@ -672,11 +783,12 @@ fn parse_song(text: &str) -> Result<Song, String> {
                 }
                 TrackMode::Notes { vel, len, channel } => {
                     let (vel, len, channel) = (*vel, *len, *channel);
+                    let drums = channel == crate::drums::DRUM_CHANNEL;
                     for token in tokenize(line).map_err(err)? {
                         if token == "|" {
                             continue;
                         }
-                        let (notes, dur, vel) = parse_note_token(&token, vel, len)
+                        let (notes, dur, vel) = parse_note_token(&token, vel, len, drums)
                             .map_err(|m| err(format!("token '{}': {}", token, m)))?;
                         let off_beat = track_beat + dur * gate;
                         for &note in &notes {
@@ -854,8 +966,14 @@ fn tokenize(line: &str) -> Result<Vec<String>, String> {
 }
 
 /// Parse one note-track token into (notes, duration-in-beats, velocity).
-/// An empty notes list is a rest.
-fn parse_note_token(token: &str, default_vel: f32, default_len: f64) -> Result<(Vec<u8>, f64, f32), String> {
+/// An empty notes list is a rest. On drum tracks the instrument names
+/// (BD SD RS CP CH OH) are valid notes too.
+fn parse_note_token(
+    token: &str,
+    default_vel: f32,
+    default_len: f64,
+    drums: bool,
+) -> Result<(Vec<u8>, f64, f32), String> {
     let mut s = token;
     let mut vel = default_vel;
     let mut dur = default_len;
@@ -872,15 +990,23 @@ fn parse_note_token(token: &str, default_vel: f32, default_len: f64) -> Result<(
         return Err("duration must be positive".into());
     }
 
+    let one = |s: &str| -> Result<u8, String> {
+        if drums {
+            if let Some(n) = crate::drums::note_from_name(s) {
+                return Ok(n);
+            }
+        }
+        parse_note(s)
+    };
     let notes = if s == "." || s.eq_ignore_ascii_case("r") {
         Vec::new()
     } else if let Some(inner) = s.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
         inner
             .split_whitespace()
-            .map(parse_note)
+            .map(one)
             .collect::<Result<Vec<u8>, String>>()?
     } else {
-        vec![parse_note(s)?]
+        vec![one(s)?]
     };
 
     Ok((notes, dur, vel.clamp(0.0, 1.0)))
@@ -947,21 +1073,21 @@ mod tests {
 
     #[test]
     fn note_tokens() {
-        let (notes, dur, vel) = parse_note_token("C4:2@0.7", 0.8, 1.0).unwrap();
+        let (notes, dur, vel) = parse_note_token("C4:2@0.7", 0.8, 1.0, false).unwrap();
         assert_eq!(notes, vec![60]);
         assert_eq!(dur, 2.0);
         assert_eq!(vel, 0.7);
 
-        let (notes, dur, _) = parse_note_token("[C4 E4 G4]:0.5", 0.8, 1.0).unwrap();
+        let (notes, dur, _) = parse_note_token("[C4 E4 G4]:0.5", 0.8, 1.0, false).unwrap();
         assert_eq!(notes, vec![60, 64, 67]);
         assert_eq!(dur, 0.5);
 
-        let (notes, dur, _) = parse_note_token("R:4", 0.8, 1.0).unwrap();
+        let (notes, dur, _) = parse_note_token("R:4", 0.8, 1.0, false).unwrap();
         assert!(notes.is_empty());
         assert_eq!(dur, 4.0);
 
         // default duration comes from the track's len option
-        let (_, dur, _) = parse_note_token("C4", 0.8, 0.5).unwrap();
+        let (_, dur, _) = parse_note_token("C4", 0.8, 0.5, false).unwrap();
         assert_eq!(dur, 0.5);
     }
 

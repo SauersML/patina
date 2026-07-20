@@ -1,4 +1,5 @@
 use crate::voice::Voice;
+use crate::drums::{DrumMachine, DRUM_CHANNEL};
 use crate::reverb::Reverb;
 use crate::chorus::{Chorus, ChorusMode};
 use crate::oscillator::{CircuitModel, Waveform, PROGRAM_V};
@@ -76,6 +77,28 @@ pub struct ParamValues {
     pub tape_flutter: f32,
     pub tape_drive: f32,
     pub tape_age: f32,
+    // The rhythm section's panel (all 0..1 knob rotations)
+    pub bd_level: f32,
+    pub bd_tune: f32,
+    pub bd_attack: f32,
+    pub bd_decay: f32,
+    pub bd_sweep: f32,
+    pub bd_drive: f32,
+    pub sd_level: f32,
+    pub sd_tune: f32,
+    pub sd_tone: f32,
+    pub sd_snappy: f32,
+    pub sd_decay: f32,
+    pub rs_level: f32,
+    pub rs_tune: f32,
+    pub cp_level: f32,
+    pub cp_decay: f32,
+    pub hh_level: f32,
+    pub hh_tune: f32,
+    pub hh_metal: f32,
+    pub ch_decay: f32,
+    pub oh_decay: f32,
+    pub dr_drive: f32,
 }
 
 impl Default for ParamValues {
@@ -130,6 +153,29 @@ impl Default for ParamValues {
             tape_flutter: 0.0,
             tape_drive: 0.0,
             tape_age: 0.0,
+            // 909 panel at rest: levels up, character knobs at the
+            // factory-fresh center detents
+            bd_level: 0.8,
+            bd_tune: 0.35,
+            bd_attack: 0.5,
+            bd_decay: 0.45,
+            bd_sweep: 0.5,
+            bd_drive: 0.25,
+            sd_level: 0.75,
+            sd_tune: 0.4,
+            sd_tone: 0.5,
+            sd_snappy: 0.6,
+            sd_decay: 0.5,
+            rs_level: 0.7,
+            rs_tune: 0.5,
+            cp_level: 0.75,
+            cp_decay: 0.5,
+            hh_level: 0.7,
+            hh_tune: 0.5,
+            hh_metal: 0.65,
+            ch_decay: 0.35,
+            oh_decay: 0.5,
+            dr_drive: 0.0,
         }
     }
 }
@@ -156,6 +202,9 @@ impl DcBlocker {
 
 pub struct VoiceManager {
     pub voices: Vec<Voice>,
+    /// The rhythm section: one 909-style analog drum board sharing the
+    /// chassis, the output bus, and the effects with the keyboard voices.
+    pub drums: DrumMachine,
     reverb: Reverb,
     chorus: Chorus,
     tape: Tape,
@@ -197,6 +246,7 @@ impl VoiceManager {
             voices: (0..num_voices)
                 .map(|i| Voice::new(sample_rate, i, num_voices))
                 .collect(),
+            drums: DrumMachine::new(sample_rate),
             reverb: Reverb::new(sample_rate),
             chorus: Chorus::new(sample_rate),
             tape: Tape::new(sample_rate),
@@ -279,6 +329,13 @@ impl VoiceManager {
     }
 
     pub fn note_on_channel(&mut self, note: u8, velocity: f32, channel: u16) {
+        // The rhythm section is not a keyboard voice: a drum-channel note
+        // is a trigger pulse onto the 909 board's trigger bus, velocity
+        // riding the accent line
+        if channel == DRUM_CHANNEL {
+            self.drums.trigger_note(note, velocity);
+            return;
+        }
         self.note_counter += 1;
         let age = self.note_counter;
         // A fresh press owns the note again; it is no longer the pedal's
@@ -345,6 +402,11 @@ impl VoiceManager {
 
     /// Release a note on one specific channel only.
     pub fn note_off_channel(&mut self, note: u8, channel: u16) {
+        // Drum voices are one-shots fired by their trigger pulse; the
+        // gate's falling edge does nothing on the hardware either
+        if channel == DRUM_CHANNEL {
+            return;
+        }
         if self.pedal_down {
             if self
                 .voices
@@ -723,6 +785,16 @@ impl VoiceManager {
             left += l;
             right += r;
         }
+
+        // The rhythm section renders on the same bus, in the same volts.
+        // It shares everything downstream — summing amp slew, fuzz,
+        // reverbs, chorus, tape — and its current draw loads the same
+        // rail, so a hard kick microscopically sags every oscillator:
+        // the drum machine is IN the instrument, not beside it.
+        let (dl, dr) = self.drums.render_next();
+        left += dl;
+        right += dr;
+
         // What the supply just delivered — next sample's rail load
         // (normalized back from volts so the substrate scale is unchanged)
         self.prev_current = (left.abs() + right.abs()) / PROGRAM_V;
@@ -802,6 +874,113 @@ impl VoiceManager {
     pub fn set_tape_age(&mut self, age: f32) {
         self.params.tape_age = age.clamp(0.0, 1.0);
         self.tape.set_age(self.params.tape_age);
+    }
+
+    // --- The rhythm section's panel ---------------------------------------
+
+    pub fn set_bd_level(&mut self, v: f32) {
+        self.params.bd_level = v.clamp(0.0, 1.0);
+        self.drums.set_bd_level(self.params.bd_level);
+    }
+
+    pub fn set_bd_tune(&mut self, v: f32) {
+        self.params.bd_tune = v.clamp(0.0, 1.0);
+        self.drums.set_bd_tune(self.params.bd_tune);
+    }
+
+    pub fn set_bd_attack(&mut self, v: f32) {
+        self.params.bd_attack = v.clamp(0.0, 1.0);
+        self.drums.set_bd_attack(self.params.bd_attack);
+    }
+
+    pub fn set_bd_decay(&mut self, v: f32) {
+        self.params.bd_decay = v.clamp(0.0, 1.0);
+        self.drums.set_bd_decay(self.params.bd_decay);
+    }
+
+    pub fn set_bd_sweep(&mut self, v: f32) {
+        self.params.bd_sweep = v.clamp(0.0, 1.0);
+        self.drums.set_bd_sweep(self.params.bd_sweep);
+    }
+
+    pub fn set_bd_drive(&mut self, v: f32) {
+        self.params.bd_drive = v.clamp(0.0, 1.0);
+        self.drums.set_bd_drive(self.params.bd_drive);
+    }
+
+    pub fn set_sd_level(&mut self, v: f32) {
+        self.params.sd_level = v.clamp(0.0, 1.0);
+        self.drums.set_sd_level(self.params.sd_level);
+    }
+
+    pub fn set_sd_tune(&mut self, v: f32) {
+        self.params.sd_tune = v.clamp(0.0, 1.0);
+        self.drums.set_sd_tune(self.params.sd_tune);
+    }
+
+    pub fn set_sd_tone(&mut self, v: f32) {
+        self.params.sd_tone = v.clamp(0.0, 1.0);
+        self.drums.set_sd_tone(self.params.sd_tone);
+    }
+
+    pub fn set_sd_snappy(&mut self, v: f32) {
+        self.params.sd_snappy = v.clamp(0.0, 1.0);
+        self.drums.set_sd_snappy(self.params.sd_snappy);
+    }
+
+    pub fn set_sd_decay(&mut self, v: f32) {
+        self.params.sd_decay = v.clamp(0.0, 1.0);
+        self.drums.set_sd_decay(self.params.sd_decay);
+    }
+
+    pub fn set_rs_level(&mut self, v: f32) {
+        self.params.rs_level = v.clamp(0.0, 1.0);
+        self.drums.set_rs_level(self.params.rs_level);
+    }
+
+    pub fn set_rs_tune(&mut self, v: f32) {
+        self.params.rs_tune = v.clamp(0.0, 1.0);
+        self.drums.set_rs_tune(self.params.rs_tune);
+    }
+
+    pub fn set_cp_level(&mut self, v: f32) {
+        self.params.cp_level = v.clamp(0.0, 1.0);
+        self.drums.set_cp_level(self.params.cp_level);
+    }
+
+    pub fn set_cp_decay(&mut self, v: f32) {
+        self.params.cp_decay = v.clamp(0.0, 1.0);
+        self.drums.set_cp_decay(self.params.cp_decay);
+    }
+
+    pub fn set_hh_level(&mut self, v: f32) {
+        self.params.hh_level = v.clamp(0.0, 1.0);
+        self.drums.set_hh_level(self.params.hh_level);
+    }
+
+    pub fn set_hh_tune(&mut self, v: f32) {
+        self.params.hh_tune = v.clamp(0.0, 1.0);
+        self.drums.set_hh_tune(self.params.hh_tune);
+    }
+
+    pub fn set_hh_metal(&mut self, v: f32) {
+        self.params.hh_metal = v.clamp(0.0, 1.0);
+        self.drums.set_hh_metal(self.params.hh_metal);
+    }
+
+    pub fn set_ch_decay(&mut self, v: f32) {
+        self.params.ch_decay = v.clamp(0.0, 1.0);
+        self.drums.set_ch_decay(self.params.ch_decay);
+    }
+
+    pub fn set_oh_decay(&mut self, v: f32) {
+        self.params.oh_decay = v.clamp(0.0, 1.0);
+        self.drums.set_oh_decay(self.params.oh_decay);
+    }
+
+    pub fn set_drum_drive(&mut self, v: f32) {
+        self.params.dr_drive = v.clamp(0.0, 1.0);
+        self.drums.set_drive(self.params.dr_drive);
     }
 }
 

@@ -88,7 +88,11 @@ pub fn serialize(p: &ParamValues) -> String {
          attack {}\ndecay {}\nsustain {}\nrelease {}\n\
          fuzz {}\nspring {}\nreverb_decay {}\nreverb_wet {}\n\
          chorus_mode {}\nchorus_rate {}\nchorus_depth {}\n\
-         tape_wow {}\ntape_flutter {}\ntape_drive {}\ntape_age {}\n",
+         tape_wow {}\ntape_flutter {}\ntape_drive {}\ntape_age {}\n\
+         bd_level {}\nbd_tune {}\nbd_attack {}\nbd_decay {}\nbd_sweep {}\nbd_drive {}\n\
+         sd_level {}\nsd_tune {}\nsd_tone {}\nsd_snappy {}\nsd_decay {}\n\
+         rs_level {}\nrs_tune {}\ncp_level {}\ncp_decay {}\n\
+         hh_level {}\nhh_tune {}\nhh_metal {}\nch_decay {}\noh_decay {}\ndr_drive {}\n",
         p.volume, waveform, osc2_wave, p.osc2_pitch, p.osc2_level,
         osc3_wave, p.osc3_pitch, p.osc3_level,
         if p.circuit == crate::oscillator::CircuitModel::Arp { 1 } else { 0 },
@@ -102,6 +106,10 @@ pub fn serialize(p: &ParamValues) -> String {
         p.fuzz, p.spring, p.reverb_decay, p.reverb_wet,
         chorus_mode, p.chorus_rate, p.chorus_depth,
         p.tape_wow, p.tape_flutter, p.tape_drive, p.tape_age,
+        p.bd_level, p.bd_tune, p.bd_attack, p.bd_decay, p.bd_sweep, p.bd_drive,
+        p.sd_level, p.sd_tune, p.sd_tone, p.sd_snappy, p.sd_decay,
+        p.rs_level, p.rs_tune, p.cp_level, p.cp_decay,
+        p.hh_level, p.hh_tune, p.hh_metal, p.ch_decay, p.oh_decay, p.dr_drive,
     )
 }
 

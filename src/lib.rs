@@ -9,6 +9,7 @@
 
 pub mod adaa;
 pub mod chorus;
+pub mod drums;
 pub mod envelope;
 pub mod filter;
 pub mod fuzz;

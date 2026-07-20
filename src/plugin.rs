@@ -138,6 +138,30 @@ fn float_specs() -> Vec<FloatSpec> {
         spec("tpflut",   pct("Tape Flutter", 0.0),                              |vm, v| vm.set_tape_flutter(v)),
         guarded("tpdrive", pct("Tape Drive", 0.0),                              |vm, v| vm.set_tape_drive(v)),
         guarded("tpage",   pct("Tape Age", 0.0),                                |vm, v| vm.set_tape_age(v)),
+
+        // Rhythm section (the 909 board; triggered on MIDI channel 10).
+        // Panel knobs are unitless rotations, exactly like the hardware.
+        spec("bdlevel",  pct("BD Level", 0.8),                                  |vm, v| vm.set_bd_level(v)),
+        spec("bdtune",   pct("BD Tune", 0.35).with_unit(""),                    |vm, v| vm.set_bd_tune(v)),
+        spec("bdattack", pct("BD Attack", 0.5).with_unit(""),                   |vm, v| vm.set_bd_attack(v)),
+        spec("bddecay",  pct("BD Decay", 0.45).with_unit(""),                   |vm, v| vm.set_bd_decay(v)),
+        spec("bdsweep",  pct("BD Sweep", 0.5).with_unit(""),                    |vm, v| vm.set_bd_sweep(v)),
+        spec("bddrive",  pct("BD Drive", 0.25).with_unit(""),                   |vm, v| vm.set_bd_drive(v)),
+        spec("sdlevel",  pct("SD Level", 0.75),                                 |vm, v| vm.set_sd_level(v)),
+        spec("sdtune",   pct("SD Tune", 0.4).with_unit(""),                     |vm, v| vm.set_sd_tune(v)),
+        spec("sdtone",   pct("SD Tone", 0.5).with_unit(""),                     |vm, v| vm.set_sd_tone(v)),
+        spec("sdsnappy", pct("SD Snappy", 0.6).with_unit(""),                   |vm, v| vm.set_sd_snappy(v)),
+        spec("sddecay",  pct("SD Decay", 0.5).with_unit(""),                    |vm, v| vm.set_sd_decay(v)),
+        spec("rslevel",  pct("RS Level", 0.7),                                  |vm, v| vm.set_rs_level(v)),
+        spec("rstune",   pct("RS Tune", 0.5).with_unit(""),                     |vm, v| vm.set_rs_tune(v)),
+        spec("cplevel",  pct("CP Level", 0.75),                                 |vm, v| vm.set_cp_level(v)),
+        spec("cpdecay",  pct("CP Decay", 0.5).with_unit(""),                    |vm, v| vm.set_cp_decay(v)),
+        spec("hhlevel",  pct("HH Level", 0.7),                                  |vm, v| vm.set_hh_level(v)),
+        spec("hhtune",   pct("HH Tune", 0.5).with_unit(""),                     |vm, v| vm.set_hh_tune(v)),
+        spec("hhmetal",  pct("HH Metal", 0.65).with_unit(""),                   |vm, v| vm.set_hh_metal(v)),
+        spec("chdecay",  pct("CH Decay", 0.35).with_unit(""),                   |vm, v| vm.set_ch_decay(v)),
+        spec("ohdecay",  pct("OH Decay", 0.5).with_unit(""),                    |vm, v| vm.set_oh_decay(v)),
+        spec("drdrive",  pct("Drum Drive", 0.0),                                |vm, v| vm.set_drum_drive(v)),
     ]
 }
 
@@ -345,11 +369,24 @@ impl Plugin for PatinaPlugin {
                     break;
                 }
                 match event {
-                    NoteEvent::NoteOn { note, velocity, .. } => {
-                        self.vm.note_on(note, velocity);
+                    // GM convention: channel 10 (0-indexed 9) triggers the
+                    // 909 board instead of the keyboard voices
+                    NoteEvent::NoteOn { note, velocity, channel, .. } => {
+                        if channel == 9 {
+                            self.vm.note_on_channel(
+                                note,
+                                velocity,
+                                crate::drums::DRUM_CHANNEL,
+                            );
+                        } else {
+                            self.vm.note_on(note, velocity);
+                        }
                     }
-                    NoteEvent::NoteOff { note, .. } | NoteEvent::Choke { note, .. } => {
-                        self.vm.note_off(note);
+                    NoteEvent::NoteOff { note, channel, .. }
+                    | NoteEvent::Choke { note, channel, .. } => {
+                        if channel != 9 {
+                            self.vm.note_off(note);
+                        }
                     }
                     // 0.5 is center; a standard wheel spans +/-2 semitones
                     NoteEvent::MidiPitchBend { value, .. } => {

@@ -293,34 +293,48 @@ impl MidiHandler {
                 // Try to parse the raw MIDI bytes using midly
                 if let Ok(event) = LiveEvent::parse(message) {
                     // Process standard MIDI channel messages
-                    if let LiveEvent::Midi { channel: _, message } = event {
+                    if let LiveEvent::Midi { channel, message } = event {
+                        // GM convention: channel 10 (0-indexed 9) is the
+                        // drum channel — those notes hit the 909 board's
+                        // trigger inputs instead of the keyboard voices
+                        let drums = channel.as_int() == 9;
                         match message {
                             // Handle Note On messages
                             MidiMessage::NoteOn { key, vel } => {
                                 let note = key.as_int();
                                 let velocity = vel.as_int();
-                                
+
                                 // MIDI spec: Note On with velocity 0 is equivalent to Note Off
                                 if velocity > 0 {
                                     // This is a genuine Note On message
                                     if let Some(vm) = &voice_manager {
-                                        // Direct approach: call note_on() on the VoiceManager
-                                        vm.lock().note_on(note, velocity as f32 / 127.0);
+                                        if drums {
+                                            vm.lock().note_on_channel(
+                                                note,
+                                                velocity as f32 / 127.0,
+                                                crate::drums::DRUM_CHANNEL,
+                                            );
+                                        } else {
+                                            // Direct approach: call note_on() on the VoiceManager
+                                            vm.lock().note_on(note, velocity as f32 / 127.0);
+                                        }
                                     } else {
                                         // Channel approach: send a NoteOn event through the channel
-                                        let _ = sender.send(MidiEvent::NoteOn { 
-                                            note, 
-                                            velocity 
+                                        let _ = sender.send(MidiEvent::NoteOn {
+                                            note,
+                                            velocity
                                         });
                                     }
                                 } else {
                                     // This is a Note Off message disguised as Note On with velocity 0
                                     if let Some(vm) = &voice_manager {
-                                        vm.lock().note_off(note);
+                                        if !drums {
+                                            vm.lock().note_off(note);
+                                        }
                                     } else {
-                                        let _ = sender.send(MidiEvent::NoteOff { 
-                                            note, 
-                                            velocity: 0 
+                                        let _ = sender.send(MidiEvent::NoteOff {
+                                            note,
+                                            velocity: 0
                                         });
                                     }
                                 }
@@ -328,12 +342,16 @@ impl MidiHandler {
                             // Handle explicit Note Off messages
                             MidiMessage::NoteOff { key, vel: _ } => {
                                 let note = key.as_int();
-                                
+
                                 if let Some(vm) = &voice_manager {
-                                    vm.lock().note_off(note);
+                                    // Drum voices are one-shots; the 909
+                                    // trigger has no falling edge to send
+                                    if !drums {
+                                        vm.lock().note_off(note);
+                                    }
                                 } else {
-                                    let _ = sender.send(MidiEvent::NoteOff { 
-                                        note, 
+                                    let _ = sender.send(MidiEvent::NoteOff {
+                                        note,
                                         velocity: 0 // We don't currently use Note Off velocity
                                     });
                                 }

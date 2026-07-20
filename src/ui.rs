@@ -226,6 +226,28 @@ pub struct SynthUI {
     tape_flutter: f32,
     tape_drive: f32,
     tape_age: f32,
+    // The rhythm section's panel (mirrors ParamValues like everything else)
+    bd_level: f32,
+    bd_tune: f32,
+    bd_attack: f32,
+    bd_decay: f32,
+    bd_sweep: f32,
+    bd_drive: f32,
+    sd_level: f32,
+    sd_tune: f32,
+    sd_tone: f32,
+    sd_snappy: f32,
+    sd_decay: f32,
+    rs_level: f32,
+    rs_tune: f32,
+    cp_level: f32,
+    cp_decay: f32,
+    hh_level: f32,
+    hh_tune: f32,
+    hh_metal: f32,
+    ch_decay: f32,
+    oh_decay: f32,
+    dr_drive: f32,
     /// QWERTY keys currently sounding, mapped to the MIDI note each one
     /// started (so note-off always matches, even if the octave changed).
     pressed_keys: HashMap<Key, u8>,
@@ -770,6 +792,28 @@ impl SynthUI {
             tape_flutter: 0.0,
             tape_drive: 0.0,
             tape_age: 0.0,
+            // 909 panel defaults, mirroring ParamValues::default()
+            bd_level: 0.8,
+            bd_tune: 0.35,
+            bd_attack: 0.5,
+            bd_decay: 0.45,
+            bd_sweep: 0.5,
+            bd_drive: 0.25,
+            sd_level: 0.75,
+            sd_tune: 0.4,
+            sd_tone: 0.5,
+            sd_snappy: 0.6,
+            sd_decay: 0.5,
+            rs_level: 0.7,
+            rs_tune: 0.5,
+            cp_level: 0.75,
+            cp_decay: 0.5,
+            hh_level: 0.7,
+            hh_tune: 0.5,
+            hh_metal: 0.65,
+            ch_decay: 0.35,
+            oh_decay: 0.5,
+            dr_drive: 0.0,
             pressed_keys: HashMap::new(),
             theme_applied: false,
             notes_active: false,
@@ -1000,6 +1044,27 @@ impl SynthUI {
             self.tape_flutter = p.tape_flutter;
             self.tape_drive = p.tape_drive;
             self.tape_age = p.tape_age;
+            self.bd_level = p.bd_level;
+            self.bd_tune = p.bd_tune;
+            self.bd_attack = p.bd_attack;
+            self.bd_decay = p.bd_decay;
+            self.bd_sweep = p.bd_sweep;
+            self.bd_drive = p.bd_drive;
+            self.sd_level = p.sd_level;
+            self.sd_tune = p.sd_tune;
+            self.sd_tone = p.sd_tone;
+            self.sd_snappy = p.sd_snappy;
+            self.sd_decay = p.sd_decay;
+            self.rs_level = p.rs_level;
+            self.rs_tune = p.rs_tune;
+            self.cp_level = p.cp_level;
+            self.cp_decay = p.cp_decay;
+            self.hh_level = p.hh_level;
+            self.hh_tune = p.hh_tune;
+            self.hh_metal = p.hh_metal;
+            self.ch_decay = p.ch_decay;
+            self.oh_decay = p.oh_decay;
+            self.dr_drive = p.dr_drive;
             self.current_octave = p.ui_octave.round() as i32;
             self.notes_active = vm.held_note_states().iter().any(|&held| held);
 
