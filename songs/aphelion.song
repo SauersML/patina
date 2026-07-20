@@ -1,23 +1,23 @@
-# Aphelion — slowness as the instrument. 68 BPM, seven seconds per
-# chord, and a harmony this project has never used: the MAJOR-THIRD
-# CYCLE, C - Ab - E - and around again. No diatonic gravity at all:
-# each move keeps exactly one common tone (C stays into Ab; Ab
-# becomes G# into E; E stays into C) while every other voice slides
-# by a semitone. Lush, floating, and quietly wrong with zero wrong
-# notes — the ground keeps becoming a different planet's ground.
+# Aphelion — second draft: the orbit now travels.
 #
-# THE ARP IS THE HARMONY: no chord track. A 3.7-octave arpeggio
-# (C2 to G5) in slow eighths, every note ringing 1.4 seconds past
-# its step, so the line stacks into a rolling wash — chords emerge
-# from overlap. It enters at QUARTER note speed, doubles into the
-# body, and slows back to quarters to end: slowness framing motion.
+# Same slow planet-harmony (major-third cycle, 7 seconds per chord,
+# one common tone surviving each move), but the piece EXPLORES:
 #
-# The bass is gone as a pattern: one TIDAL drone note per chord,
-# swelling in over a second. Deep halftime drums (boom and thud
-# only, no ticks). The melody is wide-interval and long-toned —
-# leaps of sixths and octaves, held across chord boundaries so the
-# cycle reharmonizes it. Candy keeps its sparkle exemption: each
-# twinkle in section IV is the NEXT chord's root, arriving early.
+#   I    quarter-note arp, alone with the drone
+#   II   the rising wash (eighths, 3.7 octaves)
+#   III  the wash INVERTS — descending contour, melody enters
+#   IV   DEPARTURE: the cycle runs BACKWARDS (C - E - Ab; same
+#        planets, reversed voice-leading, everything familiar and
+#        nothing in the same place) and the arp doubles to
+#        SIXTEENTHS, reaching E6 — the fast water section
+#   V    forward again, sixteenths relaxing to eighths mid-cycle,
+#        melody at its peak (G6)
+#   VI   quarters again, rising to a final C6; the drone stays
+#
+# Candy is gone. Its job — small bright events at boundaries —
+# belongs to the DRUMS now: ladder-drum rolls (Bb-C-Eb-G) at chord
+# changes in the departure and return, double-kick leans, then just
+# a heartbeat kick under the outro.
 
 bpm 68
 gate 0.92
@@ -49,6 +49,7 @@ track ground vel=0.7 patch=tidal
 C2:8
 C2:8 Ab1:8 E2:8
 C2:8 Ab1:8 E2:8
+C2:8 E2:8 Ab1:8
 C2:8 Ab1:8 E2:8
 C2:16
 
@@ -57,23 +58,29 @@ C2:1 G2:1 C3:1 E3:1 G3:1 C4:1 E4:1 G4:1
 C2:0.5 G2:0.5 C3:0.5 E3:0.5 G3:0.5 C4:0.5 E4:0.5 G4:0.5 C5:0.5 E5:0.5 G5:0.5 E5:0.5 C5:0.5 G4:0.5 E4:0.5 G3:0.5
 Ab1:0.5 Eb2:0.5 Ab2:0.5 C3:0.5 Eb3:0.5 Ab3:0.5 C4:0.5 Eb4:0.5 Ab4:0.5 C5:0.5 Eb5:0.5 C5:0.5 Ab4:0.5 Eb4:0.5 C4:0.5 Eb3:0.5
 E2:0.5 B2:0.5 E3:0.5 G#3:0.5 B3:0.5 E4:0.5 G#4:0.5 B4:0.5 E5:0.5 G#5:0.5 B5:0.5 G#5:0.5 E5:0.5 B4:0.5 G#4:0.5 B3:0.5
-C2:0.5 G2:0.5 C3:0.5 E3:0.5 G3:0.5 C4:0.5 E4:0.5 G4:0.5 C5:0.5 E5:0.5 G5:0.5 E5:0.5 C5:0.5 G4:0.5 E4:0.5 G3:0.5
-Ab1:0.5 Eb2:0.5 Ab2:0.5 C3:0.5 Eb3:0.5 Ab3:0.5 C4:0.5 Eb4:0.5 Ab4:0.5 C5:0.5 Eb5:0.5 C5:0.5 Ab4:0.5 Eb4:0.5 C4:0.5 Eb3:0.5
-E2:0.5 B2:0.5 E3:0.5 G#3:0.5 B3:0.5 E4:0.5 G#4:0.5 B4:0.5 E5:0.5 G#5:0.5 B5:0.5 G#5:0.5 E5:0.5 B4:0.5 G#4:0.5 B3:0.5
-C2:0.5 G2:0.5 C3:0.5 E3:0.5 G3:0.5 C4:0.5 E4:0.5 G4:0.5 C5:0.5 E5:0.5 G5:0.5 E5:0.5 C5:0.5 G4:0.5 E4:0.5 G3:0.5
-Ab1:0.5 Eb2:0.5 Ab2:0.5 C3:0.5 Eb3:0.5 Ab3:0.5 C4:0.5 Eb4:0.5 Ab4:0.5 C5:0.5 Eb5:0.5 C5:0.5 Ab4:0.5 Eb4:0.5 C4:0.5 Eb3:0.5
+G5:0.5 E5:0.5 C5:0.5 G4:0.5 E4:0.5 C4:0.5 G3:0.5 E3:0.5 C3:0.5 G2:0.5 C2:0.5 G2:0.5 C3:0.5 E3:0.5 G3:0.5 C4:0.5
+Eb5:0.5 C5:0.5 Ab4:0.5 Eb4:0.5 C4:0.5 Ab3:0.5 Eb3:0.5 C3:0.5 Ab2:0.5 Eb2:0.5 Ab1:0.5 Eb2:0.5 Ab2:0.5 C3:0.5 Eb3:0.5 Ab3:0.5
+B5:0.5 G#5:0.5 E5:0.5 B4:0.5 G#4:0.5 E4:0.5 B3:0.5 G#3:0.5 E3:0.5 B2:0.5 E2:0.5 B2:0.5 E3:0.5 G#3:0.5 B3:0.5 E4:0.5
+C2:0.25 G2:0.25 C3:0.25 E3:0.25 G3:0.25 C4:0.25 E4:0.25 G4:0.25 C5:0.25 E5:0.25 G5:0.25 C6:0.25 G5:0.25 E5:0.25 C5:0.25 G4:0.25 C2:0.25 G2:0.25 C3:0.25 E3:0.25 G3:0.25 C4:0.25 E4:0.25 G4:0.25 C5:0.25 E5:0.25 G5:0.25 C6:0.25 G5:0.25 E5:0.25 C5:0.25 G4:0.25
+E2:0.25 B2:0.25 E3:0.25 G#3:0.25 B3:0.25 E4:0.25 G#4:0.25 B4:0.25 E5:0.25 G#5:0.25 B5:0.25 E6:0.25 B5:0.25 G#5:0.25 E5:0.25 B4:0.25 E2:0.25 B2:0.25 E3:0.25 G#3:0.25 B3:0.25 E4:0.25 G#4:0.25 B4:0.25 E5:0.25 G#5:0.25 B5:0.25 E6:0.25 B5:0.25 G#5:0.25 E5:0.25 B4:0.25
+Ab1:0.25 Eb2:0.25 Ab2:0.25 C3:0.25 Eb3:0.25 Ab3:0.25 C4:0.25 Eb4:0.25 Ab4:0.25 C5:0.25 Eb5:0.25 Ab5:0.25 Eb5:0.25 C5:0.25 Ab4:0.25 Eb4:0.25 Ab1:0.25 Eb2:0.25 Ab2:0.25 C3:0.25 Eb3:0.25 Ab3:0.25 C4:0.25 Eb4:0.25 Ab4:0.25 C5:0.25 Eb5:0.25 Ab5:0.25 Eb5:0.25 C5:0.25 Ab4:0.25 Eb4:0.25
+C2:0.25 G2:0.25 C3:0.25 E3:0.25 G3:0.25 C4:0.25 E4:0.25 G4:0.25 C5:0.25 E5:0.25 G5:0.25 C6:0.25 G5:0.25 E5:0.25 C5:0.25 G4:0.25 C2:0.25 G2:0.25 C3:0.25 E3:0.25 G3:0.25 C4:0.25 E4:0.25 G4:0.25 C5:0.25 E5:0.25 G5:0.25 C6:0.25 G5:0.25 E5:0.25 C5:0.25 G4:0.25
+Ab1:0.25 Eb2:0.25 Ab2:0.25 C3:0.25 Eb3:0.25 Ab3:0.25 C4:0.25 Eb4:0.25 Ab4:0.25 C5:0.25 Eb5:0.25 Ab5:0.25 Eb5:0.25 C5:0.25 Ab4:0.25 Eb4:0.25 Ab1:0.25 Eb2:0.25 Ab2:0.25 C3:0.25 Eb3:0.25 Ab3:0.25 C4:0.25 Eb4:0.25 Ab4:0.25 C5:0.25 Eb5:0.25 Ab5:0.25 Eb5:0.25 C5:0.25 Ab4:0.25 Eb4:0.25
 E2:0.5 B2:0.5 E3:0.5 G#3:0.5 B3:0.5 E4:0.5 G#4:0.5 B4:0.5 E5:0.5 G#5:0.5 B5:0.5 G#5:0.5 E5:0.5 B4:0.5 G#4:0.5 B3:0.5
 C2:1 G2:1 C3:1 E3:1 G3:1 C4:1 E4:1 G4:1
-C5:2 E5:2 G5:4
+C5:2 E5:2 G5:2 C6:2
 
 track melody vel=0.62 patch=warmvoice
 R:32
 R:2 E5:3 G5:2 C6:1
 C6:2 Eb5:4 R:2
 R:1 B5:3 G#5:3 E5:1
-R:1 G5:2 C6:2 D6:2 E6:1
-Eb6:3 C6:3 Ab5:2
-B5:2 G#5:2 E5:2 R:2
+R:1 G5:2 C6:2 E6:2 D6:1
+B5:3 G#5:2 E6:3
+Eb6:2 C6:3 Ab5:3
+R:1 C6:2 E6:2 G6:3
+Eb6:3 C6:2 Ab5:3
+B5:3 G#5:3 E5:2
 R:2 G5:2 E5:4 C6:8
 
 track drums vel=0.8 patch=slowkit
@@ -83,30 +90,26 @@ C2:0.5@0.85 R:1.5 G2:0.5@0.7 R:1.5 C2:0.5@0.85 R:1.5 G2:0.5@0.7 R:1.5
 C2:0.5@0.85 R:1.5 G2:0.5@0.7 R:1.5 C2:0.5@0.85 R:1.5 G2:0.5@0.7 R:1.5
 C2:0.5@0.85 R:1.5 G2:0.5@0.7 R:1.5 C2:0.5@0.85 R:1.5 G2:0.5@0.7 R:1.5
 C2:0.5@0.85 R:1.5 G2:0.5@0.7 R:1.5 C2:0.5@0.85 R:1.5 G2:0.5@0.7 R:1.5
-C2:0.5@0.85 R:1 C2:0.5@0.6 G2:0.5@0.7 R:1.5 C2:0.5@0.85 R:1 C2:0.5@0.6 G2:0.5@0.7 R:1.5
-C2:0.5@0.85 R:1 C2:0.5@0.6 G2:0.5@0.7 R:1.5 C2:0.5@0.85 R:1 C2:0.5@0.6 G2:0.5@0.7 R:1.5
-C2:0.5@0.85 R:1 C2:0.5@0.6 G2:0.5@0.7 R:1.5 C2:0.5@0.85 R:1 C2:0.5@0.6 G2:0.5@0.7 R:1.5
+C2:0.5@0.85 R:1 C2:0.5@0.6 G2:0.5@0.7 R:1.5 C2:0.5@0.85 R:1.5 Bb2:0.25@0.6 C3:0.25@0.6 Eb3:0.25@0.6 G3:0.25@0.6 R:1
+C2:0.5@0.85 R:1 C2:0.5@0.6 G2:0.5@0.7 R:1.5 C2:0.5@0.85 R:1.5 Bb2:0.25@0.6 C3:0.25@0.6 Eb3:0.25@0.6 G3:0.25@0.6 R:1
+C2:0.5@0.85 R:1 C2:0.5@0.6 G2:0.5@0.7 R:1.5 C2:0.5@0.85 R:1.5 Bb2:0.25@0.6 C3:0.25@0.6 Eb3:0.25@0.6 G3:0.25@0.6 R:1
+C2:0.5@0.85 R:1 C2:0.5@0.6 G2:0.5@0.7 R:1.5 C2:0.5@0.85 R:1.5 Bb2:0.25@0.6 C3:0.25@0.6 Eb3:0.25@0.6 G3:0.25@0.6 R:1
+C2:0.5@0.85 R:1 C2:0.5@0.6 G2:0.5@0.7 R:1.5 C2:0.5@0.85 R:1.5 Bb2:0.25@0.6 C3:0.25@0.6 Eb3:0.25@0.6 G3:0.25@0.6 R:1
 C2:0.5@0.85 R:1.5 G2:0.5@0.7 R:1.5 C2:0.5@0.85 R:1.5 G2:0.5@0.7 R:1.5
+C2:0.5@0.8 R:3.5 C2:0.5@0.7 R:3.5
 R:8
 
-track sparkle vel=0.32 patch=doorchime
-R:56
-R:7.5 C7:0.5
-R:7.5 Ab6:0.5
-R:7.5 B6:0.5
-R:6 [C6 G6]:2 R:8
-
 automate arp.cutoff
-1400 R:8 2000:24@smooth 2600:24@smooth 3200:24@smooth 1200:16@exp
+1400 R:8 2000:24@smooth 2400:24@smooth 3400:24@smooth 2800:24@smooth 1200:16@exp
 
 automate ground.cutoff
-450 R:32 600:24@smooth 750:24@smooth 400:16@smooth
+450 R:32 600:24@smooth 800:24@smooth 700:24@smooth 400:16@smooth
 
 automate melody.cutoff
-2600 R:32 3000:24@smooth 3600:24@smooth 2200:16@smooth
+2600 R:32 3000:24@smooth 3800:24@smooth 3400:24@smooth 2200:16@smooth
 
 automate fuzz
-0 R:56 0.15:24@lin 0:16@smooth
+0 R:56 0.18:24@lin 0.1:24@smooth 0:16@smooth
 
 automate reverb_wet
-0.4 R:56 0.55:24@smooth 0.7:16@smooth
+0.4 R:56 0.5:24@smooth 0.62:24@smooth 0.72:16@smooth
