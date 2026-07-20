@@ -9,9 +9,11 @@
 //               pitch down over the first tens of milliseconds, a separate
 //               ATTACK click path, and a diode/transistor waveshaper that
 //               clips the hottest early cycles into the "knock".
-//   SNARE       TWO bridged-T oscillators (~185 Hz and ~330 Hz — a deliberate
-//               non-harmonic pair) plus a noise path with its own filter and
-//               envelope; TUNE moves both shells, SNAPPY is the noise VCA.
+//   SNARE       TWO triangle-core oscillators tuned a fixed ~1.47 apart
+//               (~180 Hz and ~265 Hz — the cap ratio C69 0.01µF : C71
+//               0.0068µF, a deliberate non-harmonic pair) plus a noise path
+//               with its own filter and envelope; TUNE moves both shells,
+//               SNAPPY is the noise VCA.
 //   RIM SHOT    A stack of bridged-T resonators rung hard for milliseconds
 //               and clipped — all attack, no body.
 //   HAND CLAP   Noise through a ~1 kHz band-pass, gated by a multi-pulse
@@ -51,7 +53,6 @@
 
 use crate::adaa::AdaaTanh;
 use crate::hpf::HighPassLadder;
-use crate::noise::NoiseSource;
 
 /// The reserved song/MIDI channel that routes notes to the drum board.
 pub const DRUM_CHANNEL: u16 = u16::MAX;
@@ -187,9 +188,16 @@ impl Kick {
         }
         self.t_since += 1.0 / self.sample_rate;
 
-        // Shell frequency: TUNE spans the service-manual bracket (~42 to
-        // ~88 Hz fundamental), and the two pitch-envelope discharges ride
-        // on top. SWEEP scales their depth; 0.5 is the stock board.
+        // Shell frequency. On the board the resonator is a twin-T tank
+        // (C1 0.068 µF) whose charge current is set by TUNE (VR2 100 kΩ(A))
+        // through C9 0.33 µF — the cap Roland enlarged from 0.22 µF after
+        // S/N 381500 "for expanding the TUNE range" (SCHEMATIC, Change
+        // Information). No absolute Hz is printed, so the ~42–88 Hz span is
+        // DERIVED (measured 909 fundamental, trimmed by ear). The two
+        // pitch-envelope discharges ride on top; SWEEP scales their depth
+        // (0.5 = stock). The 4 ms / 45 ms pair is DERIVED, bracketed by the
+        // documented accent/trigger envelope shapes F1–F3 (2–4.5 ms attack,
+        // 5–25 ms total, service notes sheet 3).
         let f0 = 42.0 * (88.0f32 / 42.0).powf(self.tune);
         let depth = self.sweep * 2.0; // 0.5 -> 1.0 = stock depths
         self.sweep_fast *= rc_coef(0.004, self.sample_rate);
@@ -230,6 +238,18 @@ impl Kick {
 // ---------------------------------------------------------------------------
 // Snare drum
 // ---------------------------------------------------------------------------
+
+/// Snare shell frequency ratio. The two triangle-core VCOs (IC37/IC38 on
+/// the voicing board) run at f2/f1 = C69/C71 = 0.01 µF / 0.0068 µF = 1.47,
+/// with equal 100 kΩ integrator resistors (R269/R273) so oscillation
+/// frequency tracks 1/C (SCHEMATIC, TR-909 service notes sheet 3 /
+/// voicing board PCB 2291084903). VCO-1 (larger cap) is the lower tone.
+const SNARE_SHELL_RATIO: f32 = 0.01 / 0.0068; // = 1.4706…
+
+/// Lower-shell frequency at panel-center TUNE (DERIVED: within the service
+/// tolerance of the documented ~180 Hz VCO-1 fundamental; the upper shell
+/// then lands at ~265 Hz via SNARE_SHELL_RATIO).
+const SNARE_SHELL_BASE_HZ: f32 = 150.0;
 
 /// Two detuned shells plus a filtered, enveloped noise path.
 struct Snare {
@@ -295,12 +315,16 @@ impl Snare {
         if self.amp < 1e-5 && self.noise_env < 1e-5 {
             return 0.0;
         }
-        // Shells: ~185 and ~330 Hz at panel center (service notes), the
-        // pair ratio fixed by the two bridged-T networks; TUNE moves both.
-        // A fast onset bend (~4 ms) gives the 909 snare its "doip".
-        self.bend *= rc_coef(0.004, self.sample_rate);
-        let f1 = 160.0 * (1.0 + 0.5 * self.tune) * (1.0 + 0.9 * self.bend);
-        let f2 = f1 * 1.78;
+        // Shells: two triangle-core VCOs whose ratio is fixed by the timing
+        // caps (SNARE_SHELL_RATIO = C69/C71 = 1.47, SCHEMATIC). Lower shell
+        // ~180 Hz at panel center, upper ~265 Hz; TUNE (VR6 10 kΩ(B)) moves
+        // both together. The CV generator (IC35/IC36) bends the charge rate
+        // of C69 for ~20 ms after the trigger — the IC36 pitch pulse is a
+        // 2 ms spike decaying over ~20 ms (SCHEMATIC, sheet 3) — which is
+        // the 909 snare's onset "doip".
+        self.bend *= rc_coef(0.006, self.sample_rate); // τ≈6 ms -> ~20 ms bend
+        let f1 = SNARE_SHELL_BASE_HZ * (1.0 + 0.5 * self.tune) * (1.0 + 0.9 * self.bend);
+        let f2 = f1 * SNARE_SHELL_RATIO;
         self.phase1 += f1 / self.sample_rate;
         self.phase1 -= self.phase1.floor();
         self.phase2 += f2 / self.sample_rate;
@@ -344,8 +368,15 @@ struct Rim {
     tune: f32,
 }
 
-/// Rim modes: frequency Hz, relative level, T60 seconds (SCHEMATIC
-/// bracket; the stack is all transient).
+/// Rim modes: (frequency Hz, relative level, T60 s). On the board the rim
+/// is three multiple-feedback band-passes (IC48b/IC49a/IC49b), each rung by
+/// the trigger, diode-clipped (D91/D92), then high-passed. Centers derived
+/// from their timing caps via f0 = 1/(2π·C·√(Rin·Rfb)) (SCHEMATIC, voicing
+/// board PCB 2291084903):
+///   F2  C=0.027 µF, Rin=2.2 k, Rfb=330 k -> ~219 Hz
+///   F1  C=0.010 µF, Rin=2.2 k, Rfb=470 k -> ~496 Hz
+///   F3  C=0.0047 µF, Rin=2.2 k, Rfb=470 k -> ~1054 Hz
+/// Relative levels and the (short, all-transient) T60s are DERIVED.
 const RIM_MODES: [(f32, f32, f32); 3] =
     [(220.0, 1.0, 0.040), (500.0, 0.85, 0.032), (1020.0, 0.5, 0.022)];
 
@@ -395,9 +426,13 @@ impl Rim {
 // Hand clap
 // ---------------------------------------------------------------------------
 
-/// Band-passed noise through the flam envelope: a burst generator
-/// retriggers the fast discharge every ~12 ms (three palms), then hands
-/// off to the longer "room" tail.
+/// Band-passed noise through the flam envelope. On the board an AN6912
+/// quad comparator (IC29) wired as an RC relaxation oscillator emits a
+/// short burst of pulses that gate a BA662 OTA (IC30); a separate longer
+/// RC (C65 0.47 µF / R225 1 M) supplies the reverb tail (SCHEMATIC, sheet
+/// 3). Here: a burst generator retriggers the fast discharge every ~10 ms
+/// (three palms, DERIVED from the documented ~8–10 ms pulse spacing), then
+/// hands off to the longer "room" tail.
 struct Clap {
     sample_rate: f32,
     t: f32, // seconds since trigger
@@ -436,8 +471,8 @@ impl Clap {
         self.accent = vel.clamp(0.0, 1.0);
         self.t = 0.0;
         self.burst = 0.7 + 0.3 * self.accent;
-        self.bursts_left = 2; // two RETRIGGERS after the first palm
-        self.next_burst = 0.012;
+        self.bursts_left = 2; // two RETRIGGERS after the first palm (3 total)
+        self.next_burst = 0.010;
         self.tail = 0.0;
         // Tail T60 ~90..500 ms across the knob (stock sits mid)
         let t60 = 0.09 + 0.41 * self.decay;
@@ -451,11 +486,11 @@ impl Clap {
         }
         self.t += 1.0 / self.sample_rate;
 
-        // The retrigger sawtooth: every 12 ms the fast discharge restarts
+        // The retrigger sawtooth: every ~10 ms the fast discharge restarts
         if self.bursts_left > 0 && self.t >= self.next_burst {
             self.burst = 0.7 + 0.3 * self.accent;
             self.bursts_left -= 1;
-            self.next_burst += 0.012;
+            self.next_burst += 0.010;
             if self.bursts_left == 0 {
                 // Hand-off: the room tail begins where the flam ends
                 self.tail = 0.55 * (0.7 + 0.3 * self.accent);
@@ -616,10 +651,12 @@ pub struct DrumMachine {
     rim: Rim,
     clap: Clap,
     hats: Hats,
-    /// One noise transistor shared by snare and clap, exactly like the
-    /// board (the ARP-style source reused — "an amplified, reversed
-    /// junction of a selected transistor").
-    noise: NoiseSource,
+    /// The 909's noise generator is DIGITAL: two 4006 18-bit shift
+    /// registers cascaded (IC32+IC33), clocked by 4070 XORs (IC31) —
+    /// flat, bright pseudo-random noise, one source shared by snare and
+    /// clap (SCHEMATIC, docs/tr909-circuit-reference.md §1). Modeled as
+    /// a xorshift PRNG: same class of generator, four decades on.
+    noise_rng: u32,
     /// Bus drive: the modern stage. 0 = wire. Smoothed so automation
     /// can't zipper the gain.
     drive: f32,
@@ -636,7 +673,7 @@ impl DrumMachine {
             rim: Rim::new(sample_rate),
             clap: Clap::new(sample_rate),
             hats: Hats::new(sample_rate),
-            noise: NoiseSource::new(),
+            noise_rng: 0x6D2B_79F5,
             drive: 0.0,
             drive_target: 0.0,
             bus_shaper_l: AdaaTanh::new(),
@@ -675,7 +712,7 @@ impl DrumMachine {
     /// voices just off-axis, as if the board's individual outs were panned
     /// at the desk).
     pub fn render_next(&mut self) -> (f32, f32) {
-        let noise = self.noise.next();
+        let noise = white(&mut self.noise_rng);
 
         let bd = self.kick.render();
         let sd = self.snare.render(noise);
@@ -868,10 +905,10 @@ mod tests {
         dm.trigger_note(38, 1.0);
         let out = render(&mut dm, (0.25 * SR) as usize);
         let win = &out[(0.02 * SR) as usize..]; // past the onset bend
-        let f1 = 160.0 * (1.0 + 0.5 * 0.4);
+        let f1 = SNARE_SHELL_BASE_HZ * (1.0 + 0.5 * 0.4);
         let m1 = goertzel(win, f1);
-        let m2 = goertzel(win, f1 * 1.78);
-        let off = goertzel(win, f1 * 1.35); // between the modes
+        let m2 = goertzel(win, f1 * SNARE_SHELL_RATIO);
+        let off = goertzel(win, f1 * 0.7); // below the lower mode
         assert!(m1 > 3.0 * off && m2 > 2.0 * off,
             "both shell modes should stand above the floor: m1={m1:.2} m2={m2:.2} off={off:.2}");
 
@@ -887,12 +924,32 @@ mod tests {
     }
 
     #[test]
+    fn snare_shell_pair_sits_at_the_cap_ratio() {
+        // The upper shell must land at the 1.47 cap-ratio (C69/C71), not the
+        // old 1.78. Render shells only and compare energy at both ratios.
+        assert!((SNARE_SHELL_RATIO - 1.47).abs() < 0.01);
+        let mut dm = DrumMachine::new(SR);
+        dm.set_sd_snappy(0.0);
+        dm.set_sd_tune(0.4);
+        dm.trigger_note(38, 1.0);
+        let out = render(&mut dm, (0.25 * SR) as usize);
+        let win = &out[(0.02 * SR) as usize..]; // past the onset bend
+        let f1 = SNARE_SHELL_BASE_HZ * (1.0 + 0.5 * 0.4);
+        let at_ratio = goertzel(win, f1 * SNARE_SHELL_RATIO);
+        let at_178 = goertzel(win, f1 * 1.78);
+        assert!(
+            at_ratio > 3.0 * at_178,
+            "upper shell should sit at the 1.47 cap ratio, not 1.78: {at_ratio:.2} vs {at_178:.2}"
+        );
+    }
+
+    #[test]
     fn clap_flams_then_tails() {
         let mut dm = DrumMachine::new(SR);
         dm.set_cp_decay(0.5);
         dm.trigger_note(39, 1.0);
         let out = render(&mut dm, (0.4 * SR) as usize);
-        // Envelope follower; the three palms make local maxima ~12 ms apart
+        // Envelope follower; the three palms make local maxima ~10 ms apart
         let mut env = 0.0f32;
         let envelope: Vec<f32> = out
             .iter()
