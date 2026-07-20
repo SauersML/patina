@@ -40,7 +40,7 @@ automate spring
 automate reverb_decay
 0.85
 automate tape_wow
-0.18
+0.18 R:104 0.55:16@lin
 automate tape_flutter
 0.1
 automate tape_drive
@@ -54,7 +54,7 @@ C2:8 Ab1:8 E2:8
 C2:8 Ab1:8 E2:8
 C2:8 E2:8 Ab1:8
 C2:8 Ab1:8 E2:8
-C2:16
+Ab1:8 E2:8
 
 track pads vel=0.55 patch=hollowpad
 [C3 G3 D4]:8
@@ -62,27 +62,28 @@ track pads vel=0.55 patch=hollowpad
 [C3 G3 D4]:8 [Ab2 Eb3 Bb3]:8 [E3 B3 F#4]:8
 [C3 G3 D4]:8 [E3 B3 F#4]:8 [Ab2 Eb3 Bb3]:8
 [C3 G3 D4]:8 [Ab2 Eb3 Bb3]:8 [E3 B3 F#4]:8
-[C3 E3 G#3 C4]:16@0.5
+[Ab2 Eb3 Bb3]:8@0.6 [E3 B3 F#4]:8@0.6
 
 track cantus vel=0.5 patch=warmvoice
 R:32
 E4:8 Eb4:8 E4:8
 G4:8 G#4:8 Ab4:8
 E4:4 G4:4 Eb4:8 B3:8
-C4:12 R:4
+G#4:16
 
 track motif vel=0.72 patch=farvoice
 R:32
-R:1 C5:0.5 G4:0.5 E4:1 R:2 E4:1@0.5 R:2
+R:1 [C5 C6]:0.5 [G4 G5]:0.5 [E4 E5]:1 R:2 [E4 E5]:1@0.5 R:2
 R:8
-R:1 B4:0.5 G#4:0.5 E4:1 R:2 E4:1@0.5 R:2
-R:1 C5:0.5 G4:0.5 E4:1 R:2 E4:1@0.5 R:2
+R:1 [B4 B5]:0.5 [G#4 G#5]:0.5 [E4 E5]:1 R:2 [E4 E5]:1@0.5 R:2
+R:1 [C5 C6]:0.5 [G4 G5]:0.5 [E4 E5]:1 R:2 [E4 E5]:1@0.5 R:2
 R:8
-R:1 C5:0.5 Ab4:0.5 Eb4:1 R:2 Eb4:1@0.5 R:2
-R:1 C5:0.5 G4:0.5 E4:1 R:2 E4:1@0.5 R:2
+R:1 [C5 C6]:0.5 [Ab4 Ab5]:0.5 [Eb4 Eb5]:1 R:2 [Eb4 Eb5]:1@0.5 R:2
+R:1 [C5 C6]:0.5 [G4 G5]:0.5 [E4 E5]:1 R:2 [E4 E5]:1@0.5 R:2
 R:8
-R:1 B4:0.5 G#4:0.5 E4:1 R:2 E4:1@0.5 R:2
-R:2 C5:1 G4:1 E4:4 R:8
+R:1 [B4 B5]:0.5 [G#4 G#5]:0.5 [E4 E5]:1 R:2 [E4 E5]:1@0.5 R:2
+R:1 [C5 C6]:0.5 [Ab4 Ab5]:0.5 [Eb4 Eb5]:1 R:2 [Eb4 Eb5]:1@0.5 R:2
+R:1 G#5:1@0.42 R:2 B5:1@0.36 R:1.5 E5:1.5@0.3
 
 track beat kit=909
 R:16
@@ -98,8 +99,7 @@ BD:0.5@0.8 CH:0.5@0.35 SD:0.5@0.6 CH:0.5@0.35 CH:0.5@0.35 BD:0.5@0.7 SD:0.5@0.6 
 BD:0.5@0.8 CH:0.5@0.35 SD:0.5@0.6 CH:0.5@0.35 CH:0.5@0.35 BD:0.5@0.7 SD:0.5@0.6 CH:0.5@0.35 BD:0.5@0.8 CH:0.5@0.35 SD:0.5@0.6 CH:0.5@0.35 R:0.5 BD:0.5@0.7 SD:0.5@0.6 OH:0.5@0.35
 BD:0.5@0.8 CH:0.5@0.35 SD:0.5@0.6 CH:0.5@0.35 CH:0.5@0.35 BD:0.5@0.7 SD:0.5@0.6 CH:0.5@0.35 BD:0.5@0.8 CH:0.5@0.35 SD:0.5@0.6 CH:0.5@0.35 CH:0.5@0.35 BD:0.5@0.7 SD:0.5@0.6 CH:0.5@0.35
 BD:0.5@0.8 CH:0.5@0.35 SD:0.5@0.6 CH:0.5@0.35 CH:0.5@0.35 BD:0.5@0.7 SD:0.5@0.6 CH:0.5@0.35 R:0.5 CH:0.5@0.35 SD:0.5@0.6 CH:0.5@0.35 BD:0.5@0.8 BD:0.5@0.5 SD:0.5@0.6 OH:0.5@0.35
-BD:0.5@0.7 CH:0.5@0.3 SD:0.5@0.5 CH:0.5@0.3 CH:0.5@0.3 BD:0.5@0.6 SD:0.5@0.5 CH:0.5@0.3
-R:4
+R:8
 
 automate bd_tune
 0.3
@@ -131,13 +131,13 @@ automate dr_drive
 0.5
 
 automate pads.cutoff
-1200 R:8 1500:24@smooth 1800:24@smooth 2200:24@smooth 1900:24@smooth 1000:16@exp
+1200 R:8 1500:24@smooth 1800:24@smooth 2200:24@smooth 1900:24@smooth 2300:16@smooth
 
 automate ground.cutoff
-450 R:32 600:24@smooth 800:24@smooth 700:24@smooth 400:16@smooth
+450 R:32 600:24@smooth 800:24@smooth 700:24@smooth 600:16@smooth
 
 automate cantus.cutoff
-2200 R:32 2600:24@smooth 3000:24@smooth 2600:24@smooth 1800:16@smooth
+2200 R:32 2600:24@smooth 3000:24@smooth 2600:24@smooth 3000:16@smooth
 
 automate fuzz
 0 R:56 0.18:24@lin 0.1:24@smooth 0:16@smooth
