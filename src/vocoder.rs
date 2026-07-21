@@ -29,9 +29,10 @@
 
 use crate::noise::NoiseSource;
 
-/// Number of channels. The VSM 201 has 20; 16 covers 120 Hz - 7.2 kHz at
-/// just over third-octave spacing, which keeps speech clearly legible.
-const BANDS: usize = 16;
+/// Number of channels: 20, like the VSM 201, over 120 Hz - 7.2 kHz.
+/// The extra resolution around F2 (800-2500 Hz) is where vowel identity
+/// lives — fewer, wider bands smear EH into IH and words stop parsing.
+const BANDS: usize = 20;
 const F_LO: f32 = 120.0;
 const F_HI: f32 = 7200.0;
 
@@ -109,6 +110,12 @@ pub struct Vocoder {
     /// VCA drive and post-gain: the TalkBox mode leans on the amp.
     drive: f32,
     makeup: f32,
+    /// The voiced/unvoiced switch (VSM 201): when the speech frame is
+    /// mostly high-band energy — a fricative or a stop burst — the whole
+    /// carrier crossfades to noise for that instant, so consonants cut
+    /// through instead of smearing into the chord. This is the single
+    /// biggest intelligibility feature a channel vocoder has.
+    unvoiced_mix: f32,
 }
 
 impl Vocoder {
@@ -140,6 +147,7 @@ impl Vocoder {
             release: 0.0,
             drive: 1.6,
             makeup: 2.5,
+            unvoiced_mix: 0.0,
         };
         v.set_mode(VocoderMode::TalkBox);
         v
@@ -189,6 +197,21 @@ impl Vocoder {
         // One noise generator serves every high band, like the shared
         // avalanche transistor on the voice boards
         let noise = self.noise.next() * 4.0;
+        // The voiced/unvoiced detector reads last sample's band envelopes
+        // (one sample of lag, milliseconds ahead of the RC followers):
+        // a frame that is mostly high-band energy is a consonant
+        let (mut hf, mut total) = (0.0f32, 1e-9f32);
+        for ch in &self.channels {
+            total += ch.env;
+            if ch.fc > 3300.0 {
+                hf += ch.env;
+            }
+        }
+        let unvoiced_target = if hf > 0.42 * total { 1.0 } else { 0.0 };
+        // ~4 ms crossfade: fast enough for a T burst, no clicks
+        self.unvoiced_mix +=
+            (unvoiced_target - self.unvoiced_mix) * (250.0 / self.sample_rate).min(1.0);
+
         let mut out = 0.0;
         for ch in &mut self.channels {
             let mut m = modulator;
@@ -200,7 +223,8 @@ impl Vocoder {
             let k = if rect > ch.env { self.attack } else { self.release };
             ch.env += (rect - ch.env) * k;
 
-            let mut c = carrier * (1.0 - ch.noise_mix) + noise * ch.noise_mix;
+            let nm = ch.noise_mix.max(self.unvoiced_mix);
+            let mut c = carrier * (1.0 - nm) + noise * nm;
             for bp in &mut ch.synthesis {
                 c = bp.tick(c);
             }

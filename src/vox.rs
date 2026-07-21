@@ -768,9 +768,10 @@ impl VoxSource {
         self.fric_res.set(self.fric_f, self.fric_bw, self.sample_rate);
         let hiss = self.fric_res.tick(n) * self.fric;
 
-        // Voiced tract vs frication balance: vowels carry ~10 dB more
-        // level than /s/ in real speech
-        x * 0.28 + hiss * 0.35
+        // Voiced tract vs frication balance: vowels lead, but the
+        // consonants stay hot enough to trip the vocoder's unvoiced
+        // detector — diction beats strict realism here
+        x * 0.28 + hiss * 0.45
     }
 
     /// True while anything is sounding or queued.
