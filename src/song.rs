@@ -44,11 +44,22 @@
 //                           # root (natural speed, one-shot), mode=gate|
 //                           # oneshot, reverse, fixed (no keytracking),
 //                           # mono/choke (new note cuts the last),
-//                           # gain= pan= pitch= attack= release= vel_amt=.
+//                           # gain= pan= pitch= attack= release= vel_amt=,
+//                           # cutoff=/res= (the slot's resonant lowpass),
+//                           # beats=N (varispeed the region/loop to span
+//                           # exactly N beats at the song tempo — break
+//                           # matching), bits=/rate= (vintage converter:
+//                           # resample+truncate at load and play through
+//                           # the un-reconstructed ZOH DAC; bits=12
+//                           # rate=26040 is the SP-1200's converter).
+//                           # Playback is band-limited windowed-sinc with
+//                           # the kernel widened when pitching up, so
+//                           # varispeed doesn't alias in either direction.
 //                           # Automate the transport per track:
 //                           # `automate keys.smp_pitch` is a varispeed
 //                           # knob in semitones; smp_start scrubs where
-//                           # notes drop the needle; smp_gain, smp_pan,
+//                           # notes drop the needle; smp_cutoff/smp_res
+//                           # sweep the filter; smp_gain, smp_pan,
 //                           # smp_attack, smp_release reshape it live.
 //
 // Note-track tokens:
@@ -97,7 +108,7 @@
 // The tape deck (per sampler track via `automate <track>.<param>`, or
 // global to all slots): smp_pitch (semitones, -24..24), smp_start (0..1
 // needle-drop point), smp_gain (0..2), smp_pan (-1..1), smp_attack,
-// smp_release (seconds).
+// smp_release (seconds), smp_cutoff (Hz, 20000 = open), smp_res (0..1).
 
 use std::sync::Arc;
 use std::thread;
@@ -218,6 +229,8 @@ pub enum Param {
     SmpPan,
     SmpAttack,
     SmpRelease,
+    SmpCutoff,
+    SmpRes,
 }
 
 pub(crate) fn waveform_from_value(value: f32) -> Waveform {
@@ -248,6 +261,8 @@ impl Param {
             17 => Param::SmpStart,
             18 => Param::SmpAttack,
             19 => Param::SmpRelease,
+            3 => Param::SmpCutoff,
+            4 => Param::SmpRes,
             12 => Param::VoxLevel,
             13 => Param::VoxDry,
             14 => Param::VoxVibrato,
@@ -396,6 +411,8 @@ impl Param {
             Param::SmpPan => (-1.0, 1.0, Lin),
             Param::SmpAttack => (0.001, 4.0, Log),
             Param::SmpRelease => (0.003, 8.0, Log),
+            Param::SmpCutoff => (60.0, 20000.0, Log),
+            Param::SmpRes => (0.0, 1.0, Lin),
         }
     }
 }
@@ -492,6 +509,8 @@ impl Param {
             "smp_pan" => Param::SmpPan,
             "smp_attack" => Param::SmpAttack,
             "smp_release" => Param::SmpRelease,
+            "smp_cutoff" => Param::SmpCutoff,
+            "smp_res" => Param::SmpRes,
             _ => return None,
         })
     }
@@ -597,7 +616,8 @@ impl Param {
             // Un-addressed sampler automation reaches every slot (the
             // per-track path routes by channel before it gets here)
             Param::SmpPitch | Param::SmpStart | Param::SmpGain | Param::SmpPan
-            | Param::SmpAttack | Param::SmpRelease => vm.set_sampler_all(self, value),
+            | Param::SmpAttack | Param::SmpRelease | Param::SmpCutoff
+            | Param::SmpRes => vm.set_sampler_all(self, value),
         }
     }
 
@@ -891,6 +911,10 @@ fn parse_song(text: &str) -> Result<Song, String> {
                     };
                 let mut smp_data: Option<std::sync::Arc<crate::sampler::SampleData>> = None;
                 let mut smp_mode_set = false;
+                // Reel-preparation options, applied once the file is known
+                let mut smp_bits: Option<u32> = None;
+                let mut smp_rate: Option<u32> = None;
+                let mut smp_beats: Option<f64> = None;
                 for opt in line.split_whitespace().skip(2) {
                     if let Some(v) = opt.strip_prefix("vel=") {
                         vel = v.parse::<f32>().map_err(|_| err(format!("invalid vel '{}'", v)))?;
@@ -922,6 +946,33 @@ fn parse_song(text: &str) -> Result<Song, String> {
                         smp_data = Some(std::sync::Arc::new(
                             crate::sampler::load_wav_stereo(v).map_err(err)?,
                         ));
+                    } else if smp.is_some() && opt.starts_with("bits=") {
+                        let v = &opt[5..];
+                        let n: u32 = v
+                            .parse()
+                            .map_err(|_| err(format!("invalid bits '{}'", v)))?;
+                        if !(4..=16).contains(&n) {
+                            return Err(err("bits must be 4-16".into()));
+                        }
+                        smp_bits = Some(n);
+                    } else if smp.is_some() && opt.starts_with("rate=") {
+                        let v = &opt[5..];
+                        let n: u32 = v
+                            .parse()
+                            .map_err(|_| err(format!("invalid rate '{}'", v)))?;
+                        if !(2000..=96000).contains(&n) {
+                            return Err(err("rate must be 2000-96000 Hz".into()));
+                        }
+                        smp_rate = Some(n);
+                    } else if smp.is_some() && opt.starts_with("beats=") {
+                        let v = &opt[6..];
+                        let n: f64 = v
+                            .parse()
+                            .map_err(|_| err(format!("invalid beats '{}'", v)))?;
+                        if n <= 0.0 {
+                            return Err(err("beats must be positive".into()));
+                        }
+                        smp_beats = Some(n);
                     } else if let Some(cfg) = smp.as_mut() {
                         parse_sampler_option(cfg, opt, &mut smp_mode_set).map_err(err)?;
                     } else {
@@ -929,12 +980,37 @@ fn parse_song(text: &str) -> Result<Song, String> {
                     }
                 }
                 if let Some(mut cfg) = smp {
-                    let data = smp_data
+                    let mut data = smp_data
                         .ok_or_else(|| err("sampler track needs sample=file.wav".into()))?;
                     // Chop pads are drum pads: fire-and-forget unless the
                     // track says otherwise
                     if cfg.chop > 1 && !smp_mode_set {
                         cfg.mode = crate::sampler::PlayMode::OneShot;
+                    }
+                    // Vintage converters: resample/truncate the reel once
+                    // at load, and play it back through the ZOH DAC
+                    if smp_bits.is_some() || smp_rate.is_some() {
+                        data = std::sync::Arc::new(crate::sampler::crunch(
+                            &data, smp_bits, smp_rate,
+                        ));
+                        cfg.zoh = true;
+                    }
+                    // beats=N: fit the playback region (the loop if there
+                    // is one) to exactly N beats at the song's tempo
+                    if let Some(beats) = smp_beats {
+                        let rate = data.rate.max(1) as f64;
+                        let total = data.frames() as f64 / rate;
+                        let (a, b) = match cfg.loop_pts {
+                            Some((a, b)) => {
+                                ((a as f64).max(cfg.start as f64), (b as f64).min(total))
+                            }
+                            None => (
+                                cfg.start as f64,
+                                if cfg.end > 0.0 { cfg.end as f64 } else { total },
+                            ),
+                        };
+                        let secs = (b - a).max(1e-3);
+                        cfg.speed = (secs / (beats * 60.0 / bpm)).clamp(0.03, 32.0) as f32;
                     }
                     if samplers.len() >= crate::sampler::MAX_SLOTS {
                         return Err(err(format!(
@@ -1162,6 +1238,10 @@ fn parse_sampler_option(
         cfg.release = secs(v, "release")?.clamp(0.003, 8.0);
     } else if let Some(v) = opt.strip_prefix("vel_amt=") {
         cfg.vel_amt = secs(v, "vel_amt")?.clamp(0.0, 1.0);
+    } else if let Some(v) = opt.strip_prefix("cutoff=") {
+        cfg.cutoff = secs(v, "cutoff")?.clamp(60.0, 20000.0);
+    } else if let Some(v) = opt.strip_prefix("res=") {
+        cfg.res = secs(v, "res")?.clamp(0.0, 1.0);
     } else {
         return Err(format!("unknown track option '{}'", opt));
     }
@@ -1617,10 +1697,30 @@ mod tests {
         assert!(peak > 0.05, "the tape deck should be audible, peak={peak}");
         assert!(frames.iter().all(|&(l, r)| l.is_finite() && r.is_finite()));
 
+        // Vintage converters, tempo-fit, and the slot filter parse into
+        // the slot config; beats= solves the varispeed for the tempo
+        let song = parse_song(&format!(
+            "bpm 120\n\
+             track chop sample={wav} chop=4 bits=12 rate=26040 cutoff=1200 res=0.4 beats=1\n\
+             C4:1\n"
+        ))
+        .unwrap();
+        let cfg = &song.samplers[0].cfg;
+        assert!(cfg.zoh, "bits=/rate= should enable the ZOH DAC");
+        assert_eq!(song.samplers[0].data.rate, 26040);
+        assert!((cfg.cutoff - 1200.0).abs() < 1e-3);
+        assert!((cfg.res - 0.4).abs() < 1e-3);
+        // reel is 0.5 s; 1 beat at 120 bpm is 0.5 s -> unity speed
+        assert!((cfg.speed - 1.0).abs() < 0.02, "beats fit speed {}", cfg.speed);
+
         // grammar errors
         assert!(
             parse_song("bpm 120\ntrack a root=C3\nC4\n").is_err(),
             "sampler options need sample="
+        );
+        assert!(
+            parse_song(&format!("bpm 120\ntrack a sample={wav} bits=2\nC4\n")).is_err(),
+            "bits out of range"
         );
         assert!(
             parse_song(&format!("bpm 120\ntrack a sample={wav} loop=0.5:0.1\nC4\n")).is_err(),

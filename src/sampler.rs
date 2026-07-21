@@ -123,6 +123,17 @@ pub struct SlotConfig {
     /// Where new notes drop the needle: 0..1 across the region
     /// (smp_start — automatable).
     pub scrub: f32,
+    /// Per-slot resonant lowpass (smp_cutoff / smp_res — automatable):
+    /// the sampler filter of the SP/Akai school. 20 kHz + no resonance
+    /// is bypassed.
+    pub cutoff: f32,
+    pub res: f32,
+    /// Extra speed multiplier on top of keytracking — `beats=N` computes
+    /// this so a loop spans exactly N beats at the song's tempo.
+    pub speed: f32,
+    /// Zero-order-hold playback (set by `bits=`/`rate=` crunching): the
+    /// vintage DAC's imaging instead of band-limited reconstruction.
+    pub zoh: bool,
 }
 
 impl Default for SlotConfig {
@@ -145,6 +156,10 @@ impl Default for SlotConfig {
             vel_amt: 1.0,
             pitch_semis: 0.0,
             scrub: 0.0,
+            cutoff: 20000.0,
+            res: 0.0,
+            speed: 1.0,
+            zoh: false,
         }
     }
 }
@@ -187,6 +202,8 @@ struct Head {
     /// Overrides the slot release when choked.
     choke: bool,
     age: u64,
+    /// State-variable filter integrator states: [ic1_l, ic2_l, ic1_r, ic2_r].
+    svf: [f32; 4],
 }
 
 impl Head {
@@ -206,37 +223,208 @@ impl Head {
             vel_gain: 1.0,
             choke: false,
             age: 0,
+            svf: [0.0; 4],
         }
     }
 }
 
-/// 4-point cubic Hermite (Catmull-Rom) read of one channel at a
-/// fractional source-frame position, edge-clamped.
-#[inline]
-fn hermite(buf: &[f32], pos: f64) -> f32 {
-    let n = buf.len();
-    if n == 0 {
-        return 0.0;
+/// Cached ZDF state-variable-filter coefficients for one slot; recomputed
+/// only when its (cutoff, res) pair actually changes, never per sample.
+#[derive(Clone, Copy)]
+struct FiltCoeffs {
+    cutoff: f32,
+    res: f32,
+    a1: f32,
+    a2: f32,
+    a3: f32,
+    k: f32,
+    bypass: bool,
+}
+
+impl FiltCoeffs {
+    fn stale() -> Self {
+        Self { cutoff: -1.0, res: -1.0, a1: 0.0, a2: 0.0, a3: 0.0, k: 0.0, bypass: true }
     }
-    let i = pos.floor() as isize;
-    let t = (pos - i as f64) as f32;
-    let at = |k: isize| -> f32 {
-        let k = k.clamp(0, n as isize - 1) as usize;
-        buf[k]
-    };
-    let (xm1, x0, x1, x2) = (at(i - 1), at(i), at(i + 1), at(i + 2));
-    let c = (x1 - xm1) * 0.5;
-    let v = x0 - x1;
-    let w = c + v;
-    let a = w + v + (x2 - x0) * 0.5;
-    let b = w + a;
-    (((a * t) - b) * t + c) * t + x0
+
+    fn update(&mut self, cutoff: f32, res: f32, sample_rate: f32) {
+        if self.cutoff == cutoff && self.res == res {
+            return;
+        }
+        self.cutoff = cutoff;
+        self.res = res;
+        self.bypass = cutoff >= 19000.0 && res <= 0.02;
+        // Simper's trapezoidal SVF: stable under audio-rate coefficient
+        // swings, which automated filter sweeps are
+        let g = (std::f32::consts::PI * cutoff.clamp(20.0, 0.45 * sample_rate) / sample_rate).tan();
+        self.k = 2.0 - 1.85 * res.clamp(0.0, 1.0);
+        self.a1 = 1.0 / (1.0 + g * (g + self.k));
+        self.a2 = g * self.a1;
+        self.a3 = g * self.a2;
+    }
+
+    /// One lowpass tick on a (ic1, ic2) state pair.
+    #[inline]
+    fn tick(&self, x: f32, ic1: &mut f32, ic2: &mut f32) -> f32 {
+        let v3 = x - *ic2;
+        let v1 = self.a1 * *ic1 + self.a2 * v3;
+        let v2 = *ic2 + self.a2 * *ic1 + self.a3 * v3;
+        *ic1 = 2.0 * v1 - *ic1;
+        *ic2 = 2.0 * v2 - *ic2;
+        v2
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Band-limited playback: windowed-sinc interpolation
+// ---------------------------------------------------------------------------
+//
+// The read head is a Kaiser-windowed sinc kernel (16 taps at unit speed,
+// beta = 8.6, ~-90 dB sidelobes) evaluated from one precomputed table.
+// Pitching DOWN the kernel is used as-is; pitching UP it is time-stretched
+// by the speed ratio, which lowers its cutoff to the post-shift Nyquist —
+// proper decimation anti-aliasing, so playing high above the root stays
+// clean instead of folding. Weights are normalized per read (exact unity
+// DC, no ripple) and shared between the two channels.
+
+/// Kernel half-width in source frames at unit stretch.
+const SINC_HALF: usize = 8;
+/// Table resolution: samples per unit of kernel time.
+const SINC_RES: usize = 64;
+/// Anti-alias stretch cap: beyond 4x down-pitch the residual images sit
+/// below the -90 dB window floor of what a 64-tap read can promise.
+const SINC_MAX_STRETCH: f32 = 4.0;
+
+/// Zeroth-order modified Bessel function (power series — converges fast
+/// for the argument range a Kaiser window uses).
+fn bessel_i0(x: f32) -> f32 {
+    let mut sum = 1.0f32;
+    let mut term = 1.0f32;
+    for k in 1..=24 {
+        let t = x / (2.0 * k as f32);
+        term *= t * t;
+        sum += term;
+        if term < 1e-9 * sum {
+            break;
+        }
+    }
+    sum
+}
+
+/// One-sided kernel table: sinc(0.97 x) * kaiser(x / HALF), x in [0, HALF].
+fn sinc_table() -> &'static [f32] {
+    use std::sync::OnceLock;
+    static TABLE: OnceLock<Vec<f32>> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let beta = 8.6f32;
+        let denom = bessel_i0(beta);
+        let n = SINC_HALF * SINC_RES + 2; // one guard entry past the edge
+        (0..n)
+            .map(|i| {
+                let x = i as f32 / SINC_RES as f32;
+                if x >= SINC_HALF as f32 {
+                    return 0.0;
+                }
+                // Cutoff at 0.97 Nyquist: a hair of headroom for the
+                // finite transition band of a 16-tap kernel
+                let c = 0.97f32;
+                let s = if x < 1e-6 {
+                    c
+                } else {
+                    (std::f32::consts::PI * c * x).sin() / (std::f32::consts::PI * x)
+                };
+                let t = x / SINC_HALF as f32;
+                s * bessel_i0(beta * (1.0 - t * t).sqrt()) / denom
+            })
+            .collect()
+    })
+}
+
+/// Band-limited stereo read at a fractional source position. `stretch`
+/// >= 1 widens the kernel for anti-aliased down-shifting (pass the read
+/// speed when it exceeds 1). Edge-clamped; weights shared across L/R.
+fn sinc_read(left: &[f32], right: &[f32], pos: f64, stretch: f32) -> (f32, f32) {
+    let table = sinc_table();
+    let n = left.len() as isize;
+    if n == 0 {
+        return (0.0, 0.0);
+    }
+    let stretch = stretch.clamp(1.0, SINC_MAX_STRETCH);
+    let half = (SINC_HALF as f32 * stretch).ceil() as isize;
+    let base = pos.floor() as isize;
+    let frac = (pos - base as f64) as f32;
+    let (mut al, mut ar, mut ws) = (0.0f32, 0.0f32, 0.0f32);
+    let scale = SINC_RES as f32 / stretch;
+    for j in (1 - half)..=half {
+        let d = (j as f32 - frac).abs() * scale;
+        let i = d as usize;
+        if i + 1 >= table.len() {
+            continue;
+        }
+        let t = d - i as f32;
+        let w = table[i] + (table[i + 1] - table[i]) * t;
+        let k = (base + j).clamp(0, n - 1) as usize;
+        al += left[k] * w;
+        ar += right[k] * w;
+        ws += w;
+    }
+    if ws.abs() < 1e-6 {
+        (0.0, 0.0)
+    } else {
+        (al / ws, ar / ws)
+    }
+}
+
+/// Zero-order-hold read: the un-reconstructed DAC of the vintage boxes.
+/// Crunched slots (`bits=`/`rate=`) play through this on purpose — the
+/// imaging spray above the converter rate IS the SP-1200 sparkle.
+#[inline]
+fn zoh_read(left: &[f32], right: &[f32], pos: f64) -> (f32, f32) {
+    let n = left.len();
+    if n == 0 {
+        return (0.0, 0.0);
+    }
+    let i = (pos.floor() as isize).clamp(0, n as isize - 1) as usize;
+    (left[i], right[i])
+}
+
+/// Load-time converter emulation: optionally resample the reel to a
+/// vintage converter rate (band-limited, via the same sinc kernel) and
+/// truncate to a word size, as the old converters did (truncation, no
+/// dither — the grit is authentic, the DC blocker downstream eats the
+/// half-LSB offset). `bits=12 rate=26040` is the SP-1200's converter.
+pub fn crunch(data: &SampleData, bits: Option<u32>, rate: Option<u32>) -> SampleData {
+    let mut left = data.left.clone();
+    let mut right = data.right.clone();
+    let mut out_rate = data.rate;
+    if let Some(to) = rate.filter(|&t| t != data.rate && t > 0) {
+        let ratio = data.rate as f64 / to as f64;
+        let stretch = (ratio as f32).max(1.0).min(8.0);
+        let frames = (data.frames() as f64 / ratio).floor().max(1.0) as usize;
+        let mut l = Vec::with_capacity(frames);
+        let mut r = Vec::with_capacity(frames);
+        for i in 0..frames {
+            let (a, b) = sinc_read(&data.left, &data.right, i as f64 * ratio, stretch);
+            l.push(a);
+            r.push(b);
+        }
+        left = l;
+        right = r;
+        out_rate = to;
+    }
+    if let Some(b) = bits {
+        let levels = (1u32 << b.clamp(2, 24).saturating_sub(1)) as f32;
+        let q = |x: &mut f32| *x = (x.clamp(-1.0, 1.0) * levels).floor() / levels;
+        left.iter_mut().for_each(&q);
+        right.iter_mut().for_each(&q);
+    }
+    SampleData { left, right, rate: out_rate }
 }
 
 pub struct SamplerBank {
     sample_rate: f32,
     slots: Vec<Option<SamplerSlot>>,
     heads: Vec<Head>,
+    filt: Vec<FiltCoeffs>,
     counter: u64,
 }
 
@@ -246,6 +434,7 @@ impl SamplerBank {
             sample_rate,
             slots: (0..MAX_SLOTS).map(|_| None).collect(),
             heads: (0..NUM_HEADS).map(|_| Head::idle()).collect(),
+            filt: (0..MAX_SLOTS).map(|_| FiltCoeffs::stale()).collect(),
             counter: 0,
         }
     }
@@ -276,6 +465,8 @@ impl SamplerBank {
                     | Param::SmpPan
                     | Param::SmpAttack
                     | Param::SmpRelease
+                    | Param::SmpCutoff
+                    | Param::SmpRes
             );
         };
         let c = &mut slot.cfg;
@@ -286,6 +477,8 @@ impl SamplerBank {
             Param::SmpPan => c.pan = value.clamp(-1.0, 1.0),
             Param::SmpAttack => c.attack = value.clamp(0.001, 4.0),
             Param::SmpRelease => c.release = value.clamp(0.003, 8.0),
+            Param::SmpCutoff => c.cutoff = value.clamp(60.0, 20000.0),
+            Param::SmpRes => c.res = value.clamp(0.0, 1.0),
             _ => return false,
         }
         true
@@ -321,9 +514,11 @@ impl SamplerBank {
             r0 += slice * k;
         }
 
-        // Scrub: drop the needle partway into the (possibly sliced) region
+        // Scrub: drop the needle partway into the (possibly sliced)
+        // region — from the far end when the transport runs backwards
         let len = r1 - r0;
-        let start = r0 + (cfg.scrub as f64).clamp(0.0, 0.98) * len;
+        let scrub = (cfg.scrub as f64).clamp(0.0, 0.98) * len;
+        let start = if cfg.reverse { r1 - 1.0 - scrub } else { r0 + scrub };
 
         // Latch the sustain loop, clamped into the region; a degenerate
         // loop disables itself
@@ -376,7 +571,7 @@ impl SamplerBank {
             slot: slot_idx,
             note,
             held: true,
-            pos: if cfg.reverse { r1 - 1.0 } else { start },
+            pos: start,
             region: (r0, r1),
             looping,
             xfade_frames,
@@ -390,6 +585,7 @@ impl SamplerBank {
             vel_gain: 1.0 - cfg.vel_amt + cfg.vel_amt * vel.powf(1.5),
             choke: false,
             age: self.counter,
+            svf: [0.0; 4],
         };
     }
 
@@ -431,7 +627,8 @@ impl SamplerBank {
             let data = &slot.data;
             let src_rate = data.rate as f64;
 
-            // Varispeed: keytrack interval * live pitch knob * bend bus
+            // Varispeed: keytrack interval * live pitch knob * tempo-fit
+            // speed * bend bus
             let semis = if h.keytrack {
                 (h.note as i16 - cfg.root as i16) as f32 + cfg.pitch_semis
             } else {
@@ -439,6 +636,7 @@ impl SamplerBank {
             };
             let step = (src_rate / out_rate)
                 * ((semis / 12.0).exp2() as f64)
+                * cfg.speed.clamp(0.03, 32.0) as f64
                 * pitch_mult.max(0.01) as f64;
 
             // The envelope
@@ -462,13 +660,23 @@ impl SamplerBank {
             }
 
             // Read the tape (with the loop's equal-power crossfade region
-            // pre-blending the wrap destination)
+            // pre-blending the wrap destination). Band-limited sinc for
+            // hi-fi slots — the kernel stretched by the read speed when
+            // pitching up, so nothing folds — or the raw ZOH of a
+            // crunched slot's vintage DAC.
             let (r0, r1) = h.region;
+            let stretch = step as f32;
+            let zoh = cfg.zoh;
             let mut l = 0.0f32;
             let mut r = 0.0f32;
             let mut read = |pos: f64, g: f32| {
-                l += hermite(&data.left, pos) * g;
-                r += hermite(&data.right, pos) * g;
+                let (a, b) = if zoh {
+                    zoh_read(&data.left, &data.right, pos)
+                } else {
+                    sinc_read(&data.left, &data.right, pos, stretch)
+                };
+                l += a * g;
+                r += b * g;
             };
             match h.looping {
                 Some((la, lb)) if !h.reverse && h.xfade_frames > 0.0 && h.pos >= lb - h.xfade_frames => {
@@ -478,6 +686,23 @@ impl SamplerBank {
                     read(la + (h.pos - (lb - h.xfade_frames)), ph.sin());
                 }
                 _ => read(h.pos, 1.0),
+            }
+
+            // The slot's lowpass (coefficients cached per slot, state per
+            // head). Bypassed wide-open; the integrator tracks the input
+            // meanwhile so a sweep re-engaging the filter doesn't thump.
+            let fc = &mut self.filt[h.slot];
+            fc.update(cfg.cutoff, cfg.res, self.sample_rate);
+            if fc.bypass {
+                h.svf[1] = l;
+                h.svf[3] = r;
+                h.svf[0] = 0.0;
+                h.svf[2] = 0.0;
+            } else {
+                let [mut i1l, mut i2l, mut i1r, mut i2r] = h.svf;
+                l = fc.tick(l, &mut i1l, &mut i2l);
+                r = fc.tick(r, &mut i1r, &mut i2r);
+                h.svf = [i1l, i2l, i1r, i2r];
             }
 
             // Edge declick so a region cut mid-waveform can't click
@@ -545,10 +770,15 @@ pub fn load_wav_stereo(path: &str) -> Result<SampleData, String> {
         }
         match id {
             b"fmt " if size >= 16 => {
-                let format = u16::from_le_bytes(data[body..body + 2].try_into().unwrap());
+                let mut format = u16::from_le_bytes(data[body..body + 2].try_into().unwrap());
                 let channels = u16::from_le_bytes(data[body + 2..body + 4].try_into().unwrap());
                 let rate = u32::from_le_bytes(data[body + 4..body + 8].try_into().unwrap());
                 let bits = u16::from_le_bytes(data[body + 14..body + 16].try_into().unwrap());
+                // WAVE_FORMAT_EXTENSIBLE (what most DAWs export): the
+                // real format is the SubFormat GUID's leading 16 bits
+                if format == 0xFFFE && size >= 40 {
+                    format = u16::from_le_bytes(data[body + 24..body + 26].try_into().unwrap());
+                }
                 fmt = Some((format, channels, rate, bits));
             }
             b"data" => {
@@ -559,10 +789,10 @@ pub fn load_wav_stereo(path: &str) -> Result<SampleData, String> {
                 let bytes = match (format, bits) {
                     (1, 16) => 2,
                     (1, 24) => 3,
-                    (3, 32) => 4,
+                    (1, 32) | (3, 32) => 4,
                     (f, b) => {
                         return Err(format!(
-                            "wav '{}': unsupported format {} / {} bits (use PCM16, PCM24, or float32)",
+                            "wav '{}': unsupported format {} / {} bits (use PCM 16/24/32 or float32)",
                             path, f, b
                         ))
                     }
@@ -571,6 +801,9 @@ pub fn load_wav_stereo(path: &str) -> Result<SampleData, String> {
                     match (format, bits) {
                         (1, 16) => i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0,
                         (1, 24) => i32::from_le_bytes([0, b[0], b[1], b[2]]) as f32 / 2147483648.0,
+                        (1, 32) => {
+                            i32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f32 / 2147483648.0
+                        }
                         _ => f32::from_le_bytes([b[0], b[1], b[2], b[3]]),
                     }
                 };
@@ -778,6 +1011,209 @@ mod tests {
             b = bank.render_next(1.0).0;
         }
         assert!(a > b, "reverse ramp should descend ({:.3} → {:.3})", a, b);
+    }
+
+    fn rms(bank: &mut SamplerBank, n: usize) -> f32 {
+        let mut acc = 0.0f64;
+        for _ in 0..n {
+            let (l, _) = bank.render_next(1.0);
+            acc += (l as f64) * (l as f64);
+        }
+        ((acc / n as f64) as f32).sqrt()
+    }
+
+    /// The accuracy claim: pitching UP is band-limited. A 15 kHz partial
+    /// played +12 lands at 30 kHz — beyond Nyquist — and must be filtered
+    /// by the stretched kernel, not folded back as an 18 kHz alias.
+    /// (Hermite/ZOH reads keep nearly all of it.)
+    #[test]
+    fn upshift_is_antialiased() {
+        let hot = |bank: &mut SamplerBank, note: u8| {
+            bank.note_on(0, note, 1.0);
+            for _ in 0..480 {
+                bank.render_next(1.0); // past the attack
+            }
+            rms(bank, 9600)
+        };
+        // Re-tune the reel to 15 kHz
+        let mut bank = SamplerBank::new(48000.0);
+        bank.set_slot(0, SamplerSlot {
+            data: sine_reel(48000, 1.0, 15000.0),
+            cfg: SlotConfig { attack: 0.001, ..Default::default() },
+        });
+        let natural = hot(&mut bank, 60);
+        let mut bank2 = SamplerBank::new(48000.0);
+        bank2.set_slot(0, SamplerSlot {
+            data: sine_reel(48000, 1.0, 15000.0),
+            cfg: SlotConfig { attack: 0.001, ..Default::default() },
+        });
+        let shifted = hot(&mut bank2, 72);
+        assert!(natural > 0.1, "natural read lost the partial, rms={natural}");
+        assert!(
+            shifted < natural * 0.05,
+            "aliasable content must be filtered when pitching up: {natural} -> {shifted}"
+        );
+    }
+
+    /// The vintage converters: `crunch` truncates onto the exact bit grid
+    /// and resamples the reel to the converter rate.
+    #[test]
+    fn crunch_quantizes_and_resamples() {
+        let data = sine_reel(48000, 1.0, 440.0);
+        let c = crunch(&data, Some(8), None);
+        let levels = 128.0f32;
+        for &s in c.left.iter().step_by(97) {
+            let snapped = (s * levels).round() / levels;
+            assert!(
+                (s - snapped).abs() < 1e-6,
+                "sample {} not on the 8-bit grid",
+                s
+            );
+        }
+        let c = crunch(&data, None, Some(24000));
+        assert_eq!(c.rate, 24000);
+        assert!((c.frames() as i64 - 24000).abs() <= 2);
+        // The 440 Hz tone survives decimation at full level
+        let peak = c.left.iter().fold(0.0f32, |a, &s| a.max(s.abs()));
+        assert!((peak - 0.5).abs() < 0.05, "tone lost in resample, peak={peak}");
+    }
+
+    /// The slot filter: an 8 kHz partial through a 500 Hz lowpass.
+    #[test]
+    fn slot_filter_darkens() {
+        let open = {
+            let mut bank = SamplerBank::new(48000.0);
+            bank.set_slot(0, SamplerSlot {
+                data: sine_reel(48000, 1.0, 8000.0),
+                cfg: SlotConfig { attack: 0.001, ..Default::default() },
+            });
+            bank.note_on(0, 60, 1.0);
+            rms(&mut bank, 9600)
+        };
+        let dark = {
+            let mut bank = SamplerBank::new(48000.0);
+            bank.set_slot(0, SamplerSlot {
+                data: sine_reel(48000, 1.0, 8000.0),
+                cfg: SlotConfig { attack: 0.001, cutoff: 500.0, ..Default::default() },
+            });
+            bank.note_on(0, 60, 1.0);
+            rms(&mut bank, 9600)
+        };
+        assert!(open > 0.1, "open filter should pass the tone, rms={open}");
+        assert!(
+            dark < open * 0.05,
+            "500 Hz lowpass should crush an 8 kHz tone: {open} -> {dark}"
+        );
+    }
+
+    /// `beats=` fit: a half-speed slot takes twice the tape time.
+    #[test]
+    fn speed_scales_playback_time() {
+        let mut bank = bank_with(SlotConfig {
+            attack: 0.001,
+            mode: PlayMode::OneShot,
+            speed: 0.5,
+            ..Default::default()
+        });
+        bank.note_on(0, 60, 1.0);
+        for _ in 0..(48000 + 24000) {
+            bank.render_next(1.0);
+        }
+        assert!(bank.any_active(), "half-speed one-shot ended a reel-length early");
+        for _ in 0..48000 {
+            bank.render_next(1.0);
+        }
+        assert!(!bank.any_active(), "half-speed one-shot should end by 2 reel-lengths");
+    }
+
+    /// Reverse honors the needle-drop scrub: scrub 0.5 on a rising ramp
+    /// starts the backwards read from the middle, not the end.
+    #[test]
+    fn reverse_scrub_starts_midway() {
+        let n = 48000usize;
+        let ramp: Vec<f32> = (0..n).map(|i| i as f32 / n as f32).collect();
+        let data = Arc::new(SampleData { left: ramp.clone(), right: ramp, rate: 48000 });
+        let mut bank = SamplerBank::new(48000.0);
+        let cfg = SlotConfig { reverse: true, scrub: 0.5, attack: 0.001, ..Default::default() };
+        bank.set_slot(0, SamplerSlot { data, cfg });
+        bank.note_on(0, 60, 1.0);
+        let mut v = 0.0;
+        for _ in 0..480 {
+            v = bank.render_next(1.0).0;
+        }
+        let v = v / (PROGRAM_V * cfg.gain);
+        assert!(
+            (v - 0.5).abs() < 0.05,
+            "reverse scrub 0.5 should read near ramp level 0.5, got {v}"
+        );
+    }
+
+    /// WAVE_FORMAT_EXTENSIBLE (the modern DAW default) decodes via its
+    /// SubFormat GUID.
+    #[test]
+    fn extensible_wav_loads() {
+        let rate: u32 = 44100;
+        let n = 64usize;
+        let mut d = Vec::new();
+        d.extend_from_slice(b"RIFF");
+        d.extend_from_slice(&(4 + 8 + 40 + 8 + n as u32 * 2).to_le_bytes());
+        d.extend_from_slice(b"WAVEfmt ");
+        d.extend_from_slice(&40u32.to_le_bytes());
+        d.extend_from_slice(&0xFFFEu16.to_le_bytes()); // extensible
+        d.extend_from_slice(&1u16.to_le_bytes()); // mono
+        d.extend_from_slice(&rate.to_le_bytes());
+        d.extend_from_slice(&(rate * 2).to_le_bytes());
+        d.extend_from_slice(&2u16.to_le_bytes());
+        d.extend_from_slice(&16u16.to_le_bytes());
+        d.extend_from_slice(&22u16.to_le_bytes()); // cbSize
+        d.extend_from_slice(&16u16.to_le_bytes()); // valid bits
+        d.extend_from_slice(&0u32.to_le_bytes()); // channel mask
+        d.extend_from_slice(&1u16.to_le_bytes()); // SubFormat: PCM
+        d.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71]);
+        d.extend_from_slice(b"data");
+        d.extend_from_slice(&(n as u32 * 2).to_le_bytes());
+        for i in 0..n {
+            d.extend_from_slice(&((i as i16) * 100).to_le_bytes());
+        }
+        let path = std::env::temp_dir().join("patina-extensible-test.wav");
+        std::fs::write(&path, d).unwrap();
+        let s = load_wav_stereo(path.to_str().unwrap()).unwrap();
+        assert_eq!(s.rate, 44100);
+        assert_eq!(s.frames(), n);
+        assert!((s.left[10] - 1000.0 / 32768.0).abs() < 1e-4);
+    }
+
+    /// Worst-case throughput: every head sounding, all reading through
+    /// the widest stretched kernel (+24 semis = 4x stretch, 64 taps).
+    /// Run by hand: cargo test --release perf_worst_case -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn perf_worst_case() {
+        let mut bank = SamplerBank::new(48000.0);
+        bank.set_slot(0, SamplerSlot {
+            data: sine_reel(48000, 30.0, 440.0),
+            cfg: SlotConfig {
+                loop_pts: Some((0.5, 29.0)),
+                xfade: 0.2,
+                cutoff: 2000.0,
+                res: 0.3,
+                ..Default::default()
+            },
+        });
+        for i in 0..24 {
+            bank.note_on(0, 84 + (i % 3) as u8, 1.0); // +24..+26: full stretch
+        }
+        let n = 48000 * 4;
+        let t = std::time::Instant::now();
+        let mut acc = 0.0f32;
+        for _ in 0..n {
+            acc += bank.render_next(1.0).0;
+        }
+        let secs = t.elapsed().as_secs_f64();
+        println!(
+            "24 heads at 4x stretch: {:.1}x realtime (sink {acc})",
+            (n as f64 / 48000.0) / secs
+        );
     }
 
     #[test]

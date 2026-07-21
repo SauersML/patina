@@ -51,12 +51,20 @@ automate tapechoir.smp_gain
   0.7 R:72 0:8@lin
 
 # --- The chops ------------------------------------------------------------
-# "HOLD ON, THE LIGHT WILL FIND YOU" (5–16 s) cut into 8 pads from C4.
+# "HOLD ON, THE LIGHT WILL FIND YOU" (5–16 s) cut into 8 pads from C4,
+# through the SP-1200's converters (12 bits at 26.04 kHz, un-reconstructed
+# DAC) and the sampler's own lowpass, which opens as the section builds.
 # mono: each pad chokes the last. One-shot by default in chop mode.
-track chops sample=renders/hold-on.wav chop=8 start=5 end=16 root=C4 mono gain=0.9 len=0.5 vel=0.85
+track chops sample=renders/hold-on.wav chop=8 start=5 end=16 root=C4 bits=12 rate=26040 mono gain=0.9 len=0.5 vel=0.85
   >32 (C4 . D#4 . F4 C4 . G4)x4
   (C4 C4@0.6 D#4 . F4 . F#4 G4)x2 (C4 . D#4 . F4 C4 G4@0.6 G4)x2
   >64 C4 . . . F4 . . . C4:4 .:4
+
+automate chops.smp_cutoff
+  900 R:32 11000:24@exp
+
+automate chops.smp_res
+  0.35
 
 # --- The reverse swell ----------------------------------------------------
 # The hymn's decaying tail (50–55 s) played backwards: silence gathering
