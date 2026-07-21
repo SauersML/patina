@@ -6,6 +6,87 @@
 use std::fs::File;
 use std::io::{BufWriter, Result, Write};
 
+/// One wav per track channel, soloed through the same engine: what each
+/// instrument contributed, with its own sends ringing in the shared tanks.
+/// Channels that share a strip (all `kit=` tracks, all sampler tracks)
+/// bounce once under the first track's name.
+pub fn render_stems(song: &crate::song::Song, dir: &str) -> Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let mut done: Vec<u16> = Vec::new();
+    for (name, channel) in &song.tracks {
+        // group channels that mix as one strip
+        let key = if *channel == crate::drums::DRUM_CHANNEL {
+            crate::drums::DRUM_CHANNEL
+        } else if *channel >= crate::sampler::SAMPLER_CHANNEL_BASE {
+            crate::sampler::SAMPLER_CHANNEL_BASE
+        } else {
+            *channel
+        };
+        if done.contains(&key) {
+            continue;
+        }
+        done.push(key);
+        let path = format!("{}/{}.wav", dir.trim_end_matches('/'), name);
+        println!("stem: {} (channel {})", path, key);
+        let mut frames = crate::song::render_offline_solo(song, 48000.0, Some(key));
+        let peak = frames
+            .iter()
+            .fold(0.0f32, |a, &(l, r)| a.max(l.abs()).max(r.abs()));
+        if peak > 1e-6 {
+            // one shared gain across stems would preserve the mix, but a
+            // stem is a working file: give each the medium's headroom
+            let gain = 0.891 / peak;
+            for (l, r) in &mut frames {
+                *l *= gain;
+                *r *= gain;
+            }
+        }
+        write_wav(&path, &frames, 48000)?;
+    }
+    Ok(())
+}
+
+/// The parsed song as JSON: exact event times in seconds (post tempo
+/// map), note/param/channel payloads, and the track name map — so a
+/// visualization never needs its own .song parser to stay honest.
+pub fn export_events(song: &crate::song::Song, path: &str) -> Result<()> {
+    use std::io::Write;
+    let mut w = std::io::BufWriter::new(std::fs::File::create(path)?);
+    writeln!(w, "{{")?;
+    writeln!(w, "  \"tracks\": {{")?;
+    for (i, (name, ch)) in song.tracks.iter().enumerate() {
+        let comma = if i + 1 < song.tracks.len() { "," } else { "" };
+        writeln!(w, "    \"{}\": {}{}", name, ch, comma)?;
+    }
+    writeln!(w, "  }},")?;
+    writeln!(w, "  \"events\": [")?;
+    let n = song.events.len();
+    for (i, e) in song.events.iter().enumerate() {
+        let body = match &e.kind {
+            crate::song::EventKind::NoteOn { note, velocity, channel } => format!(
+                "\"type\":\"on\",\"note\":{},\"vel\":{:.4},\"ch\":{}",
+                note, velocity, channel
+            ),
+            crate::song::EventKind::NoteOff { note, channel } => {
+                format!("\"type\":\"off\",\"note\":{},\"ch\":{}", note, channel)
+            }
+            crate::song::EventKind::Param { param, value, channel } => format!(
+                "\"type\":\"param\",\"param\":\"{:?}\",\"value\":{:.6},\"ch\":{}",
+                param, value, channel
+            ),
+            crate::song::EventKind::Lyric { channel, .. } => {
+                format!("\"type\":\"lyric\",\"ch\":{}", channel)
+            }
+        };
+        let comma = if i + 1 < n { "," } else { "" };
+        writeln!(w, "    {{\"t\":{:.6},{}}}{}", e.time, body, comma)?;
+    }
+    writeln!(w, "  ]")?;
+    writeln!(w, "}}")?;
+    println!("Wrote {} ({} events)", path, n);
+    Ok(())
+}
+
 pub fn render_to_wav(song: &crate::song::Song, path: &str) -> Result<()> {
     let sample_rate = 48000.0f32;
     println!("Rendering {} events...", song.events.len());

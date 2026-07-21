@@ -64,6 +64,10 @@ pub struct Voice {
     /// per-sample slew step (1.0 = effectively instant).
     glide_offset: f32,
     glide_rate: f32,
+    /// External pitch CV (octaves from A440) — the voice box's
+    /// performance line. While present it replaces note pitch and
+    /// glide: the curve carries its own portamento, scoops and vibrato.
+    cv_override: Option<f32>,
     /// Juno-style sub-oscillator level: the first oscillator's divide-by-two
     /// square, mixed in before the filter.
     sub_level: f32,
@@ -179,6 +183,7 @@ impl Voice {
             drift_rng: seed.wrapping_mul(0x27D4_EB2F) | 1,
             glide_offset: 0.0,
             glide_rate: 1.0,
+            cv_override: None,
             sub_level: 0.0,
             osc_pitch_semi: [0.0, 0.0],
             osc_level: [0.72, 0.72],
@@ -250,6 +255,10 @@ impl Voice {
 
     pub fn set_glide_rate(&mut self, rate: f32) {
         self.glide_rate = rate.clamp(1e-7, 1.0);
+    }
+
+    pub fn set_cv_override(&mut self, cv: Option<f32>) {
+        self.cv_override = cv;
     }
 
     /// Diagnostic: remaining glide distance in octaves (0 = arrived).
@@ -436,7 +445,12 @@ impl Voice {
 
         // Glide: the CV settles toward the target note; exponential in
         // octave space, so the audible swoop is geometric in frequency
-        let pitch_mult = if self.glide_offset != 0.0 {
+        let pitch_mult = if let Some(cv) = self.cv_override {
+            // Performance line: absolute pitch, relative to the note the
+            // oscillators were tuned to at trigger
+            let note_cv = (self.note.unwrap_or(69) as f32 - 69.0) / 12.0;
+            pitch_mult * (cv - note_cv).exp2()
+        } else if self.glide_offset != 0.0 {
             // Linear slew, exact arrival: step toward the target and STOP
             if self.glide_offset.abs() <= self.glide_rate {
                 self.glide_offset = 0.0;

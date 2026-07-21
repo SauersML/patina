@@ -183,9 +183,24 @@ impl Reverb {
     }
 
     pub fn process(&mut self, input_left: f32, input_right: f32) -> (f32, f32) {
+        self.process_with_send(input_left, input_right, 0.0, 0.0)
+    }
+
+    /// The tank is linear, so the wet knob can live on the INPUT side:
+    /// tank(in * wet) == tank(in) * wet, bit-for-bit the legacy mix — and
+    /// a per-channel send bus becomes just another input into the same
+    /// tank, heard at unity regardless of the global wet knob.
+    pub fn process_with_send(
+        &mut self,
+        input_left: f32,
+        input_right: f32,
+        send_left: f32,
+        send_right: f32,
+    ) -> (f32, f32) {
         // Feed: mono sum through pre-delay and band limits into the
         // diffusion chain
-        let mono = (input_left + input_right) * 0.5;
+        let mono = (input_left + input_right) * 0.5 * self.wet
+            + (send_left + send_right) * 0.5;
         self.pre_delay.push(mono);
         let fed = self.pre_delay.read_int(self.pre_delay_samples);
         let fed = self.in_lp.process(fed);
@@ -226,8 +241,8 @@ impl Reverb {
         let wet_r = wet_r - self.out_hp_r.process(wet_r);
 
         (
-            input_left * self.dry + wet_l * self.wet,
-            input_right * self.dry + wet_r * self.wet,
+            input_left * self.dry + wet_l,
+            input_right * self.dry + wet_r,
         )
     }
 }

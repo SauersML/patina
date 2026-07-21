@@ -112,6 +112,10 @@ pub struct SpringReverb {
     springs: [Spring; 2],
     drive_hp: OnePoleHp,
     drive_lp: OnePoleLp,
+    send_hp: OnePoleHp,
+    send_lp: OnePoleLp,
+    // lets the springs ring out after a send burst even at zero wet
+    send_tail: f32,
     wet: f32,
     smoothed: f32,
 }
@@ -128,6 +132,9 @@ impl SpringReverb {
             // Drive/pickup electronics: springs pass roughly 120 Hz - 4 kHz
             drive_hp: OnePoleHp::new(120.0, sample_rate),
             drive_lp: OnePoleLp::new(4200.0, sample_rate),
+            send_hp: OnePoleHp::new(120.0, sample_rate),
+            send_lp: OnePoleLp::new(4200.0, sample_rate),
+            send_tail: 0.0,
             wet: 0.0,
             smoothed: 0.0,
         }
@@ -139,11 +146,28 @@ impl SpringReverb {
     }
 
     pub fn process(&mut self, left: f32, right: f32) -> (f32, f32) {
+        self.process_with_send(left, right, 0.0, 0.0)
+    }
+
+    /// The springs themselves are linear (dispersion, fixed decay), so
+    /// the wet control scales the DRIVEN global signal into the springs
+    /// — identical to scaling their output, the legacy law — and a
+    /// per-channel send drives its own input electronics into the same
+    /// pair of springs, heard at unity.
+    pub fn process_with_send(
+        &mut self,
+        left: f32,
+        right: f32,
+        send_left: f32,
+        send_right: f32,
+    ) -> (f32, f32) {
         self.smoothed += (self.wet - self.smoothed) * 0.001;
         let w = self.smoothed;
-        if w < 0.002 && self.wet < 0.002 {
+        let send = (send_left + send_right) * 0.5;
+        if w < 0.002 && self.wet < 0.002 && send.abs() < 1e-6 && self.send_tail < 1e-5 {
             return (left, right);
         }
+        self.send_tail = self.send_tail.max(send.abs()) * 0.9995;
 
         // Mono spring drive with soft input electronics
         let mono = (left + right) * 0.5;
@@ -152,17 +176,23 @@ impl SpringReverb {
             (x * (27.0 + x * x) / (27.0 + 9.0 * x * x)) / 1.8
         };
         let x = self.drive_lp.process(self.drive_hp.process(driven));
+        let sdriven = {
+            let x = (send * 1.8).clamp(-3.0, 3.0);
+            (x * (27.0 + x * x) / (27.0 + 9.0 * x * x)) / 1.8
+        };
+        let xs = self.send_lp.process(self.send_hp.process(sdriven));
 
-        let s0 = self.springs[0].process(x);
-        let s1 = self.springs[1].process(x);
+        let feed = x * w + xs;
+        let s0 = self.springs[0].process(feed);
+        let s1 = self.springs[1].process(feed);
 
         // The two pickup returns split unevenly into the stereo outputs
         let wet_l = (s0 * 0.85 + s1 * 0.35) * 1.7;
         let wet_r = (s1 * 0.85 + s0 * 0.35) * 1.7;
 
         (
-            left * (1.0 - w) + wet_l * w,
-            right * (1.0 - w) + wet_r * w,
+            left * (1.0 - w) + wet_l,
+            right * (1.0 - w) + wet_r,
         )
     }
 }

@@ -887,6 +887,9 @@ pub struct VoxBox {
     wav: Option<Vec<f32>>,
     wav_pos: usize,
     wav_active: bool,
+    /// Performance pitch line in MIDI notes, one value per engine
+    /// sample, indexed by `wav_pos` — the modulator's own clock.
+    pitch_curve: Option<Vec<f32>>,
     held: u32,
     // Smoothed output gains
     level: f32,
@@ -907,6 +910,7 @@ impl VoxBox {
             wav: None,
             wav_pos: 0,
             wav_active: false,
+            pitch_curve: None,
             held: 0,
             level: 0.8,
             level_t: 0.8,
@@ -958,6 +962,36 @@ impl VoxBox {
         self.wav = Some(out);
         self.wav_active = false;
         self.wav_pos = 0;
+    }
+
+    /// Load the performance pitch line (`pitch=` on a vox track): MIDI
+    /// note numbers sampled on the SAME clock as the modulator wav, so
+    /// the melody and the mouth can never drift apart. Values pass
+    /// through unnormalized — a float32 wav carries 62.0 as 62.0.
+    pub fn set_pitch_curve(&mut self, samples: &[f32], source_rate: u32) {
+        let ratio = source_rate as f64 / self.sample_rate as f64;
+        let out_len = (samples.len() as f64 / ratio) as usize;
+        let mut out = Vec::with_capacity(out_len);
+        for i in 0..out_len {
+            let t = i as f64 * ratio;
+            let i0 = t as usize;
+            let frac = (t - i0 as f64) as f32;
+            let a = samples[i0];
+            let b = samples[(i0 + 1).min(samples.len() - 1)];
+            out.push(a + (b - a) * frac);
+        }
+        self.pitch_curve = Some(out);
+    }
+
+    /// The performance line's pitch right now, as CV in octaves from
+    /// A440 — None when no curve is loaded or the recording is idle.
+    pub fn pitch_cv(&self) -> Option<f32> {
+        let curve = self.pitch_curve.as_ref()?;
+        if !self.wav_active || curve.is_empty() {
+            return None;
+        }
+        let m = curve[self.wav_pos.min(curve.len() - 1)];
+        Some((m - 69.0) / 12.0)
     }
 
     pub fn note_on(&mut self, note: u8, velocity: f32) {

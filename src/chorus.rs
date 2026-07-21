@@ -142,13 +142,37 @@ impl Chorus {
     }
 
 
+    /// Override the insert mix set by the mode switch: `0` keeps the bus
+    /// completely dry while the BBD still runs, so per-channel sends can
+    /// be chorused alone. Selecting a mode afterwards re-derives its
+    /// default mix, matching the hardware's switch behavior.
+    pub fn set_mix(&mut self, mix: f32) {
+        self.wet_dry_mix = mix.clamp(0.0, 1.0);
+    }
+
     pub fn process(&mut self, input_left: f32, input_right: f32) -> (f32, f32) {
+        self.process_with_send(input_left, input_right, 0.0, 0.0)
+    }
+
+    /// The BBD line is fed by the global bus scaled by the insert mix
+    /// PLUS the per-channel send bus at unity — so `chorus_mode` on with
+    /// `chorus_mix 0` chews only what the tracks send it.
+    pub fn process_with_send(
+        &mut self,
+        input_left: f32,
+        input_right: f32,
+        send_left: f32,
+        send_right: f32,
+    ) -> (f32, f32) {
         if self.mode == ChorusMode::Off {
             return (input_left, input_right);
         }
+        let m = self.wet_dry_mix.clamp(0.0, 1.0);
+        let fed_left = input_left * m + send_left;
+        let fed_right = input_right * m + send_right;
 
-        let high_passed_left = self.high_pass_left.process(input_left);
-        let high_passed_right = self.high_pass_right.process(input_right);
+        let high_passed_left = self.high_pass_left.process(fed_left);
+        let high_passed_right = self.high_pass_right.process(fed_right);
         let filtered_input_left = self.low_pass_left.process(high_passed_left);
         let filtered_input_right = self.low_pass_right.process(high_passed_right);
 
@@ -164,16 +188,17 @@ impl Chorus {
 
         let (left_output, right_output) = self.calculate_delay_samples(input_with_feedback_left, input_with_feedback_right);
 
-        let noise = self.noise_generator.generate();
+        // BBD hiss rides the line at the level the line is actually fed
+        let n_gain = if send_left != 0.0 || send_right != 0.0 { m.max(0.25) } else { m };
+        let noise = self.noise_generator.generate() * n_gain;
         let left_output = left_output + noise;
         let right_output = right_output + noise;
 
         let left_output = self.saturation.process(left_output);
         let right_output = self.saturation.process(right_output);
 
-        let wet_dry_mix = self.wet_dry_mix.clamp(0.0, 1.0);
-        let left = (1.0 - wet_dry_mix) * input_left + wet_dry_mix * left_output;
-        let right = (1.0 - wet_dry_mix) * input_right + wet_dry_mix * right_output;
+        let left = (1.0 - m) * input_left + left_output;
+        let right = (1.0 - m) * input_right + right_output;
 
         (left.clamp(-1.0, 1.0), right.clamp(-1.0, 1.0))
     }

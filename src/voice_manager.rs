@@ -255,6 +255,74 @@ impl DcBlocker {
     }
 }
 
+/// One track's mixer strip. `gain`/`pan` sit between the voice and the
+/// bus; the sends feed the spring, reverb and chorus tanks directly; and
+/// `duck` is the sidechain — every kick trigger snaps the envelope to 1,
+/// the strip's gain dips by `duck * env`, and `duck_release` sets how
+/// fast it breathes back.
+#[derive(Clone, Copy)]
+pub struct ChannelMix {
+    pub gain: f32,
+    pub pan: f32,
+    pub rev_send: f32,
+    pub spr_send: f32,
+    pub cho_send: f32,
+    pub duck: f32,
+    duck_decay: f32,
+    cur_gain: f32,
+    cur_pan: f32,
+    duck_env: f32,
+}
+
+impl ChannelMix {
+    fn new(sample_rate: f32) -> Self {
+        ChannelMix {
+            gain: 1.0,
+            pan: 0.0,
+            rev_send: 0.0,
+            spr_send: 0.0,
+            cho_send: 0.0,
+            duck: 0.0,
+            duck_decay: duck_decay_for(0.18, sample_rate),
+            cur_gain: 1.0,
+            cur_pan: 0.0,
+            duck_env: 0.0,
+        }
+    }
+}
+
+fn duck_decay_for(release_secs: f32, sample_rate: f32) -> f32 {
+    (-1.0 / (release_secs.max(0.01) * sample_rate)).exp()
+}
+
+/// Pass one channel's contribution through its mixer strip: ducked gain,
+/// constant-center balance pan, and taps into the three send buses.
+fn strip(
+    mixes: &HashMap<u16, ChannelMix>,
+    ch: u16,
+    l: f32,
+    r: f32,
+    spr: &mut (f32, f32),
+    rev: &mut (f32, f32),
+    cho: &mut (f32, f32),
+) -> (f32, f32) {
+    let Some(m) = mixes.get(&ch) else { return (l, r) };
+    let g = m.cur_gain * (1.0 - m.duck * m.duck_env);
+    let (mut l, mut r) = (l * g, r * g);
+    if m.cur_pan > 0.0 {
+        l *= 1.0 - m.cur_pan;
+    } else {
+        r *= 1.0 + m.cur_pan;
+    }
+    spr.0 += l * m.spr_send;
+    spr.1 += r * m.spr_send;
+    rev.0 += l * m.rev_send;
+    rev.1 += r * m.rev_send;
+    cho.0 += l * m.cho_send;
+    cho.1 += r * m.cho_send;
+    (l, r)
+}
+
 pub struct VoiceManager {
     pub voices: Vec<Voice>,
     /// The rhythm section: one 909-style analog drum board sharing the
@@ -296,6 +364,12 @@ pub struct VoiceManager {
     last_note_on_sample: u64,
     /// Per-song-channel parameter snapshots (the per-track patches).
     channel_params: HashMap<u16, ParamValues>,
+    /// Per-track mixer strip: gain, pan, effect sends, sidechain duck.
+    /// Channels absent from the map pass through untouched.
+    channel_mix: HashMap<u16, ChannelMix>,
+    /// Solo one channel (stem bounces): every other channel still
+    /// renders — oscillators free-run — but never reaches the bus.
+    solo: Option<u16>,
     pub params: ParamValues,
     pub scope: VecDeque<f32>,
     gain: f32, // smoothed master gain
@@ -349,6 +423,8 @@ impl VoiceManager {
             samples_rendered: 0,
             last_note_on_sample: u64::MAX,
             channel_params,
+            channel_mix: HashMap::new(),
+            solo: None,
             params,
             scope: VecDeque::with_capacity(SCOPE_LEN),
             gain: params.volume,
@@ -393,7 +469,40 @@ impl VoiceManager {
     /// Update one parameter on a channel and re-assert it on that
     /// channel's sounding voices — per-track automation. Bus-level
     /// parameters (effects, LFO, noise) fall through to the global path.
+    /// Solo one channel for a stem bounce (None restores the full mix).
+    pub fn set_solo(&mut self, channel: Option<u16>) {
+        self.solo = channel;
+    }
+
+    pub fn set_track_mix(&mut self, channel: u16, param: crate::song::Param, value: f32) {
+        use crate::song::Param as P;
+        let sr = self.sample_rate;
+        let m = self
+            .channel_mix
+            .entry(channel)
+            .or_insert_with(|| ChannelMix::new(sr));
+        match param {
+            P::TrackGain => m.gain = value.clamp(0.0, 2.0),
+            P::TrackPan => m.pan = value.clamp(-1.0, 1.0),
+            P::ReverbSend => m.rev_send = value.clamp(0.0, 1.0),
+            P::SpringSend => m.spr_send = value.clamp(0.0, 1.0),
+            P::ChorusSend => m.cho_send = value.clamp(0.0, 1.0),
+            P::DuckAmount => m.duck = value.clamp(0.0, 1.0),
+            P::DuckRelease => m.duck_decay = duck_decay_for(value, sr),
+            _ => {}
+        }
+    }
+
     pub fn set_channel_param(&mut self, channel: u16, param: crate::song::Param, value: f32) {
+        use crate::song::Param as P;
+        if matches!(
+            param,
+            P::TrackGain | P::TrackPan | P::ReverbSend | P::SpringSend
+                | P::ChorusSend | P::DuckAmount | P::DuckRelease
+        ) {
+            self.set_track_mix(channel, param, value);
+            return;
+        }
         if channel == 0 {
             param.apply(self, value);
             return;
@@ -420,6 +529,15 @@ impl VoiceManager {
         // is a trigger pulse onto the 909 board's trigger bus, velocity
         // riding the accent line
         if channel == DRUM_CHANNEL {
+            // The kick is the sidechain source: every BD trigger snaps
+            // the duck envelope of every strip that asked to be ducked
+            if note == 35 || note == 36 {
+                for m in self.channel_mix.values_mut() {
+                    if m.duck > 0.0 {
+                        m.duck_env = 1.0;
+                    }
+                }
+            }
             self.drums.trigger_note(note, velocity);
             return;
         }
@@ -903,6 +1021,10 @@ impl VoiceManager {
         self.vox.set_clarity(v.clamp(0.0, 1.0));
     }
 
+    pub fn set_vox_pitch(&mut self, samples: &[f32], source_rate: u32) {
+        self.vox.set_pitch_curve(samples, source_rate);
+    }
+
     pub fn set_vox_breath(&mut self, v: f32) {
         self.params.vox_breath = v.clamp(0.0, 1.0);
         self.vox.source.set_breath(self.params.vox_breath);
@@ -974,14 +1096,32 @@ impl VoiceManager {
         // free-run from power-on and the VCAs only close to their -60 dB
         // floor, so a "silent" instrument is still faintly alive — like
         // the hardware, and unlike digital silence
+        // Advance every mixer strip once per sample: smoothed gain and
+        // pan (no zipper under automation), duck envelopes breathing back
+        for m in self.channel_mix.values_mut() {
+            m.cur_gain += (m.gain - m.cur_gain) * 0.001;
+            m.cur_pan += (m.pan - m.cur_pan) * 0.001;
+            m.duck_env *= m.duck_decay;
+        }
+
         let mut left = 0.0;
         let mut right = 0.0;
+        // Per-channel effect-send buses, accumulated in volts like the bus
+        let mut send_spr = (0.0f32, 0.0f32);
+        let mut send_rev = (0.0f32, 0.0f32);
+        let mut send_cho = (0.0f32, 0.0f32);
         // Voices on the vox channel never reach the bus directly: they
         // are the vocoder's carrier, and only what the speech lets
         // through comes back
         let mut carrier = 0.0;
+        // The performance line: when a vox pitch curve is playing, it IS
+        // the carrier's pitch — portamento, scoops and vibrato included
+        let vox_cv = self.vox.pitch_cv();
         for (i, voice) in self.voices.iter_mut().enumerate() {
             let bleed = deltas[(i + n - 1) % n.max(1)] * CROSSTALK;
+            if voice.channel() == VOX_CHANNEL {
+                voice.set_cv_override(vox_cv);
+            }
             let (l, r) = voice.render_next(
                 noise,
                 pitch_mult,
@@ -990,9 +1130,14 @@ impl VoiceManager {
                 substrate,
                 bleed,
             );
-            if voice.channel() == VOX_CHANNEL {
+            let ch = voice.channel();
+            if ch == VOX_CHANNEL {
                 carrier += l + r;
-            } else {
+            } else if self.solo.map_or(true, |s| s == ch) {
+                let (l, r) = strip(
+                    &self.channel_mix, ch, l, r,
+                    &mut send_spr, &mut send_rev, &mut send_cho,
+                );
                 left += l;
                 right += r;
             }
@@ -1000,10 +1145,16 @@ impl VoiceManager {
 
         // The voice box: speech (formant voice or recorded wav) vocoding
         // the carrier, plus however much raw voice vox_dry lets out. Mono,
-        // center — one mouth.
+        // center — one mouth (with its own strip on the desk).
         let vox_out = self.vox.process(carrier);
-        left += vox_out;
-        right += vox_out;
+        if self.solo.map_or(true, |s| s == VOX_CHANNEL) {
+            let (vl, vr) = strip(
+                &self.channel_mix, VOX_CHANNEL, vox_out, vox_out,
+                &mut send_spr, &mut send_rev, &mut send_cho,
+            );
+            left += vl;
+            right += vr;
+        }
 
         // The rhythm section renders on the same bus, in the same volts.
         // It shares everything downstream — summing amp slew, fuzz,
@@ -1011,15 +1162,28 @@ impl VoiceManager {
         // rail, so a hard kick microscopically sags every oscillator:
         // the drum machine is IN the instrument, not beside it.
         let (dl, dr) = self.drums.render_next();
-        left += dl;
-        right += dr;
+        if self.solo.map_or(true, |s| s == DRUM_CHANNEL) {
+            let (dl, dr) = strip(
+                &self.channel_mix, DRUM_CHANNEL, dl, dr,
+                &mut send_spr, &mut send_rev, &mut send_cho,
+            );
+            left += dl;
+            right += dr;
+        }
 
         // The tape deck too: same bus, same volts, same rail load — and
         // its varispeed follows the shared bend/vibrato bus, so the pitch
-        // wheel bends tape and oscillators together
+        // wheel bends tape and oscillators together. One strip for the
+        // whole deck (its slots keep their own smp_gain/smp_pan).
         let (sl, sr) = self.sampler.render_next(pitch_mult);
-        left += sl;
-        right += sr;
+        if self.solo.map_or(true, |s| slot_for_channel(s).is_some()) {
+            let (sl, sr) = strip(
+                &self.channel_mix, crate::sampler::SAMPLER_CHANNEL_BASE, sl, sr,
+                &mut send_spr, &mut send_rev, &mut send_cho,
+            );
+            left += sl;
+            right += sr;
+        }
 
         // What the supply just delivered — next sample's rail load
         // (normalized back from volts so the substrate scale is unchanged)
@@ -1038,12 +1202,19 @@ impl VoiceManager {
         right *= g;
 
         // Fuzz first (a pedal in front of everything), then reverb and
-        // chorus with their own internal dry/wet; tape sits last, as if the
-        // whole mix were bounced to cassette
+        // chorus with their own internal dry/wet — each fed its per-track
+        // send bus at unity alongside the global knob; tape sits last, as
+        // if the whole mix were bounced to cassette
         let (left, right) = self.fuzz.process(left, right);
-        let (left, right) = self.spring.process(left, right);
-        let (left, right) = self.reverb.process(left, right);
-        let (left, right) = self.chorus.process(left, right);
+        let (left, right) =
+            self.spring
+                .process_with_send(left, right, send_spr.0 * g, send_spr.1 * g);
+        let (left, right) =
+            self.reverb
+                .process_with_send(left, right, send_rev.0 * g, send_rev.1 * g);
+        let (left, right) =
+            self.chorus
+                .process_with_send(left, right, send_cho.0 * g, send_cho.1 * g);
         let (left, right) = self.tape.process(left, right);
 
         let left = soft_limit(self.dc_left.process(left));
@@ -1065,6 +1236,10 @@ impl VoiceManager {
     pub fn set_reverb_wet(&mut self, wet: f32) {
         self.params.reverb_wet = wet.clamp(0.0, 1.0);
         self.reverb.set_wet(self.params.reverb_wet);
+    }
+
+    pub fn set_chorus_mix(&mut self, mix: f32) {
+        self.chorus.set_mix(mix);
     }
 
     pub fn set_chorus_mode(&mut self, mode: ChorusMode) {

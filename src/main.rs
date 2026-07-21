@@ -195,6 +195,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    // The parsed score as JSON: `--play x.song --export-events out.json`
+    let export_path = args
+        .iter()
+        .position(|a| a == "--export-events")
+        .and_then(|i| args.get(i + 1))
+        .cloned();
+    if let Some(out) = export_path.as_deref() {
+        let song = song_path.ok_or("--export-events requires --play <song.song>")?;
+        let song = song::load_song(song)?;
+        patina::render::export_events(&song, out)?;
+        return Ok(());
+    }
+
+    // One wav per track: `--play x.song --render-stems <dir>`
+    let stems_path = args
+        .iter()
+        .position(|a| a == "--render-stems")
+        .and_then(|i| args.get(i + 1))
+        .cloned();
+    if let Some(dir) = stems_path.as_deref() {
+        let song = song_path.ok_or("--render-stems requires --play <song.song>")?;
+        let song = song::load_song(song)?;
+        patina::render::render_stems(&song, dir)?;
+        return Ok(());
+    }
+
     let host = cpal::default_host();
     let device = host.default_output_device().expect("no output device available");
 

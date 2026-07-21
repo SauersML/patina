@@ -12,6 +12,14 @@
 //   track lead vel=0.9 len=0.5   # start a note track; tracks play in parallel.
 //                                # vel = default velocity (0..1)
 //                                # len = default token duration in beats (default 1)
+//                                # swing=0.56 leans every offbeat 16th late
+//                                # by (swing-0.5) of the pair (0.5 = straight).
+//                                # Mixer-strip options set the track's desk
+//                                # channel at bar one: gain= pan= (-1..1)
+//                                # reverb_send= spring_send= chorus_send=
+//                                # (0..1, into the shared tanks at unity)
+//                                # duck= (kick-keyed sidechain depth) and
+//                                # duck_release= (seconds back to full).
 //     E5:2 D5 C5 R:4 [C4 E4 G4]:2@0.6  | A4
 //
 //   track beat kit=909 len=0.5   # a drum track: kit= routes it to the
@@ -68,12 +76,23 @@
 //   R  or  .              rest
 //   :2                    duration suffix, in beats (floats allowed)
 //   @0.7                  velocity suffix (0..1)
+//   ~+0.02  ~-0.01        microtiming, in beats: push or drag this hit
+//                         off the grid (the cursor stays on it)
 //   |                     bar line, ignored (readability only)
 //
 // Automation tracks ramp a synth parameter through breakpoints:
 //
 //   automate cutoff
 //     400 8000:16@exp R:8 400:4@smooth
+//
+//   automate bpm          # the tempo itself is a lane: ritardando,
+//     170 90:16@smooth    # accelerando, half-time snaps — beats keep
+//                         # their musical positions, time stretches
+//
+//   Per-track mixer lanes ride the same syntax: `automate lead.gain`,
+//   `automate pad.pan`, `automate snare.reverb_send` (dub throws that
+//   touch only the snare), `automate bass.duck`. `automate chorus_mix`
+//   overrides the mode switch's insert mix (0 = bus dry, sends only).
 //
 //   The first token must be a plain value (the starting point). After that,
 //   V:D@shape means "ramp to V over D beats". R:D / .:D holds the current
@@ -237,6 +256,19 @@ pub enum Param {
     SmpRelease,
     SmpCutoff,
     SmpRes,
+    // The mixer desk (voice_manager::ChannelMix): every track owns a
+    // strip — gain and pan between voice and bus, sends into the spring,
+    // reverb and chorus tanks, and a kick-keyed sidechain duck. Channel-
+    // scoped: address them as `automate <track>.<param>`.
+    TrackGain,
+    TrackPan,
+    ReverbSend,
+    SpringSend,
+    ChorusSend,
+    DuckAmount,
+    DuckRelease,
+    // Global chorus insert mix override (the mode switch re-derives it)
+    ChorusMix,
 }
 
 pub(crate) fn waveform_from_value(value: f32) -> Waveform {
@@ -421,6 +453,11 @@ impl Param {
             Param::SmpRelease => (0.003, 8.0, Log),
             Param::SmpCutoff => (60.0, 20000.0, Log),
             Param::SmpRes => (0.0, 1.0, Lin),
+            Param::TrackGain => (0.0, 2.0, Lin),
+            Param::TrackPan => (-1.0, 1.0, Lin),
+            Param::ReverbSend | Param::SpringSend | Param::ChorusSend
+            | Param::DuckAmount | Param::ChorusMix => (0.0, 1.0, Lin),
+            Param::DuckRelease => (0.02, 2.0, Lin),
         }
     }
 }
@@ -520,6 +557,14 @@ impl Param {
             "smp_release" => Param::SmpRelease,
             "smp_cutoff" => Param::SmpCutoff,
             "smp_res" => Param::SmpRes,
+            "gain" => Param::TrackGain,
+            "pan" => Param::TrackPan,
+            "reverb_send" => Param::ReverbSend,
+            "spring_send" => Param::SpringSend,
+            "chorus_send" => Param::ChorusSend,
+            "duck" => Param::DuckAmount,
+            "duck_release" => Param::DuckRelease,
+            "chorus_mix" => Param::ChorusMix,
             _ => return None,
         })
     }
@@ -527,6 +572,10 @@ impl Param {
     pub(crate) fn apply(self, vm: &mut VoiceManager, value: f32) {
         match self {
             Param::Volume => vm.set_volume(value),
+            Param::TrackGain | Param::TrackPan | Param::ReverbSend
+            | Param::SpringSend | Param::ChorusSend | Param::DuckAmount
+            | Param::DuckRelease => vm.set_track_mix(0, self, value),
+            Param::ChorusMix => vm.set_chorus_mix(value),
             Param::WaveformSel => vm.set_waveform(waveform_from_value(value)),
             Param::Detune => vm.set_detune(value),
             Param::Cutoff => vm.set_filter_cutoff(value),
@@ -764,8 +813,8 @@ pub enum EventKind {
 }
 
 pub struct SongEvent {
-    time: f64, // seconds from song start
-    kind: EventKind,
+    pub time: f64, // seconds from song start
+    pub kind: EventKind,
 }
 
 /// A parsed song: the timed events plus each patch channel's parameter
@@ -776,9 +825,15 @@ pub struct Song {
     /// A recorded vocoder modulator (`wav=` on a vox track): mono samples
     /// and their source rate, resampled by the engine on registration.
     pub vox_wav: Option<(Vec<f32>, u32)>,
+    /// The performance pitch line (`pitch=` on a vox track): MIDI note
+    /// numbers in a float32 wav, on the modulator's clock.
+    pub vox_pitch: Option<(Vec<f32>, u32)>,
     /// The tape deck: slot i (= channel SAMPLER_CHANNEL_BASE + i) holds a
     /// loaded reel and its transport, from `sample=` tracks.
     pub samplers: Vec<crate::sampler::SamplerSlot>,
+    /// Every `track` line's name and the channel it landed on, in file
+    /// order — the map that stem bounces and event exports speak.
+    pub tracks: Vec<(String, u16)>,
 }
 
 pub fn load_song(path: &str) -> Result<Song, String> {
@@ -812,6 +867,9 @@ fn register_channels(vm: &mut VoiceManager, song: &Song) {
     if let Some((samples, rate)) = &song.vox_wav {
         vm.set_vox_wav(samples, *rate);
     }
+    if let Some((samples, rate)) = &song.vox_pitch {
+        vm.set_vox_pitch(samples, *rate);
+    }
     for (i, slot) in song.samplers.iter().enumerate() {
         vm.set_sampler_slot(i, slot.clone());
     }
@@ -821,7 +879,19 @@ fn register_channels(vm: &mut VoiceManager, song: &Song) {
 /// engine, no audio device. Returns interleaved-by-frame stereo samples,
 /// with a few seconds of tail for reverb and tape print-through to ring out.
 pub fn render_offline(song: &Song, sample_rate: f32) -> Vec<(f32, f32)> {
+    render_offline_solo(song, sample_rate, None)
+}
+
+/// Render with one channel soloed (stem bounces): everything still runs —
+/// oscillators free-run, tempo and automation march — but only the solo
+/// channel's strip reaches the bus and the sends.
+pub fn render_offline_solo(
+    song: &Song,
+    sample_rate: f32,
+    solo: Option<u16>,
+) -> Vec<(f32, f32)> {
     let mut vm = VoiceManager::new(sample_rate, 10);
+    vm.set_solo(solo);
     // A bounce records a warmed-up instrument, not a cold power-on
     vm.warm_up();
     register_channels(&mut vm, song);
@@ -862,8 +932,10 @@ pub fn spawn_player(song: Song, voice_manager: Arc<Mutex<VoiceManager>>) {
 
 enum TrackMode {
     None,
-    Notes { vel: f32, len: f64, channel: u16 },
+    Notes { vel: f32, len: f64, channel: u16, swing: f64 },
     Automation { param: Param, current: Option<f32>, channel: u16 },
+    /// `automate bpm`: tokens land on the tempo map, not the event list
+    Tempo { current: Option<f32> },
 }
 
 // (beats, order-rank, kind); rank makes offs < params < ons at equal times
@@ -876,7 +948,10 @@ fn parse_song(text: &str) -> Result<Song, String> {
     // Per-track patches: channel N+1 = channels[N]; channel 0 = the panel
     let mut channels: Vec<ParamValues> = Vec::new();
     let mut track_channels: Vec<(String, u16)> = Vec::new();
+    // `automate bpm` breakpoints, kept in beat-space until the end
+    let mut tempo_lane: Vec<(f64, AutoToken)> = Vec::new();
     let mut vox_wav: Option<(Vec<f32>, u32)> = None;
+    let mut vox_pitch: Option<(Vec<f32>, u32)> = None;
     let mut samplers: Vec<crate::sampler::SamplerSlot> = Vec::new();
 
     let mut mode = TrackMode::None;
@@ -925,11 +1000,40 @@ fn parse_song(text: &str) -> Result<Song, String> {
                 let mut smp_bits: Option<u32> = None;
                 let mut smp_rate: Option<u32> = None;
                 let mut smp_beats: Option<f64> = None;
+                let mut swing = 0.5f64;
+                // mixer-strip options (gain= pan= reverb_send= ... duck=)
+                // become Param events at beat 0 on this track's channel
+                let mut mix_opts: Vec<(Param, f32)> = Vec::new();
                 for opt in line.split_whitespace().skip(2) {
                     if let Some(v) = opt.strip_prefix("vel=") {
                         vel = v.parse::<f32>().map_err(|_| err(format!("invalid vel '{}'", v)))?;
                     } else if let Some(v) = opt.strip_prefix("len=") {
                         len = v.parse::<f64>().map_err(|_| err(format!("invalid len '{}'", v)))?;
+                    } else if let Some(v) = opt.strip_prefix("swing=") {
+                        swing = v
+                            .parse::<f64>()
+                            .map_err(|_| err(format!("invalid swing '{}'", v)))?;
+                        if !(0.4..=0.8).contains(&swing) {
+                            return Err(err("swing must be 0.4-0.8 (0.5 = straight)".into()));
+                        }
+                    } else if let Some((k, v)) = opt.split_once('=').filter(|(k, _)| {
+                        matches!(
+                            Param::from_name(k),
+                            Some(
+                                Param::TrackGain
+                                    | Param::TrackPan
+                                    | Param::ReverbSend
+                                    | Param::SpringSend
+                                    | Param::ChorusSend
+                                    | Param::DuckAmount
+                                    | Param::DuckRelease
+                            )
+                        )
+                    }) {
+                        let value = v
+                            .parse::<f32>()
+                            .map_err(|_| err(format!("invalid {} '{}'", k, v)))?;
+                        mix_opts.push((Param::from_name(k).unwrap(), value));
                     } else if opt.strip_prefix("kit=").is_some() {
                         // A drum track: notes route to the rhythm section
                         // (there is one board, so no per-track patches here)
@@ -942,6 +1046,13 @@ fn parse_song(text: &str) -> Result<Song, String> {
                         // A recorded modulator for the vocoder, instead of
                         // the built-in formant voice
                         vox_wav = Some(crate::vox::load_wav_mono(v).map_err(err)?);
+                        channel = crate::vox::VOX_CHANNEL;
+                    } else if let Some(v) = opt.strip_prefix("pitch=") {
+                        // The performance line: sample-accurate carrier
+                        // pitch (portamento, scoops, vibrato), authored
+                        // as MIDI notes in a float32 wav on the
+                        // modulator's clock
+                        vox_pitch = Some(crate::vox::load_wav_mono(v).map_err(err)?);
                         channel = crate::vox::VOX_CHANNEL;
                     } else if let Some(v) = opt.strip_prefix("patch=") {
                         // A private patch for this track: the file's
@@ -1031,8 +1142,11 @@ fn parse_song(text: &str) -> Result<Song, String> {
                     channel = crate::sampler::SAMPLER_CHANNEL_BASE + samplers.len() as u16;
                     samplers.push(crate::sampler::SamplerSlot { data, cfg });
                 }
+                for (param, value) in mix_opts {
+                    events.push((0.0, 1, EventKind::Param { param, value, channel }));
+                }
                 track_channels.push((name, channel));
-                mode = TrackMode::Notes { vel, len, channel };
+                mode = TrackMode::Notes { vel, len, channel, swing };
             }
             "automate" => {
                 let name = line
@@ -1056,6 +1170,11 @@ fn parse_song(text: &str) -> Result<Song, String> {
                     }
                     None => (0u16, name),
                 };
+                if pname == "bpm" && channel == 0 {
+                    track_beat = 0.0;
+                    mode = TrackMode::Tempo { current: None };
+                    continue;
+                }
                 let param = Param::from_name(pname)
                     .ok_or_else(|| err(format!("unknown parameter '{}'", pname)))?;
                 track_beat = 0.0;
@@ -1065,7 +1184,8 @@ fn parse_song(text: &str) -> Result<Song, String> {
                 TrackMode::None => {
                     return Err(err("event tokens before any 'track' or 'automate' line".into()));
                 }
-                TrackMode::Notes { vel, len, channel } => {
+                TrackMode::Notes { vel, len, channel, swing } => {
+                    let swing = *swing;
                     let (vel, len, channel) = (*vel, *len, *channel);
                     let drums = channel == crate::drums::DRUM_CHANNEL;
                     let line = expand_groups(line).map_err(err)?;
@@ -1086,8 +1206,19 @@ fn parse_song(text: &str) -> Result<Song, String> {
                             Some(i) => (token[..i].to_string(), Some(&token[i + 1..])),
                             None => (token.clone(), None),
                         };
-                        let (notes, dur, vel) = parse_note_token(&token, vel, len, drums)
-                            .map_err(|m| err(format!("token '{}': {}", token, m)))?;
+                        let (notes, dur, vel, shift) =
+                            parse_note_token(&token, vel, len, drums)
+                                .map_err(|m| err(format!("token '{}': {}", token, m)))?;
+                        // swing: every offbeat 16th in the pair leans late
+                        // by (swing - 0.5) of the pair; the cursor stays
+                        // on the grid so durations never accumulate error
+                        let ph = track_beat.rem_euclid(0.5);
+                        let lean = if swing != 0.5 && (ph - 0.25).abs() < 1e-6 {
+                            (swing - 0.5) * 0.5
+                        } else {
+                            0.0
+                        };
+                        let sound_beat = (track_beat + shift + lean).max(0.0);
                         if let Some(lyric) = lyric {
                             if channel != crate::vox::VOX_CHANNEL {
                                 return Err(err(format!(
@@ -1103,16 +1234,22 @@ fn parse_song(text: &str) -> Result<Song, String> {
                             }
                             let syl = crate::vox::parse_lyric(lyric)
                                 .map_err(|m| err(format!("token '{}': {}", token, m)))?;
+                            let ph = track_beat.rem_euclid(0.5);
+                            let lean = if swing != 0.5 && (ph - 0.25).abs() < 1e-6 {
+                                (swing - 0.5) * 0.5
+                            } else {
+                                0.0
+                            };
                             events.push((
-                                track_beat,
+                                (track_beat + lean).max(0.0),
                                 1,
                                 EventKind::Lyric { syl, channel },
                             ));
                         }
-                        let off_beat = track_beat + dur * gate;
+                        let off_beat = sound_beat + dur * gate;
                         for &note in &notes {
                             events.push((
-                                track_beat,
+                                sound_beat,
                                 2,
                                 EventKind::NoteOn { note, velocity: vel, channel },
                             ));
@@ -1160,6 +1297,45 @@ fn parse_song(text: &str) -> Result<Song, String> {
                         }
                     }
                 }
+                TrackMode::Tempo { current } => {
+                    let line = expand_groups(line).map_err(err)?;
+                    for token in tokenize(&line).map_err(err)? {
+                        if token == "|" {
+                            continue;
+                        }
+                        if let Some(beat) = token.strip_prefix('>') {
+                            track_beat = beat
+                                .parse::<f64>()
+                                .map_err(|_| err(format!("invalid seek '{}'", token)))?;
+                            continue;
+                        }
+                        let seg = parse_automation_token(&token)
+                            .map_err(|m| err(format!("token '{}': {}", token, m)))?;
+                        match seg {
+                            AutoToken::Hold(dur) => track_beat += dur,
+                            AutoToken::Set(value) => {
+                                if !(20.0..=400.0).contains(&value) {
+                                    return Err(err("bpm must be 20-400".into()));
+                                }
+                                tempo_lane.push((track_beat, AutoToken::Set(value)));
+                                *current = Some(value);
+                            }
+                            AutoToken::Ramp { to, dur, shape } => {
+                                if current.is_none() {
+                                    return Err(err(
+                                        "first bpm token must be a plain value".into(),
+                                    ));
+                                }
+                                if !(20.0..=400.0).contains(&to) {
+                                    return Err(err("bpm must be 20-400".into()));
+                                }
+                                tempo_lane.push((track_beat, AutoToken::Ramp { to, dur, shape }));
+                                *current = Some(to);
+                                track_beat += dur;
+                            }
+                        }
+                    }
+                }
             },
         }
     }
@@ -1174,16 +1350,62 @@ fn parse_song(text: &str) -> Result<Song, String> {
             .then(a.1.cmp(&b.1))
     });
 
-    let secs_per_beat = 60.0 / bpm;
+    let max_beat = events.iter().map(|e| e.0).fold(0.0f64, f64::max);
+    let time_of = tempo_map(bpm, &tempo_lane, max_beat);
     Ok(Song {
         events: events
             .into_iter()
-            .map(|(beats, _, kind)| SongEvent { time: beats * secs_per_beat, kind })
+            .map(|(beats, _, kind)| SongEvent { time: time_of(beats), kind })
             .collect(),
         channels,
         vox_wav,
+        vox_pitch,
         samplers,
+        tracks: track_channels,
     })
+}
+
+/// Compile the tempo lane into beat -> seconds. The lane is sampled at
+/// automation resolution and 60/bpm integrated cumulatively, so ramps
+/// (ritardando, accelerando, with any shape) land sample-accurately —
+/// events keep their musical positions and time stretches around them.
+fn tempo_map(base_bpm: f64, lane: &[(f64, AutoToken)], max_beat: f64) -> impl Fn(f64) -> f64 {
+    let res = AUTOMATION_STEPS_PER_BEAT;
+    let n = ((max_beat + 8.0) * res).ceil() as usize + 2;
+    let mut bpm_at = vec![base_bpm as f32; n];
+    for &(beat, ref tok) in lane {
+        let i0 = ((beat * res).round() as usize).min(n - 1);
+        match *tok {
+            AutoToken::Set(v) => {
+                for x in &mut bpm_at[i0..] {
+                    *x = v;
+                }
+            }
+            AutoToken::Ramp { to, dur, shape } => {
+                let i1 = (((beat + dur) * res).round() as usize).clamp(i0 + 1, n);
+                let from = bpm_at[i0];
+                for k in i0..i1 {
+                    let t = (k - i0) as f32 / (i1 - i0) as f32;
+                    bpm_at[k] = shape.interpolate(from, to, t);
+                }
+                for x in &mut bpm_at[i1.min(n)..] {
+                    *x = to;
+                }
+            }
+            AutoToken::Hold(_) => {}
+        }
+    }
+    let mut time = vec![0.0f64; n];
+    for i in 1..n {
+        let mid = 0.5 * (bpm_at[i - 1] + bpm_at[i]) as f64;
+        time[i] = time[i - 1] + (60.0 / mid) / res;
+    }
+    move |beat: f64| {
+        let x = (beat * res).max(0.0);
+        let i = (x as usize).min(n - 2);
+        let frac = x - i as f64;
+        time[i] + (time[i + 1] - time[i]) * frac
+    }
 }
 
 /// One tape-deck track option. Times are seconds on the source recording;
@@ -1409,10 +1631,22 @@ fn parse_note_token(
     default_vel: f32,
     default_len: f64,
     drums: bool,
-) -> Result<(Vec<u8>, f64, f32), String> {
+) -> Result<(Vec<u8>, f64, f32, f64), String> {
     let mut s = token;
     let mut vel = default_vel;
     let mut dur = default_len;
+    // `~+0.02` / `~-0.01`: push or drag this hit by beats without moving
+    // the grid — feel, at last, without absolute-seek gymnastics
+    let mut shift = 0.0f64;
+    if let Some(i) = s.rfind('~') {
+        shift = s[i + 1..]
+            .parse::<f64>()
+            .map_err(|_| "invalid timing shift".to_string())?;
+        if shift.abs() > 0.5 {
+            return Err("timing shift must be within +/-0.5 beats".into());
+        }
+        s = &s[..i];
+    }
 
     if let Some(i) = s.rfind('@') {
         vel = s[i + 1..].parse::<f32>().map_err(|_| "invalid velocity".to_string())?;
@@ -1445,7 +1679,7 @@ fn parse_note_token(
         vec![one(s)?]
     };
 
-    Ok((notes, dur, vel.clamp(0.0, 1.0)))
+    Ok((notes, dur, vel.clamp(0.0, 1.0), shift))
 }
 
 /// Parse a note name like C4, F#3, Eb5 (C4 = MIDI 60), or a raw MIDI number.
@@ -1509,21 +1743,21 @@ mod tests {
 
     #[test]
     fn note_tokens() {
-        let (notes, dur, vel) = parse_note_token("C4:2@0.7", 0.8, 1.0, false).unwrap();
+        let (notes, dur, vel, _) = parse_note_token("C4:2@0.7", 0.8, 1.0, false).unwrap();
         assert_eq!(notes, vec![60]);
         assert_eq!(dur, 2.0);
         assert_eq!(vel, 0.7);
 
-        let (notes, dur, _) = parse_note_token("[C4 E4 G4]:0.5", 0.8, 1.0, false).unwrap();
+        let (notes, dur, _, _) = parse_note_token("[C4 E4 G4]:0.5", 0.8, 1.0, false).unwrap();
         assert_eq!(notes, vec![60, 64, 67]);
         assert_eq!(dur, 0.5);
 
-        let (notes, dur, _) = parse_note_token("R:4", 0.8, 1.0, false).unwrap();
+        let (notes, dur, _, _) = parse_note_token("R:4", 0.8, 1.0, false).unwrap();
         assert!(notes.is_empty());
         assert_eq!(dur, 4.0);
 
         // default duration comes from the track's len option
-        let (_, dur, _) = parse_note_token("C4", 0.8, 0.5, false).unwrap();
+        let (_, dur, _, _) = parse_note_token("C4", 0.8, 0.5, false).unwrap();
         assert_eq!(dur, 0.5);
     }
 
