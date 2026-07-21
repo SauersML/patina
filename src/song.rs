@@ -1033,6 +1033,17 @@ fn parse_song(text: &str) -> Result<Song, String> {
                     channel = crate::sampler::SAMPLER_CHANNEL_BASE + samplers.len() as u16;
                     samplers.push(crate::sampler::SamplerSlot { data, cfg });
                 }
+                // A bare synth track gets a PRIVATE channel seeded from
+                // the panel's musical default. It used to play on channel
+                // 0 — the live panel itself — where per-track voice-level
+                // automation silently lost to (or fought over) the shared
+                // panel state: `automate sub.waveform 0` left three
+                // detuned saws playing. Same sound at rest, but now the
+                // track's automation actually lands on its own voice.
+                if channel == 0 {
+                    channels.push(ParamValues::default());
+                    channel = channels.len() as u16;
+                }
                 for (param, value) in mix_opts {
                     events.push((0.0, 1, EventKind::Param { param, value, channel }));
                 }
@@ -2076,13 +2087,15 @@ mod tests {
              2000\n",
         )
         .unwrap();
-        assert_eq!(song.channels.len(), 1, "one patch track -> one channel");
+        // patch track -> channel 1; the bare pad now gets its own
+        // private channel too (2) instead of squatting on the panel
+        assert_eq!(song.channels.len(), 2, "patch channel + bare-track channel");
         // lead notes carry channel 1, pad notes channel 0
         let lead_on = song.events.iter().any(|e| {
             matches!(e.kind, EventKind::NoteOn { note: 72, channel: 1, .. })
         });
         let pad_on = song.events.iter().any(|e| {
-            matches!(e.kind, EventKind::NoteOn { note: 48, channel: 0, .. })
+            matches!(e.kind, EventKind::NoteOn { note: 48, channel: 2, .. })
         });
         assert!(lead_on && pad_on);
         // dotted automation tagged to channel 1, plain to channel 0
@@ -2506,5 +2519,30 @@ mod tests {
                 "syllable {k} must stand clear of the gap: {sung} vs {gap}"
             );
         }
+    }
+
+    #[test]
+    fn bare_tracks_get_private_channels() {
+        // Two bare synth tracks must not share the live panel (channel
+        // 0) — per-track automation must land on a private channel.
+        let src = "bpm 120\ntrack a vel=0.8\n  C4:1\ntrack b vel=0.8\n  E4:1\n";
+        let dir = std::env::temp_dir().join("patina_bare_ch_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.song");
+        std::fs::write(&path, src).unwrap();
+        let song = load_song(path.to_str().unwrap()).unwrap();
+        let mut chans: Vec<u16> = song
+            .events
+            .iter()
+            .filter_map(|e| match e.kind {
+                EventKind::NoteOn { channel, .. } => Some(channel),
+                _ => None,
+            })
+            .collect();
+        chans.sort_unstable();
+        chans.dedup();
+        assert_eq!(chans.len(), 2, "two tracks, two channels: {chans:?}");
+        assert!(!chans.contains(&0), "no bare track may sit on the live panel");
+        assert_eq!(song.channels.len(), 2);
     }
 }
