@@ -3,10 +3,13 @@
 # Not the vocoder: vox_mode 2 is the LPC formant tracker, the true
 # talk-box circuit, tuned by measurement against the isolated HBFS
 # vocals (see faster-higher.song). The modulator is one beat-grid wav
-# (renders/talkbox-duet.wav, built by scripts/talkbox-duet.py):
-# af_heart at +3 st varispeed answers am_michael at natural pitch —
-# two throats, one tube, syllable per note. The engine has a single
-# vox_wav slot, so the duet is cut into the wav, not into tracks.
+# (renders/talkbox-flow.wav, built by scripts/talkbox-flow.py): each
+# 8-beat phrase is ONE continuous Kokoro utterance — coarticulated,
+# human, the way a talkbox player sings through the tube — af_heart
+# lifted a small varispeed into the reference's register, am_michael
+# at natural pitch. The riff's note changes ride over the flowing
+# speech. The engine has a single vox_wav slot, so the duet is cut
+# into the wav, not into tracks.
 
 bpm 120
 gate 0.98
@@ -24,9 +27,9 @@ automate reverb_decay
 automate tape_drive
   0.25
 automate tape_age
-  0.08
+  0.45
 
-track voice vox wav=renders/talkbox-duet.wav vel=1 len=1
+track voice vox wav=renders/talkbox-flow.wav vel=1 len=1
   A3 A3 C4 C4 D4 D4 E4 D4
   C4 C4 A3 A3 G3 G3 A3 C4
   A3 A3 C4 D4 E4 E4 G4 E4
