@@ -1,0 +1,65 @@
+# Talkbox Duet — two Kokoro voices trading lines through the Talker.
+#
+# Not the vocoder: vox_mode 2 is the LPC formant tracker, the true
+# talk-box circuit, tuned by measurement against the isolated HBFS
+# vocals (see faster-higher.song). The modulator is one beat-grid wav
+# (renders/talkbox-duet.wav, built by scripts/talkbox-duet.py):
+# af_heart at +3 st varispeed answers am_michael at natural pitch —
+# two throats, one tube, syllable per note. The engine has a single
+# vox_wav slot, so the duet is cut into the wav, not into tracks.
+
+bpm 120
+gate 0.98
+
+automate vox_mode
+  2
+automate vox_level
+  1
+automate vox_dry
+  0
+automate reverb_wet
+  0.16
+automate reverb_decay
+  0.5
+automate tape_drive
+  0.25
+automate tape_age
+  0.08
+
+track voice vox wav=renders/talkbox-duet.wav vel=1 len=1
+  A3 A3 C4 C4 D4 D4 E4 D4
+  C4 C4 A3 A3 G3 G3 A3 C4
+  A3 A3 C4 D4 E4 E4 G4 E4
+  D4 D4 C4 C4 A3 G3 A3 A3
+  A3 A3 C4 C4 D4 D4 E4 D4
+  C4 C4 A3 A3 G3 G3 A3 C4
+  A3 A3 C4 D4 E4 E4 G4 E4
+  D4 D4 C4 C4 A3 G3 A3 A3
+
+automate voice.detune
+  8
+automate voice.osc2_level
+  0.6
+automate voice.osc2_pitch
+  0
+automate voice.osc3_level
+  0
+automate voice.sub
+  0
+automate voice.drive
+  2
+automate voice.saturation
+  0.3
+automate voice.release
+  0.03
+automate voice.attack
+  0.004
+
+track bass patch=deepsine vel=0.65 len=0.5
+  (A1 . . A1 . . A1 . | F1 . . F1 . G1 . .)x2
+  (A1 . . A1 . . A1 . | F1 . . F1 . G1 G1 .)x2
+  (A1 . . A1 . . A1 . | F1 . . F1 . G1 . .)x2
+  (A1 . . A1 . . A1 . | F1 . . F1 . G1 G1 .)x2 A1:2
+
+track beat kit=909 len=0.5
+  (BD CH:0.25 CH:0.25 OH@0.5 BD CH SD@0.5 CH | BD CH:0.25 CH:0.25 OH@0.5 BD CH SD@0.6 [CH OH]@0.5)x8 [BD CP]:1
