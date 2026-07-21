@@ -1,0 +1,60 @@
+# Hold On — a hymn for the voice box, written for what it can already do.
+#
+# The choir hums first (a sustained M — no vowel, so the murmur holds),
+# then opens into the line "HOLD ON, THE LIGHT WILL FIND YOU HOME".
+# Stanza one sings close and small through the TalkBox circuit; in the
+# breath before stanza two the mode switch flips to the full-range
+# studio board, the carrier filter opens, and breath and vibrato bloom
+# into the long final HOME — whose M coda hums the piece closed.
+#
+# Every bit of expression here is hand-shaped: velocities rise and fall
+# through the line, diphthongs (OW, AY) glide their own formants, codas
+# (L-D, N-D, M) land on the releases.
+
+bpm 66
+gate 0.94
+
+automate vox_level
+  0.9
+automate vox_mode
+  0 R:31 1
+automate vox_breath
+  0.1 R:24 0.2:6@smooth R:14 0.42:8@smooth
+automate vox_vibrato
+  0.15 R:24 0.35:6@smooth R:19 0.6:8@smooth
+# The room: warm tape, long soft reverb, a breath of BBD chorus
+automate reverb_wet
+  0.42
+automate reverb_decay
+  0.82
+automate tape_age
+  0.3
+automate tape_wow
+  0.12
+automate chorus_mode
+  1
+automate chorus_depth
+  0.25
+automate chorus_rate
+  0.4
+
+track choir vox vel=0.7
+  [A2 E3 A3 C4]:6@0.5=M R:1
+  [F2 C3 F3 A3]:3@0.65=HH-OW-L-D [G2 D3 G3 B3]:3@0.6=AA-N
+  [A2 E3 A3 C4]:1@0.55=DH-AH [A2 E3 A3 C4]:3@0.75=L-AY-T
+  [C3 G3 C4 E4]:2@0.6=W-IH-L [F2 C3 F3 A3]:3@0.8=F-AY-N-D
+  [G2 D3 G3 B3]:2@0.65=Y-UW [A2 E3 A3 C4]:6@0.7=HH-OW-M
+  R:2
+  [F2 C3 F3 A3 C4]:3@0.8=HH-OW-L-D [G2 D3 G3 B3 D4]:3@0.75=AA-N
+  [A2 E3 A3 C4]:1@0.7=DH-AH [A2 E3 A3 C4 E4]:3@0.9=L-AY-T
+  [C3 G3 C4 E4]:2@0.75=W-IH-L [F2 C3 F3 A3 C4]:3@0.95=F-AY-N-D
+  [G2 D3 G3 B3 D4]:2@0.8=Y-UW [A2 E3 A3 C4 E4]:10@1=HH-OW-M
+
+# The carrier darkens for the close first stanza, opens for the second
+automate choir.cutoff
+  3500 R:30 12000:6@exp
+
+# A sine sub an octave under the choir's roots, entering with the words
+track bass patch=deepsine vel=0.5 len=1
+  >7 F1:3 G1:3 A1:4 C2:2 F1:3 G1:2 A1:6
+  >32 F1:3 G1:3 A1:4 C2:2 F1:3 G1:2 A1:10
