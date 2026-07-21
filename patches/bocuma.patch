@@ -1,22 +1,21 @@
-# The Kaini / Bocuma voice — SH-101 architecture, set from the
-# community's verified SH-01A recreation sheet and checked against
-# the record by harmonic analysis:
-#   saw dominant + a touch of pulse + a touch of TWO-octave-down
-#   square (osc3 at -24 here) — noise is a bus source in Patina, so
-#   add `automate noise / 0.1` in the song. VCF key-follow ~0.7 with
-#   a real filter envelope (long decay: every note dims as it
-#   sustains). Fast attack, long decay, gentle portamento. The wow
-#   and the room are the song's job: tape_wow high, tape_drive some,
-#   reverb generous. PLAY AT WRITTEN PITCH (saw carries the note).
+# The Kaini/Bocuma voice, corrected architecture: an SH-101 is ONE
+# VCO whose saw and sub are phase-locked outputs of the same core.
+# Faking the mixer with separate free-running oscillators makes a
+# thin beating double — so this patch uses only osc1 (saw) plus the
+# TRUE sub-oscillator, which is phase-locked to the core by
+# construction (the divider shares its phase), exactly like the
+# hardware. One solid voice.
+# Filter: key-followed ladder with a breathing envelope; driven and
+# saturated for body. Wow/reverb live in the song.
 waveform 2
-osc2_wave 1
+osc2_wave 2
 osc2_pitch 0
-osc2_level 0.25
-osc3_wave 1
-osc3_pitch -24
-osc3_level 0.35
+osc2_level 0
+osc3_wave 2
+osc3_pitch 0
+osc3_level 0
 detune 0
-sub 0
+sub 0.7
 circuit 0
 key_track 0.7
 osc_fm 0
@@ -26,7 +25,7 @@ glide 0.03
 pulse_width 0.5
 attack 0.018
 decay 1.0
-sustain 0.55
+sustain 0.6
 release 0.5
 filter_env 1.2
 filter_attack 0.005
@@ -35,6 +34,6 @@ filter_sustain 0.55
 filter_release 0.5
 cutoff 1150
 resonance 1.1
-drive 1.6
+drive 1.7
 saturation 0.8
 hpf 16

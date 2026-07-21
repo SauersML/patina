@@ -17,7 +17,7 @@ automate tape_age
 automate tape_drive
 0.3
 automate noise
-0.02
+0
 track v patch=bocuma
 A#3:8
 >10 (A#3:0.25 D4:0.25 F4:0.25 A#4:0.25 F4:0.25 D4:0.25)x8
