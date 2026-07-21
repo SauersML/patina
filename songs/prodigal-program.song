@@ -38,22 +38,29 @@ automate reverb_decay
 # ---- the groove ------------------------------------------------------
 track beat kit=909 len=1
   R:16
-  (BD:1@0.85 SD:0.75@0.7 BD:1.25@0.6 SD:1@0.75 BD:1@0.85 SD:1.5@0.7 BD:0.5@0.65 SD:1@0.75)x14
+  (BD:1@0.9 SD:0.75@0.75 BD:0.5@0.6 BD:0.75@0.7 SD:1@0.8 BD:1@0.9 SD:1.5@0.75 BD:0.5@0.65 SD:0.75@0.8 BD:0.25@0.5)x3
+  BD:1@0.9 SD:0.75@0.75 BD:0.5@0.6 BD:0.75@0.7 SD:1@0.8 BD:1@0.9 SD:1@0.8 R:2
+  (BD:1@0.9 SD:0.75@0.75 BD:0.5@0.6 BD:0.75@0.7 SD:1@0.8 BD:1@0.9 SD:1.5@0.75 BD:0.5@0.65 SD:0.75@0.8 BD:0.25@0.5)x3
+  BD:1@0.9 SD:0.75@0.75 BD:0.5@0.6 BD:0.75@0.7 SD:1@0.8 BD:1@0.9 SD:1@0.8 R:2
+  (BD:1@0.9 SD:0.75@0.75 BD:0.5@0.6 BD:0.75@0.7 SD:1@0.8 BD:1@0.9 SD:1.5@0.75 BD:0.5@0.65 SD:0.75@0.8 BD:0.25@0.5)x2
+  BD:1@0.9 SD:3@0.8 R:4
+  (BD:1@0.9 SD:0.75@0.75 BD:0.5@0.6 BD:0.75@0.7 SD:1@0.8 BD:1@0.9 SD:1.5@0.75 BD:0.5@0.65 SD:0.75@0.8 BD:0.25@0.5)x2
+  BD:1@0.9 SD:0.75@0.75 BD:0.5@0.6 BD:0.75@0.7 SD:1@0.8 BD:1@0.9 SD:1@0.8 R:2
   R:24
 
+automate bd_level
+  0.9
+automate bd_drive
+  0.4
+automate bd_decay
+  0.6
 automate sd_level
-  0.5
+  0.7
 automate sd_tune
   0.3
 automate sd_snappy
-  0.35
+  0.4
 
-automate bd_level
-  0.8
-automate bd_decay
-  0.55
-automate bd_drive
-  0.15
 
 # hats: four swung '&'s per bar, silent through C, a small fill
 # closing every fourth bar — an accent pattern, not wallpaper
@@ -66,15 +73,24 @@ track hats sample=renders/prodigal/percgrid.wav root=C3 chop=4 mono bits=12 rate
   R:24
 
 # the TSS air layered over the 909 snare body — two spectra, one hit
-track snare sample=renders/prodigal/percgrid.wav root=C3 chop=4 bits=12 rate=26040 gain=1.5 len=1
+track snare sample=renders/prodigal/percgrid.wav root=C3 chop=4 bits=12 rate=26040 gain=1.7 len=1
   R:16
-  (R:1 D3:0.75@0.8 R:1.25 D3:1@0.85 R:1 D3:1.5@0.8 R:0.5 D3:1@0.85)x14
+  (R:0.75 D3:0.25@0.3 D3:2@0.9 D3:1@0.85 R:1 D3:2@0.9 D3:0.5@0.85 C3:0.25@0.5 C#3:0.25@0.45)x3
+  R:0.75 D3:0.25@0.3 D3:2@0.9 D3:1@0.85 R:1 D3:1@0.9 R:2
+  (R:0.75 D3:0.25@0.3 D3:2@0.9 D3:1@0.85 R:1 D3:2@0.9 D3:0.5@0.85 C3:0.25@0.5 C#3:0.25@0.45)x3
+  R:0.75 D3:0.25@0.3 D3:2@0.9 D3:1@0.85 R:1 D3:1@0.9 R:2
+  (R:0.75 D3:0.25@0.3 D3:2@0.9 D3:1@0.85 R:1 D3:2@0.9 D3:0.5@0.85 C3:0.25@0.5 C#3:0.25@0.45)x2
+  R:1 D3:0.5@0.4 R:2.5 D3:0.25@0.3 D3:0.25@0.4 R:3.5
+  (R:0.75 D3:0.25@0.3 D3:2@0.9 D3:1@0.85 R:1 D3:2@0.9 D3:0.5@0.85 C3:0.25@0.5 C#3:0.25@0.45)x2
+  R:0.75 D3:0.25@0.3 D3:2@0.9 D3:1@0.85 R:1 D3:1@0.9 R:2
   R:24
 
 automate snare.reverb_send
   0.35
 automate hats.reverb_send
   0.12
+automate hats.gain
+  1.35
 
 # ---- the bed: breath, tuned and breathing ----------------------------
 track voxbass sample=renders/prodigal/mmm.wav root=G#2 loop=0.90:2.06 xfade=0.31 attack=0.3 release=0.8 gain=1.7 cutoff=900 len=8
@@ -141,9 +157,6 @@ track rebootS sample=renders/prodigal/rebootS.wav root=C3 mode=oneshot gain=1.3 
 
 automate rebootS.reverb_send
   0.2
-
-track shib sample=renders/prodigal/shibboleth.wav root=C3 mode=oneshot gain=1.2 len=1
-  R:56 C3:8 R:88
 
 # the ladder: once, spoken, rhythmic
 track worm sample=renders/prodigal/wormhole.wav root=C3 chop=6 mono bits=12 rate=26040 gain=1.3 len=1
