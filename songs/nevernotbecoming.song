@@ -31,7 +31,7 @@ automate vox_level
 automate vox_mode
   2 R:8 1:0.2 R:7.8 2:0.2 R:111.8 1:0.2 R:59.8 2:0.2 R:63.8 1:0.2 R:51.8 2:0.2 R:119.8 1:0.2 R:19.8 2:0.2 R:7.6
 automate vox_dry
-  0.22 R:8 0.08:0.2 R:7.8 0.22:0.2 R:111.8 0.08:0.2 R:59.8 0.22:0.2 R:63.8 0.08:0.2 R:51.8 0.22:0.2 R:119.8 0.08:0.2 R:19.8 0.22:0.2 R:7.6
+  0.5 R:8 0.15:0.2 R:7.8 0.5:0.2 R:111.8 0.15:0.2 R:59.8 0.5:0.2 R:63.8 0.15:0.2 R:51.8 0.5:0.2 R:119.8 0.15:0.2 R:19.8 0.5:0.2 R:7.6
 automate reverb_wet
   0.2 R:128 0.3:1 R:59 0.2:1 R:63 0.3:1 R:51 0.2:1 R:119 0.32:1 R:26.4
 automate reverb_decay
@@ -46,17 +46,17 @@ track voice vox wav=renders/nevernot-line.wav pitch=renders/nevernot-pitch.wav v
   R:16
   E4:112
   E4:2 G4:2 A4:2 B4:3 A4:1.5 B4:1.5 C#5:2 B4:2
-  [A2 A3 E4 B4 E5]:2 [A2 A3 E4 A4 C#5]:2 [B2 B3 F#4 B4 D5]:2 [G2 G3 E4 G4 B4]:2
-  [A2 A3 E4 A4 C#5]:2 [B2 B3 F#4 B4 D5]:2 [C#3 C#4 A4 C#5 E5]:2 [B2 B3 F#4 B4 D5]:2
-  [D3 D4 A4 D5]:2 [C#3 C#4 A4 C#5]:2 [B2 B3 B4 E5]:2 [A2 A3 A4 C#5]:2
-  [D3 D4 A4 D5]:2 [C#3 C#4 A4 C#5]:2 [B2 B3 B4 E5]:4 [B2 B3 G#4 E5]:4
+  [A2 A3 E4 C#5 E5]:2 [B2 B3 F#4 B4 E5]:2 [D3 D4 F#4 A4 E5]:2 [E3 E4 G#4 B4 C#5]:2
+  [A2 A3 E4 C#5 E5]:2 [B2 B3 F#4 D5 F#5]:2 [D3 D4 F#4 A4 E5]:2 [E3 E4 G#4 B4 D5]:2
+  [A2 A3 E4 C#5]:2 [B2 B3 F#4 D5]:2 [D3 D4 A4 C#5]:2 [E3 E4 G#4 B4]:2
+  [A2 A3 E4 C#5]:2 [B2 B3 F#4 D5]:2 [D3 D4 A4 D5]:4 [B2 B3 G#4 E5]:4
   [E3 B3 E4 G4]:4 [E3 B3 E4 F#4]:4
   E4:64
   E4:2 G4:2 A4:2 B4:3 A4:1.5 B4:1.5 C#5:2 B4:2
-  [A2 A3 E4 B4 E5]:2 [A2 A3 E4 A4 C#5]:2 [B2 B3 F#4 B4 D5]:2 [G2 G3 E4 G4 B4]:2
-  [A2 A3 E4 A4 C#5]:2 [B2 B3 F#4 B4 D5]:2 [C#3 C#4 A4 C#5 E5]:2 [B2 B3 F#4 B4 D5]:2
-  [D3 D4 A4 D5]:2 [C#3 C#4 A4 C#5]:2 [B2 B3 B4 E5]:2 [A2 A3 A4 C#5]:2
-  [D3 D4 A4 D5]:2 [C#3 C#4 A4 C#5]:2 [B2 B3 B4 E5]:4 [B2 B3 G#4 E5]:4
+  [A2 A3 E4 C#5 E5]:2 [B2 B3 F#4 B4 E5]:2 [D3 D4 F#4 A4 E5]:2 [E3 E4 G#4 B4 C#5]:2
+  [A2 A3 E4 C#5 E5]:2 [B2 B3 F#4 D5 F#5]:2 [D3 D4 F#4 A4 E5]:2 [E3 E4 G#4 B4 D5]:2
+  [A2 A3 E4 C#5]:2 [B2 B3 F#4 D5]:2 [D3 D4 A4 C#5]:2 [E3 E4 G#4 B4]:2
+  [A2 A3 E4 C#5]:2 [B2 B3 F#4 D5]:2 [D3 D4 A4 D5]:4 [B2 B3 G#4 E5]:4
   E4:120
   [A3 E4 A4 C#5]:4 [G#3 E4 B4 E5]:4 [E3 B3 E4 G#4]:4
   R:8
@@ -67,17 +67,17 @@ track choir vox vel=1 len=1
   R:16
   R:112
   G3:3 E3:3 F#3:3 A3:3 G#3:4
-  [A3 E4 B4 E5]:2 [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [G3 E4 G4 B4]:2
-  [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [C#4 A4 C#5 E5]:2 [B3 F#4 B4 D5]:2
-  [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:2 [A3 A4 C#5]:2
-  [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:4 [B3 G#4 E5]:4
+  [A3 E4 C#5 E5]:2 [B3 F#4 B4 E5]:2 [D4 F#4 A4 E5]:2 [E4 G#4 B4 C#5]:2
+  [A3 E4 C#5 E5]:2 [B3 F#4 D5 F#5]:2 [D4 F#4 A4 E5]:2 [E4 G#4 B4 D5]:2
+  [A3 E4 C#5]:2 [B3 F#4 D5]:2 [D4 A4 C#5]:2 [E4 G#4 B4]:2
+  [A3 E4 C#5]:2 [B3 F#4 D5]:2 [D4 A4 D5]:4 [B3 G#4 E5]:4
   [E3 B3 E4 G4]:4 [E3 B3 E4 F#4]:4
   R:64
   G3:3 E3:3 F#3:3 A3:3 G#3:4
-  [A3 E4 B4 E5]:2 [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [G3 E4 G4 B4]:2
-  [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [C#4 A4 C#5 E5]:2 [B3 F#4 B4 D5]:2
-  [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:2 [A3 A4 C#5]:2
-  [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:4 [B3 G#4 E5]:4
+  [A3 E4 C#5 E5]:2 [B3 F#4 B4 E5]:2 [D4 F#4 A4 E5]:2 [E4 G#4 B4 C#5]:2
+  [A3 E4 C#5 E5]:2 [B3 F#4 D5 F#5]:2 [D4 F#4 A4 E5]:2 [E4 G#4 B4 D5]:2
+  [A3 E4 C#5]:2 [B3 F#4 D5]:2 [D4 A4 C#5]:2 [E4 G#4 B4]:2
+  [A3 E4 C#5]:2 [B3 F#4 D5]:2 [D4 A4 D5]:4 [B3 G#4 E5]:4
   R:120
   [A3 E4 A4 C#5]:4 [G#3 E4 B4 E5]:4 [E3 B3 E4 G#4]:4
   R:8
@@ -114,7 +114,7 @@ automate voice.osc2_pitch
 automate voice.osc3_level
   0.12
 automate voice.sub
-  0.12
+  0.06
 automate voice.drive
   1.3
 automate voice.saturation
@@ -130,9 +130,9 @@ automate voice.attack
 # a jittering 16th-note micro-melody under 80 ms glide: hover, wander,
 # leave. It crosses the stereo field on entry and recedes downward.
 track buzz vel=0.55 len=0.25
-  R:8
+  R:1
   A3:0.75 G#3:0.25 A3:0.5 A#3:0.25 A3:0.75 G#3:0.5 A3:0.5 B3:0.25 A3:0.75 G#3:0.25 A3:0.5 A#3:0.25 A3:0.75 G#3:0.5 A3:1.25
-  R:420
+  R:427
   A3:0.5 G#3:0.5 A3:0.75 G3:0.25 F#3:0.75 G3:0.25 F#3:0.5 E3:0.5 F#3:0.25 E3:0.75 E3:1 D3:0.5 E3:1.5
 
 automate buzz.detune
@@ -158,7 +158,7 @@ automate buzz.release
 automate buzz.glide
   0.08
 automate buzz.gain
-  1.4 R:436 0.4:8@exp
+  1.7 R:436 0.4:8@exp
 automate buzz.pan
   -0.5 R:8 0.5:8@lin R:420 -0.6:8@lin
 
@@ -167,11 +167,11 @@ track sawS vel=0.72 len=4
   E4:6 F#4:4 E4:6
   (E4:5 F#4:4 E4:5 D4:2)x7
   G4:6 A4:6 B4:4
-  (E5:5 D5:8 E5:3)x2 E5:4
+  E5:6 C#5:2 E5:4 F#5:2 E5:2 C#5:4 D5:4 C#5:4 E5:8
   E5:8
   (E4:5 F#4:4 E4:5 D4:2)x4
   G4:6 A4:6 B4:4
-  (E5:5 D5:8 E5:3)x2 E5:4
+  E5:6 C#5:2 E5:4 F#5:2 E5:2 C#5:4 D5:4 C#5:4 E5:8
   R:48
   (E4:5 F#4:4 E4:5 D4:2)
   B4:4 C#5:4 D#5:4 E5:4 F#5:4
@@ -183,11 +183,11 @@ track sawA vel=0.58 len=4
   G3:7 F#3:3 G3:6
   (G3:3 F#3:4 E3:4 D3:5)x7
   E3:6 F#3:6 G#3:4
-  (A3:5 B3:4 A3:4 G3:3)x2 B3:4
+  (A3:5 B3:4 A3:4 G#3:3)x2 B3:4
   G3:5 F#3:3
   (G3:3 F#3:4 E3:4 D3:5)x4
   E3:6 F#3:6 G#3:4
-  (A3:5 B3:4 A3:4 G3:3)x2 B3:4
+  (A3:5 B3:4 A3:4 G#3:3)x2 B3:4
   R:48
   (G3:3 F#3:4 E3:4 D3:5)
   B3:4 C#4:4 E4:4 F#4:4 G#4:4

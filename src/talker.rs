@@ -224,7 +224,24 @@ impl Talker {
     }
 
     pub fn set_clarity(&mut self, c: f32) {
-        self.clarity = c.clamp(0.0, 1.0);
+        let c = c.clamp(0.0, 1.0);
+        // Automation calls this every block: rebuild the output filters
+        // ONLY when the value moves, or their state resets continuously
+        // and the cascade never rings up (measured: the voice fell to
+        // 0.2% energy above 3 kHz)
+        if (c - self.clarity).abs() < 1e-4 {
+            return;
+        }
+        self.clarity = c;
+        // Open the OUTPUT reconstruction band with clarity: 4.8 kHz is
+        // the tube's cab-like wall; 6 kHz buys audible air. Analysis
+        // stays band-limited — that part is what makes LPC track
+        // formants instead of harmonics.
+        let fc = 4800.0 + 1200.0 * c;
+        self.out = [
+            Lowpass::tuned(fc, 0.6, self.sr),
+            Lowpass::tuned(fc, 1.0, self.sr),
+        ];
     }
 
     /// Frame analysis at the decimated rate: windowed autocorrelation,
@@ -374,8 +391,11 @@ impl Talker {
             g *= t * t;
         }
         self.gate = g;
-        // Amp grit backs off with clarity at constant small-signal gain
-        let drive = 1.5 - 1.1 * self.clarity;
+        // Amp grit backs off with clarity at constant small-signal gain.
+        // At full clarity the stage is nearly linear (drive 0.15): the
+        // "loud but constrained" tube-amp squash on program-level vowels
+        // was tanh compression, not loudness
+        let drive = 1.5 - 1.35 * self.clarity;
         (f * drive).tanh() * (4.8 / drive) * g
     }
 
@@ -420,7 +440,8 @@ impl Talker {
         // The wah: the mouth's openness as LARGE cutoff motion, swept at
         // full rate so the filter glides instead of stepping
         self.wah_fc += (self.wah_fc_target - self.wah_fc) * self.wah_slew;
-        self.wah.retune(self.wah_fc, 1.3, self.sr);
+        // The wah's resonance is the honk; clarity flattens it
+        self.wah.retune(self.wah_fc, 1.3 - 0.6 * self.clarity, self.sr);
         y = self.wah.tick(y);
         // De-emphasis inversion: restore the brightness the analysis
         // whitening removed (measured: centroid 319 Hz without this vs
@@ -434,7 +455,12 @@ impl Talker {
         // NuVo passthrough: the modulator minus its own lows = the
         // sibilant band, faded in only on unvoiced frames
         let sib = (modulator - self.m_lp) * self.unvoiced * 6.5;
-        y + sib
+        // Clarity's air band: the tube path physically ends by ~3 kHz
+        // (tract decimation + reconstruction), so above it the only
+        // honest source is the voice itself — the same high band the
+        // NuVo trick uses, but continuous, riding the speech gate
+        let air = (modulator - self.m_lp) * self.clarity * 18.0 * self.gate;
+        y + sib + air
     }
 }
 

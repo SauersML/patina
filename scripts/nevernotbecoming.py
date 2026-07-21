@@ -667,8 +667,11 @@ def main():
         shaped = np.convolve(even * env, kernel, "same")
         phrase *= shaped
         if _is_voc:
-            phrase *= 0.62 / (np.sqrt((phrase ** 2).mean()) + 1e-9)
-            phrase = np.tanh(phrase / 0.65) * 0.65
+            # loudness now lives in vox_level 2 — keep the modulator's
+            # DYNAMICS, because band envelopes articulate from them: a
+            # wall-limited modulator has no consonants left to track
+            phrase *= 0.45 / (np.sqrt((phrase ** 2).mean()) + 1e-9)
+            phrase = np.tanh(phrase / 0.8) * 0.8
         else:
             phrase *= 0.12 / (np.sqrt((phrase ** 2).mean()) + 1e-9)
         print(f"  ok  {text[:64]}")
