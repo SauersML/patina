@@ -1421,6 +1421,8 @@ fn parse_sampler_option(
             _ => return Err(format!("mode must be gate or oneshot, got '{}'", v)),
         };
         *mode_set = true;
+    } else if opt == "psola" {
+        cfg.psola = true;
     } else if opt == "reverse" {
         cfg.reverse = true;
     } else if opt == "fixed" {

@@ -33,9 +33,9 @@ PHRASES = [
     ("flute",     "af_heart",   0.85, "I am the flute, the reed, the hollow bone."),
     ("noti",      "af_heart",   0.85, "It is not I who speak."),
     ("grateful",  "af_heart",   0.85, "Grateful, to be had. Held. Beheld."),
-    ("aaah",      "af_heart",   0.6,  "Aaah."),
-    ("oooh",      "af_heart",   0.6,  "Oooh."),
-    ("mmm",       "am_michael", 0.55, "Mmm."),
+    ("aaah",      "af_heart",   0.5,  "Aaaaaah."),
+    ("oooh",      "af_heart",   0.5,  "Ooooooh."),
+    ("mmm",       "am_michael", 0.5,  "Mmmmmm."),
     ("danced",    "am_michael", 0.9,  "I am being danced. Being entranced."),
 ]
 
@@ -90,6 +90,24 @@ def main():
             grid[s:s + len(a)] += a
     sf.write(os.path.join(OUT, "wormhole.wav"), grid, RATE)
     print(f"wormhole    {len(grid)/RATE:5.2f}s  6 words on a {cell}s grid (chop=6)")
+
+    # the drum kit made of mouth: four plosives on a strict grid,
+    # chop=4 -> T K TSS P as pads
+    cellp = 0.3
+    kit = ["Tuh.", "Kuh.", "Tss.", "Puh."]
+    grid = np.zeros(int(len(kit) * cellp * RATE), dtype=np.float32)
+    with tempfile.TemporaryDirectory() as tmp:
+        for i, w in enumerate(kit):
+            pth = os.path.join(tmp, f"k{i}.wav")
+            say("af_heart" if w == "Tss." else "am_michael", w, 1.0, pth)
+            a, _ = sf.read(pth, dtype="float32")
+            a = a[: int(0.16 * RATE)]
+            fade = np.linspace(1, 0, int(0.03 * RATE)) ** 2
+            a[-len(fade):] *= fade[: len(a[-len(fade):])]
+            s = int(i * cellp * RATE)
+            grid[s:s + len(a)] += a
+    sf.write(os.path.join(OUT, "percgrid.wav"), grid, RATE)
+    print(f"percgrid    {len(grid)/RATE:5.2f}s  T K TSS P on a {cellp}s grid (chop=4)")
 
     # the reversal: the prodigal phrase, backwards — for the dissolve
     a, _ = sf.read(os.path.join(OUT, "prodigal.wav"), dtype="float32")

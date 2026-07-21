@@ -188,30 +188,74 @@ def warp(audio, knots, out_len, win=600, hop=150, search=200):
 
 
 def melodize(x, curve):
+    """TD-PSOLA: formant-preserving pitch correction. Grains are cut
+    pitch-synchronously at glottal epochs and re-spaced at the target
+    period — each grain keeps its spectral shape (the throat), only
+    the spacing changes (the note). No chipmunk at any interval."""
     f0, hop = track_f0(x)
-    ratios = np.ones(len(f0), dtype=np.float32)
+    # per-sample source f0, held through unvoiced stretches
+    f0s = np.zeros(len(x), dtype=np.float32)
+    last = 0.0
     for j in range(len(f0)):
-        if f0[j] <= 0:
+        v = f0[j] if f0[j] > 0 else last
+        f0s[j * hop:(j + 1) * hop] = v
+        if f0[j] > 0:
+            last = f0[j]
+    voiced = np.zeros(len(x), dtype=bool)
+    for j in range(len(f0)):
+        voiced[j * hop:(j + 1) * hop] = f0[j] > 0
+
+    # epoch marking: walk by one period, snap to the local energy peak
+    env = np.abs(x)
+    k = 48
+    env = np.convolve(env, np.ones(k) / k, "same")
+    epochs = []
+    i = 0
+    while i < len(x) - 1:
+        if not voiced[i] or f0s[i] <= 0:
+            i += hop
             continue
-        m = curve[min(j * hop, len(curve) - 1)]
-        tgt = 440.0 * 2 ** ((m - 69) / 12.0)
-        ratios[j] = np.clip(tgt / f0[j], 0.55, 1.9)
-    rp = np.pad(ratios, 2, mode="edge")
-    ratios = np.median(np.lib.stride_tricks.sliding_window_view(rp, 5), axis=1)
-    B, HB = 2048, 1024
-    y = np.zeros(len(x) + B, dtype=np.float32)
-    ws = np.zeros(len(x) + B, dtype=np.float32)
-    w = np.hanning(B).astype(np.float32)
-    for start in range(0, max(len(x) - B, 1), HB):
-        j = min(start // hop, len(ratios) - 1)
-        rr = float(ratios[j])
-        seg = x[start:start + B]
-        if len(seg) < B:
+        T = RATE / f0s[i]
+        lo, hi = int(i + 0.75 * T), min(int(i + 1.25 * T), len(x) - 1)
+        if hi <= lo:
             break
-        blk = seg if abs(rr - 1) < 0.02 else resample(stretch(seg, rr), B)
-        y[start:start + B] += blk * w
-        ws[start:start + B] += w
-    y = (y[:len(x)] / np.maximum(ws[:len(x)], 1e-3)).astype(np.float32)
+        nxt = lo + int(np.argmax(env[lo:hi]))
+        epochs.append(nxt)
+        i = nxt
+    epochs = np.array(epochs, dtype=np.int64)
+
+    y = np.zeros(len(x) + 4096, dtype=np.float32)
+    ws = np.zeros(len(x) + 4096, dtype=np.float32)
+    # unvoiced regions copy straight through
+    uv = ~voiced
+    y[: len(x)][uv] += x[uv]
+    ws[: len(x)][uv] += 1.0
+
+    if len(epochs) > 2:
+        t_out = float(epochs[0])
+        ei = 0
+        while t_out < len(x):
+            # nearest source epoch to this output instant
+            while ei + 1 < len(epochs) and abs(epochs[ei + 1] - t_out) < abs(epochs[ei] - t_out):
+                ei += 1
+            e = epochs[ei]
+            if not voiced[min(int(t_out), len(x) - 1)]:
+                t_out += hop
+                continue
+            Ts = RATE / max(f0s[e], 1.0)
+            m = curve[min(int(t_out), len(curve) - 1)]
+            ftgt = 440.0 * 2 ** ((m - 69) / 12.0)
+            ftgt = np.clip(ftgt, f0s[e] * 0.5, f0s[e] * 2.2)
+            gw = int(min(2 * Ts, 1200))
+            a, b = e - gw // 2, e + gw // 2
+            if a >= 0 and b < len(x) and gw > 16:
+                grain = x[a:b] * np.hanning(b - a).astype(np.float32)
+                o = int(t_out) - gw // 2
+                if o >= 0 and o + (b - a) < len(y):
+                    y[o:o + (b - a)] += grain
+                    ws[o:o + (b - a)] += np.hanning(b - a).astype(np.float32)
+            t_out += RATE / ftgt
+    y = (y[: len(x)] / np.maximum(ws[: len(x)], 0.35)).astype(np.float32)
     pk = np.abs(y).max()
     return y * (0.9 / pk) if pk > 0 else y
 

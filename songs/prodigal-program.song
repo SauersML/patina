@@ -44,7 +44,7 @@ automate reverb_decay
 # looped breaths: her Aaah carries the harmony, her Oooh shadows it
 # above, his Mmm hums the bass line. The tape is the only instrument
 # that is not a voice.
-track voxpad sample=renders/prodigal/aaah.wav root=A3 loop=0.32:0.74 xfade=0.11 attack=0.5 release=1.2 gain=1.25 cutoff=2400 len=8
+track voxpad sample=renders/prodigal/aaah.wav root=A3 loop=0.43:0.97 xfade=0.15 attack=0.5 release=1.2 gain=1.25 cutoff=2400 len=8
   [D3 A3]:8 [D3 F#3 A3]:8
   ([D3 F#3 A3]:8 [C3 E3 G3]:8)x2
   ([B2 D3 F#3]:8 [G2 B2 D3]:8)x2
@@ -52,14 +52,14 @@ track voxpad sample=renders/prodigal/aaah.wav root=A3 loop=0.32:0.74 xfade=0.11 
   [G2 D3 G3]:8 [A2 C#3 E3]:8 [D3 F#3 A3]:8
   [D3 A3]:8 [D3 A3 D4]:16
 
-track oooPad sample=renders/prodigal/oooh.wav root=A3 loop=0.26:0.60 xfade=0.09 attack=0.7 release=1.4 gain=0.95 cutoff=2600 len=8
+track oooPad sample=renders/prodigal/oooh.wav root=A3 loop=0.46:1.05 xfade=0.16 attack=0.7 release=1.4 gain=0.95 cutoff=2600 len=8
   R:48
   [F#3 B3]:16 [D3 G3]:16
   [D3 F3]:8 [C3 E3]:8 [A#2 D3]:8
   [B3 D4]:8 [C#4 E4]:8 [D4 F#4]:8
   [A3 D4]:16 R:8
 
-track voxbass sample=renders/prodigal/mmm.wav root=B2 loop=0.25:0.58 xfade=0.09 attack=0.3 release=0.8 gain=1.7 cutoff=900 len=8
+track voxbass sample=renders/prodigal/mmm.wav root=B2 loop=0.90:2.06 xfade=0.31 attack=0.3 release=0.8 gain=1.7 cutoff=900 len=8
   R:16
   (D2:8 C2:8)x2
   (B2:8 G2:8)x2
@@ -67,14 +67,27 @@ track voxbass sample=renders/prodigal/mmm.wav root=B2 loop=0.25:0.58 xfade=0.09 
   G2:8 A2:8 D2:8
   D2:24
 
-# the stutter: "I" and "am" as two crushed pads
-track stut sample=renders/prodigal/iam.wav root=C3 chop=2 mono bits=12 rate=26040 gain=1.1 len=1
-  C3:2 R:2 C3:1 C3:1 C#3:2 R:2 C3:1 R:1 C#3:2 R:2
-  (C3:1 R:1 C#3:1 R:1 C3:1 R:3)x4
-  (C3:1@0.6 R:1 C#3:1@0.6 R:1 C3:1@0.6 R:3)x4
+# percussion: soft 909 kick as the heartbeat; hats and snare are
+# spoken plosives (T K TSS P) sliced as pads and crushed through the
+# SP-1200 converters — the drums are also a voice
+track beat kit=909 len=0.5
+  R:16
+  (BD@0.55 . . . . . . . | . . BD@0.45 . . . . .)x7
   R:24
-  (C3:1 C3:1 C#3:2 R:1 C3:1 R:2)x3
+
+track vocperc sample=renders/prodigal/percgrid.wav root=C3 chop=4 mono bits=12 rate=26040 gain=1.1 len=0.5
+  R:48
+  (C3@0.5 C#3@0.3 C3@0.4 C#3@0.3 D3@0.75 C#3@0.3 C3@0.4 D#3@0.35)x8
+  (C3@0.4 C#3@0.25 C3@0.3 C#3@0.25 D3@0.6 C#3@0.25 C3@0.3 D#3@0.3)x6
+  (C3@0.55 C#3@0.35 C3@0.45 C#3@0.35 D3@0.85 C#3@0.35 C3@0.45 D#3@0.4)x6
   R:24
+
+automate bd_level
+  0.6
+automate bd_decay
+  0.55
+automate bd_drive
+  0.1
 
 # the loop: one full sung sentence, 8 beats, repeated IDENTICAL —
 # the harmony reinterprets it (D, C, Bm, G, and finally over the

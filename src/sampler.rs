@@ -134,6 +134,12 @@ pub struct SlotConfig {
     /// Zero-order-hold playback (set by `bits=`/`rate=` crunching): the
     /// vintage DAC's imaging instead of band-limited reconstruction.
     pub zoh: bool,
+    /// Formant-preserving pitch (TD-PSOLA): keytracking and smp_pitch
+    /// re-space pitch-synchronous grains instead of varispeeding the
+    /// tape, so a voice changes NOTE without changing THROAT — and
+    /// duration is independent of pitch (`speed` becomes time-stretch).
+    /// Loop/reverse are ignored in this mode.
+    pub psola: bool,
 }
 
 impl Default for SlotConfig {
@@ -160,6 +166,7 @@ impl Default for SlotConfig {
             res: 0.0,
             speed: 1.0,
             zoh: false,
+            psola: false,
         }
     }
 }
@@ -204,6 +211,14 @@ struct Head {
     age: u64,
     /// State-variable filter integrator states: [ic1_l, ic2_l, ic1_r, ic2_r].
     svf: [f32; 4],
+    /// PSOLA: source-time cursor (frames), next grain onset (output
+    /// samples since note-on), output sample counter, active grains as
+    /// (epoch index, position within grain).
+    ps_cursor: f64,
+    ps_next: f64,
+    ps_n: f64,
+    ps_grains: [(usize, f64); 4],
+    ps_live: [bool; 4],
 }
 
 impl Head {
@@ -224,8 +239,98 @@ impl Head {
             choke: false,
             age: 0,
             svf: [0.0; 4],
+            ps_cursor: 0.0,
+            ps_next: 0.0,
+            ps_n: 0.0,
+            ps_grains: [(0, 0.0); 4],
+            ps_live: [false; 4],
         }
     }
+}
+
+/// Pitch-synchronous analysis for psola playback: track f0 by
+/// autocorrelation, then walk the reel one period at a time snapping
+/// each mark to the local energy peak. Unvoiced stretches get uniform
+/// 5 ms marks flagged unvoiced (played at unit spacing — Hann OLA at
+/// 50% overlap reconstructs them nearly exactly).
+pub fn analyze_epochs(data: &SampleData) -> Vec<(f64, f64, bool)> {
+    let n = data.left.len();
+    let rate = data.rate as f32;
+    let mono: Vec<f32> = (0..n)
+        .map(|i| 0.5 * (data.left[i] + data.right[i]))
+        .collect();
+    let frame = (rate * 0.025) as usize;
+    let hop = (rate * 0.010) as usize;
+    let lo = (rate / 500.0) as usize;
+    let hi = ((rate / 70.0) as usize).min(frame.saturating_sub(1));
+    let nf = if n > frame { (n - frame) / hop.max(1) } else { 0 };
+    let mut f0 = vec![0.0f32; nf.max(1)];
+    for j in 0..nf {
+        let seg = &mono[j * hop..j * hop + frame];
+        let mean = seg.iter().sum::<f32>() / frame as f32;
+        let e0: f32 = seg.iter().map(|s| (s - mean) * (s - mean)).sum();
+        if e0 < 1e-4 || hi <= lo {
+            continue;
+        }
+        let (mut best, mut best_c) = (0usize, 0.0f32);
+        for lag in lo..hi {
+            let mut c = 0.0f32;
+            let mut i = 0;
+            while i + lag < frame {
+                c += (seg[i] - mean) * (seg[i + lag] - mean);
+                i += 2; // stride 2: analysis-grade, half the work
+            }
+            if c > best_c {
+                best_c = c;
+                best = lag;
+            }
+        }
+        let mut e_half = 0.0f32;
+        let mut i = 0;
+        while i + best < frame {
+            let a = seg[i] - mean;
+            e_half += a * a;
+            i += 2;
+        }
+        if best > 0 && best_c > 0.3 * e_half.max(1e-9) {
+            f0[j] = rate / best as f32;
+        }
+    }
+    // smoothed envelope for peak snapping
+    let k = (rate / 1000.0) as usize + 1;
+    let mut env = vec![0.0f32; n];
+    let mut acc = 0.0f32;
+    for i in 0..n {
+        acc += mono[i].abs();
+        if i >= k {
+            acc -= mono[i - k].abs();
+        }
+        env[i] = acc;
+    }
+    let uv_step = (rate * 0.005) as f64;
+    let mut epochs = Vec::new();
+    let mut i = 0.0f64;
+    while (i as usize) < n.saturating_sub(2) {
+        let j = ((i as usize) / hop.max(1)).min(f0.len().saturating_sub(1));
+        let f = f0[j];
+        if f > 0.0 {
+            let t_frames = (rate / f) as f64;
+            let a = ((i + 0.75 * t_frames) as usize).min(n.saturating_sub(2));
+            let b = (((i + 1.25 * t_frames) as usize).min(n - 1)).max(a + 1);
+            let mut peak = a;
+            for m in a..b {
+                if env[m] > env[peak] {
+                    peak = m;
+                }
+            }
+            epochs.push((peak as f64, t_frames, true));
+            i = peak as f64;
+        } else {
+            epochs.push((i, uv_step, false));
+            i += uv_step;
+        }
+    }
+    epochs
 }
 
 /// Cached ZDF state-variable-filter coefficients for one slot; recomputed
@@ -424,6 +529,9 @@ pub struct SamplerBank {
     sample_rate: f32,
     slots: Vec<Option<SamplerSlot>>,
     heads: Vec<Head>,
+    /// Pitch-synchronous analysis per slot (psola mode), computed once
+    /// at registration: (source frame, source period frames, voiced).
+    epochs: Vec<Option<Arc<Vec<(f64, f64, bool)>>>>,
     filt: Vec<FiltCoeffs>,
     counter: u64,
 }
@@ -434,6 +542,7 @@ impl SamplerBank {
             sample_rate,
             slots: (0..MAX_SLOTS).map(|_| None).collect(),
             heads: (0..NUM_HEADS).map(|_| Head::idle()).collect(),
+            epochs: (0..MAX_SLOTS).map(|_| None).collect(),
             filt: (0..MAX_SLOTS).map(|_| FiltCoeffs::stale()).collect(),
             counter: 0,
         }
@@ -448,6 +557,11 @@ impl SamplerBank {
         for h in self.heads.iter_mut().filter(|h| h.slot == index) {
             h.stage = Stage::Off;
         }
+        self.epochs[index] = if slot.cfg.psola {
+            Some(Arc::new(analyze_epochs(&slot.data)))
+        } else {
+            None
+        };
         self.slots[index] = Some(slot);
     }
 
@@ -586,6 +700,11 @@ impl SamplerBank {
             choke: false,
             age: self.counter,
             svf: [0.0; 4],
+            ps_cursor: 0.0,
+            ps_next: 0.0,
+            ps_n: 0.0,
+            ps_grains: [(0, 0.0); 4],
+            ps_live: [false; 4],
         };
     }
 
@@ -669,6 +788,103 @@ impl SamplerBank {
             let zoh = cfg.zoh;
             let mut l = 0.0f32;
             let mut r = 0.0f32;
+
+            // PSOLA: the note changes, the throat doesn't. Grains cut at
+            // the reel's glottal epochs, re-spaced at the target period;
+            // the cursor advances at natural (or `speed`-stretched) time,
+            // so pitch and duration are independent.
+            if cfg.psola {
+                if let Some(ep) = self.epochs[h.slot].as_ref() {
+                    if h.ps_n == 0.0 {
+                        h.ps_cursor = h.pos.max(r0);
+                    }
+                    let ratio = ((semis / 12.0).exp2() * pitch_mult.max(0.01)) as f64;
+                    let rate_ratio = src_rate / out_rate;
+                    // launch a grain when its time comes
+                    if h.ps_n >= h.ps_next {
+                        // nearest epoch to the cursor
+                        let mut eix = match ep.binary_search_by(|e| {
+                            e.0.partial_cmp(&h.ps_cursor).unwrap()
+                        }) {
+                            Ok(i) => i,
+                            Err(i) => i.min(ep.len() - 1),
+                        };
+                        if eix > 0
+                            && (ep[eix].0 - h.ps_cursor).abs()
+                                > (ep[eix - 1].0 - h.ps_cursor).abs()
+                        {
+                            eix -= 1;
+                        }
+                        for g in 0..h.ps_grains.len() {
+                            if !h.ps_live[g] {
+                                h.ps_grains[g] = (eix, 0.0);
+                                h.ps_live[g] = true;
+                                break;
+                            }
+                        }
+                        let (_, period, voiced) = ep[eix];
+                        let r_eff = if voiced { ratio } else { 1.0 };
+                        h.ps_next += (period / r_eff) / rate_ratio;
+                    }
+                    // mix the live grains
+                    for g in 0..h.ps_grains.len() {
+                        if !h.ps_live[g] {
+                            continue;
+                        }
+                        let (eix, gpos) = h.ps_grains[g];
+                        let (center, period, _v) = ep[eix];
+                        let half = period.min(600.0);
+                        let width = 2.0 * half;
+                        if gpos >= width {
+                            h.ps_live[g] = false;
+                            continue;
+                        }
+                        let src_pos = center - half + gpos;
+                        if src_pos >= 0.0 && src_pos < r1 {
+                            let w = 0.5
+                                - 0.5 * (std::f64::consts::TAU * gpos / width).cos();
+                            let (a, b) = sinc_read(
+                                &data.left, &data.right, src_pos, 1.0,
+                            );
+                            l += a * w as f32;
+                            r += b * w as f32;
+                        }
+                        h.ps_grains[g].1 = gpos + rate_ratio;
+                    }
+                    h.ps_cursor +=
+                        rate_ratio * cfg.speed.clamp(0.03, 32.0) as f64;
+                    h.ps_n += 1.0;
+                    if h.ps_cursor >= r1 {
+                        if h.held {
+                            // hold the tail like a gate reaching tape end
+                            h.stage = Stage::Release;
+                            h.held = false;
+                        } else {
+                            h.stage = Stage::Release;
+                        }
+                    }
+                    // shared filter/pan path, mirrored from below
+                    let fc = &mut self.filt[h.slot];
+                    fc.update(cfg.cutoff, cfg.res, self.sample_rate);
+                    if fc.bypass {
+                        h.svf[1] = l;
+                        h.svf[3] = r;
+                        h.svf[0] = 0.0;
+                        h.svf[2] = 0.0;
+                    } else {
+                        let [mut i1l, mut i2l, mut i1r, mut i2r] = h.svf;
+                        l = fc.tick(l, &mut i1l, &mut i2l);
+                        r = fc.tick(r, &mut i1r, &mut i2r);
+                        h.svf = [i1l, i2l, i1r, i2r];
+                    }
+                    let ph = (cfg.pan.clamp(-1.0, 1.0) + 1.0)
+                        * std::f32::consts::FRAC_PI_4;
+                    let g = h.env * h.vel_gain * cfg.gain * PROGRAM_V;
+                    left += l * g * ph.cos() * std::f32::consts::SQRT_2;
+                    right += r * g * ph.sin() * std::f32::consts::SQRT_2;
+                    continue;
+                }
+            }
             let mut read = |pos: f64, g: f32| {
                 let (a, b) = if zoh {
                     zoh_read(&data.left, &data.right, pos)
@@ -1225,5 +1441,93 @@ mod tests {
         assert_eq!(slot_for_channel(0), None);
         // The block sits strictly below the voice box
         assert!(SAMPLER_CHANNEL_BASE + MAX_SLOTS as u16 <= crate::vox::VOX_CHANNEL);
+    }
+
+    #[test]
+    fn psola_shifts_pitch_but_not_formant_or_duration() {
+        // a 150 Hz pulse train ringing a 1400 Hz one-pole resonator:
+        // pitch lives in the pulse spacing, the formant in the ring
+        let rate = 48000usize;
+        let dur = 0.6f32;
+        let n = (rate as f32 * dur) as usize;
+        let mut x = vec![0.0f32; n];
+        let period = rate / 150;
+        let mut ring = 0.0f32;
+        let mut ring2 = 0.0f32;
+        let w = std::f32::consts::TAU * 1400.0 / rate as f32;
+        let rq = 0.995f32;
+        for i in 0..n {
+            let imp = if i % period == 0 { 1.0 } else { 0.0 };
+            let y = imp + 2.0 * rq * w.cos() * ring - rq * rq * ring2;
+            ring2 = ring;
+            ring = y;
+            x[i] = y * 0.05;
+        }
+        let data = std::sync::Arc::new(SampleData {
+            left: x.clone(),
+            right: x,
+            rate: rate as u32,
+        });
+        let mut cfg = SlotConfig::default();
+        cfg.root = 60;
+        cfg.psola = true;
+        cfg.attack = 0.001;
+        cfg.release = 0.01;
+        let mut bank = SamplerBank::new(rate as f32);
+        bank.set_slot(0, SamplerSlot { data, cfg });
+        bank.note_on(0, 67, 1.0); // +7 st
+        let mut out = Vec::with_capacity(n + rate / 2);
+        for _ in 0..(n + rate / 4) {
+            let (l, _r) = bank.render_next(1.0);
+            out.push(l);
+        }
+        // duration: energy must persist to ~90% of natural length
+        let tail = &out[(n as f32 * 0.85) as usize..(n as f32 * 0.95) as usize];
+        let tail_rms = (tail.iter().map(|s| s * s).sum::<f32>() / tail.len() as f32).sqrt();
+        assert!(tail_rms > 1e-4, "psola must preserve duration, tail rms {tail_rms}");
+        // pitch: autocorrelation over the middle
+        let seg = &out[rate / 5..rate / 5 + 4096];
+        let mean = seg.iter().sum::<f32>() / seg.len() as f32;
+        let mut best = 0usize;
+        let mut best_c = 0.0f32;
+        for lag in (rate / 400)..(rate / 90) {
+            let mut c = 0.0f32;
+            for i in 0..(seg.len() - lag) {
+                c += (seg[i] - mean) * (seg[i + lag] - mean);
+            }
+            if c > best_c {
+                best_c = c;
+                best = lag;
+            }
+        }
+        let f0 = rate as f32 / best as f32;
+        let target = 150.0 * (7.0f32 / 12.0).exp2();
+        assert!(
+            (f0 / target).log2().abs() < 0.12,
+            "psola pitch: got {f0:.1} Hz, want ~{target:.1}"
+        );
+        // formant: spectral peak in 900..2200 must stay near 1400 Hz
+        let m = 8192.min(seg.len());
+        let mut best_f = 0.0f32;
+        let mut best_e = 0.0f32;
+        let mut f = 900.0f32;
+        while f < 2200.0 {
+            let (mut re, mut im) = (0.0f32, 0.0f32);
+            for (i, s) in seg[..m].iter().enumerate() {
+                let ph = std::f32::consts::TAU * f * i as f32 / rate as f32;
+                re += s * ph.cos();
+                im += s * ph.sin();
+            }
+            let e = re * re + im * im;
+            if e > best_e {
+                best_e = e;
+                best_f = f;
+            }
+            f += 25.0;
+        }
+        assert!(
+            (best_f - 1400.0).abs() < 220.0,
+            "psola must hold the formant: peak at {best_f:.0} Hz, want ~1400"
+        );
     }
 }
