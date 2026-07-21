@@ -415,10 +415,14 @@ impl Param {
             | Param::RsTune | Param::CpLevel | Param::CpDecay
             | Param::HhLevel | Param::HhTune | Param::HhMetal
             | Param::ChDecay | Param::OhDecay | Param::DrumDrive
-            // The voice box's four knobs are unitless mixes/depths
-            | Param::VoxLevel | Param::VoxDry | Param::VoxBreath
+            // The voice box's knobs are unitless mixes/depths
+            | Param::VoxDry | Param::VoxBreath
             | Param::VoxVibrato | Param::VoxIntonation
             | Param::VoxClarity => (0.0, 1.0, Lin),
+            // vox_level reaches 2: the band vocoder's per-band tanh caps
+            // its own output, so headroom above unity is the only push a
+            // song can give a vocoder chorus
+            Param::VoxLevel => (0.0, 2.0, Lin),
             Param::ReverbDecay => (0.0, 0.99, Lin),
             Param::PulseWidth => (0.05, 0.95, Lin),
             Param::Detune => (0.0, 30.0, Lin),

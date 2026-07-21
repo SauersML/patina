@@ -9,11 +9,12 @@
 # with gliding voice-led voicings. The interlude and the coda are
 # wordless doubled "aaah" choir over melting Em voicings.
 #
-# The pad is four saw tracks panned into a wall, voice-led with
-# ANTICIPATORY portamento: alto and tenor change notes a bar before
-# the harmony moves and glide (3.5-4 s/octave) so they ARRIVE in
-# consonance exactly as the chord changes — tension resolving on the
-# downbeat, often two voices gliding together. E dorian, 100, no drums.
+# The pad is four saw tracks panned into a wall, written as slow
+# COUNTERPOINT rather than gestures: common tones hold across chord
+# changes, every other voice moves by STEP (glide 2.5-4 s/oct turns
+# each step into a slow melt), and suspensions resolve mid-chord —
+# the soprano's E rings over D as a ninth, then eases to F#; the
+# alto walks G-F#-E-D one step per chord. E dorian, 100, no drums.
 #
 # Mix (measured on un-normalized stems): the vocoder ran 15 dB under
 # the verse lead — chorus modulator now +7 dB and carrier gain 1.8x
@@ -28,13 +29,13 @@ gate 0.98
 automate vox_clarity
   1
 automate vox_level
-  0.9
+  0.9 R:80 2:0.2 R:39.8 0.9:0.2 R:31.8 2:0.2 R:31.8 0.9:0.2 R:19.8 2:0.2 R:19.6
 automate vox_mode
   2 R:80 1:0.2 R:39.8 2:0.2 R:31.8 1:0.2 R:31.8 2:0.2 R:19.8 1:0.2 R:19.6
 automate vox_dry
   0.22 R:80 0.08:0.2 R:39.8 0.22:0.2 R:31.8 0.08:0.2 R:31.8 0.22:0.2 R:19.8 0.08:0.2 R:19.6
 automate reverb_wet
-  0.2
+  0.2 R:80 0.3:1 R:31 0.2:1 R:39 0.3:1 R:31 0.2:1 R:19 0.32:1 R:19.6
 automate reverb_decay
   0.6
 automate tape_drive
@@ -60,6 +61,29 @@ track voice vox wav=renders/nevernot-line.wav pitch=renders/nevernot-pitch.wav v
   E4:20
   [A3 E4 A4 C#5]:4 [G3 D4 G4 B4]:4 [E3 B3 E4 G4]:4
 
+# A second bank of keys on the same vox channel: the vocoder's output
+# scales with its carrier, so doubling the chord voices during the
+# choir spans is a clean +6 dB that no mixer knob could give
+track choir vox vel=1 len=1
+  R:80
+  [A3 E4 B4 E5]:2 [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [G3 E4 G4 B4]:2
+  [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [C#4 A4 C#5 E5]:2 [B3 F#4 B4 D5]:2
+  [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:2 [A3 A4 C#5]:2
+  [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:4
+  [E3 B3 E4 G4]:4 [E3 B3 E4 F#4]:4
+  R:32
+  [A3 E4 B4 E5]:2 [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [G3 E4 G4 B4]:2
+  [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [C#4 A4 C#5 E5]:2 [B3 F#4 B4 D5]:2
+  [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:2 [A3 A4 C#5]:2
+  [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:4
+  R:20
+  [A3 E4 A4 C#5]:4 [G3 D4 G4 B4]:4 [E3 B3 E4 G4]:4
+
+automate choir.gain
+  2
+automate choir.glide
+  1.2
+
 automate voice.gain
   1 R:80 2:0.2 R:39.8 1:0.2 R:31.8 2:0.2 R:31.8 1:0.2 R:19.8 2:0.2 R:19.6
 automate voice.glide
@@ -83,39 +107,40 @@ automate voice.release
 automate voice.attack
   0.004
 
-# ---- the saw wall: four voices, individually led ---------------------
-# Alto and tenor verse lines change notes EARLY and glide into the next
-# chord's tone: G3->F#3 arrives as the bass reaches D, E3->B3 climbs
-# through the A chord and lands as it becomes Bm.
+# ---- the saw wall: slow counterpoint, one step at a time -------------
+# Verse cycle Em|D|A|Bm — soprano: E (9th over D!) eases to F#, back
+# to E (4th over Bm) down to D. Alto: G F# E D, one step per chord.
+# Tenor: B suspends over D, resolves to A, holds through A (common
+# tone), steps back to B as the harmony becomes Bm.
 track sawS vel=0.62 len=4
-  E4:2 F#4:2 G4:4 F#4:2 E4:2 B3:4
-  (E4:4 D4:2 E4:2 C#4:4 D4:2 F#4:2)x4
-  (E5:2 D5:2 C#5:2 B4:2 D5:4 E5:2 B4:2)x2
-  E5:4 G4:4
-  (E4:4 D4:2 E4:2 C#4:4 D4:2 F#4:2)x2
-  (E5:2 D5:2 C#5:2 B4:2 D5:4 E5:2 B4:2)x2
+  E4:6 F#4:4 E4:6
+  (E4:5 F#4:4 E4:5 D4:2)x4
+  (E5:5 D5:8 E5:3)x2
+  E5:8
+  (E4:5 F#4:4 E4:5 D4:2)x2
+  (E5:5 D5:8 E5:3)x2
   B4:4 C#5:4 D5:4 E5:4 F#5:4
   E5:20
 
 track sawA vel=0.58 len=4
-  G3:4 F#3:4 G3:4 F#3:4
-  (G3:2 F#3:4 A3:4 D4:3 B3:3)x4
-  (E4:4 D4:4 A3:2 B3:2 G3:4)x2
-  E4:4 B3:4
-  (G3:2 F#3:4 A3:4 D4:3 B3:3)x2
-  (E4:4 D4:4 A3:2 B3:2 G3:4)x2
+  G3:7 F#3:3 G3:6
+  (G3:3 F#3:4 E3:4 D3:5)x4
+  (A3:5 B3:4 A3:4 G3:3)x2
+  G3:5 F#3:3
+  (G3:3 F#3:4 E3:4 D3:5)x2
+  (A3:5 B3:4 A3:4 G3:3)x2
   B3:4 C#4:4 E4:4 F#4:4 G4:4
-  G4:20
+  G4:8 E4:12
 
 track sawT vel=0.58 len=4
-  B3:4 B3:2 A3:2 B3:4 A3:2 F#3:2
-  (B3:3 A3:3 E3:2 B3:5 F#3:3)x4
-  (C#4:4 D4:3 B3:1 F#4:2 D4:2 E4:4)x2
-  G3:4 F#3:4
-  (B3:3 A3:3 E3:2 B3:5 F#3:3)x2
-  (C#4:4 D4:3 B3:1 F#4:2 D4:2 E4:4)x2
+  B3:16
+  (B3:6 A3:5 B3:5)x4
+  (E4:5 F#4:7 E4:4)x2
+  B3:8
+  (B3:6 A3:5 B3:5)x2
+  (E4:5 F#4:7 E4:4)x2
   G3:4 A3:4 C#4:4 B3:4 E4:4
-  B3:20
+  B3:8 E4:12
 
 track sawB vel=0.62 len=4
   E2:4 E2:4 E2:4 D2:4
@@ -130,10 +155,10 @@ track sawB vel=0.62 len=4
 track bass patch=deepsine vel=0.85 len=4
   E1:4 E1:4 E1:4 D1:4
   (E1:4 D1:4 A1:4 B1:4)x4
-  (A1:4 B1:4 D1:4 E1:4)x2
+  (A1:2 A1:2 B1:2 B1:2 D1:2 D1:2 E1:2 E1:2)x2
   E1:4 D1:4
   (E1:4 D1:4 A1:4 B1:4)x2
-  (A1:4 B1:4 D1:4 E1:4)x2
+  (A1:2 A1:2 B1:2 B1:2 D1:2 D1:2 E1:2 E1:2)x2
   E1:4 F#1:4 A1:4 B1:4 E1:4
   A1:4 G1:4 E1:12
 
@@ -142,7 +167,7 @@ automate bass.gain
 
 # ---- pad voicing: soft-edged, breathing, long inner bends ------------
 automate sawS.gain
-  2
+  1.8 R:80 1.45:1 R:31 1.8:1 R:39 1.45:1 R:31 1.8:1 R:19 1.5:1 R:19.6
 automate sawS.pan
   -0.35
 automate sawS.detune
@@ -162,10 +187,10 @@ automate sawS.release
 automate sawS.cutoff
   8000 R:80 11000:4@smooth R:28 8000:4@smooth R:36 11000:4@smooth R:28 9000:4@smooth R:28
 automate sawS.glide
-  0.6 R:176 5:12@lin R:36
+  2.5 R:176 5:12@lin R:36
 
 automate sawA.gain
-  2
+  1.8 R:80 1.45:1 R:31 1.8:1 R:39 1.45:1 R:31 1.8:1 R:19 1.5:1 R:19.6
 automate sawA.pan
   0.35
 automate sawA.detune
@@ -188,7 +213,7 @@ automate sawA.glide
   3.5 R:176 5:12@lin R:36
 
 automate sawT.gain
-  2
+  1.8 R:80 1.45:1 R:31 1.8:1 R:39 1.45:1 R:31 1.8:1 R:19 1.5:1 R:19.6
 automate sawT.pan
   -0.2
 automate sawT.detune

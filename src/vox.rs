@@ -919,8 +919,11 @@ impl VoxBox {
         }
     }
 
+    /// Up to 2: the band vocoder's per-band tanh saturates on any real
+    /// carrier, so its loudness is fixed by post-tanh makeup — headroom
+    /// above unity is the only way a song can push a vocoder chorus.
     pub fn set_level(&mut self, v: f32) {
-        self.level_t = v.clamp(0.0, 1.0);
+        self.level_t = v.clamp(0.0, 2.0);
     }
 
     pub fn set_dry(&mut self, v: f32) {

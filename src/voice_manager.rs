@@ -1008,7 +1008,7 @@ impl VoiceManager {
     }
 
     pub fn set_vox_level(&mut self, v: f32) {
-        self.params.vox_level = v.clamp(0.0, 1.0);
+        self.params.vox_level = v.clamp(0.0, 2.0);
         self.vox.set_level(self.params.vox_level);
     }
 

@@ -82,48 +82,48 @@ SCORE = [
     # movement is saved for the accents and the cadences
     (16, "I feel the searing caress of that merciless sun upon my compound eyes.",
      [("I", 0.0, 0.5, 0.8, "E4", {}),
-      ("feel", 0.5, 1.5, 1.0, "G4", {"scoop": -1.0}),
-      ("the", 2.0, 0.5, 0.7, "G4", {}),
-      ("searing", 2.5, 1.5, 0.9, [(0, "A4"), (0.5, "B4")], {}),
-      ("caress", 4.0, 1.5, 0.9, "A4", {}),
-      ("of", 5.5, 0.5, 0.7, "A4", {}),
-      ("that", 6.0, 0.5, 0.7, "A4", {}),
-      ("merciless", 6.5, 1.5, 0.9, [(0, "G4"), (0.5, "F#4")], {}),
+      ("feel", 0.5, 1.0, 1.0, "G4", {"scoop": -1.0}),
+      ("the", 1.5, 0.5, 0.7, "G4", {}),
+      ("searing", 2.0, 1.5, 0.9, "A4", {"vib": (0.6, 5.7, 24)}),
+      ("caress", 3.5, 1.0, 0.9, "G4", {}),
+      ("of", 5.0, 0.5, 0.7, "A4", {}),
+      ("that", 5.5, 0.5, 0.7, "A4", {}),
+      ("merciless", 6.0, 1.5, 0.9, [(0, "B4"), (0.4, "A4"), (0.75, "G4")], {}),
       ("sun", 8.0, 2.0, 1.0, "B4", {"scoop": -2.0, "vib": (0.4, 5.7, 32)}),
-      ("upon", 10.0, 1.0, 0.8, "B4", {}),
-      ("my", 11.0, 0.5, 0.8, "C#5", {}),
-      ("compound", 11.5, 1.5, 1.0, [(0, "B4"), (0.5, "A4")], {}),
-      ("eyes", 13.0, 2.5, 1.0, [(0, "G4"), (0.5, "F#4")],
+      ("upon", 10.0, 1.0, 0.8, "A4", {}),
+      ("my", 11.0, 0.5, 0.8, "G4", {}),
+      ("compound", 11.5, 1.5, 1.0, [(0, "G4"), (0.5, "F#4")], {}),
+      ("eyes", 13.25, 2.25, 1.0, [(0, "F#4"), (0.5, "E4")],
        {"vib": (0.5, 5.7, 30), "fall": -1.5})]),
     (16, "Its rays refracting into kaleidoscopic fractals that shimmer "
          "and pulsate across my vision.",
      [("Its", 0.0, 0.5, 0.8, "E4", {}),
       ("rays", 0.5, 1.5, 0.9, "G4", {"vib": (0.6, 5.7, 25)}),
       ("refracting", 2.0, 1.5, 0.9, [(0, "A4"), (0.5, "G4")], {}),
-      ("into", 3.5, 1.0, 0.7, "G4", {}),
-      ("kaleidoscopic", 4.5, 2.5, 1.0,
+      ("into", 4.5, 1.0, 0.7, "E4", {}),
+      ("kaleidoscopic", 5.5, 2.5, 1.0,
        [(0, "E4"), (0.25, "G4"), (0.5, "A4"), (0.75, "B4")], {}),
-      ("fractals", 7.0, 1.5, 0.9, [(0, "C#5"), (0.5, "B4")], {}),
-      ("that", 8.5, 0.5, 0.7, "A4", {}),
-      ("shimmer", 9.0, 1.5, 0.9, "A4", {"vib": (0.6, 6.2, 22)}),
-      ("and", 10.5, 0.5, 0.7, "A4", {}),
-      ("pulsate", 11.0, 1.5, 0.9, [(0, "G4"), (0.5, "F#4")], {}),
-      ("across", 12.5, 1.0, 0.8, "E4", {}),
-      ("my", 13.5, 0.5, 0.7, "E4", {}),
+      ("fractals", 8.0, 1.5, 0.9, [(0, "B4"), (0.5, "A4")], {}),
+      ("that", 9.75, 0.5, 0.7, "A4", {}),
+      ("shimmer", 10.25, 1.25, 0.9, "A4", {"vib": (0.5, 6.2, 22)}),
+      ("and", 11.5, 0.5, 0.7, "G4", {}),
+      ("pulsate", 12.0, 1.0, 0.9, [(0, "G4"), (0.5, "F#4")], {}),
+      ("across", 13.0, 0.75, 0.8, "F#4", {}),
+      ("my", 13.75, 0.25, 0.7, "E4", {}),
       ("vision", 14.0, 2.0, 0.9, "E4", {"vib": (0.5, 5.7, 28), "fall": -1.5})]),
     (16, "As the burning orb reaches its zenith, I shed my outer vestments.",
      [("As", 0.0, 0.5, 0.7, "E4", {}),
       ("the", 0.5, 0.5, 0.7, "E4", {}),
-      ("burning", 1.0, 1.5, 0.9, "G4", {}),
-      ("orb", 2.5, 1.5, 1.0, "B4", {"scoop": -1.5, "vib": (0.45, 5.7, 30)}),
+      ("burning", 1.0, 1.0, 0.9, "G4", {}),
+      ("orb", 2.0, 1.5, 1.0, "A4", {"scoop": -1.5, "vib": (0.45, 5.7, 28)}),
       ("reaches", 4.0, 1.0, 0.8, "A4", {}),
       ("its", 5.0, 0.5, 0.7, "A4", {}),
-      ("zenith", 5.5, 1.5, 0.9, [(0, "A4"), (0.5, "G4")], {}),
-      ("I", 7.0, 0.5, 0.8, "E4", {}),
-      ("shed", 7.5, 1.5, 1.0, "G4", {"vib": (0.5, 5.7, 26)}),
-      ("my", 9.0, 0.5, 0.7, "G4", {}),
-      ("outer", 9.5, 1.0, 0.8, [(0, "G4"), (0.5, "F#4")], {}),
-      ("vestments", 10.5, 2.5, 0.9, [(0, "E4"), (0.5, "D4")],
+      ("zenith", 5.5, 1.5, 0.9, [(0, "B4"), (0.5, "A4")], {}),
+      ("I", 8.0, 0.5, 0.8, "A4", {}),
+      ("shed", 8.5, 1.5, 1.0, "B4", {"scoop": -1.5, "vib": (0.5, 5.7, 28)}),
+      ("my", 10.0, 0.5, 0.7, "A4", {}),
+      ("outer", 10.5, 1.0, 0.8, [(0, "A4"), (0.5, "G4")], {}),
+      ("vestments", 11.5, 2.0, 0.9, [(0, "F#4"), (0.5, "E4")],
        {"vib": (0.5, 5.7, 24), "fall": -1.0})]),
     (16, "Layers upon layers slough away, leaving only the pulsant "
          "nectarized essence at the core.",
@@ -151,13 +151,13 @@ SCORE = [
     (16, "Rendered raw, I move as pure apian anima now.",
      [("Rendered", 0.0, 1.0, 0.9, "E4", {}),
       ("raw", 1.0, 2.0, 1.0, "G4", {"scoop": -2.0, "vib": (0.4, 5.7, 30)}),
-      ("I", 3.0, 0.5, 0.7, "G4", {}),
-      ("move", 3.5, 1.5, 0.9, "A4", {}),
-      ("as", 5.0, 0.5, 0.7, "A4", {}),
-      ("pure", 5.5, 1.5, 1.0, "B4", {"vib": (0.5, 5.7, 28)}),
-      ("apian", 7.0, 1.5, 0.9, [(0, "G4"), (0.5, "F#4")], {}),
-      ("anima", 8.5, 1.5, 0.9, [(0, "F#4"), (0.5, "A4")], {}),
-      ("now", 10.0, 2.5, 1.0, "B4", {"vib": (0.4, 5.7, 32), "fall": -1.5})]),
+      ("I", 3.5, 0.5, 0.7, "G4", {}),
+      ("move", 4.0, 1.5, 0.9, "A4", {}),
+      ("as", 5.5, 0.5, 0.7, "A4", {}),
+      ("pure", 6.0, 1.5, 1.0, "B4", {"vib": (0.5, 5.7, 28)}),
+      ("apian", 8.0, 1.5, 0.9, [(0, "B4"), (0.5, "A4")], {}),
+      ("anima", 9.5, 1.5, 0.9, [(0, "A4"), (0.5, "G4")], {}),
+      ("now", 11.0, 2.5, 1.0, "F#4", {"vib": (0.4, 5.7, 30), "fall": -1.0})]),
     (16, "A quivering translucent incandescence, tuned solely to the "
          "thrumming heartbeat of this unearthly desert canyonscape.",
      [("A", 0.0, 0.5, 0.7, "E4", {}),
@@ -411,8 +411,8 @@ def main():
         # soft-limited; its band followers hear RMS, and a compressed
         # modulator is exactly what a vocoder choir wants
         if _is_voc:
-            phrase *= 0.35 / (np.sqrt((phrase ** 2).mean()) + 1e-9)
-            phrase = np.tanh(phrase / 0.75) * 0.75
+            phrase *= 0.62 / (np.sqrt((phrase ** 2).mean()) + 1e-9)
+            phrase = np.tanh(phrase / 0.65) * 0.65
         else:
             phrase *= 0.12 / (np.sqrt((phrase ** 2).mean()) + 1e-9)
         chunks.append(phrase.astype(np.float32))
@@ -423,8 +423,27 @@ def main():
     pitch = build_pitch(spb, len(line))
     sf.write(os.path.join(REPO, "renders", "nevernot-pitch.wav"),
              pitch, RATE, subtype="FLOAT")
+
+    # The score as data, for anything downstream (the lyric video reads
+    # this): absolute seconds on the VOCAL clock (add the song's intro
+    # offset to get song time)
+    import json
+    dump, base = [], 0.0
+    for entry in SCORE:
+        if entry[0] == "rest":
+            base += entry[1] * spb
+            continue
+        slot_beats, text, timing, is_voc = parse(entry)
+        dump.append({
+            "start": base, "dur": slot_beats * spb, "vocoder": is_voc,
+            "text": text,
+            "words": [{"w": w, "t": base + o * spb, "dur": l * spb, "vel": v}
+                      for w, o, l, v, _p, _x in timing]})
+        base += slot_beats * spb
+    with open(os.path.join(REPO, "renders", "nevernot-score.json"), "w") as f:
+        json.dump({"spb": spb, "intro": 16 * spb, "phrases": dump}, f, indent=1)
     print(f"wrote line ({len(line) / RATE:.1f}s) + pitch "
-          f"({pitch.min():.1f}..{pitch.max():.1f} MIDI)")
+          f"({pitch.min():.1f}..{pitch.max():.1f} MIDI) + score json")
 
 
 if __name__ == "__main__":
