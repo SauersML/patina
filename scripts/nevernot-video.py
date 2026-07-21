@@ -211,14 +211,41 @@ def main():
     fonts = {s: load_font(s) for s in (22, 26, 30, 36, 44, 54)}
     probe_only = os.environ.get("PROBE") is not None
     out_path = os.path.join(REPO, "renders/nevernotbecoming-lyric.mp4")
-    ff = None if probe_only else subprocess.Popen(
-        ["ffmpeg", "-y", "-loglevel", "error",
-         "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}",
-         "-r", str(FPS), "-i", "-",
-         "-i", os.path.join(REPO, "renders/nevernotbecoming.wav"),
-         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18",
-         "-c:a", "aac", "-b:a", "192k", "-shortest", out_path],
-        stdin=subprocess.PIPE)
+
+    # Segmented encoding: on a loaded 8 GB machine the kernel kills
+    # ffmpeg mid-encode under memory pressure (BrokenPipeError here,
+    # random frame each run). mpegts segments stay valid when the
+    # writer dies; we count what landed, restart where it stopped,
+    # and concat+mux at the end.
+    seg_dir = os.path.join(REPO, "renders", ".nn-segs")
+    os.makedirs(seg_dir, exist_ok=True)
+    segments = []
+
+    def open_segment(idx):
+        path = os.path.join(seg_dir, f"seg{idx:03d}.ts")
+        proc = subprocess.Popen(
+            ["ffmpeg", "-y", "-loglevel", "error",
+             "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}",
+             "-r", str(FPS), "-i", "-",
+             "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
+             "-pix_fmt", "yuv420p", "-f", "mpegts", path],
+            stdin=subprocess.PIPE)
+        return path, proc
+
+    def seg_frames(path):
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-count_packets",
+             "-select_streams", "v", "-show_entries",
+             "stream=nb_read_packets", "-of", "csv=p=0", path],
+            capture_output=True, text=True)
+        # mpegts lists the stream under its program AND top-level, so
+        # ffprobe prints the count twice — take the first
+        try:
+            return int(out.stdout.split()[0])
+        except (ValueError, IndexError):
+            return 0
+
+    ff = None
 
     bg = Image.new("RGB", (W, H), (8, 7, 6))
     d0 = ImageDraw.Draw(bg)
@@ -231,7 +258,18 @@ def main():
 
     probes = {int(s * FPS): s for s in (15.0, 95.0, 109.0, 228.0)}
 
-    for f in (sorted(probes) if probe_only else range(nframes)):
+    f = 0
+    frame_iter = sorted(probes) if probe_only else None
+    seg_path = None
+    while True:
+        if probe_only:
+            if not frame_iter:
+                break
+            f = frame_iter.pop(0)
+        elif f >= nframes:
+            break
+        if not probe_only and ff is None:
+            seg_path, ff = open_segment(len(segments))
         t = f / FPS
         img = bg.copy()
         dr = ImageDraw.Draw(img, "RGBA")
@@ -364,14 +402,39 @@ def main():
         dr.line([(X_NOW, 40), (X_NOW, H - 46)], fill=(170, 120, 60, 70), width=1)
 
         if ff is not None:
-            ff.stdin.write(img.tobytes())
+            try:
+                ff.stdin.write(img.tobytes())
+            except BrokenPipeError:
+                ff.wait()
+                landed = seg_frames(seg_path)
+                start = sum(n for _, n in segments)
+                segments.append((seg_path, landed))
+                f = start + landed
+                print(f"ffmpeg died at frame {f}; resuming", flush=True)
+                ff = None
+                continue
         if f in probes:
             img.save(f"{os.environ.get('PROBE_DIR', '/tmp')}/probe-{probes[f]:.0f}.png")
+        if not probe_only:
+            f += 1
 
     if ff is not None:
         ff.stdin.close()
         ff.wait()
-        print(f"wrote {out_path} ({nframes} frames, {dur:.1f}s)")
+        segments.append((seg_path, seg_frames(seg_path)))
+    if not probe_only:
+        concat = "concat:" + "|".join(p for p, _ in segments)
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-i", concat,
+             "-i", os.path.join(REPO, "renders/nevernotbecoming.wav"),
+             "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+             "-shortest", out_path], check=True)
+        for p_, _ in segments:
+            os.remove(p_)
+        os.rmdir(seg_dir)
+        total = sum(n for _, n in segments)
+        print(f"wrote {out_path} ({total} frames in {len(segments)} "
+              f"segment(s), {dur:.1f}s)")
 
 
 if __name__ == "__main__":
