@@ -1,0 +1,63 @@
+# Compound Eyes — the performed Talker: authored pitch, vibrato, glide.
+#
+# The lead is one continuous Kokoro performance through the legible
+# Talker (vox_mode 2, vox_clarity 1). Two files drive it in lockstep:
+# wav= is the mouth (each phrase ONE utterance, WSOLA-warped onto its
+# scored word timing) and pitch= is the melody — a float32 MIDI curve
+# on the same clock, carrying portamento, scoops, melisma inside long
+# words, delayed vibrato and release falls (scripts/compound-eyes.py).
+# The note track only gates the phrases; the curve IS the pitch.
+#
+# Fast and Dorian: D dorian at 140, the bass vamping i-IV (D against
+# G with the B natural in the lead's "roar"), four phrases of sixteen.
+
+bpm 140
+gate 0.98
+
+automate vox_mode
+  2
+automate vox_clarity
+  1
+automate vox_level
+  1
+automate vox_dry
+  0.12
+automate reverb_wet
+  0.16
+automate reverb_decay
+  0.5
+automate tape_drive
+  0.25
+automate tape_age
+  0.45
+
+track voice vox wav=renders/compound-eyes-line.wav pitch=renders/compound-eyes-pitch.wav vel=1 len=1
+  D4:16 D4:16 D3:16 D3:16
+
+automate voice.detune
+  1
+automate voice.osc2_level
+  0.25
+automate voice.osc2_pitch
+  0.12
+automate voice.osc3_level
+  0.12
+automate voice.sub
+  0.12
+automate voice.drive
+  2
+automate voice.saturation
+  0.3
+automate voice.release
+  0.03
+automate voice.attack
+  0.004
+
+track bass patch=deepsine vel=0.65 len=0.5
+  (D1 . . D1 . . D1 D1 | G1 . . G1 . F1 G1 .)x3
+  (D1 . . D1 . . D1 D1 | C2 . . B1 . G1 A1 .)
+  (D1 . . D1 . . D1 D1 | G1 . . G1 . F1 G1 .)x3
+  (D1 . . D1 . . D1 D1 | C2 . . G1 . A1 D1 .) D1:2
+
+track beat kit=909 len=0.5
+  (BD CH:0.25 CH:0.25 OH@0.5 BD CH SD@0.5 CH | BD CH:0.25 CH:0.25 OH@0.5 BD CH SD@0.6 [CH OH]@0.5)x8 [BD CP]:1
