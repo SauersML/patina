@@ -364,9 +364,13 @@ impl Talker {
         // follower bury every word after a phrase's loudest one
         let mut g = norm.powf(0.45 + 0.35 * self.clarity);
         // ...with a downward expander at the floor, so the compression
-        // doesn't hold the gate open on room silence between phrases
-        if norm < 0.02 {
-            let t = norm / 0.02;
+        // doesn't hold the gate open on room silence between phrases.
+        // Clarity lowers the floor: after a loud held word the peak
+        // follower needs seconds to decay, and a 2% threshold was
+        // swallowing the first consonant of every word after a breath
+        let thr = 0.02 - 0.015 * self.clarity;
+        if norm < thr {
+            let t = norm / thr;
             g *= t * t;
         }
         self.gate = g;

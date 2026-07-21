@@ -22,7 +22,7 @@
 #   OUT 36 | FIN 36 | aaah 12 | bzzz 8 | tail 8   = 452
 
 bpm 100
-gate 0.98
+gate 1
 
 automate vox_clarity
   1
