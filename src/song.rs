@@ -58,6 +58,8 @@
 // vox_level (0..1 vocoder into the bus), vox_dry (0..1 raw formant voice),
 // vox_breath (0..1 aspiration), vox_vibrato (0..1 voice vibrato depth),
 // vox_mode (0 = TalkBox tube voicing, 1 = full-range vocoder; plain sets),
+// vox_intonation (0..1 autonomous pitch prosody: accents, declination,
+// final falls — keep low when singing, high when speaking),
 // glide (portamento seconds, 0 = off), sub (0..1 octave-down square),
 // osc2_wave/osc3_wave (0-3), osc2_pitch/osc3_pitch (semitones -24..24),
 // osc2_level/osc3_level (0..1; `waveform` is a macro setting all three
@@ -184,6 +186,7 @@ pub enum Param {
     VoxVibrato,
     /// 0 = TalkBox ('97 Talker tube voicing), 1 = full-range vocoder.
     VoxModeSel,
+    VoxIntonation,
 }
 
 pub(crate) fn waveform_from_value(value: f32) -> Waveform {
@@ -210,6 +213,7 @@ impl Param {
             13 => Param::VoxDry,
             14 => Param::VoxVibrato,
             15 => Param::VoxModeSel,
+            16 => Param::VoxIntonation,
             // The rhythm section claims the 20-31 general-purpose block
             // plus 52-60 — every 909 knob is a controller away
             20 => Param::BdLevel,
@@ -321,7 +325,7 @@ impl Param {
             | Param::ChDecay | Param::OhDecay | Param::DrumDrive
             // The voice box's four knobs are unitless mixes/depths
             | Param::VoxLevel | Param::VoxDry | Param::VoxBreath
-            | Param::VoxVibrato => (0.0, 1.0, Lin),
+            | Param::VoxVibrato | Param::VoxIntonation => (0.0, 1.0, Lin),
             Param::ReverbDecay => (0.0, 0.99, Lin),
             Param::PulseWidth => (0.05, 0.95, Lin),
             Param::Detune => (0.0, 30.0, Lin),
@@ -435,6 +439,7 @@ impl Param {
             "vox_breath" => Param::VoxBreath,
             "vox_vibrato" => Param::VoxVibrato,
             "vox_mode" => Param::VoxModeSel,
+            "vox_intonation" => Param::VoxIntonation,
             _ => return None,
         })
     }
@@ -536,6 +541,7 @@ impl Param {
             Param::VoxBreath => vm.set_vox_breath(value),
             Param::VoxVibrato => vm.set_vox_vibrato(value),
             Param::VoxModeSel => vm.set_vox_mode(value),
+            Param::VoxIntonation => vm.set_vox_intonation(value),
         }
     }
 
@@ -668,7 +674,7 @@ pub enum EventKind {
     NoteOff { note: u8, channel: u16 },
     Param { param: Param, value: f32, channel: u16 },
     /// A syllable for the voice box, landing just before its note-on.
-    Lyric { phones: Vec<crate::vox::LyricPhone>, channel: u16 },
+    Lyric { syl: crate::vox::Syllable, channel: u16 },
 }
 
 pub struct SongEvent {
@@ -706,7 +712,7 @@ fn dispatch(vm: &mut VoiceManager, kind: &EventKind) {
         &EventKind::Param { param, value, channel } => {
             vm.set_channel_param(channel, param, value)
         }
-        EventKind::Lyric { phones, channel } => vm.set_lyric(*channel, phones.clone()),
+        EventKind::Lyric { syl, channel } => vm.set_lyric(*channel, syl.clone()),
     }
 }
 
@@ -913,12 +919,12 @@ fn parse_song(text: &str) -> Result<Song, String> {
                                     token
                                 )));
                             }
-                            let phones = crate::vox::parse_lyric(lyric)
+                            let syl = crate::vox::parse_lyric(lyric)
                                 .map_err(|m| err(format!("token '{}': {}", token, m)))?;
                             events.push((
                                 track_beat,
                                 1,
-                                EventKind::Lyric { phones, channel },
+                                EventKind::Lyric { syl, channel },
                             ));
                         }
                         let off_beat = track_beat + dur * gate;
@@ -1330,7 +1336,7 @@ mod tests {
             .events
             .iter()
             .filter_map(|e| match &e.kind {
-                EventKind::Lyric { phones, channel } => Some((e.time, phones, *channel)),
+                EventKind::Lyric { syl, channel } => Some((e.time, &syl.phones, *channel)),
                 _ => None,
             })
             .collect();

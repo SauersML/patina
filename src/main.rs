@@ -103,20 +103,36 @@ where
 }
 
 /// Build a one-track song that just says the phrase: each word is a
-/// dash-joined ARPAbet syllable sung on A2, mostly dry voice with a
-/// whisper of talk-boxed carrier underneath.
+/// dash-joined ARPAbet syllable spoken on A2 with full intonation —
+/// stress digits (`P-AH-T-IY1-N-AH`) place the pitch accents, `.` and
+/// `?` end phrases with falls and rises, and the last word falls by
+/// default. Mostly dry voice, a whisper of talk-boxed carrier under it.
 fn say_song(text: &str) -> String {
     let mut s = String::from(
         "bpm 60\ngate 0.97\n\
          automate vox_dry\n0.9\n\
          automate vox_level\n0.3\n\
-         automate vox_vibrato\n0.15\n\
+         automate vox_vibrato\n0.12\n\
+         automate vox_intonation\n0.85\n\
          automate reverb_wet\n0.2\n\
          track say vox vel=0.85\n",
     );
-    for word in text.split_whitespace() {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    for (i, word) in words.iter().enumerate() {
+        let mut word = (*word).to_string();
+        let phrase_end = word.ends_with('.') || word.ends_with('?');
+        if i + 1 == words.len() && !phrase_end {
+            word.push('.'); // a statement ends with a fall
+        }
         let n = word.split('-').count();
-        s.push_str(&format!("A2:{:.2}={} R:0.15 ", 0.25 + 0.15 * n as f64, word));
+        // A breath between words, a longer one between phrases
+        let pause = if phrase_end { 0.45 } else { 0.15 };
+        s.push_str(&format!(
+            "A2:{:.2}={} R:{} ",
+            0.25 + 0.15 * n as f64,
+            word,
+            pause
+        ));
     }
     s.push('\n');
     s

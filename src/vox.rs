@@ -74,6 +74,25 @@ pub struct LyricPhone {
     pub ms: Option<f32>,
     /// Loudness scale for this phoneme alone.
     pub amp: f32,
+    /// CMUdict-style stress on vowels: 1 primary, 2 secondary, 0 reduced.
+    /// None = let the prosody planner decide (first vowel primary).
+    pub stress: Option<u8>,
+}
+
+/// How a syllable relates to its phrase edge, from lyric punctuation:
+/// `=HH-OW-M.` falls (statement), `=HH-OW-M?` rises (question).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Boundary {
+    None,
+    Fall,
+    Rise,
+}
+
+/// A parsed lyric: the phonemes plus any phrase-boundary mark.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Syllable {
+    pub phones: Vec<LyricPhone>,
+    pub boundary: Boundary,
 }
 
 /// Continuant targets: formants, bandwidths, source amplitudes, timing.
@@ -201,8 +220,17 @@ impl Phoneme {
 }
 
 /// Parse a lyric: dash-separated ARPAbet, each phoneme optionally
-/// `:ms` (length in milliseconds) and/or `@amp` — `HH-EH:180@0.7-L-OW`.
-pub fn parse_lyric(s: &str) -> Result<Vec<LyricPhone>, String> {
+/// carrying a stress digit (vowels: `OW1`, `AH0`), `:ms` (length in
+/// milliseconds), and/or `@amp` — `HH-OW1:180@0.7-L-D`. A trailing `.`
+/// marks a phrase-final fall, `?` a rise: `=HH-OW1-M.`
+pub fn parse_lyric(s: &str) -> Result<Syllable, String> {
+    let (s, boundary) = if let Some(r) = s.strip_suffix('.') {
+        (r, Boundary::Fall)
+    } else if let Some(r) = s.strip_suffix('?') {
+        (r, Boundary::Rise)
+    } else {
+        (s.strip_suffix(',').unwrap_or(s), Boundary::None)
+    };
     let mut out = Vec::new();
     for raw in s.split('-').filter(|t| !t.is_empty()) {
         let mut part = raw;
@@ -224,19 +252,32 @@ pub fn parse_lyric(s: &str) -> Result<Vec<LyricPhone>, String> {
             ms = Some(v);
             part = &part[..i];
         }
-        let ph = Phoneme::from_name(part).ok_or_else(|| {
+        let (name, stress) = match part.as_bytes().last() {
+            Some(c) if c.is_ascii_digit() && part.len() > 1 => {
+                let d = c - b'0';
+                if d > 2 {
+                    return Err(format!("lyric '{}': stress is 0, 1, or 2", raw));
+                }
+                (&part[..part.len() - 1], Some(d))
+            }
+            _ => (part, None),
+        };
+        let ph = Phoneme::from_name(name).ok_or_else(|| {
             format!(
                 "unknown phoneme '{}' (ARPAbet: AA AE AH AO EH ER IH IY UH UW \
                  AY AW EY OW OY W Y L R M N NG F TH S SH HH V DH Z ZH P B T D K G CH JH)",
-                part
+                name
             )
         })?;
-        out.push(LyricPhone { ph, ms, amp: amp.clamp(0.0, 2.0) });
+        if stress.is_some() && !ph.is_vowel() {
+            return Err(format!("lyric '{}': stress digits go on vowels", raw));
+        }
+        out.push(LyricPhone { ph, ms, amp: amp.clamp(0.0, 2.0), stress });
     }
     if out.is_empty() {
         return Err("empty lyric".into());
     }
-    Ok(out)
+    Ok(Syllable { phones: out, boundary })
 }
 
 // ---------------------------------------------------------------------------
@@ -287,6 +328,9 @@ struct Seg {
     dur: usize,
     glide_to: Option<[f32; 3]>,
     slew_ms: f32,
+    /// Pitch-accent bump (semitones) fired when this segment begins —
+    /// the stressed-syllable rise-fall.
+    accent: f32,
 }
 
 const SUSTAIN: usize = usize::MAX;
@@ -299,8 +343,18 @@ pub struct VoxSource {
     pos: usize,
     queue: VecDeque<Seg>,
     coda: Vec<Seg>,
-    pending: Option<(Vec<LyricPhone>, f32)>, // lyric + velocity gain
+    pending: Option<Syllable>,
     held: Vec<u8>,
+    // Prosody: where we are in the phrase and what the pitch is doing
+    // about it. All of it scales with the `intonation` knob.
+    intonation: f32,
+    syl_index: u32,
+    phrase_done: bool,
+    boundary: Boundary,
+    decl_st: f32,   // declination, semitones (slewed via f0_target)
+    accent_st: f32, // pitch-accent envelope, decaying
+    fall_st: f32,   // phrase-final fall/rise envelope
+    fall_target: f32,
     // Smoothed tract state
     f: [f32; 3],
     bw: [f32; 3],
@@ -317,7 +371,11 @@ pub struct VoxSource {
     vib_phase: f32,
     vibrato: f32, // 0..1 panel knob -> cents inside
     jitter_lp: f32,
+    shimmer_lp: f32,
     breath: f32,
+    /// Spectral-tilt lowpass on the glottal pulse: vocal effort opens it
+    /// (louder = brighter), softness closes it.
+    tilt_lp: f32,
     noise: NoiseSource,
     res: [Resonator; 4],
     fric_res: Resonator,
@@ -333,6 +391,14 @@ impl VoxSource {
             coda: Vec::new(),
             pending: None,
             held: Vec::new(),
+            intonation: 0.12,
+            syl_index: 0,
+            phrase_done: true,
+            boundary: Boundary::None,
+            decl_st: 0.0,
+            accent_st: 0.0,
+            fall_st: 0.0,
+            fall_target: 0.0,
             f: [500.0, 1500.0, 2500.0],
             bw: [90.0, 110.0, 160.0],
             voiced: 0.0,
@@ -347,7 +413,9 @@ impl VoxSource {
             vib_phase: 0.0,
             vibrato: 0.25,
             jitter_lp: 0.0,
+            shimmer_lp: 0.0,
             breath: 0.12,
+            tilt_lp: 0.0,
             noise: NoiseSource::new(),
             res: [Resonator::default(); 4],
             fric_res: Resonator::default(),
@@ -362,11 +430,17 @@ impl VoxSource {
         self.vibrato = v.clamp(0.0, 1.0);
     }
 
+    /// How much the voice performs on its own: pitch accents on stressed
+    /// syllables, declination across the phrase, final falls and rises.
+    /// Low for singing (the notes are the melody), high for speech.
+    pub fn set_intonation(&mut self, v: f32) {
+        self.intonation = v.clamp(0.0, 1.0);
+    }
+
     /// The next note-on will sing this. Set from the song's lyric events,
     /// which land just before their note-ons.
-    pub fn set_syllable(&mut self, phones: Vec<LyricPhone>) {
-        // Velocity is filled in by the note that consumes it
-        self.pending = Some((phones, 1.0));
+    pub fn set_syllable(&mut self, syl: Syllable) {
+        self.pending = Some(syl);
     }
 
     pub fn note_on(&mut self, note: u8, velocity: f32) {
@@ -374,9 +448,23 @@ impl VoxSource {
             self.held.push(note);
         }
         self.retune();
-        if let Some((phones, _)) = self.pending.take() {
+        if let Some(syl) = self.pending.take() {
+            // Phrase bookkeeping: the count restarts after a boundary
+            // syllable, and declination steps down as the phrase goes on
+            if self.phrase_done {
+                self.syl_index = 0;
+                self.phrase_done = false;
+                self.fall_st = 0.0;
+                self.fall_target = 0.0;
+            } else {
+                self.syl_index += 1;
+            }
+            self.decl_st =
+                (0.8 - 0.35 * self.syl_index as f32).max(-2.2) * self.intonation;
+            self.boundary = syl.boundary;
+
             let gain = 0.4 + 0.6 * velocity.clamp(0.0, 1.0);
-            let (main, coda) = self.build_syllable(&phones, gain);
+            let (main, coda) = self.build_syllable(&syl.phones, gain);
             // A new syllable interrupts whatever was still queued (fast
             // passages drop their codas, like a hurried singer)
             self.queue.clear();
@@ -408,7 +496,26 @@ impl VoxSource {
                 seg.dur = min_vowel; // staccato: the vowel still speaks, briefly
             }
         }
-        let coda = std::mem::take(&mut self.coda);
+        let mut coda = std::mem::take(&mut self.coda);
+        // Phrase edges: the pitch falls (or rises) through the coda, and
+        // a statement-final coda stretches — phrase-final lengthening
+        match self.boundary {
+            Boundary::Fall => {
+                self.fall_target = -3.5 * self.intonation;
+                self.phrase_done = true;
+                for seg in &mut coda {
+                    if seg.dur != SUSTAIN {
+                        seg.dur = (seg.dur as f32 * 1.4) as usize;
+                    }
+                }
+            }
+            Boundary::Rise => {
+                self.fall_target = 4.0 * self.intonation;
+                self.phrase_done = true;
+            }
+            Boundary::None => {}
+        }
+        self.boundary = Boundary::None;
         self.queue.extend(coda);
     }
 
@@ -421,12 +528,26 @@ impl VoxSource {
         }
     }
 
+    /// Stress → loudness, length, and pitch-accent size.
+    fn stress_shape(&self, stress: Option<u8>) -> (f32, f32, f32) {
+        match stress.unwrap_or(1) {
+            0 => (0.78, 0.7, 0.0),
+            2 => (1.0, 1.05, 1.2 * self.intonation),
+            _ => (1.15, 1.3, 2.4 * self.intonation),
+        }
+    }
+
     fn seg_from(&self, lp: &LyricPhone, dur: usize) -> Seg {
         let s = lp.ph.spec();
+        let (amp_scale, _, accent) = if lp.ph.is_vowel() {
+            self.stress_shape(lp.stress)
+        } else {
+            (1.0, 1.0, 0.0)
+        };
         Seg {
             f: s.f,
             bw: s.bw,
-            voiced: s.voiced * lp.amp,
+            voiced: s.voiced * lp.amp * amp_scale,
             fric: s.fric * lp.amp,
             fric_f: s.fric_f,
             fric_bw: s.fric_bw,
@@ -434,6 +555,7 @@ impl VoxSource {
             dur,
             glide_to: lp.ph.glide_to(),
             slew_ms: s.slew_ms,
+            accent,
         }
     }
 
@@ -455,6 +577,7 @@ impl VoxSource {
                 dur: ms_to_samples(lp.ms.unwrap_or(closure_ms)),
                 glide_to: None,
                 slew_ms: 15.0,
+                accent: 0.0,
             });
             // Burst: a short noise transient shaped by the place of
             // articulation (affricates hold theirs much longer)
@@ -469,6 +592,7 @@ impl VoxSource {
                 dur: ms_to_samples(locus.ms),
                 glide_to: None,
                 slew_ms: locus.slew_ms,
+                accent: 0.0,
             });
             return;
         }
@@ -478,7 +602,8 @@ impl VoxSource {
         } else if sustains {
             SUSTAIN
         } else if lp.ph.is_vowel() {
-            ms_to_samples(INNER_VOWEL_MS)
+            let (_, dur_scale, _) = self.stress_shape(lp.stress);
+            ms_to_samples(INNER_VOWEL_MS * dur_scale)
         } else {
             ms_to_samples(spec.ms)
         };
@@ -488,9 +613,21 @@ impl VoxSource {
     /// Split a lyric into what speaks at note-on (onset consonants plus
     /// the sustaining nucleus) and what waits for note-off (the coda).
     fn build_syllable(&self, phones: &[LyricPhone], gain: f32) -> (Vec<Seg>, Vec<Seg>) {
+        // Unmarked stress defaults: the first vowel carries the syllable,
+        // any further vowels reduce (English's trochaic habit)
+        let mut first_vowel = true;
         let scaled: Vec<LyricPhone> = phones
             .iter()
-            .map(|lp| LyricPhone { amp: lp.amp * gain, ..*lp })
+            .map(|lp| {
+                let stress = if lp.ph.is_vowel() {
+                    let s = lp.stress.or(if first_vowel { Some(1) } else { Some(0) });
+                    first_vowel = false;
+                    s
+                } else {
+                    lp.stress
+                };
+                LyricPhone { amp: lp.amp * gain, stress, ..*lp }
+            })
             .collect();
         let last_vowel = scaled.iter().rposition(|p| p.ph.is_vowel());
         let split = last_vowel.map(|i| i + 1).unwrap_or(scaled.len());
@@ -533,6 +670,11 @@ impl VoxSource {
         }
         if self.cur.is_none() {
             if let Some(s) = self.queue.pop_front() {
+                // A stressed nucleus fires its pitch accent as it begins;
+                // the f0 slew shapes the rise, the decay below the fall
+                if s.accent > self.accent_st {
+                    self.accent_st = s.accent;
+                }
                 self.cur = Some(s);
                 self.pos = 0;
             }
@@ -541,7 +683,7 @@ impl VoxSource {
 
         // Targets: the current segment's, or silence (formants hold their
         // last positions — the mouth doesn't snap shut)
-        let (tf, tbw, tv, tfr, tff, tfbw, tasp, slew_ms) = match &self.cur {
+        let (tf, tbw, mut tv, tfr, tff, tfbw, tasp, slew_ms) = match &self.cur {
             Some(s) => {
                 let mut tf = s.f;
                 let mut slew = s.slew_ms;
@@ -556,6 +698,11 @@ impl VoxSource {
             }
             None => (self.f, self.bw, 0.0, 0.0, self.fric_f, self.fric_bw, 0.0, 25.0),
         };
+        // Breath pressure eases over a long-held note — a sustained vowel
+        // settles instead of holding organ-flat
+        if self.cur.map_or(false, |s| s.dur == SUSTAIN) {
+            tv *= 0.88 + 0.12 * (-(self.pos as f32) / (1.2 * self.sample_rate)).exp();
+        }
 
         // Slew the tract toward its targets: formants at the segment's
         // pace, source amplitudes on a fast 12 ms envelope
@@ -571,16 +718,29 @@ impl VoxSource {
         self.fric_f += (tff - self.fric_f) * kf;
         self.fric_bw += (tfbw - self.fric_bw) * kf;
 
-        // Pitch: slew to the note, add vibrato and a little pitch jitter —
-        // a perfectly steady f0 is the one thing no throat can do
+        // Pitch: slew to the note, then let the prosody speak on top —
+        // declination into the target (slewed with it), the decaying
+        // pitch-accent bump, the phrase-final fall or rise — then vibrato
+        // and the jitter no throat can suppress
         let n = self.noise.next();
         self.jitter_lp += 0.0015 * (n - self.jitter_lp);
-        self.f0 += (self.f0_target - self.f0) * (1.0 - (-1000.0 / (35.0 * self.sample_rate)).exp());
+        self.shimmer_lp += 0.0004 * (n - self.shimmer_lp);
+        let target = self.f0_target * (self.decl_st / 12.0).exp2();
+        self.f0 += (target - self.f0) * (1.0 - (-1000.0 / (35.0 * self.sample_rate)).exp());
+        self.accent_st *= 1.0 - 1.0 / (0.2 * self.sample_rate); // ~200 ms decay
+        self.fall_st +=
+            (self.fall_target - self.fall_st) * (1.0 - (-1000.0 / (150.0 * self.sample_rate)).exp());
         self.vib_phase = (self.vib_phase + 5.3 / self.sample_rate).fract();
         let vib_cents = self.vibrato * 40.0 * (TAU * self.vib_phase).sin();
-        let f0 = self.f0 * ((vib_cents / 1200.0) + self.jitter_lp * 0.012).exp2();
+        let f0 = self.f0
+            * ((self.accent_st + self.fall_st) / 12.0
+                + vib_cents / 1200.0
+                + self.jitter_lp * 0.012)
+                .exp2();
 
-        // Glottal source: differentiated Rosenberg pulse plus breath
+        // Glottal source: differentiated Rosenberg pulse through the
+        // effort-dependent tilt filter (soft voice = darker pulse), with
+        // shimmer on the pulse amplitude and breath in the throat
         self.phase += f0 / self.sample_rate;
         if self.phase >= 1.0 {
             self.phase -= 1.0;
@@ -588,7 +748,11 @@ impl VoxSource {
         let g = Self::glottal_flow(self.phase);
         let dg = (g - self.g_prev) * self.sample_rate / (f0 * 6.0);
         self.g_prev = g;
-        let source = dg * self.voiced
+        let tilt_fc = 700.0 + 5200.0 * self.voiced.clamp(0.0, 1.0);
+        let kt = 1.0 - (-TAU * tilt_fc / self.sample_rate).exp();
+        self.tilt_lp += kt * (dg - self.tilt_lp);
+        let shimmer = 1.0 + self.shimmer_lp * 0.35;
+        let source = self.tilt_lp * self.voiced * shimmer
             + n * (self.asp + self.breath * self.voiced * 0.5);
 
         // The tract: cascade resonators F1-F3 moving, F4 fixed
@@ -612,6 +776,12 @@ impl VoxSource {
     /// True while anything is sounding or queued.
     pub fn speaking(&self) -> bool {
         self.cur.is_some() || !self.queue.is_empty()
+    }
+
+    /// The prosody's current pitch offset in semitones (test telemetry).
+    #[cfg(test)]
+    pub(crate) fn prosody_st(&self) -> f32 {
+        self.decl_st + self.accent_st + self.fall_st
     }
 }
 
@@ -829,14 +999,26 @@ mod tests {
     #[test]
     fn lyric_parsing() {
         let l = parse_lyric("HH-EH:180@0.7-L-OW").unwrap();
-        assert_eq!(l.len(), 4);
-        assert_eq!(l[0], LyricPhone { ph: Phoneme::HH, ms: None, amp: 1.0 });
-        assert_eq!(l[1].ph, Phoneme::EH);
-        assert_eq!(l[1].ms, Some(180.0));
-        assert!((l[1].amp - 0.7).abs() < 1e-6);
-        assert_eq!(l[3].ph, Phoneme::OW);
+        assert_eq!(l.boundary, Boundary::None);
+        assert_eq!(l.phones.len(), 4);
+        assert_eq!(
+            l.phones[0],
+            LyricPhone { ph: Phoneme::HH, ms: None, amp: 1.0, stress: None }
+        );
+        assert_eq!(l.phones[1].ph, Phoneme::EH);
+        assert_eq!(l.phones[1].ms, Some(180.0));
+        assert!((l.phones[1].amp - 0.7).abs() < 1e-6);
+        assert_eq!(l.phones[3].ph, Phoneme::OW);
         // lowercase is fine
-        assert_eq!(parse_lyric("s-ih-ng").unwrap()[2].ph, Phoneme::NG);
+        assert_eq!(parse_lyric("s-ih-ng").unwrap().phones[2].ph, Phoneme::NG);
+        // stress digits ride the vowels; punctuation marks the phrase edge
+        let l = parse_lyric("HH-OW1-M.").unwrap();
+        assert_eq!(l.boundary, Boundary::Fall);
+        assert_eq!(l.phones[1].stress, Some(1));
+        assert_eq!(parse_lyric("Y-UW0?").unwrap().boundary, Boundary::Rise);
+        assert_eq!(parse_lyric("AA2:90").unwrap().phones[0].stress, Some(2));
+        assert!(parse_lyric("AA3").is_err(), "stress is 0-2");
+        assert!(parse_lyric("S1-AA").is_err(), "stress goes on vowels");
         assert!(parse_lyric("QX").is_err());
         assert!(parse_lyric("").is_err());
         assert!(parse_lyric("AA:-5").is_err());
@@ -975,6 +1157,80 @@ mod tests {
             burst_zcr > 2.5 * vowel_zcr,
             "T burst should follow release: {burst_zcr} vs vowel {vowel_zcr}"
         );
+    }
+
+    /// Stress shapes loudness: a reduced vowel (AA0) must sing quieter
+    /// than a stressed one (AA1).
+    #[test]
+    fn stress_scales_loudness() {
+        let sr = 48000.0;
+        let level_of = |lyric: &str| -> f32 {
+            let mut v = VoxSource::new(sr);
+            v.set_vibrato(0.0);
+            v.set_syllable(parse_lyric(lyric).unwrap());
+            v.note_on(45, 0.8);
+            let n = (0.4 * sr) as usize;
+            let mut out = Vec::with_capacity(n);
+            for _ in 0..n {
+                out.push(v.render());
+            }
+            rms(&out[n / 2..])
+        };
+        let stressed = level_of("AA1");
+        let reduced = level_of("AA0");
+        assert!(
+            stressed > 1.25 * reduced,
+            "AA1 should outsing AA0: {stressed} vs {reduced}"
+        );
+    }
+
+    /// The phrase has a shape: pitch accents bump each syllable onset,
+    /// declination lowers later syllables, and a `.` boundary drives the
+    /// pitch down through the coda after the last key lifts.
+    #[test]
+    fn prosody_declines_and_falls() {
+        let sr = 48000.0;
+        let mut v = VoxSource::new(sr);
+        v.set_intonation(1.0);
+        let sing = |v: &mut VoxSource, secs: f32| {
+            for _ in 0..(secs * sr) as usize {
+                v.render();
+            }
+        };
+        // Three-syllable phrase; the last is marked with a final fall
+        v.set_syllable(parse_lyric("AA").unwrap());
+        v.note_on(45, 0.8);
+        sing(&mut v, 0.05);
+        let first = v.prosody_st();
+        sing(&mut v, 0.25);
+        v.note_off(45);
+        sing(&mut v, 0.1);
+        v.set_syllable(parse_lyric("AA").unwrap());
+        v.note_on(45, 0.8);
+        sing(&mut v, 0.3);
+        v.note_off(45);
+        sing(&mut v, 0.1);
+        v.set_syllable(parse_lyric("HH-OW-M.").unwrap());
+        v.note_on(45, 0.8);
+        sing(&mut v, 0.05);
+        let last_onset = v.prosody_st();
+        sing(&mut v, 0.25);
+        v.note_off(45);
+        sing(&mut v, 0.35); // the coda speaks while the fall takes hold
+        let after_fall = v.prosody_st();
+        assert!(
+            first > last_onset + 0.4,
+            "declination: first syllable should sit higher ({first} vs {last_onset})"
+        );
+        assert!(
+            after_fall < -2.0,
+            "a `.` boundary must drive the pitch down through the coda, got {after_fall}"
+        );
+        // A fresh phrase after the boundary starts high again
+        v.set_syllable(parse_lyric("AA").unwrap());
+        v.note_on(45, 0.8);
+        sing(&mut v, 0.05);
+        assert!(v.prosody_st() > 0.0, "new phrase should reset declination");
     }
 
     /// VoxBox: speech articulates the carrier; silence doesn't.

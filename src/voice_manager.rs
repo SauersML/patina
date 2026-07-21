@@ -1,6 +1,6 @@
 use crate::voice::Voice;
 use crate::drums::{DrumMachine, DRUM_CHANNEL};
-use crate::vox::{LyricPhone, VoxBox, VOX_CHANNEL};
+use crate::vox::{Syllable, VoxBox, VOX_CHANNEL};
 use crate::reverb::Reverb;
 use crate::chorus::{Chorus, ChorusMode};
 use crate::oscillator::{CircuitModel, Waveform, PROGRAM_V};
@@ -113,6 +113,9 @@ pub struct ParamValues {
     pub vox_vibrato: f32,
     /// 0 = TalkBox voicing, 1 = full-range vocoder.
     pub vox_mode: f32,
+    /// How much the voice performs its own pitch prosody (accents,
+    /// declination, final falls). Low for singing, high for speech.
+    pub vox_intonation: f32,
 }
 
 impl ParamValues {
@@ -226,6 +229,7 @@ impl Default for ParamValues {
             vox_breath: 0.12,
             vox_vibrato: 0.25,
             vox_mode: 0.0,
+            vox_intonation: 0.12,
         }
     }
 }
@@ -839,9 +843,9 @@ impl VoiceManager {
     // --- The voice box --------------------------------------------------
 
     /// Queue a syllable for the voice; the next vox note-on sings it.
-    pub fn set_lyric(&mut self, channel: u16, phones: Vec<LyricPhone>) {
+    pub fn set_lyric(&mut self, channel: u16, syl: Syllable) {
         if channel == VOX_CHANNEL {
-            self.vox.source.set_syllable(phones);
+            self.vox.source.set_syllable(syl);
         }
     }
 
@@ -873,6 +877,11 @@ impl VoiceManager {
     pub fn set_vox_mode(&mut self, v: f32) {
         self.params.vox_mode = v.clamp(0.0, 1.0);
         self.vox.set_mode(crate::vocoder::VocoderMode::from_value(self.params.vox_mode));
+    }
+
+    pub fn set_vox_intonation(&mut self, v: f32) {
+        self.params.vox_intonation = v.clamp(0.0, 1.0);
+        self.vox.source.set_intonation(self.params.vox_intonation);
     }
 
     pub fn render_next(&mut self) -> (f32, f32) {
