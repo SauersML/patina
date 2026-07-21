@@ -1,18 +1,18 @@
-# The Kaini/Bocuma voice, circuit-corrected: the SH-101's filter is
-# the IR3109 — an OTA CASCADE, not a Moog ladder. Our gm-C core
-# (circuit 1) is the same circuit family: clean in the passband,
-# biting only near cutoff, with the trimmed stable oscillators the
-# 101 was known for. One ramp core
-# with its converter boards mixed in parallel — the engine's new
-# source mixer, phase-locked by construction like the SH-101's.
-#   mix: saw dominant, a glint of pulse (the 101 sheet's ~1.5/10),
-#   plus the phase-locked sub-square an octave down. One solid
-#   voice; no free-running partners, no beating double.
-#   Key-followed ladder with a breathing envelope, driven with the
-#   saturation stage working. Wow and room live in the song.
+# The Kaini/Bocuma voice — corrected to the community's actual
+# SH-01A panel reading, which is humbler than every guess:
+#   SAW ONLY, full level. No pulse, no sub, no noise.
+# The identity is the ENVELOPE and FILTER, not the mix:
+#   - one fast-attack / LONG-decay / near-zero-sustain contour
+#     shaping both loudness and cutoff (the 101 shares one ADSR):
+#     every note is a bloom that fades, never a held organ tone
+#   - strong key tracking (KYBD ~8/10) on the OTA-cascade filter
+#     (circuit 1 — the IR3109's family), moderate-low resonance
+#   - light triangle vibrato, and AUTO portamento at almost minimum
+#     time: the fast linear legato glide
+# Wow, tape, and room live in the song / preset bus lines below.
 waveform 2
-mix_saw 0.85
-mix_pulse 0.13
+mix_saw 0
+mix_pulse 0
 mix_tri 0
 mix_sine 0
 osc2_wave 2
@@ -22,27 +22,27 @@ osc3_wave 2
 osc3_pitch 0
 osc3_level 0
 detune 0
-sub 0.7
+sub 0
 circuit 1
-key_track 0.7
+key_track 0.8
 osc_fm 0
 sync 0
 ring 0
-glide 0.03
-pulse_width 0.42
-attack 0.018
-decay 1.0
-sustain 0.6
-release 0.5
-filter_env 1.2
+glide 0.012
+pulse_width 0.5
+attack 0.008
+decay 2.2
+sustain 0.1
+release 0.8
+filter_env 1.5
 filter_attack 0.005
-filter_decay 0.8
-filter_sustain 0.55
-filter_release 0.5
-cutoff 1250
-resonance 0.55
-drive 1.7
-saturation 0.8
+filter_decay 2.2
+filter_sustain 0.1
+filter_release 0.8
+cutoff 1300
+resonance 1.0
+drive 1.4
+saturation 0.4
 hpf 16
 volume 0.55
 octave 3
@@ -54,10 +54,10 @@ reverb_wet 0.3
 chorus_mode 0
 chorus_rate 0.5
 chorus_depth 0
-lfo_rate 0.4
+lfo_rate 1.2
 lfo_shape 0.5
-lfo_pitch 2
-lfo_filter 0
+lfo_pitch 3
+lfo_filter 0.06
 lfo_pwm 0
 tape_wow 0.42
 tape_flutter 0.06
