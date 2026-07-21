@@ -31,7 +31,7 @@ automate vox_level
 automate vox_mode
   2 R:8 1:0.2 R:7.8 2:0.2 R:111.8 1:0.2 R:59.8 2:0.2 R:63.8 1:0.2 R:51.8 2:0.2 R:119.8 1:0.2 R:19.8 2:0.2 R:7.6
 automate vox_dry
-  0.5 R:8 0.15:0.2 R:7.8 0.5:0.2 R:111.8 0.15:0.2 R:59.8 0.5:0.2 R:63.8 0.15:0.2 R:51.8 0.5:0.2 R:119.8 0.15:0.2 R:19.8 0.5:0.2 R:7.6
+  0.5 R:8 0.2:0.2 R:7.8 0.5:0.2 R:111.8 0.2:0.2 R:59.8 0.5:0.2 R:63.8 0.2:0.2 R:51.8 0.5:0.2 R:119.8 0.2:0.2 R:19.8 0.5:0.2 R:7.6
 automate reverb_wet
   0.2 R:128 0.3:1 R:59 0.2:1 R:63 0.3:1 R:51 0.2:1 R:119 0.32:1 R:26.4
 automate reverb_decay
@@ -42,7 +42,7 @@ automate tape_age
   0.3
 
 # ---- the voice -------------------------------------------------------
-track voice vox wav=renders/nevernot-line.wav pitch=renders/nevernot-pitch.wav vel=1 len=1
+track voice vox wav=renders/nevernot-line-sung.wav pitch=renders/nevernot-pitch.wav vel=1 len=1
   R:16
   E4:112
   E4:2 G4:2 A4:2 B4:3 A4:1.5 B4:1.5 C#5:2 B4:2

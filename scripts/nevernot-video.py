@@ -212,13 +212,22 @@ def main():
             if ph["text"].startswith("Aaah"):
                 aah_spans.append(span)
         for w in ph["words"]:
-            words.append({"w": w["w"], "t": intro + w["t"], "d": w["dur"],
+            wt, wd_ = intro + w["t"], w["dur"]
+            if ph["text"].startswith("Bzz"):
+                # the audio bee lives on its own clock now
+                wt, wd_ = (0.6, 8.4) if w["t"] < 100 else (261.6, 4.8)
+            words.append({"w": w["w"], "t": wt, "d": wd_,
                           "vel": w["vel"], "voc": ph["vocoder"],
                           "aah": ph["text"].startswith("Aaah"),
                           "buzz": ph["text"].startswith("Bzz")})
 
     curve, crate = sf.read(os.path.join(REPO, "renders/nevernot-pitch.wav"),
                            dtype="float32")
+    try:
+        harm, hrate = sf.read(os.path.join(REPO, "renders/nevernot-harmony.wav"),
+                              dtype="float32")
+    except Exception:
+        harm, hrate = np.zeros(1, dtype=np.float32), crate
     mix, mrate = sf.read(os.path.join(REPO, "renders/nevernotbecoming.wav"),
                          dtype="float32")
     if mix.ndim > 1:
@@ -399,6 +408,21 @@ def main():
         if len(pts) > 1:
             dr.line(pts, fill=col((0, 190, 170), 150), width=2)
 
+        # the real voice's counter-line, glowing teal beneath the lead
+        pts = []
+        for px in range(0, W, 3):
+            tt = t0w + px / px_per_s
+            i = int((tt - intro) * hrate)
+            v = harm[i] if 0 <= i < len(harm) else 0.0
+            if v > 1.0:
+                pts.append((px, m2y(v)))
+            else:
+                if len(pts) > 1:
+                    dr.line(pts, fill=col((90, 210, 140), 95), width=2)
+                pts = []
+        if len(pts) > 1:
+            dr.line(pts, fill=col((90, 210, 140), 95), width=2)
+
         ch = chord_at(t)
         in_voc = any(a0 <= t < b0 for a0, b0 in voc_spans)
         if in_voc and ch:
@@ -546,6 +570,13 @@ def main():
 
         dr.line([(X_NOW, 40), (X_NOW, H - 46)], fill=col((170, 120, 60), 70), width=1)
 
+        # sync watermark: frame number as 20 bits of 4x3 blocks — lets a
+        # test decode frame IDENTITY from the finished mp4 at any time
+        for bit in range(20):
+            v = 255 if (f >> bit) & 1 else 0
+            x0b = W - 4 * (bit + 1)
+            dr.rectangle([x0b, H - 3, x0b + 3, H - 1], fill=(v, v, v))
+
         # the coda whiteout, then the dark
         if sec == "aaah" and beat >= 424:
             wash = int(60 * k_now)
@@ -578,9 +609,13 @@ def main():
     if not probe_only:
         concat = "concat:" + "|".join(p for p, _ in segments)
         subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error", "-i", concat,
+            ["ffmpeg", "-y", "-loglevel", "error",
+             "-fflags", "+genpts", "-i", concat,
              "-i", os.path.join(REPO, "renders/nevernotbecoming.wav"),
-             "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+             "-vf", "setpts=N/30/TB", "-r", "30",
+             "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
+             "-pix_fmt", "yuv420p",
+             "-c:a", "aac", "-b:a", "192k",
              "-shortest", out_path], check=True)
         for p_, _ in segments:
             os.remove(p_)
