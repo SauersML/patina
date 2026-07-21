@@ -34,6 +34,8 @@ PHRASES = [
     ("noti",      "af_heart",   0.85, "It is not I who speak."),
     ("grateful",  "af_heart",   0.85, "Grateful, to be had. Held. Beheld."),
     ("aaah",      "af_heart",   0.6,  "Aaah."),
+    ("oooh",      "af_heart",   0.6,  "Oooh."),
+    ("mmm",       "am_michael", 0.55, "Mmm."),
     ("danced",    "am_michael", 0.9,  "I am being danced. Being entranced."),
 ]
 
@@ -71,7 +73,7 @@ def main():
     for name, voice, speed, text in PHRASES:
         d = say(voice, text, speed, os.path.join(OUT, f"{name}.wav"))
         extra = ""
-        if name == "aaah":
+        if name in ("aaah", "oooh", "mmm"):
             extra = f"  loop={0.35*d:.2f}:{0.8*d:.2f} xfade={0.12*d:.2f}"
         print(f"{name:11s} {d:5.2f}s  ({voice})  {text!r}{extra}")
 
