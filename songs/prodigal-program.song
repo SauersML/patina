@@ -49,15 +49,25 @@ track beat kit=909 len=1
   R:24
 
 automate bd_level
-  0.9
+  0.95
 automate bd_drive
-  0.4
-automate bd_decay
+  0.45
+automate bd_attack
+  0.65
+automate bd_sweep
   0.6
+automate bd_decay
+  0.65
+automate dr_drive
+  0.4
 automate sd_level
-  0.7
+  0.75
 automate sd_tune
   0.3
+automate sd_tone
+  0.6
+automate sd_decay
+  0.6
 automate sd_snappy
   0.4
 
@@ -93,16 +103,20 @@ automate hats.gain
   1.35
 
 # ---- the bed: breath, tuned and breathing ----------------------------
-track voxbass sample=renders/prodigal/mmm.wav root=G#2 loop=0.90:2.06 xfade=0.31 attack=0.3 release=0.8 gain=1.7 cutoff=900 len=8
-  D2:16
+track voxbass sample=renders/prodigal/mmm.wav root=G#2 psola beats=8 mode=oneshot attack=0.3 release=0.8 gain=1.7 cutoff=900 len=8
+  D2:8 D2:8
   (D2:8 C2:8)x2
   (B2:8 G2:8)x2
   D2:8 C2:8 A#2:8
   G2:8 A2:8 D2:8
-  D2:24
+  D2:8 D2:8 D2:8
 
 automate voxbass.smp_pitch
   -0.47
+automate voxbass.duck
+  0.38
+automate voxbass.duck_release
+  0.22
 automate voxbass.smp_cutoff
   700 R:104 1400:8@smooth R:40
 
@@ -125,6 +139,10 @@ automate breath.smp_pitch
   0.06
 automate breath.reverb_send
   0.5
+automate breath.duck
+  0.5
+automate breath.duck_release
+  0.28
 
 # ---- the songs -------------------------------------------------------
 # themeA twice with air between; once more over the bloom
