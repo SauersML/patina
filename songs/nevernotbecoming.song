@@ -43,7 +43,7 @@ automate tape_age
 
 # ---- the voice -------------------------------------------------------
 track voice vox wav=renders/nevernot-line.wav pitch=renders/nevernot-pitch.wav vel=1 len=1
-  R:8 [E2 B2 E3 B3]:8
+  R:16
   E4:112
   E4:2 G4:2 A4:2 B4:3 A4:1.5 B4:1.5 C#5:2 B4:2
   [A2 A3 E4 B4 E5]:2 [A2 A3 E4 A4 C#5]:2 [B2 B3 F#4 B4 D5]:2 [G2 G3 E4 G4 B4]:2
@@ -59,12 +59,12 @@ track voice vox wav=renders/nevernot-line.wav pitch=renders/nevernot-pitch.wav v
   [D3 D4 A4 D5]:2 [C#3 C#4 A4 C#5]:2 [B2 B3 B4 E5]:4 [B2 B3 G#4 E5]:4
   E4:120
   [A3 E4 A4 C#5]:4 [G#3 E4 B4 E5]:4 [E3 B3 E4 G#4]:4
-  [E2 B2 E3 B3]:8
+  R:8
 
 # A second bank of keys on the same vox channel: doubles the choir
 # spans' carrier for density
 track choir vox vel=1 len=1
-  R:8 [E2 B2 E3 B3]:8
+  R:16
   R:112
   G3:3 E3:3 F#3:3 A3:3 G#3:4
   [A3 E4 B4 E5]:2 [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [G3 E4 G4 B4]:2
@@ -80,7 +80,7 @@ track choir vox vel=1 len=1
   [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:4 [B3 G#4 E5]:4
   R:120
   [A3 E4 A4 C#5]:4 [G#3 E4 B4 E5]:4 [E3 B3 E4 G#4]:4
-  [E2 B2 E3 B3]:8
+  R:8
 
 automate choir.gain
   2
@@ -123,6 +123,44 @@ automate voice.release
   0.03
 automate voice.attack
   0.004
+
+# ---- the bee itself: no voice, pure circuit ---------------------------
+# Three saws detuned 28 cents beat against each other at A3 — 220 Hz,
+# a honeybee's actual wingbeat — with per-voice noise as wing-air and
+# a jittering 16th-note micro-melody under 80 ms glide: hover, wander,
+# leave. It crosses the stereo field on entry and recedes downward.
+track buzz vel=0.55 len=0.25
+  R:8
+  A3:0.75 G#3:0.25 A3:0.5 A#3:0.25 A3:0.75 G#3:0.5 A3:0.5 B3:0.25 A3:0.75 G#3:0.25 A3:0.5 A#3:0.25 A3:0.75 G#3:0.5 A3:1.25
+  R:420
+  A3:0.5 G#3:0.5 A3:0.75 G3:0.25 F#3:0.75 G3:0.25 F#3:0.5 E3:0.5 F#3:0.25 E3:0.75 E3:1 D3:0.5 E3:1.5
+
+automate buzz.detune
+  28
+automate buzz.osc2_level
+  0.8
+automate buzz.osc3_level
+  0.8
+automate buzz.noise
+  0.12
+automate buzz.sub
+  0.3
+automate buzz.drive
+  3
+automate buzz.saturation
+  0.6
+automate buzz.cutoff
+  2600
+automate buzz.attack
+  0.05
+automate buzz.release
+  0.3
+automate buzz.glide
+  0.08
+automate buzz.gain
+  1.4 R:436 0.4:8@exp
+automate buzz.pan
+  -0.5 R:8 0.5:8@lin R:420 -0.6:8@lin
 
 # ---- the saw wall: slow counterpoint, one step at a time -------------
 track sawS vel=0.72 len=4
