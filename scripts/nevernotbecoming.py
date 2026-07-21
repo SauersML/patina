@@ -32,8 +32,9 @@ LEAD = [("af_heart", 1.0)]
 CHOIR = [("af_heart", 0.62), ("af_bella", 0.44)]
 
 N = {"D3": 50, "E3": 52, "F#3": 54, "G3": 55, "A3": 57, "B3": 59,
-     "C#4": 61, "D4": 62, "E4": 64, "F#4": 66, "G4": 67, "A4": 69,
-     "B4": 71, "C#5": 73, "D5": 74, "E5": 76, "F#5": 78}
+     "C#4": 61, "D4": 62, "E4": 64, "F#4": 66, "G4": 67, "G#4": 68,
+     "A4": 69, "B4": 71, "C#5": 73, "D5": 74, "D#5": 75, "E5": 76,
+     "F#5": 78, "G#5": 80}
 
 BUZZ = (8, "vocoder", "Bzzzzz.",
         [("Bzzzzz", 0.5, 7.0, 0.9, "E4", {})])
@@ -392,8 +393,9 @@ SCORE = [
       ("pollenovective", 9.0, 1.5, 0.9,
        [(0, "B4"), (0.4, "C#5"), (0.75, "B4")], {}),
       ("nevernotbecoming", 10.5, 8.0, 1.0,
-       [(0, "B4"), (0.2, "C#5"), (0.4, "D5"), (0.6, "E5"), (0.8, "F#5")],
-       {"scoop": -1.5, "vib": (0.55, 5.6, 38), "fall": -3.0})]),
+       [(0, "B4"), (0.18, "C#5"), (0.36, "D#5"), (0.54, "E5"),
+        (0.72, "F#5"), (0.88, "G#5")],
+       {"scoop": -1.5, "vib": (0.55, 5.6, 38), "fall": -2.0})]),
     # ---- the last verse, calm ------------------------------------------
     (16, "Every fleeting form resolidified from my starblazed "
          "starmeldmists of dissolution is already its own curvaceously "
@@ -572,6 +574,30 @@ def build_pitch(spb, total_samples):
     return midi.astype(np.float32)
 
 
+def curve_only():
+    """Rebuild pitch + json against the existing line wav — melody
+    edits never touch the speech, so skip the whole TTS pass."""
+    import json
+    spb = 60.0 / BPM
+    line, _ = sf.read(os.path.join(REPO, "renders", "nevernot-line.wav"),
+                      dtype="float32")
+    pitch = build_pitch(spb, len(line))
+    sf.write(os.path.join(REPO, "renders", "nevernot-pitch.wav"),
+             pitch, RATE, subtype="FLOAT")
+    dump, base = [], 0.0
+    for entry in SCORE:
+        slot_beats, text, timing, is_voc = parse(entry)
+        dump.append({
+            "start": base, "dur": slot_beats * spb, "vocoder": is_voc,
+            "text": text,
+            "words": [{"w": w, "t": base + o * spb, "dur": l * spb, "vel": v}
+                      for w, o, l, v, _p, _x in timing]})
+        base += slot_beats * spb
+    with open(os.path.join(REPO, "renders", "nevernot-score.json"), "w") as f:
+        json.dump({"spb": spb, "intro": 8 * spb, "phrases": dump}, f, indent=1)
+    print(f"curve rebuilt ({pitch.min():.1f}..{pitch.max():.1f} MIDI)")
+
+
 def main():
     from mlx_audio.tts.utils import load_model
     from mlx_audio.tts.models.kokoro import KokoroPipeline
@@ -675,4 +701,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    if "--curve-only" in sys.argv:
+        curve_only()
+    else:
+        main()
