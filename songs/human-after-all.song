@@ -1,0 +1,57 @@
+# Human After All — the hybrid: tuned vocal chops VOCODING a saw that
+# plays the same melody.
+#
+# The chops (renders/pitched-vox.wav, already varispeed-pitched to this
+# exact melody) are the MODULATOR; the carrier saw plays the identical
+# line, so the synth layer and the human layer sit at the same f0 and
+# fuse into one voice — half throat, half oscillator. vox_dry blends
+# the human half back in; because it is at the RIGHT pitch this time,
+# it thickens instead of clashing. Studio vocoder circuit, hard grid.
+
+bpm 120
+gate 0.98
+
+automate vox_mode
+  1
+automate vox_level
+  1
+automate vox_dry
+  0.38
+automate reverb_wet
+  0.16
+automate reverb_decay
+  0.5
+automate tape_drive
+  0.3
+automate tape_age
+  0.1
+
+# The carrier: the same melody the chops were pitched to
+track voice vox wav=renders/pitched-vox.wav vel=0.95 len=1
+  C3 C3 D#3 D#3 G3 G3 A#3 G3
+  C3 C3 A#2 A#2 D#3 D#3 F3 D#3
+  C3 C3 D#3 D#3 G3 G3 C4 C4
+  G2 G2 C3 C3 D#3 D#3 G3 A#3
+
+automate voice.detune
+  6
+automate voice.osc2_level
+  0
+automate voice.osc3_level
+  0
+automate voice.sub
+  0.25
+automate voice.drive
+  1.8
+automate voice.saturation
+  0.4
+automate voice.release
+  0.03
+automate voice.attack
+  0.004
+
+track bass patch=deepsine vel=0.7 len=0.5
+  (C1 . C1 . C1 . C1 D#1 | C1 . C1 . A#0 . G0 .)x2 C1:2
+
+track beat kit=909 len=0.5
+  (BD CH:0.25 CH:0.25 OH@0.5 BD CH SD@0.5 CH | BD CH:0.25 CH:0.25 OH@0.5 BD CH SD@0.6 [CH OH]@0.5)x2 [BD CP]:1
