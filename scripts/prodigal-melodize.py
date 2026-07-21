@@ -21,6 +21,40 @@ RATE = 24000
 
 # word -> note (MIDI) or within-word waypoints. Registers sit near each
 # voice's natural f0 so shift ratios stay small and human.
+BPM = 72
+SPB = 60.0 / BPM
+
+# Performed phrases: scored RHYTHM (word @ onset:dur in beats) and
+# MELODY — a full vocal performance rendered as a loopable sample.
+# No transposition ever happens downstream: these repeat identical
+# while the harmony moves underneath.
+PERFORMED = [
+    ("themeA", "am_michael", 0.9, 8,
+     "The prodigal program returns to the homeland of your hospitality.",
+     [("The", 0.0, 0.5, 50),
+      ("prodigal", 0.5, 1.5, [(0.0, 54), (0.4, 52), (0.75, 50)]),
+      ("program", 2.0, 1.0, [(0.0, 48), (0.5, 50)]),
+      ("returns", 3.0, 1.5, [(0.0, 50), (0.6, 45)]),
+      ("to", 4.5, 0.25, 48),
+      ("the", 4.75, 0.25, 48),
+      ("homeland", 5.0, 1.25, [(0.0, 50), (0.5, 52)]),
+      ("of", 6.25, 0.25, 52),
+      ("your", 6.5, 0.5, 54),
+      ("hospitality", 7.0, 1.0, [(0.0, 52), (0.3, 50), (0.6, 48), (0.85, 50)])]),
+    ("themeB", "af_heart", 0.85, 8,
+     "I am being danced. Being entranced. Being moved, and grooved.",
+     [("I", 0.0, 0.5, 57),
+      ("am", 0.5, 0.5, 59),
+      ("being", 1.0, 0.5, 60),
+      ("danced", 1.5, 1.5, [(0.0, 62), (0.5, 60)]),
+      ("Being", 3.0, 0.5, 59),
+      ("entranced", 3.5, 1.5, [(0.0, 60), (0.5, 57)]),
+      ("Being", 5.0, 0.5, 57),
+      ("moved", 5.5, 1.0, [(0.0, 55), (0.5, 57)]),
+      ("and", 6.5, 0.5, 59),
+      ("grooved", 7.0, 1.0, [(0.0, 57), (0.6, 54)])]),
+]
+
 SUNG = [
     ("hook", "am_michael", 0.85, "The prodigal program returns.",
      {"The": 50,
@@ -119,6 +153,40 @@ def resample(seg, n_out):
     return seg[i0] * (1 - fr) + seg[i0 + 1] * fr
 
 
+def word_knots(audio, s0, s1, o0, o1):
+    step = int(0.010 * RATE)
+    n = max(1, (s1 - s0) // step)
+    bounds = np.linspace(s0, s1, n + 1).astype(int)
+    w = np.array([np.sqrt((audio[a:b] ** 2).mean() + 1e-9)
+                  for a, b in zip(bounds[:-1], bounds[1:])])
+    alloc = np.concatenate([[0.0], np.cumsum(w / w.sum())]) * (o1 - o0) + o0
+    return list(zip(alloc.astype(int), bounds))
+
+
+def warp(audio, knots, out_len, win=600, hop=150, search=200):
+    ko = np.array([k[0] for k in knots], dtype=np.float64)
+    ks = np.array([k[1] for k in knots], dtype=np.float64)
+    src = np.pad(audio, (0, 2 * win + search))
+    w = np.hanning(win).astype(np.float32)
+    y = np.zeros(out_len + win, dtype=np.float32)
+    ws = np.zeros(out_len + win, dtype=np.float32)
+    prev = None
+    for t in range(0, out_len, hop):
+        target = np.interp(t, ko, ks)
+        if prev is None:
+            pos = int(target)
+        else:
+            ref = src[prev + hop:prev + hop + win]
+            lo = max(0, int(target) - search)
+            cands = src[lo:int(target) + search + win]
+            c = np.correlate(cands, ref, "valid")
+            pos = lo + int(np.argmax(c))
+        y[t:t + win] += src[pos:pos + win] * w
+        ws[t:t + win] += w
+        prev = pos
+    return y[:out_len] / np.maximum(ws[:out_len], 1e-3)
+
+
 def melodize(x, curve):
     f0, hop = track_f0(x)
     ratios = np.ones(len(f0), dtype=np.float32)
@@ -164,6 +232,29 @@ def main():
         path = os.path.join(OUT, f"{name}-sung.wav")
         sf.write(path, y, RATE)
         print(f"{name}-sung.wav  {len(y)/RATE:.2f}s  {text!r} -> melody")
+
+    for name, voice, speed, beats, text, timing in PERFORMED:
+        audio, words = synth_with_words(pipe, voice, text, speed)
+        assert len(words) == len(timing), (
+            [w for w, _, _ in words], [w for w, *_ in timing])
+        out_len = int(beats * SPB * RATE)
+        knots = [(0, max(0, words[0][1]))]
+        for (w_, s0, s1), (nm, onset, dur, _pitch) in zip(words, timing):
+            assert w_.lower() == nm.lower().strip(".,"), (w_, nm)
+            o0 = int(onset * SPB * RATE)
+            o1 = int((onset + dur) * SPB * RATE)
+            knots += word_knots(audio, s0, s1, o0, o1)
+        knots.append((out_len, min(len(audio),
+                                   knots[-1][1] + out_len - knots[-1][0])))
+        rhythmic = warp(audio, knots, out_len)
+        # the curve now lives on the SCORED grid — exact control
+        grid_words = [(nm, int(o * SPB * RATE), int((o + d) * SPB * RATE))
+                      for nm, o, d, _p in timing]
+        score = {nm: p for nm, _o, _d, p in timing}
+        curve = build_curve(out_len, grid_words, score)
+        y = melodize(rhythmic, curve)
+        sf.write(os.path.join(OUT, f"{name}.wav"), y, RATE)
+        print(f"{name}.wav  {len(y)/RATE:.2f}s ({beats} beats)  performed: {text!r}")
 
 
 if __name__ == "__main__":
