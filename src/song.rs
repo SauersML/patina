@@ -33,6 +33,24 @@
 //                                # built-in voice with a recording as the
 //                                # vocoder's modulator (any voice you like).
 //
+//   track keys sample=tape.wav root=C3 loop=0.5:2.4 xfade=0.08
+//     C3:4 [C3 Eb3 G3]:8    # a sampler track: the recording becomes an
+//                           # instrument on the keys (sampler.rs). Notes
+//                           # repitch the tape around root= (varispeed).
+//                           # Options: start=/end= trim the region (secs),
+//                           # loop or loop=a:b sustains it (equal-power
+//                           # xfade= crossfade), chop=N slices the region
+//                           # into N pads mapped chromatically up from
+//                           # root (natural speed, one-shot), mode=gate|
+//                           # oneshot, reverse, fixed (no keytracking),
+//                           # mono/choke (new note cuts the last),
+//                           # gain= pan= pitch= attack= release= vel_amt=.
+//                           # Automate the transport per track:
+//                           # `automate keys.smp_pitch` is a varispeed
+//                           # knob in semitones; smp_start scrubs where
+//                           # notes drop the needle; smp_gain, smp_pan,
+//                           # smp_attack, smp_release reshape it live.
+//
 // Note-track tokens:
 //   C4  F#3  Eb5  60      note names (C4 = MIDI 60) or raw MIDI numbers
 //   [C4 E4 G4]            chord (notes start and stop together)
@@ -75,6 +93,11 @@
 // bd_attack, bd_decay, bd_sweep, bd_drive, sd_level, sd_tune, sd_tone,
 // sd_snappy, sd_decay, rs_level, rs_tune, cp_level, cp_decay, hh_level,
 // hh_tune, hh_metal, ch_decay, oh_decay, dr_drive.
+//
+// The tape deck (per sampler track via `automate <track>.<param>`, or
+// global to all slots): smp_pitch (semitones, -24..24), smp_start (0..1
+// needle-drop point), smp_gain (0..2), smp_pan (-1..1), smp_attack,
+// smp_release (seconds).
 
 use std::sync::Arc;
 use std::thread;
@@ -187,6 +210,14 @@ pub enum Param {
     /// 0 = TalkBox ('97 Talker tube voicing), 1 = full-range vocoder.
     VoxModeSel,
     VoxIntonation,
+    // The tape deck (sampler.rs): per-slot transport controls, routed to
+    // a slot by the track's channel (global automation reaches all slots)
+    SmpPitch,
+    SmpStart,
+    SmpGain,
+    SmpPan,
+    SmpAttack,
+    SmpRelease,
 }
 
 pub(crate) fn waveform_from_value(value: f32) -> Waveform {
@@ -209,6 +240,14 @@ impl Param {
             1 => Param::ModWheel,
             // CC2 is the MIDI breath controller — it belongs to the voice
             2 => Param::VoxBreath,
+            // The tape deck rides the leftover low block; CC10 is the
+            // standard pan, which here pans the sampler
+            8 => Param::SmpGain,
+            9 => Param::SmpPitch,
+            10 => Param::SmpPan,
+            17 => Param::SmpStart,
+            18 => Param::SmpAttack,
+            19 => Param::SmpRelease,
             12 => Param::VoxLevel,
             13 => Param::VoxDry,
             14 => Param::VoxVibrato,
@@ -350,6 +389,13 @@ impl Param {
             Param::CircuitSel | Param::SyncSel | Param::VoxModeSel => (0.0, 1.0, Step),
             Param::UiOctave => (0.0, 8.0, Step),
             Param::PitchBendSemis => (-2.0, 2.0, Lin),
+            // The tape deck's transport
+            Param::SmpPitch => (-24.0, 24.0, Lin),
+            Param::SmpStart => (0.0, 1.0, Lin),
+            Param::SmpGain => (0.0, 2.0, Lin),
+            Param::SmpPan => (-1.0, 1.0, Lin),
+            Param::SmpAttack => (0.001, 4.0, Log),
+            Param::SmpRelease => (0.003, 8.0, Log),
         }
     }
 }
@@ -440,6 +486,12 @@ impl Param {
             "vox_vibrato" => Param::VoxVibrato,
             "vox_mode" => Param::VoxModeSel,
             "vox_intonation" => Param::VoxIntonation,
+            "smp_pitch" => Param::SmpPitch,
+            "smp_start" => Param::SmpStart,
+            "smp_gain" => Param::SmpGain,
+            "smp_pan" => Param::SmpPan,
+            "smp_attack" => Param::SmpAttack,
+            "smp_release" => Param::SmpRelease,
             _ => return None,
         })
     }
@@ -542,6 +594,10 @@ impl Param {
             Param::VoxVibrato => vm.set_vox_vibrato(value),
             Param::VoxModeSel => vm.set_vox_mode(value),
             Param::VoxIntonation => vm.set_vox_intonation(value),
+            // Un-addressed sampler automation reaches every slot (the
+            // per-track path routes by channel before it gets here)
+            Param::SmpPitch | Param::SmpStart | Param::SmpGain | Param::SmpPan
+            | Param::SmpAttack | Param::SmpRelease => vm.set_sampler_all(self, value),
         }
     }
 
@@ -690,6 +746,9 @@ pub struct Song {
     /// A recorded vocoder modulator (`wav=` on a vox track): mono samples
     /// and their source rate, resampled by the engine on registration.
     pub vox_wav: Option<(Vec<f32>, u32)>,
+    /// The tape deck: slot i (= channel SAMPLER_CHANNEL_BASE + i) holds a
+    /// loaded reel and its transport, from `sample=` tracks.
+    pub samplers: Vec<crate::sampler::SamplerSlot>,
 }
 
 pub fn load_song(path: &str) -> Result<Song, String> {
@@ -722,6 +781,9 @@ fn register_channels(vm: &mut VoiceManager, song: &Song) {
     }
     if let Some((samples, rate)) = &song.vox_wav {
         vm.set_vox_wav(samples, *rate);
+    }
+    for (i, slot) in song.samplers.iter().enumerate() {
+        vm.set_sampler_slot(i, slot.clone());
     }
 }
 
@@ -785,6 +847,7 @@ fn parse_song(text: &str) -> Result<Song, String> {
     let mut channels: Vec<ParamValues> = Vec::new();
     let mut track_channels: Vec<(String, u16)> = Vec::new();
     let mut vox_wav: Option<(Vec<f32>, u32)> = None;
+    let mut samplers: Vec<crate::sampler::SamplerSlot> = Vec::new();
 
     let mut mode = TrackMode::None;
     let mut track_beat = 0.0_f64;
@@ -818,6 +881,16 @@ fn parse_song(text: &str) -> Result<Song, String> {
                 let mut vel = 0.8_f32;
                 let mut len = 1.0_f64;
                 let mut channel = 0u16;
+                // A sampler track: `sample=` loads a reel and the other
+                // tape-deck options refine its transport, in any order
+                let mut smp: Option<crate::sampler::SlotConfig> =
+                    if line.split_whitespace().any(|o| o.starts_with("sample=")) {
+                        Some(Default::default())
+                    } else {
+                        None
+                    };
+                let mut smp_data: Option<std::sync::Arc<crate::sampler::SampleData>> = None;
+                let mut smp_mode_set = false;
                 for opt in line.split_whitespace().skip(2) {
                     if let Some(v) = opt.strip_prefix("vel=") {
                         vel = v.parse::<f32>().map_err(|_| err(format!("invalid vel '{}'", v)))?;
@@ -845,9 +918,32 @@ fn parse_song(text: &str) -> Result<Song, String> {
                         let p = params_from_patch(&text).map_err(err)?;
                         channels.push(p);
                         channel = channels.len() as u16;
+                    } else if let Some(v) = opt.strip_prefix("sample=") {
+                        smp_data = Some(std::sync::Arc::new(
+                            crate::sampler::load_wav_stereo(v).map_err(err)?,
+                        ));
+                    } else if let Some(cfg) = smp.as_mut() {
+                        parse_sampler_option(cfg, opt, &mut smp_mode_set).map_err(err)?;
                     } else {
                         return Err(err(format!("unknown track option '{}'", opt)));
                     }
+                }
+                if let Some(mut cfg) = smp {
+                    let data = smp_data
+                        .ok_or_else(|| err("sampler track needs sample=file.wav".into()))?;
+                    // Chop pads are drum pads: fire-and-forget unless the
+                    // track says otherwise
+                    if cfg.chop > 1 && !smp_mode_set {
+                        cfg.mode = crate::sampler::PlayMode::OneShot;
+                    }
+                    if samplers.len() >= crate::sampler::MAX_SLOTS {
+                        return Err(err(format!(
+                            "too many sampler tracks (max {})",
+                            crate::sampler::MAX_SLOTS
+                        )));
+                    }
+                    channel = crate::sampler::SAMPLER_CHANNEL_BASE + samplers.len() as u16;
+                    samplers.push(crate::sampler::SamplerSlot { data, cfg });
                 }
                 track_channels.push((name, channel));
                 mode = TrackMode::Notes { vel, len, channel };
@@ -1000,7 +1096,76 @@ fn parse_song(text: &str) -> Result<Song, String> {
             .collect(),
         channels,
         vox_wav,
+        samplers,
     })
+}
+
+/// One tape-deck track option. Times are seconds on the source recording;
+/// `root=` takes a note name, `loop=a:b` a pair of times.
+fn parse_sampler_option(
+    cfg: &mut crate::sampler::SlotConfig,
+    opt: &str,
+    mode_set: &mut bool,
+) -> Result<(), String> {
+    use crate::sampler::PlayMode;
+    let secs = |v: &str, what: &str| -> Result<f32, String> {
+        v.parse::<f32>().map_err(|_| format!("invalid {} '{}'", what, v))
+    };
+    if let Some(v) = opt.strip_prefix("root=") {
+        cfg.root = parse_note(v)?;
+    } else if let Some(v) = opt.strip_prefix("start=") {
+        cfg.start = secs(v, "start")?.max(0.0);
+    } else if let Some(v) = opt.strip_prefix("end=") {
+        cfg.end = secs(v, "end")?;
+    } else if opt == "loop" {
+        // Loop the whole region; note_on clamps the sentinel to the tape
+        cfg.loop_pts = Some((0.0, f32::MAX));
+    } else if let Some(v) = opt.strip_prefix("loop=") {
+        let (a, b) = v
+            .split_once(':')
+            .ok_or_else(|| format!("loop needs two times, e.g. loop=0.1:0.9, got '{}'", v))?;
+        let (a, b) = (secs(a, "loop start")?, secs(b, "loop end")?);
+        if b <= a {
+            return Err(format!("loop end must be after loop start ('{}')", v));
+        }
+        cfg.loop_pts = Some((a, b));
+    } else if let Some(v) = opt.strip_prefix("xfade=") {
+        cfg.xfade = secs(v, "xfade")?.clamp(0.0, 2.0);
+    } else if let Some(v) = opt.strip_prefix("chop=") {
+        let n: usize = v.parse().map_err(|_| format!("invalid chop count '{}'", v))?;
+        if !(2..=128).contains(&n) {
+            return Err("chop count must be 2-128".into());
+        }
+        cfg.chop = n;
+    } else if let Some(v) = opt.strip_prefix("mode=") {
+        cfg.mode = match v {
+            "gate" => PlayMode::Gate,
+            "oneshot" => PlayMode::OneShot,
+            _ => return Err(format!("mode must be gate or oneshot, got '{}'", v)),
+        };
+        *mode_set = true;
+    } else if opt == "reverse" {
+        cfg.reverse = true;
+    } else if opt == "fixed" {
+        cfg.keytrack = false;
+    } else if opt == "mono" || opt == "choke" {
+        cfg.mono = true;
+    } else if let Some(v) = opt.strip_prefix("gain=") {
+        cfg.gain = secs(v, "gain")?.clamp(0.0, 2.0);
+    } else if let Some(v) = opt.strip_prefix("pan=") {
+        cfg.pan = secs(v, "pan")?.clamp(-1.0, 1.0);
+    } else if let Some(v) = opt.strip_prefix("pitch=") {
+        cfg.pitch_semis = secs(v, "pitch")?.clamp(-48.0, 48.0);
+    } else if let Some(v) = opt.strip_prefix("attack=") {
+        cfg.attack = secs(v, "attack")?.clamp(0.001, 4.0);
+    } else if let Some(v) = opt.strip_prefix("release=") {
+        cfg.release = secs(v, "release")?.clamp(0.003, 8.0);
+    } else if let Some(v) = opt.strip_prefix("vel_amt=") {
+        cfg.vel_amt = secs(v, "vel_amt")?.clamp(0.0, 1.0);
+    } else {
+        return Err(format!("unknown track option '{}'", opt));
+    }
+    Ok(())
 }
 
 fn emit_ramp(
@@ -1380,6 +1545,91 @@ mod tests {
             .fold(0.0f32, |a, &(l, r)| a.max(l.abs()).max(r.abs()));
         assert!(peak > 0.05, "the choir should be audible, peak={peak}");
         assert!(frames.iter().all(|&(l, r)| l.is_finite() && r.is_finite()));
+    }
+
+    /// Write a small PCM16 mono WAV to the temp dir for sampler tests.
+    fn write_test_wav(name: &str) -> String {
+        let rate = 22050u32;
+        let n = rate as usize / 2; // half a second of 440 Hz
+        let mut data = Vec::with_capacity(44 + n * 2);
+        data.extend_from_slice(b"RIFF");
+        data.extend_from_slice(&(36 + n as u32 * 2).to_le_bytes());
+        data.extend_from_slice(b"WAVEfmt ");
+        data.extend_from_slice(&16u32.to_le_bytes());
+        for v in [1u16, 1] {
+            data.extend_from_slice(&v.to_le_bytes()); // PCM, mono
+        }
+        data.extend_from_slice(&rate.to_le_bytes());
+        data.extend_from_slice(&(rate * 2).to_le_bytes());
+        for v in [2u16, 16] {
+            data.extend_from_slice(&v.to_le_bytes()); // block align, bits
+        }
+        data.extend_from_slice(b"data");
+        data.extend_from_slice(&(n as u32 * 2).to_le_bytes());
+        let w = std::f32::consts::TAU * 440.0 / rate as f32;
+        for i in 0..n {
+            let s = ((i as f32 * w).sin() * 0.5 * 32767.0) as i16;
+            data.extend_from_slice(&s.to_le_bytes());
+        }
+        let path = std::env::temp_dir().join(name);
+        std::fs::write(&path, data).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    /// A `sample=` track becomes a sampler slot on its own channel, its
+    /// notes route there, `automate <track>.smp_*` follows, and the whole
+    /// path — DSL to tape deck to bus — makes sound.
+    #[test]
+    fn sampler_tracks_play_the_tape_deck() {
+        use crate::sampler::SAMPLER_CHANNEL_BASE;
+        let wav = write_test_wav("patina-sampler-test.wav");
+        let song = parse_song(&format!(
+            "bpm 120\n\
+             track keys sample={wav} root=C4 loop xfade=0.02 attack=0.01 release=0.3\n\
+             C4:2 G4:2\n\
+             automate keys.smp_pitch\n\
+             0 -12:2@lin\n"
+        ))
+        .unwrap();
+        assert_eq!(song.samplers.len(), 1);
+        assert_eq!(song.samplers[0].cfg.root, 60);
+        assert!(song.samplers[0].cfg.loop_pts.is_some());
+
+        let ons: Vec<u16> = song
+            .events
+            .iter()
+            .filter_map(|e| match e.kind {
+                EventKind::NoteOn { channel, .. } => Some(channel),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ons, vec![SAMPLER_CHANNEL_BASE, SAMPLER_CHANNEL_BASE]);
+        assert!(song.events.iter().any(|e| matches!(
+            e.kind,
+            EventKind::Param { param: Param::SmpPitch, channel, .. }
+                if channel == SAMPLER_CHANNEL_BASE
+        )));
+
+        let frames = render_offline(&song, 48000.0);
+        let peak = frames
+            .iter()
+            .fold(0.0f32, |a, &(l, r)| a.max(l.abs()).max(r.abs()));
+        assert!(peak > 0.05, "the tape deck should be audible, peak={peak}");
+        assert!(frames.iter().all(|&(l, r)| l.is_finite() && r.is_finite()));
+
+        // grammar errors
+        assert!(
+            parse_song("bpm 120\ntrack a root=C3\nC4\n").is_err(),
+            "sampler options need sample="
+        );
+        assert!(
+            parse_song(&format!("bpm 120\ntrack a sample={wav} loop=0.5:0.1\nC4\n")).is_err(),
+            "backwards loop points"
+        );
+        assert!(
+            parse_song(&format!("bpm 120\ntrack a sample={wav} mode=maybe\nC4\n")).is_err(),
+            "unknown play mode"
+        );
     }
 
     #[test]

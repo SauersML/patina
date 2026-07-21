@@ -1,5 +1,6 @@
 use crate::voice::Voice;
 use crate::drums::{DrumMachine, DRUM_CHANNEL};
+use crate::sampler::{slot_for_channel, SamplerBank, SamplerSlot};
 use crate::vox::{Syllable, VoxBox, VOX_CHANNEL};
 use crate::reverb::Reverb;
 use crate::chorus::{Chorus, ChorusMode};
@@ -262,6 +263,9 @@ pub struct VoiceManager {
     /// The voice box: a formant speech synthesizer driving a channel
     /// vocoder whose carrier is the vox-channel synth voices.
     pub vox: VoxBox,
+    /// The tape deck: sampler slots (`sample=` tracks) whose playback
+    /// heads mix onto the same volt bus as everything else.
+    pub sampler: SamplerBank,
     reverb: Reverb,
     chorus: Chorus,
     tape: Tape,
@@ -321,6 +325,7 @@ impl VoiceManager {
                 .collect(),
             drums: DrumMachine::new(sample_rate),
             vox: VoxBox::new(sample_rate),
+            sampler: SamplerBank::new(sample_rate),
             reverb: Reverb::new(sample_rate),
             chorus: Chorus::new(sample_rate),
             tape: Tape::new(sample_rate),
@@ -393,6 +398,12 @@ impl VoiceManager {
             param.apply(self, value);
             return;
         }
+        // A sampler track's transport automation lands on its own slot
+        if let Some(slot) = slot_for_channel(channel) {
+            if self.sampler.set_param(slot, param, value) {
+                return;
+            }
+        }
         let mut p = self.channel_params.get(&channel).copied().unwrap_or(self.params);
         if param.apply_to_params(&mut p, value) {
             self.channel_params.insert(channel, p);
@@ -410,6 +421,12 @@ impl VoiceManager {
         // riding the accent line
         if channel == DRUM_CHANNEL {
             self.drums.trigger_note(note, velocity);
+            return;
+        }
+        // Sampler notes start playback heads on their slot's reel; they
+        // never claim a keyboard voice
+        if let Some(slot) = slot_for_channel(channel) {
+            self.sampler.note_on(slot, note, velocity);
             return;
         }
         // A vox note both speaks (the modulator articulates a syllable)
@@ -497,6 +514,10 @@ impl VoiceManager {
         // Drum voices are one-shots fired by their trigger pulse; the
         // gate's falling edge does nothing on the hardware either
         if channel == DRUM_CHANNEL {
+            return;
+        }
+        if let Some(slot) = slot_for_channel(channel) {
+            self.sampler.note_off(slot, note);
             return;
         }
         // The voice hears the key lift (last one up speaks the coda);
@@ -854,6 +875,20 @@ impl VoiceManager {
         self.vox.set_wav(samples, source_rate);
     }
 
+    // --- The tape deck --------------------------------------------------
+
+    /// Load a reel + transport into a sampler slot (song registration).
+    pub fn set_sampler_slot(&mut self, index: usize, slot: SamplerSlot) {
+        self.sampler.set_slot(index, slot);
+    }
+
+    /// Un-addressed (global / MIDI CC) sampler automation: every slot.
+    pub fn set_sampler_all(&mut self, param: crate::song::Param, value: f32) {
+        for i in 0..crate::sampler::MAX_SLOTS {
+            self.sampler.set_param(i, param, value);
+        }
+    }
+
     pub fn set_vox_level(&mut self, v: f32) {
         self.params.vox_level = v.clamp(0.0, 1.0);
         self.vox.set_level(self.params.vox_level);
@@ -970,6 +1005,13 @@ impl VoiceManager {
         let (dl, dr) = self.drums.render_next();
         left += dl;
         right += dr;
+
+        // The tape deck too: same bus, same volts, same rail load — and
+        // its varispeed follows the shared bend/vibrato bus, so the pitch
+        // wheel bends tape and oscillators together
+        let (sl, sr) = self.sampler.render_next(pitch_mult);
+        left += sl;
+        right += sr;
 
         // What the supply just delivered — next sample's rail load
         // (normalized back from volts so the substrate scale is unchanged)

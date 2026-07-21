@@ -18,6 +18,7 @@ format for programmatic playback and parameter automation.
 - 🌀 Juno-style chorus (modes I–IV), stereo reverb, a 905-style dual-spring reverb (dispersive, fixed mechanical decay, wet/dry only), and a physically-modeled cassette tape stage (wow, flutter, saturation, age)
 - 🥁 A TR-909 rhythm section built from the service-manual circuits — swept bridged-T kick with click path and waveshaper, twin-shell snare with snappy noise, three-mode rim knock, flam-envelope clap, and a no-samples hi-hat (six-oscillator metal bank through the 909's swept high-pass and choke VCAs) — living on the same volt bus, effects, and power rail as the keyboard voices. Modern range extensions: kick DRIVE from clean sub to full grit, SWEEP depth, rumble-length decays, and an antialiased bus drive. Triggered from drum tracks in songs (`track beat kit=909` with `BD SD RS CP CH OH`), MIDI channel 10 (GM map), pads on the panel, or the plugin
 - 🗣️ A voice box: a Klatt-style formant speech synthesizer (glottal pulse + cascade resonators, ARPAbet phonemes) driving a 16-band channel vocoder whose carrier is the synth's own voices. Two circuits on the mode switch: the '97 DigiTech Talker "TalkBox" voicing (tube-choked lows, honky mids, instant articulation, amp grit) and a full-range VSM-201-style studio board. Lyrics ride the notes in songs (`track choir vox`, `[A2 E3 A3]:2=HH-EH-L-OW`) with per-phoneme duration and dynamics; `wav=` feeds any recorded voice through the same circuit, and `patina --say "HH-AH-L-OW"` speaks from the command line
+- 📼 A tape-deck sampler: any WAV becomes an instrument on the keys (`track keys sample=tape.wav`) — varispeed keytracking around a root note with 4-point Hermite interpolation, sustain loops with equal-power crossfades (a Mellotron whose tape never runs out), `chop=N` slice pads mapped chromatically (the MPC workflow), reverse transport, gate/one-shot modes, per-note choke (`mono`), and a live-automatable transport: `smp_pitch` is a varispeed knob (tape-stops on demand), `smp_start` scrubs the needle-drop, `smp_gain`/`smp_pan`/`smp_attack`/`smp_release` reshape it mid-song. The heads mix onto the same volt bus as everything else — sampler playback sags the power rail, runs through the fuzz/spring/reverb/chorus/tape chain, and bends with the pitch wheel
 - 🖥️ Studio-hardware GUI: knobs, ADSR graph, live oscilloscope, keys that light from the engine's real voice state
 - ⌨️ QWERTY keyboard input · 🖱️ click-and-drag keys · 🎹 MIDI input
 - 📜 Text-based song files with per-track sequencing and full parameter automation
@@ -77,6 +78,7 @@ its on-screen knob (log where the knob is log). One chart, defined once in
 | 71/74 | resonance / cutoff | 92/94 | tape wow / flutter |
 | 72/73/75/79 | release / attack / decay / sustain | 102–111 | hpf, drive, saturation, key track, filter env (A/D/S/R), chorus rate |
 | 76/77/78 | LFO rate / pitch / filter | 112–119 | chorus mode, waveforms, circuit, sync, tape drive/age |
+| 8/9/10 | sampler gain / varispeed / pan | 17/18/19 | sampler start / attack / release |
 
 Pitch bend is ±2 semitones. **Program change** switches factory patches.
 Songs speak the same language — `automate bend`, `automate mod_wheel`, and
@@ -100,7 +102,7 @@ automate cutoff                # ramp any parameter through breakpoints
 
 - **Notes**: names (`C4`, `F#3`, `Eb5`, with C4 = MIDI 60) or raw MIDI numbers; `[..]` for chords; `R` or `.` for rests; `:beats` duration; `@vel` velocity; `|` bar lines (ignored).
 - **Automation**: `automate <param>` starts a curve track. The first token is the starting value; `V:D@shape` ramps to `V` over `D` beats; `R:D` holds. Shapes: `lin`, `exp` (geometric — right for frequencies), `log`, `smooth`, `step`.
-- **Parameters**: `volume`, `waveform` (0–3), `detune`, `noise` (0–1), `glide` (seconds, 0 = off), `pulse_width` (0.05–0.95), `lfo_rate` (Hz), `lfo_shape` (0 = saw, 0.5 = tri, 1 = ramp), `lfo_pitch` (cents), `lfo_filter` (octaves), `lfo_pwm` (0–0.45), `hpf` (Hz, 16 = off), `fuzz` (0–1), `spring` (0–1), `cutoff`, `resonance`, `drive`, `saturation`, `attack`, `decay`, `sustain`, `release`, `filter_env` (octaves), `filter_attack`, `filter_decay`, `filter_sustain`, `filter_release`, `reverb_decay`, `reverb_wet`, `chorus_mode` (0–4), `chorus_rate`, `chorus_depth`, `tape_wow`, `tape_flutter`, `tape_drive`, `tape_age`, `vox_level`, `vox_dry`, `vox_breath`, `vox_vibrato`, `vox_mode` (0 = TalkBox, 1 = vocoder), `vox_intonation`.
+- **Parameters**: `volume`, `waveform` (0–3), `detune`, `noise` (0–1), `glide` (seconds, 0 = off), `pulse_width` (0.05–0.95), `lfo_rate` (Hz), `lfo_shape` (0 = saw, 0.5 = tri, 1 = ramp), `lfo_pitch` (cents), `lfo_filter` (octaves), `lfo_pwm` (0–0.45), `hpf` (Hz, 16 = off), `fuzz` (0–1), `spring` (0–1), `cutoff`, `resonance`, `drive`, `saturation`, `attack`, `decay`, `sustain`, `release`, `filter_env` (octaves), `filter_attack`, `filter_decay`, `filter_sustain`, `filter_release`, `reverb_decay`, `reverb_wet`, `chorus_mode` (0–4), `chorus_rate`, `chorus_depth`, `tape_wow`, `tape_flutter`, `tape_drive`, `tape_age`, `vox_level`, `vox_dry`, `vox_breath`, `vox_vibrato`, `vox_mode` (0 = TalkBox, 1 = vocoder), `vox_intonation`, and the tape deck's `smp_pitch` (semitones), `smp_start` (0–1), `smp_gain`, `smp_pan`, `smp_attack`, `smp_release` (per sampler track via `automate <track>.smp_pitch`, or global to all slots).
 
 ## 🗣️ The voice box
 
@@ -125,7 +127,26 @@ declination, final falls): keep it low when singing, high when speaking.
 
 - `patina --say "HH-AH-L-OW1. AY1 K-AE-N S-P-IY1-K." [--out say.wav]` speaks from the command line.
 - `scripts/borrow-voice.sh "text" out.wav [voice]` renders a recording for `wav=` (Piper if installed, else the macOS system voice).
-- `scripts/chatterbox-say.py "text" out.wav --exaggeration 0.7` uses Resemble AI's Chatterbox (open-source neural TTS; needs `uv venv --python 3.12 .venv-voice && uv pip install --python .venv-voice/bin/python chatterbox-tts`) — emotion control and voice cloning, on Metal where available.
+- `scripts/chatterbox-say.py "text" out.wav` uses Resemble AI's Chatterbox (open-source neural TTS). Setup: `uv venv --python 3.12 .venv-voice && uv pip install --python .venv-voice/bin/python chatterbox-tts "setuptools<81"` (the pin restores `pkg_resources` for the perth watermarker). Defaults to the Turbo engine (~2 GB, fits an 8 GB machine, CPU) with an RSS watchdog; `--full` unlocks the original model's `--exaggeration` emotion knob on 12+ GB machines. `--voice ref.wav` clones a speaker.
+
+## 📼 The tape deck
+
+A `sample=` track puts a recording on the keys. Everything is optional but
+the file; times are seconds on the source recording:
+
+```
+track keys sample=renders/hold-on.wav root=A3 loop=46.5:52.5 xfade=1.5 attack=0.9
+A3:8 F3:8 G3:8 A3:8              # varispeed repitch around root=
+
+track pads sample=break.wav chop=8 root=C4 mono
+(C4 . D#4 . F4 C4 . G4)x4        # 8 slice pads up from C4, each choking the last
+
+automate keys.smp_pitch          # a varispeed knob, in semitones:
+0 R:24 -24:6@smooth              # ...a two-octave tape-stop to end the song
+```
+
+- **Options**: `root=` (key of natural speed), `start=`/`end=` (trim), `loop` or `loop=a:b` + `xfade=` (sustain loop, equal-power crossfade), `chop=N` (slice pads, natural speed, one-shot), `mode=gate|oneshot`, `reverse`, `fixed` (no keytracking), `mono`/`choke`, `gain=`, `pan=`, `pitch=`, `attack=`, `release=`, `vel_amt=`.
+- `songs/magnetic-memory.song` is the demo: the instrument sampling its own bounce of *Hold On* — looped tape choir, vocal chops, reverse swells, and a tape-stop ending.
 
 ## 🔌 The Substrate
 

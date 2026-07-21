@@ -20,6 +20,7 @@ pub mod oscillator;
 pub mod patch;
 pub mod render;
 pub mod reverb;
+pub mod sampler;
 pub mod song;
 pub mod spring;
 pub mod substrate;

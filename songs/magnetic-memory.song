@@ -1,0 +1,79 @@
+# Magnetic Memory — the instrument samples its own past.
+#
+# The reel is renders/hold-on.wav, the bounce of the hymn this machine
+# already sang. (Regenerate it first if missing:
+#   cargo run --release -- --play songs/hold-on.song --render renders/hold-on.wav)
+#
+# Three tape-deck tracks, three faces of the sampler:
+#   - tapechoir: the hymn's final Am chord, sustain-looped with a long
+#     equal-power crossfade — a Mellotron whose tape never runs out.
+#     Single keys move the whole chord in parallel (root=A3), and the
+#     ending is a real tape-stop: smp_pitch varispeeds two octaves down
+#     while smp_gain rides the fader.
+#   - chops: the words "HOLD ON, THE LIGHT..." sliced into 8 pads mapped
+#     chromatically from C4 (the MPC workflow), mono so each new pad
+#     chokes the last — stutter is a performance, not an accident.
+#   - swell: the hymn's dying tail played in reverse, so each section
+#     arrives on a breath drawn backwards.
+# The 909 and a deepsine bass live on the same volt bus underneath.
+
+bpm 72
+gate 0.92
+
+# The room: long soft reverb, aged tape, a slow BBD shimmer
+automate reverb_wet
+  0.35
+automate reverb_decay
+  0.8
+automate tape_age
+  0.35
+automate tape_wow
+  0.12
+automate chorus_mode
+  2
+automate chorus_depth
+  0.3
+automate chorus_rate
+  0.5
+
+# --- The tape choir -------------------------------------------------------
+# Final chord of the hymn (~44.5s on), looped 46.5–52.5 with a 1.5 s
+# crossfade. Parallel-motion pad: A3 natural, F3/G3 shift the whole
+# choir, A2 runs the reel at half speed — a basement octave of voices.
+track tapechoir sample=renders/hold-on.wav root=A3 start=45.5 loop=46.5:52.5 xfade=1.5 attack=0.9 release=2.5 gain=0.7
+  A3:16 | A3:8 F3:8 G3:8 A3:8 | A2:8 F3:8 G3:4 E3:4 A3:16
+
+# The ending: a tape-stop. Two octaves of varispeed fall while the
+# fader rides out — the classic power-cut on a reel-to-reel.
+automate tapechoir.smp_pitch
+  0 R:72 -24:6@smooth
+automate tapechoir.smp_gain
+  0.7 R:72 0:8@lin
+
+# --- The chops ------------------------------------------------------------
+# "HOLD ON, THE LIGHT WILL FIND YOU" (5–16 s) cut into 8 pads from C4.
+# mono: each pad chokes the last. One-shot by default in chop mode.
+track chops sample=renders/hold-on.wav chop=8 start=5 end=16 root=C4 mono gain=0.9 len=0.5 vel=0.85
+  >32 (C4 . D#4 . F4 C4 . G4)x4
+  (C4 C4@0.6 D#4 . F4 . F#4 G4)x2 (C4 . D#4 . F4 C4 G4@0.6 G4)x2
+  >64 C4 . . . F4 . . . C4:4 .:4
+
+# --- The reverse swell ----------------------------------------------------
+# The hymn's decaying tail (50–55 s) played backwards: silence gathering
+# itself into a chord, landing on each section's downbeat.
+track swell sample=renders/hold-on.wav root=A3 start=50 end=55 reverse attack=0.4 release=1.2 gain=0.55
+  >28 A3:4 | >44 A3:4 | >60 A3:4
+
+# --- The floor ------------------------------------------------------------
+automate bd_level
+  0.55
+automate hh_level
+  0.35
+automate ch_decay
+  0.3
+
+track beat kit=909 len=0.5 vel=0.8
+  >32 (BD . CH . . . CH .)x10
+
+track bass patch=deepsine vel=0.55 len=1
+  >48 A1:8 F1:8 G1:4 E1:4 A1:12
