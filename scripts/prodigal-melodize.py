@@ -1,0 +1,170 @@
+#!/usr/bin/env python
+"""Sung samples: melodize spoken phrases onto scored melodies.
+
+Full pitch control over sampled vocals: Kokoro speaks a phrase, its
+own duration predictor tells us where every word lives, a scored
+word->note map becomes a pitch curve, and the f0-tracked speech is
+block-WSOLA-corrected onto it — a phrase that SINGS, in the voice's
+natural register, ready to be looped by the sampler as a riff.
+
+    .venv-voice/bin/python scripts/prodigal-melodize.py
+    -> renders/prodigal/hook-sung.wav, noti-sung.wav
+"""
+import os
+
+import numpy as np
+import soundfile as sf
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUT = os.path.join(REPO, "renders", "prodigal")
+RATE = 24000
+
+# word -> note (MIDI) or within-word waypoints. Registers sit near each
+# voice's natural f0 so shift ratios stay small and human.
+SUNG = [
+    ("hook", "am_michael", 0.85, "The prodigal program returns.",
+     {"The": 50,
+      "prodigal": [(0.0, 54), (0.4, 52), (0.75, 50)],   # the F#-E-D motif
+      "program": [(0.0, 48), (0.5, 50)],                # bVII lift
+      "returns": [(0.0, 50), (0.55, 45)]}),             # sigh to A2
+    ("noti", "af_heart", 0.85, "It is not I who speak.",
+     {"It": 57, "is": 57, "not": 60, "I": 62,
+      "who": 60, "speak": [(0.0, 57), (0.6, 55)]}),
+]
+
+
+def synth_with_words(pipe, voice, text, speed):
+    for r in pipe(text, voice=voice, speed=speed):
+        audio = np.array(r.audio, dtype=np.float32).flatten()
+        words = [(t.text.strip(".,!?"), int(t.start_ts * RATE),
+                  int(t.end_ts * RATE))
+                 for t in r.tokens
+                 if t.phonemes and any(c.isalnum() for c in t.text)
+                 and t.start_ts is not None]
+        return audio, words
+    raise RuntimeError(text)
+
+
+def build_curve(n, words, score):
+    bp = [(0, None)]
+    prev = None
+    for w, s0, s1 in words:
+        tgt = score[w]
+        way = [(0.0, float(tgt))] if not isinstance(tgt, list) else \
+              [(f, float(m)) for f, m in tgt]
+        if prev is None:
+            prev = way[0][1]
+        bp.append((s0, prev))
+        bp.append((s0 + int(0.03 * RATE), way[0][1]))
+        for fr, m in way[1:]:
+            tw = s0 + int(fr * (s1 - s0))
+            bp.append((tw - 200, bp[-1][1]))
+            bp.append((tw + 200, m))
+        bp.append((s1, way[-1][1]))
+        prev = way[-1][1]
+    bp[0] = (0, bp[1][1])
+    times = np.array([t for t, _ in bp], dtype=np.float64)
+    vals = np.array([v for _, v in bp], dtype=np.float64)
+    curve = np.interp(np.arange(n), times, vals)
+    k = int(0.015 * RATE)
+    kern = np.ones(k) / k
+    return np.convolve(np.pad(curve, k, mode="edge"), kern, "same")[k:-k]
+
+
+def track_f0(x, frame=600, hop=240):
+    n = (len(x) - frame) // hop
+    f0 = np.zeros(max(n, 1), dtype=np.float32)
+    for j in range(n):
+        seg = x[j * hop:j * hop + frame]
+        if np.sqrt((seg ** 2).mean()) < 0.015:
+            continue
+        seg = seg - seg.mean()
+        c = np.correlate(seg, seg, "full")[frame - 1:]
+        c /= c[0] + 1e-9
+        lo, hi = RATE // 480, RATE // 70
+        i = lo + int(np.argmax(c[lo:hi]))
+        if c[i] > 0.32:
+            f0[j] = RATE / i
+    return f0, hop
+
+
+def stretch(seg, r, win=480, search=140):
+    out_len = int(len(seg) * r)
+    src = np.pad(seg, (0, win * 2 + search))
+    w = np.hanning(win).astype(np.float32)
+    hop = win // 2
+    y = np.zeros(out_len + win, dtype=np.float32)
+    ws = np.zeros(out_len + win, dtype=np.float32)
+    prev = None
+    for t in range(0, out_len, hop):
+        target = t / r
+        if prev is None:
+            pos = int(target)
+        else:
+            ref = src[prev + hop:prev + hop + win]
+            lo = max(0, int(target) - search)
+            cands = src[lo:int(target) + search + win]
+            c = np.correlate(cands, ref, "valid")
+            pos = lo + int(np.argmax(c))
+        y[t:t + win] += src[pos:pos + win] * w
+        ws[t:t + win] += w
+        prev = pos
+    return y[:out_len] / np.maximum(ws[:out_len], 1e-3)
+
+
+def resample(seg, n_out):
+    idx = np.linspace(0, len(seg) - 1.001, n_out)
+    i0 = idx.astype(int)
+    fr = (idx - i0).astype(np.float32)
+    return seg[i0] * (1 - fr) + seg[i0 + 1] * fr
+
+
+def melodize(x, curve):
+    f0, hop = track_f0(x)
+    ratios = np.ones(len(f0), dtype=np.float32)
+    for j in range(len(f0)):
+        if f0[j] <= 0:
+            continue
+        m = curve[min(j * hop, len(curve) - 1)]
+        tgt = 440.0 * 2 ** ((m - 69) / 12.0)
+        ratios[j] = np.clip(tgt / f0[j], 0.55, 1.9)
+    rp = np.pad(ratios, 2, mode="edge")
+    ratios = np.median(np.lib.stride_tricks.sliding_window_view(rp, 5), axis=1)
+    B, HB = 2048, 1024
+    y = np.zeros(len(x) + B, dtype=np.float32)
+    ws = np.zeros(len(x) + B, dtype=np.float32)
+    w = np.hanning(B).astype(np.float32)
+    for start in range(0, max(len(x) - B, 1), HB):
+        j = min(start // hop, len(ratios) - 1)
+        rr = float(ratios[j])
+        seg = x[start:start + B]
+        if len(seg) < B:
+            break
+        blk = seg if abs(rr - 1) < 0.02 else resample(stretch(seg, rr), B)
+        y[start:start + B] += blk * w
+        ws[start:start + B] += w
+    y = (y[:len(x)] / np.maximum(ws[:len(x)], 1e-3)).astype(np.float32)
+    pk = np.abs(y).max()
+    return y * (0.9 / pk) if pk > 0 else y
+
+
+def main():
+    from mlx_audio.tts.utils import load_model
+    from mlx_audio.tts.models.kokoro import KokoroPipeline
+    os.environ.setdefault("VIRTUAL_ENV", os.path.join(REPO, ".venv-voice"))
+    model = load_model("mlx-community/Kokoro-82M-bf16")
+    pipe = KokoroPipeline(lang_code="a", model=model,
+                          repo_id="mlx-community/Kokoro-82M-bf16")
+    os.makedirs(OUT, exist_ok=True)
+    for name, voice, speed, text, score in SUNG:
+        audio, words = synth_with_words(pipe, voice, text, speed)
+        assert all(w in score for w, _, _ in words), [w for w, _, _ in words]
+        curve = build_curve(len(audio), words, score)
+        y = melodize(audio, curve)
+        path = os.path.join(OUT, f"{name}-sung.wav")
+        sf.write(path, y, RATE)
+        print(f"{name}-sung.wav  {len(y)/RATE:.2f}s  {text!r} -> melody")
+
+
+if __name__ == "__main__":
+    main()

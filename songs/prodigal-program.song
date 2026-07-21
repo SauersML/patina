@@ -56,7 +56,7 @@ automate padA.osc2_level
 automate padA.detune
   4
 automate padA.cutoff
-  1600
+  1600 R:80 2000:8@smooth R:16 2600:8@smooth R:40
 automate padA.attack
   0.6
 automate padA.release
@@ -64,14 +64,16 @@ automate padA.release
 automate padA.pan
   -0.3
 automate padA.gain
-  1.3
+  1.3 R:80 1.6:8@lin R:64
+automate padA.sub
+  0 R:80 0.25:8@lin R:64
 
 track padB vel=0.45 len=8
   R:48
   [F#4 B4]:16 [D4 G4]:16
-  R:24
+  [D4 F4]:8 [C4 E4]:8 [A#3 D4]:8
   [B3 D4]:8 [C#4 E4]:8 [D4 F#4]:8
-  R:24
+  [D4 A4]:16 R:8
 
 automate padB.waveform
   3
@@ -136,19 +138,28 @@ track voxpad sample=renders/prodigal/aaah.wav root=A3 loop=0.32:0.74 xfade=0.11 
 # the stutter: "I" and "am" as two crushed pads
 track stut sample=renders/prodigal/iam.wav root=C3 chop=2 mono bits=12 rate=26040 gain=1.1 len=1
   C3:2 R:2 C3:1 C3:1 C#3:2 R:2 C3:1 R:1 C#3:2 R:2
-  R:88
-  C3:1 R:1 C3:1 R:1 C#3:2 R:18
+  (C3:1 R:1 C#3:1 R:1 C3:1 R:3)x4
+  (C3:1@0.6 R:1 C#3:1@0.6 R:1 C3:1@0.6 R:3)x4
+  R:24
+  (C3:1 C3:1 C#3:2 R:1 C3:1 R:2)x3
   R:24
 
-# the thesis, falling away from itself: 0, -2, -4 semitones
-track phraseP sample=renders/prodigal/prodigal.wav root=C3 mode=oneshot gain=1.4 len=1
+# the thesis, SUNG — a riff, not an event: recurs on the 8-beat grid,
+# transposing with the harmony (that is the only pitch play left)
+track hookS sample=renders/prodigal/hook-sung.wav root=C3 mode=oneshot gain=1.4 len=1
   R:16
-  C3:8 A#2:8 R:16
-  R:104
+  (C3:8 A#2:8)x2
+  C3:16 C3:16
+  R:24
+  R:16 C3:8
+  C2:8 R:16
+
+track notiS sample=renders/prodigal/noti-sung.wav root=C3 mode=oneshot gain=1.25 len=1
+  R:56 C3:16 C3:8
+  R:56 C3:8 R:8
 
 track rets sample=renders/prodigal/returns.wav root=C3 mono gain=1.3 len=1
-  R:44 C3:1 A#2:1 G#2:2
-  R:80
+  R:128
   C3:24
 
 automate rets.smp_pitch
