@@ -131,6 +131,21 @@ We will use a layered architecture with clear interfaces between components:
 8. **SIMD Optimization**:
    - Use Rust's SIMD intrinsics for parallel processing of audio samples
 
+9. **Setter Idempotence (house rule)**:
+   - Song automation re-asserts parameter values every block, so **every
+     setter that allocates, rebuilds filters, re-randomizes, or otherwise
+     resets state MUST early-return when the value is unchanged**. A
+     setter that only stores a float may skip the guard.
+   - Violations are subtle and audible: `Talker::set_clarity` once rebuilt
+     its output filters per call and the cascade never rang up (the voice
+     lost its top end); `Chorus::set_mode` rebuilt BBD voices per set
+     event. Guarded examples: `Talker::set_clarity`, `Chorus::set_mode` /
+     `set_rate` / `set_depth`, `Tape::set_drive` / `set_age`,
+     `VoxBox::set_mode`.
+   - The next structural parameter you add will hit this trap: write the
+     guard first, and a test that re-asserting the same value leaves
+     internal state untouched (see `chorus::tests::reasserting_the_same_mode_is_a_no_op`).
+
 ## 5. Key Rust Patterns and Features to Utilize
 
 1. **Traits**: For defining common interfaces (e.g., `Oscillator`, `Effect`)

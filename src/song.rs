@@ -7,7 +7,20 @@
 // Format (one directive or a run of event tokens per line, `#` starts a comment):
 //
 //   bpm 100                  # global tempo (set once, at the top)
-//   gate 0.85                # fraction of each note's duration it is held (default 0.9)
+//   gate 0.85                # fraction of each note's duration it is held
+//                            # (default 0.9). The musical intent is "a
+//                            # small separation": the gap is (1-gate) of
+//                            # the note but never more than 80 ms, so a
+//                            # long pad doesn't end with beats of silence.
+//   section CH1 144..180     # name a beat range. Sections make the beat
+//                            # arithmetic the parser's job: `>CH1` seeks
+//                            # any track to the section start, `>CH1.end`
+//                            # to its end, and one-line automation can
+//                            # target sections directly:
+//                            #   automate vox_mode: 1 during CH1,CH2 base 0
+//                            # (set 1 at each section start; `base` is the
+//                            # value everywhere else — asserted at beat 0
+//                            # and restored at each section end).
 //
 //   track lead vel=0.9 len=0.5   # start a note track; tracks play in parallel.
 //                                # vel = default velocity (0..1)
@@ -40,6 +53,14 @@
 //                                # `wav=file.wav` on the track replaces the
 //                                # built-in voice with a recording as the
 //                                # vocoder's modulator (any voice you like).
+//                                # The recording's clock is anchored to the
+//                                # FIRST vox note-on; `wav_at=<beat>` makes
+//                                # that anchor explicit and errors if the
+//                                # first vox note is anywhere else — so
+//                                # editing other tracks can never silently
+//                                # shift the vocal. `pitch=curve.wav` (a
+//                                # float32 wav of MIDI note numbers on the
+//                                # modulator's clock) rides the same anchor.
 //
 //   track keys sample=tape.wav root=C3 loop=0.5:2.4 xfade=0.08
 //     C3:4 [C3 Eb3 G3]:8    # a sampler track: the recording becomes an
@@ -146,6 +167,10 @@ use crate::voice_manager::{ParamValues, VoiceManager};
 // Automation curves are sampled at this many points per beat
 const AUTOMATION_STEPS_PER_BEAT: f64 = 32.0;
 
+/// The longest silence `gate` may carve off a note's end, in seconds:
+/// enough to articulate a separation, never enough to eat a word.
+const GATE_GAP_MAX_S: f64 = 0.08;
+
 /// How a parameter's range is traversed by a fader or knob.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Curve {
@@ -154,121 +179,180 @@ pub enum Curve {
     Step,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Param {
-    Volume,
-    WaveformSel,
-    Detune,
-    Cutoff,
-    Resonance,
-    Drive,
-    Saturation,
-    Attack,
-    Decay,
-    Sustain,
-    Release,
-    HpfCutoff,
-    FuzzAmount,
-    NoiseLevel,
-    SpringWet,
-    Glide,
-    SubLevel,
-    Osc2Wave,
-    Osc2Pitch,
-    Osc2Level,
-    Osc3Wave,
-    Osc3Pitch,
-    Osc3Level,
-    CircuitSel,
-    KeyTrack,
-    OscFm,
-    SyncSel,
-    RingAmount,
-    UiOctave,
-    PitchBendSemis,
-    ModWheel,
-    SustainPedal,
-    PulseWidth,
-    MixSaw,
-    MixPulse,
-    MixTri,
-    MixSine,
-    LfoRate,
-    LfoShape,
-    LfoPitch,
-    LfoFilter,
-    LfoPwm,
-    FilterEnvAmount,
-    FilterAttack,
-    FilterDecay,
-    FilterSustain,
-    FilterRelease,
-    ReverbDecay,
-    ReverbWet,
-    ChorusModeSel,
-    ChorusRate,
-    ChorusDepth,
-    TapeWow,
-    TapeFlutter,
-    TapeDrive,
-    TapeAge,
+/// One row of THE parameter table (see `param_table!` below).
+pub struct ParamDef {
+    pub name: &'static str,
+    pub param: Param,
+    pub cc: Option<u8>,
+}
+
+/// The structural unification: a single macro invocation declares every
+/// parameter's variant, song-file name, MIDI CC, range, and taper in ONE
+/// row, and generates the `Param` enum, `PARAM_DEFS`, and `range()` from
+/// it. A variant cannot exist without its name/cc/range, and they cannot
+/// disagree — the mismatch is unrepresentable, not merely tested-for.
+macro_rules! param_table {
+    ($( $(#[$meta:meta])* $variant:ident : $name:literal, $cc:expr, ($lo:expr, $hi:expr, $curve:ident); )+) => {
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        pub enum Param {
+            $( $(#[$meta])* $variant, )+
+        }
+
+        /// Every parameter's name/cc row, in table order (`--params`,
+        /// the parser, the CC chart, and the sweep test all walk this).
+        pub const PARAM_DEFS: &[ParamDef] = &[
+            $( ParamDef { name: $name, param: Param::$variant, cc: $cc }, )+
+        ];
+
+        impl Param {
+            /// Bounds and taper, straight from the table row. Knobs,
+            /// MIDI CCs, and setter clamps (via `Param::clamp`) all read
+            /// this, so a range change lands everywhere at once.
+            pub fn range(self) -> (f32, f32, Curve) {
+                match self {
+                    $( Param::$variant => ($lo, $hi, Curve::$curve), )+
+                }
+            }
+        }
+    };
+}
+
+#[rustfmt::skip]
+param_table! {
+    // ------------------------------------------------------------------
+    // THE parameter table. One row = one parameter: enum variant, song-
+    // file name, MIDI CC, range and taper. The macro generates the Param
+    // enum, PARAM_DEFS, and Param::range() from these SAME rows, so a
+    // parameter cannot exist with a missing or contradictory name/cc/
+    // range — the old three-place-edit class of bug is unrepresentable.
+    // Setter clamps derive their bounds via Param::clamp (backstopped by
+    // the no_silently_clamped_params sweep test).
+    //
+    // The CC chart keeps its standard assignments where they exist
+    // (1 mod wheel, 5 portamento, 7 volume, 64 sustain, 71/74
+    // resonance/cutoff, 72/73/75/79 envelope, 91/93 sends); the 102-119
+    // block carries the engine-specific rest, the drums claim 20-31 and
+    // 52-60, the tape deck the leftover low block.
+    // ------------------------------------------------------------------
+    Volume:          "volume",         Some(7),   (0.0, 1.0, Lin);
+    WaveformSel:     "waveform",       Some(113), (0.0, 3.0, Step);
+    Detune:          "detune",         Some(83),  (0.0, 30.0, Lin);
+    Cutoff:          "cutoff",         Some(74),  (20.0, 20000.0, Log);
+    Resonance:       "resonance",      Some(71),  (0.0, 4.0, Lin);
+    Drive:           "drive",          Some(103), (0.1, 5.0, Lin);
+    Saturation:      "saturation",     Some(104), (0.0, 2.0, Lin);
+    Attack:          "attack",         Some(73),  (0.01, 2.0, Log);
+    Decay:           "decay",          Some(75),  (0.01, 2.0, Log);
+    Sustain:         "sustain",        Some(79),  (0.0, 1.0, Lin);
+    Release:         "release",        Some(72),  (0.01, 2.0, Log);
+    HpfCutoff:       "hpf",            Some(102), (16.0, 8000.0, Log);
+    FuzzAmount:      "fuzz",           None,      (0.0, 1.0, Lin);
+    NoiseLevel:      "noise",          Some(81),  (0.0, 1.0, Lin);
+    SpringWet:       "spring",         Some(95),  (0.0, 1.0, Lin);
+    Glide:           "glide",          Some(5),   (0.0, 2.0, Lin);
+    SubLevel:        "sub",            Some(80),  (0.0, 1.0, Lin);
+    Osc2Wave:        "osc2_wave",      Some(114), (0.0, 3.0, Step);
+    Osc2Pitch:       "osc2_pitch",     Some(86),  (-24.0, 24.0, Step);
+    Osc2Level:       "osc2_level",     Some(85),  (0.0, 1.0, Lin);
+    Osc3Wave:        "osc3_wave",      Some(115), (0.0, 3.0, Step);
+    Osc3Pitch:       "osc3_pitch",     Some(88),  (-24.0, 24.0, Step);
+    Osc3Level:       "osc3_level",     Some(87),  (0.0, 1.0, Lin);
+    CircuitSel:      "circuit",        Some(116), (0.0, 1.0, Step);
+    KeyTrack:        "key_track",      Some(105), (0.0, 1.0, Lin);
+    OscFm:           "osc_fm",         Some(89),  (0.0, 1.0, Lin);
+    SyncSel:         "sync",           Some(117), (0.0, 1.0, Step);
+    RingAmount:      "ring",           Some(90),  (0.0, 1.0, Lin);
+    // Keyboard register the UI should sit at; patches set it so a bass
+    // preset arrives with the keys already down where it lives
+    UiOctave:        "octave",         None,      (0.0, 8.0, Step);
+    PitchBendSemis:  "bend",           None,      (-2.0, 2.0, Lin);
+    ModWheel:        "mod_wheel",      Some(1),   (0.0, 1.0, Lin);
+    SustainPedal:    "pedal",          Some(64),  (0.0, 1.0, Lin);
+    PulseWidth:      "pulse_width",    Some(82),  (0.05, 0.95, Lin);
+    // Oscillator 1's source mixer: four 0..1 converter levels
+    MixSaw:          "mix_saw",        None,      (0.0, 1.0, Lin);
+    MixPulse:        "mix_pulse",      None,      (0.0, 1.0, Lin);
+    MixTri:          "mix_tri",        None,      (0.0, 1.0, Lin);
+    MixSine:         "mix_sine",       None,      (0.0, 1.0, Lin);
+    LfoRate:         "lfo_rate",       Some(76),  (0.1, 30.0, Log);
+    LfoShape:        "lfo_shape",      None,      (0.0, 1.0, Lin);
+    LfoPitch:        "lfo_pitch",      Some(77),  (0.0, 200.0, Lin);
+    LfoFilter:       "lfo_filter",     Some(78),  (0.0, 4.0, Lin);
+    LfoPwm:          "lfo_pwm",        None,      (0.0, 0.45, Lin);
+    FilterEnvAmount: "filter_env",     Some(106), (-5.0, 5.0, Lin);
+    FilterAttack:    "filter_attack",  Some(107), (0.001, 2.0, Log);
+    FilterDecay:     "filter_decay",   Some(108), (0.01, 2.0, Log);
+    FilterSustain:   "filter_sustain", Some(109), (0.0, 1.0, Lin);
+    FilterRelease:   "filter_release", Some(110), (0.01, 2.0, Log);
+    ReverbDecay:     "reverb_decay",   None,      (0.0, 0.99, Lin);
+    ReverbWet:       "reverb_wet",     Some(91),  (0.0, 1.0, Lin);
+    ChorusModeSel:   "chorus_mode",    Some(112), (0.0, 4.0, Step);
+    ChorusRate:      "chorus_rate",    Some(111), (0.1, 10.0, Log);
+    ChorusDepth:     "chorus_depth",   Some(93),  (0.0, 1.0, Lin);
+    TapeWow:         "tape_wow",       Some(92),  (0.0, 1.0, Lin);
+    TapeFlutter:     "tape_flutter",   Some(94),  (0.0, 1.0, Lin);
+    TapeDrive:       "tape_drive",     Some(118), (0.0, 1.0, Lin);
+    TapeAge:         "tape_age",       Some(119), (0.0, 1.0, Lin);
     // The rhythm section: one shared 909 board, so like the effects and
-    // the LFO these are bus-level parameters (0..1 panel knobs)
-    BdLevel,
-    BdTune,
-    BdAttack,
-    BdDecay,
-    BdSweep,
-    BdDrive,
-    SdLevel,
-    SdTune,
-    SdTone,
-    SdSnappy,
-    SdDecay,
-    RsLevel,
-    RsTune,
-    CpLevel,
-    CpDecay,
-    HhLevel,
-    HhTune,
-    HhMetal,
-    ChDecay,
-    OhDecay,
-    DrumDrive,
-    // The voice box (vox.rs): vocoder mix, raw-voice mix, and the two
-    // character knobs of the formant voice
-    VoxLevel,
-    VoxDry,
-    VoxBreath,
-    VoxVibrato,
-    /// Talker circuit: 0 = reference-matched caricature, 1 = legible
-    VoxClarity,
-    /// 0 = TalkBox ('97 Talker tube voicing), 1 = full-range vocoder.
-    VoxModeSel,
-    VoxIntonation,
+    // the LFO these are bus-level parameters — unitless 0..1 panel knob
+    // rotations; the circuits map them onto their electrical ranges
+    BdLevel:         "bd_level",       Some(20),  (0.0, 1.0, Lin);
+    BdTune:          "bd_tune",        Some(21),  (0.0, 1.0, Lin);
+    BdAttack:        "bd_attack",      Some(22),  (0.0, 1.0, Lin);
+    BdDecay:         "bd_decay",       Some(23),  (0.0, 1.0, Lin);
+    BdSweep:         "bd_sweep",       Some(24),  (0.0, 1.0, Lin);
+    BdDrive:         "bd_drive",       Some(25),  (0.0, 1.0, Lin);
+    SdLevel:         "sd_level",       Some(26),  (0.0, 1.0, Lin);
+    SdTune:          "sd_tune",        Some(27),  (0.0, 1.0, Lin);
+    SdTone:          "sd_tone",        Some(28),  (0.0, 1.0, Lin);
+    SdSnappy:        "sd_snappy",      Some(29),  (0.0, 1.0, Lin);
+    SdDecay:         "sd_decay",       Some(30),  (0.0, 1.0, Lin);
+    RsLevel:         "rs_level",       Some(31),  (0.0, 1.0, Lin);
+    RsTune:          "rs_tune",        Some(52),  (0.0, 1.0, Lin);
+    CpLevel:         "cp_level",       Some(53),  (0.0, 1.0, Lin);
+    CpDecay:         "cp_decay",       Some(54),  (0.0, 1.0, Lin);
+    HhLevel:         "hh_level",       Some(55),  (0.0, 1.0, Lin);
+    HhTune:          "hh_tune",        Some(56),  (0.0, 1.0, Lin);
+    HhMetal:         "hh_metal",       Some(57),  (0.0, 1.0, Lin);
+    ChDecay:         "ch_decay",       Some(58),  (0.0, 1.0, Lin);
+    OhDecay:         "oh_decay",       Some(59),  (0.0, 1.0, Lin);
+    DrumDrive:       "dr_drive",       Some(60),  (0.0, 1.0, Lin);
+    // The voice box (vox.rs). vox_level reaches 2: the band vocoder's
+    // per-band tanh caps its own output (see vocoder.rs's gain-staging
+    // contract), so headroom above unity is the only push a song can
+    // give a vocoder chorus.
+    VoxLevel:        "vox_level",      Some(12),  (0.0, 2.0, Lin);
+    VoxDry:          "vox_dry",        Some(13),  (0.0, 1.0, Lin);
+    // CC2 is the MIDI breath controller -- it belongs to the voice
+    VoxBreath:       "vox_breath",     Some(2),   (0.0, 1.0, Lin);
+    // Talker circuit only: 0 = reference-matched caricature, 1 = legible
+    VoxClarity:      "vox_clarity",    None,      (0.0, 1.0, Lin);
+    VoxVibrato:      "vox_vibrato",    Some(14),  (0.0, 1.0, Lin);
+    // 0 TalkBox / 1 studio vocoder / 2 Talker (LPC) / 3 spectral
+    VoxModeSel:      "vox_mode",       Some(15),  (0.0, 3.0, Step);
+    VoxIntonation:   "vox_intonation", Some(16),  (0.0, 1.0, Lin);
     // The tape deck (sampler.rs): per-slot transport controls, routed to
     // a slot by the track's channel (global automation reaches all slots)
-    SmpPitch,
-    SmpStart,
-    SmpGain,
-    SmpPan,
-    SmpAttack,
-    SmpRelease,
-    SmpCutoff,
-    SmpRes,
+    SmpPitch:        "smp_pitch",      Some(9),   (-24.0, 24.0, Lin);
+    SmpStart:        "smp_start",      Some(17),  (0.0, 1.0, Lin);
+    SmpGain:         "smp_gain",       Some(8),   (0.0, 2.0, Lin);
+    // CC10 is the standard pan, which here pans the sampler
+    SmpPan:          "smp_pan",        Some(10),  (-1.0, 1.0, Lin);
+    SmpAttack:       "smp_attack",     Some(18),  (0.001, 4.0, Log);
+    SmpRelease:      "smp_release",    Some(19),  (0.003, 8.0, Log);
+    SmpCutoff:       "smp_cutoff",     Some(3),   (60.0, 20000.0, Log);
+    SmpRes:          "smp_res",        Some(4),   (0.0, 1.0, Lin);
     // The mixer desk (voice_manager::ChannelMix): every track owns a
-    // strip — gain and pan between voice and bus, sends into the spring,
-    // reverb and chorus tanks, and a kick-keyed sidechain duck. Channel-
-    // scoped: address them as `automate <track>.<param>`.
-    TrackGain,
-    TrackPan,
-    ReverbSend,
-    SpringSend,
-    ChorusSend,
-    DuckAmount,
-    DuckRelease,
+    // strip. Channel-scoped: address them as `automate <track>.<param>`.
+    TrackGain:       "gain",           None,      (0.0, 2.0, Lin);
+    TrackPan:        "pan",            None,      (-1.0, 1.0, Lin);
+    ReverbSend:      "reverb_send",    None,      (0.0, 1.0, Lin);
+    SpringSend:      "spring_send",    None,      (0.0, 1.0, Lin);
+    ChorusSend:      "chorus_send",    None,      (0.0, 1.0, Lin);
+    DuckAmount:      "duck",           None,      (0.0, 1.0, Lin);
+    DuckRelease:     "duck_release",   None,      (0.02, 2.0, Lin);
     // Global chorus insert mix override (the mode switch re-derives it)
-    ChorusMix,
+    ChorusMix:       "chorus_mix",     None,      (0.0, 1.0, Lin);
 }
 
 pub(crate) fn waveform_from_value(value: f32) -> Waveform {
@@ -281,101 +365,19 @@ pub(crate) fn waveform_from_value(value: f32) -> Waveform {
 }
 
 impl Param {
-    /// The MIDI CC chart: every automatable parameter is reachable from a
-    /// controller. Standard assignments where they exist (1 mod wheel,
-    /// 5 portamento, 7 volume, 64 sustain, 71/74 resonance/cutoff,
-    /// 72/73/75/79 envelope, 91/93 sends); the 102-119 block carries the
-    /// engine-specific rest.
+    /// Look a parameter up by its MIDI CC (the chart lives in PARAM_DEFS).
     pub fn from_cc(cc: u8) -> Option<Param> {
-        Some(match cc {
-            1 => Param::ModWheel,
-            // CC2 is the MIDI breath controller — it belongs to the voice
-            2 => Param::VoxBreath,
-            // The tape deck rides the leftover low block; CC10 is the
-            // standard pan, which here pans the sampler
-            8 => Param::SmpGain,
-            9 => Param::SmpPitch,
-            10 => Param::SmpPan,
-            17 => Param::SmpStart,
-            18 => Param::SmpAttack,
-            19 => Param::SmpRelease,
-            3 => Param::SmpCutoff,
-            4 => Param::SmpRes,
-            12 => Param::VoxLevel,
-            13 => Param::VoxDry,
-            14 => Param::VoxVibrato,
-            15 => Param::VoxModeSel,
-            16 => Param::VoxIntonation,
-            // The rhythm section claims the 20-31 general-purpose block
-            // plus 52-60 — every 909 knob is a controller away
-            20 => Param::BdLevel,
-            21 => Param::BdTune,
-            22 => Param::BdAttack,
-            23 => Param::BdDecay,
-            24 => Param::BdSweep,
-            25 => Param::BdDrive,
-            26 => Param::SdLevel,
-            27 => Param::SdTune,
-            28 => Param::SdTone,
-            29 => Param::SdSnappy,
-            30 => Param::SdDecay,
-            31 => Param::RsLevel,
-            52 => Param::RsTune,
-            53 => Param::CpLevel,
-            54 => Param::CpDecay,
-            55 => Param::HhLevel,
-            56 => Param::HhTune,
-            57 => Param::HhMetal,
-            58 => Param::ChDecay,
-            59 => Param::OhDecay,
-            60 => Param::DrumDrive,
-            5 => Param::Glide,
-            7 => Param::Volume,
-            64 => Param::SustainPedal,
-            71 => Param::Resonance,
-            72 => Param::Release,
-            73 => Param::Attack,
-            74 => Param::Cutoff,
-            75 => Param::Decay,
-            76 => Param::LfoRate,
-            77 => Param::LfoPitch,
-            78 => Param::LfoFilter,
-            79 => Param::Sustain,
-            80 => Param::SubLevel,
-            81 => Param::NoiseLevel,
-            82 => Param::PulseWidth,
-            83 => Param::Detune,
-            85 => Param::Osc2Level,
-            86 => Param::Osc2Pitch,
-            87 => Param::Osc3Level,
-            88 => Param::Osc3Pitch,
-            89 => Param::OscFm,
-            90 => Param::RingAmount,
-            91 => Param::ReverbWet,
-            92 => Param::TapeWow,
-            93 => Param::ChorusDepth,
-            94 => Param::TapeFlutter,
-            95 => Param::SpringWet,
-            102 => Param::HpfCutoff,
-            103 => Param::Drive,
-            104 => Param::Saturation,
-            105 => Param::KeyTrack,
-            106 => Param::FilterEnvAmount,
-            107 => Param::FilterAttack,
-            108 => Param::FilterDecay,
-            109 => Param::FilterSustain,
-            110 => Param::FilterRelease,
-            111 => Param::ChorusRate,
-            112 => Param::ChorusModeSel,
-            113 => Param::WaveformSel,
-            114 => Param::Osc2Wave,
-            115 => Param::Osc3Wave,
-            116 => Param::CircuitSel,
-            117 => Param::SyncSel,
-            118 => Param::TapeDrive,
-            119 => Param::TapeAge,
-            _ => return None,
-        })
+        PARAM_DEFS.iter().find(|d| d.cc == Some(cc)).map(|d| d.param)
+    }
+
+    /// Clamp a value to this parameter's documented range. Setters use
+    /// this instead of hand-written bounds, so a setter clamp can never
+    /// drift from the table (the vox_mode disease). Engine-safety limits
+    /// that are DELIBERATELY wider than the musical range (detune,
+    /// glide, pitch bend) keep their own literals, with a comment.
+    pub fn clamp(self, v: f32) -> f32 {
+        let (lo, hi, _) = self.range();
+        v.clamp(lo, hi)
     }
 
     /// Map a normalized controller position (0..1) into this parameter's
@@ -390,187 +392,21 @@ impl Param {
         }
     }
 
-    /// THE range table — the single source of truth for every parameter's
-    /// bounds and taper. Knobs, MIDI CCs, and any future surface all read
-    /// this, so a range change lands everywhere at once.
-    pub fn range(self) -> (f32, f32, Curve) {
-        use Curve::*;
-        match self {
-            Param::Volume | Param::Sustain | Param::FilterSustain
-            | Param::SubLevel | Param::NoiseLevel | Param::OscFm
-            | Param::RingAmount | Param::ReverbWet | Param::ChorusDepth
-            | Param::TapeWow | Param::TapeFlutter | Param::TapeDrive
-            | Param::TapeAge | Param::SpringWet | Param::KeyTrack
-            | Param::FuzzAmount | Param::ModWheel | Param::LfoShape
-            | Param::SustainPedal | Param::Osc2Level | Param::Osc3Level
-            // Oscillator 1's source mixer: four 0..1 converter levels
-            | Param::MixSaw | Param::MixPulse | Param::MixTri
-            | Param::MixSine
-            // 909 panel knobs are all unitless 0..1 rotations; the
-            // circuits map them onto their electrical ranges
-            | Param::BdLevel | Param::BdTune | Param::BdAttack
-            | Param::BdDecay | Param::BdSweep | Param::BdDrive
-            | Param::SdLevel | Param::SdTune | Param::SdTone
-            | Param::SdSnappy | Param::SdDecay | Param::RsLevel
-            | Param::RsTune | Param::CpLevel | Param::CpDecay
-            | Param::HhLevel | Param::HhTune | Param::HhMetal
-            | Param::ChDecay | Param::OhDecay | Param::DrumDrive
-            // The voice box's knobs are unitless mixes/depths
-            | Param::VoxDry | Param::VoxBreath
-            | Param::VoxVibrato | Param::VoxIntonation
-            | Param::VoxClarity => (0.0, 1.0, Lin),
-            // vox_level reaches 2: the band vocoder's per-band tanh caps
-            // its own output, so headroom above unity is the only push a
-            // song can give a vocoder chorus
-            Param::VoxLevel => (0.0, 2.0, Lin),
-            Param::ReverbDecay => (0.0, 0.99, Lin),
-            Param::PulseWidth => (0.05, 0.95, Lin),
-            Param::Detune => (0.0, 30.0, Lin),
-            Param::Osc2Pitch | Param::Osc3Pitch => (-24.0, 24.0, Step),
-            Param::Attack | Param::Decay | Param::Release
-            | Param::FilterDecay | Param::FilterRelease => (0.01, 2.0, Log),
-            Param::FilterAttack => (0.001, 2.0, Log),
-            Param::FilterEnvAmount => (-5.0, 5.0, Lin),
-            Param::Cutoff => (20.0, 20000.0, Log),
-            Param::HpfCutoff => (16.0, 8000.0, Log),
-            Param::Resonance => (0.0, 4.0, Lin),
-            Param::Drive => (0.1, 5.0, Lin),
-            Param::Saturation => (0.0, 2.0, Lin),
-            Param::Glide => (0.0, 2.0, Lin),
-            Param::LfoRate => (0.1, 30.0, Log),
-            Param::LfoPitch => (0.0, 200.0, Lin),
-            Param::LfoFilter => (0.0, 4.0, Lin),
-            Param::LfoPwm => (0.0, 0.45, Lin),
-            Param::ChorusRate => (0.1, 10.0, Log),
-            Param::ChorusModeSel => (0.0, 4.0, Step),
-            Param::WaveformSel | Param::Osc2Wave | Param::Osc3Wave => (0.0, 3.0, Step),
-            Param::CircuitSel | Param::SyncSel => (0.0, 1.0, Step),
-            Param::VoxModeSel => (0.0, 3.0, Step),
-            Param::UiOctave => (0.0, 8.0, Step),
-            Param::PitchBendSemis => (-2.0, 2.0, Lin),
-            // The tape deck's transport
-            Param::SmpPitch => (-24.0, 24.0, Lin),
-            Param::SmpStart => (0.0, 1.0, Lin),
-            Param::SmpGain => (0.0, 2.0, Lin),
-            Param::SmpPan => (-1.0, 1.0, Lin),
-            Param::SmpAttack => (0.001, 4.0, Log),
-            Param::SmpRelease => (0.003, 8.0, Log),
-            Param::SmpCutoff => (60.0, 20000.0, Log),
-            Param::SmpRes => (0.0, 1.0, Lin),
-            Param::TrackGain => (0.0, 2.0, Lin),
-            Param::TrackPan => (-1.0, 1.0, Lin),
-            Param::ReverbSend | Param::SpringSend | Param::ChorusSend
-            | Param::DuckAmount | Param::ChorusMix => (0.0, 1.0, Lin),
-            Param::DuckRelease => (0.02, 2.0, Lin),
-        }
-    }
 }
 
 impl Param {
+    /// Look a parameter up by its song-file name (the table is PARAM_DEFS).
     pub(crate) fn from_name(name: &str) -> Option<Self> {
-        Some(match name {
-            "volume" => Param::Volume,
-            "waveform" => Param::WaveformSel,
-            "detune" => Param::Detune,
-            "cutoff" => Param::Cutoff,
-            "resonance" => Param::Resonance,
-            "drive" => Param::Drive,
-            "saturation" => Param::Saturation,
-            "attack" => Param::Attack,
-            "decay" => Param::Decay,
-            "sustain" => Param::Sustain,
-            "release" => Param::Release,
-            "hpf" => Param::HpfCutoff,
-            "fuzz" => Param::FuzzAmount,
-            "noise" => Param::NoiseLevel,
-            "spring" => Param::SpringWet,
-            "glide" => Param::Glide,
-            "sub" => Param::SubLevel,
-            "osc2_wave" => Param::Osc2Wave,
-            "osc2_pitch" => Param::Osc2Pitch,
-            "osc2_level" => Param::Osc2Level,
-            "osc3_wave" => Param::Osc3Wave,
-            "osc3_pitch" => Param::Osc3Pitch,
-            "osc3_level" => Param::Osc3Level,
-            "circuit" => Param::CircuitSel,
-            "key_track" => Param::KeyTrack,
-            "osc_fm" => Param::OscFm,
-            "sync" => Param::SyncSel,
-            "octave" => Param::UiOctave,
-            "bend" => Param::PitchBendSemis,
-            "mod_wheel" => Param::ModWheel,
-            "pedal" => Param::SustainPedal,
-            "ring" => Param::RingAmount,
-            "pulse_width" => Param::PulseWidth,
-            "mix_saw" => Param::MixSaw,
-            "mix_pulse" => Param::MixPulse,
-            "mix_tri" => Param::MixTri,
-            "mix_sine" => Param::MixSine,
-            "lfo_rate" => Param::LfoRate,
-            "lfo_shape" => Param::LfoShape,
-            "lfo_pitch" => Param::LfoPitch,
-            "lfo_filter" => Param::LfoFilter,
-            "lfo_pwm" => Param::LfoPwm,
-            "filter_env" => Param::FilterEnvAmount,
-            "filter_attack" => Param::FilterAttack,
-            "filter_decay" => Param::FilterDecay,
-            "filter_sustain" => Param::FilterSustain,
-            "filter_release" => Param::FilterRelease,
-            "reverb_decay" => Param::ReverbDecay,
-            "reverb_wet" => Param::ReverbWet,
-            "chorus_mode" => Param::ChorusModeSel,
-            "chorus_rate" => Param::ChorusRate,
-            "chorus_depth" => Param::ChorusDepth,
-            "tape_wow" => Param::TapeWow,
-            "tape_flutter" => Param::TapeFlutter,
-            "tape_drive" => Param::TapeDrive,
-            "tape_age" => Param::TapeAge,
-            "bd_level" => Param::BdLevel,
-            "bd_tune" => Param::BdTune,
-            "bd_attack" => Param::BdAttack,
-            "bd_decay" => Param::BdDecay,
-            "bd_sweep" => Param::BdSweep,
-            "bd_drive" => Param::BdDrive,
-            "sd_level" => Param::SdLevel,
-            "sd_tune" => Param::SdTune,
-            "sd_tone" => Param::SdTone,
-            "sd_snappy" => Param::SdSnappy,
-            "sd_decay" => Param::SdDecay,
-            "rs_level" => Param::RsLevel,
-            "rs_tune" => Param::RsTune,
-            "cp_level" => Param::CpLevel,
-            "cp_decay" => Param::CpDecay,
-            "hh_level" => Param::HhLevel,
-            "hh_tune" => Param::HhTune,
-            "hh_metal" => Param::HhMetal,
-            "ch_decay" => Param::ChDecay,
-            "oh_decay" => Param::OhDecay,
-            "dr_drive" => Param::DrumDrive,
-            "vox_level" => Param::VoxLevel,
-            "vox_dry" => Param::VoxDry,
-            "vox_breath" => Param::VoxBreath,
-            "vox_clarity" => Param::VoxClarity,
-            "vox_vibrato" => Param::VoxVibrato,
-            "vox_mode" => Param::VoxModeSel,
-            "vox_intonation" => Param::VoxIntonation,
-            "smp_pitch" => Param::SmpPitch,
-            "smp_start" => Param::SmpStart,
-            "smp_gain" => Param::SmpGain,
-            "smp_pan" => Param::SmpPan,
-            "smp_attack" => Param::SmpAttack,
-            "smp_release" => Param::SmpRelease,
-            "smp_cutoff" => Param::SmpCutoff,
-            "smp_res" => Param::SmpRes,
-            "gain" => Param::TrackGain,
-            "pan" => Param::TrackPan,
-            "reverb_send" => Param::ReverbSend,
-            "spring_send" => Param::SpringSend,
-            "chorus_send" => Param::ChorusSend,
-            "duck" => Param::DuckAmount,
-            "duck_release" => Param::DuckRelease,
-            "chorus_mix" => Param::ChorusMix,
-            _ => return None,
-        })
+        PARAM_DEFS.iter().find(|d| d.name == name).map(|d| d.param)
+    }
+
+    /// The song-file name of this parameter, from the same table.
+    pub fn name(self) -> &'static str {
+        PARAM_DEFS
+            .iter()
+            .find(|d| d.param == self)
+            .map(|d| d.name)
+            .unwrap_or("?")
     }
 
     pub(crate) fn apply(self, vm: &mut VoiceManager, value: f32) {
@@ -904,14 +740,25 @@ pub fn render_offline_solo(
     let total = (end * sample_rate as f64) as usize;
     let mut out = Vec::with_capacity(total);
     let mut next = 0;
+    // Allocation-pressure telemetry: the deepest simultaneous claim on
+    // the voice cards, so chorus voicings can be checked against the
+    // card limit without hand-counting note-ons
+    let mut peak_voices = 0usize;
     for n in 0..total {
         let t = n as f64 / sample_rate as f64;
+        let mut fired = false;
         while next < events.len() && events[next].time <= t {
             dispatch(&mut vm, &events[next].kind);
             next += 1;
+            fired = true;
+        }
+        if fired {
+            let active = vm.voices.iter().filter(|v| v.is_active()).count();
+            peak_voices = peak_voices.max(active);
         }
         out.push(vm.render_next());
     }
+    println!("peak concurrent voices: {}/{}", peak_voices, vm.voices.len());
     out
 }
 
@@ -956,7 +803,12 @@ fn parse_song(text: &str) -> Result<Song, String> {
     let mut tempo_lane: Vec<(f64, AutoToken)> = Vec::new();
     let mut vox_wav: Option<(Vec<f32>, u32)> = None;
     let mut vox_pitch: Option<(Vec<f32>, u32)> = None;
+    // `wav_at=`: the beat the vox recording's clock is anchored to
+    let mut vox_wav_at: Option<f64> = None;
     let mut samplers: Vec<crate::sampler::SamplerSlot> = Vec::new();
+    // Named beat ranges (`section CH1 144..180`), for seeks and `during`
+    let mut sections: std::collections::HashMap<String, (f64, f64)> =
+        std::collections::HashMap::new();
 
     let mut mode = TrackMode::None;
     let mut track_beat = 0.0_f64;
@@ -979,6 +831,26 @@ fn parse_song(text: &str) -> Result<Song, String> {
             "gate" => {
                 gate = line[4..].trim().parse::<f64>().map_err(|_| err("invalid gate".into()))?;
                 gate = gate.clamp(0.05, 1.0);
+            }
+            "section" => {
+                let mut it = line.split_whitespace().skip(1);
+                let name = it
+                    .next()
+                    .ok_or_else(|| err("section needs a name and a range: section CH1 144..180".into()))?;
+                let range = it
+                    .next()
+                    .ok_or_else(|| err(format!("section {} needs a range, e.g. 144..180", name)))?;
+                let (a, b) = range
+                    .split_once("..")
+                    .ok_or_else(|| err(format!("section range must be A..B, got '{}'", range)))?;
+                let a: f64 = a.parse().map_err(|_| err(format!("invalid section start '{}'", a)))?;
+                let b: f64 = b.parse().map_err(|_| err(format!("invalid section end '{}'", b)))?;
+                if b <= a || a < 0.0 {
+                    return Err(err(format!("section {}: end must be after start", name)));
+                }
+                if sections.insert(name.to_string(), (a, b)).is_some() {
+                    return Err(err(format!("section '{}' defined twice", name)));
+                }
             }
             "track" => {
                 track_beat = 0.0;
@@ -1055,9 +927,24 @@ fn parse_song(text: &str) -> Result<Song, String> {
                         // The performance line: sample-accurate carrier
                         // pitch (portamento, scoops, vibrato), authored
                         // as MIDI notes in a float32 wav on the
-                        // modulator's clock
-                        vox_pitch = Some(crate::vox::load_wav_mono(v).map_err(err)?);
+                        // modulator's clock. Float32 ONLY: a PCM curve
+                        // would arrive normalized and transpose the
+                        // melody to nonsense.
+                        vox_pitch = Some(crate::vox::load_wav_mono_float(v).map_err(err)?);
                         channel = crate::vox::VOX_CHANNEL;
+                    } else if let Some(v) = opt.strip_prefix("wav_at=") {
+                        // The modulator clock, made explicit: the wav
+                        // (and any pitch= curve) starts at the FIRST vox
+                        // note-on, and this declares which beat that is —
+                        // checked after parsing, so removing some other
+                        // note can never silently shift the vocal
+                        let b = v
+                            .parse::<f64>()
+                            .map_err(|_| err(format!("invalid wav_at '{}'", v)))?;
+                        if b < 0.0 {
+                            return Err(err("wav_at must be >= 0".into()));
+                        }
+                        vox_wav_at = Some(b);
                     } else if let Some(v) = opt.strip_prefix("patch=") {
                         // A private patch for this track: the file's
                         // voice-level parameters become this channel
@@ -1153,10 +1040,12 @@ fn parse_song(text: &str) -> Result<Song, String> {
                 mode = TrackMode::Notes { vel, len, channel, swing };
             }
             "automate" => {
-                let name = line
-                    .split_whitespace()
-                    .nth(1)
-                    .ok_or_else(|| err("automate needs a parameter name".into()))?;
+                let toks: Vec<&str> = line.split_whitespace().collect();
+                let name = toks
+                    .get(1)
+                    .copied()
+                    .ok_or_else(|| err("automate needs a parameter name".into()))?
+                    .trim_end_matches(':');
                 // `automate lead.cutoff` targets the named track's channel
                 let (channel, pname) = match name.split_once('.') {
                     Some((track, pname)) => {
@@ -1174,6 +1063,53 @@ fn parse_song(text: &str) -> Result<Song, String> {
                     }
                     None => (0u16, name),
                 };
+                // One-line section automation:
+                //   automate vox_mode: 1 during CH1,CH2 [base 0]
+                // sets the value at each section's start; `base` is the
+                // value everywhere else (asserted at beat 0, restored at
+                // each section end). The beat arithmetic that used to be
+                // hand-built R:.../value token chains is the parser's job.
+                if toks.get(3).copied() == Some("during") {
+                    if pname == "bpm" {
+                        return Err(err("`during` cannot drive the tempo lane".into()));
+                    }
+                    let param = Param::from_name(pname)
+                        .ok_or_else(|| err(format!("unknown parameter '{}'", pname)))?;
+                    let value: f32 = toks[2]
+                        .parse()
+                        .map_err(|_| err(format!("invalid value '{}'", toks[2])))?;
+                    let names = toks.get(4).copied().ok_or_else(|| {
+                        err("`during` needs section names, e.g. during CH1,CH2".into())
+                    })?;
+                    let base: Option<f32> = match toks.get(5).copied() {
+                        Some("base") => Some(
+                            toks.get(6)
+                                .copied()
+                                .ok_or_else(|| err("`base` needs a value".into()))?
+                                .parse()
+                                .map_err(|_| err("invalid base value".into()))?,
+                        ),
+                        Some(t) => return Err(err(format!("unexpected token '{}'", t))),
+                        None => None,
+                    };
+                    if toks.len() > 7 {
+                        return Err(err(format!("unexpected token '{}'", toks[7])));
+                    }
+                    if let Some(base) = base {
+                        events.push((0.0, 1, EventKind::Param { param, value: base, channel }));
+                    }
+                    for sname in names.split(',').filter(|s| !s.is_empty()) {
+                        let &(a, b) = sections.get(sname).ok_or_else(|| {
+                            err(format!("unknown section '{}' (define it above)", sname))
+                        })?;
+                        events.push((a, 1, EventKind::Param { param, value, channel }));
+                        if let Some(base) = base {
+                            events.push((b, 1, EventKind::Param { param, value: base, channel }));
+                        }
+                    }
+                    mode = TrackMode::None;
+                    continue;
+                }
                 if pname == "bpm" && channel == 0 {
                     track_beat = 0.0;
                     mode = TrackMode::Tempo { current: None };
@@ -1198,9 +1134,7 @@ fn parse_song(text: &str) -> Result<Song, String> {
                             continue;
                         }
                         if let Some(beat) = token.strip_prefix('>') {
-                            track_beat = beat
-                                .parse::<f64>()
-                                .map_err(|_| err(format!("invalid seek '{}'", token)))?;
+                            track_beat = resolve_seek(beat, &sections).map_err(err)?;
                             continue;
                         }
                         // `=lyric` rides the note it belongs to; split it
@@ -1250,7 +1184,14 @@ fn parse_song(text: &str) -> Result<Song, String> {
                                 EventKind::Lyric { syl, channel },
                             ));
                         }
-                        let off_beat = sound_beat + dur * gate;
+                        // gate means "a small separation", not a fraction
+                        // of ANY note: proportional for short notes,
+                        // capped at 80 ms for long ones — gate 0.98 on a
+                        // 128-beat pad must not cut beats of held keys.
+                        // (The cap uses the base bpm; a tempo lane
+                        // stretches it with everything else.)
+                        let gap = ((1.0 - gate) * dur).min(GATE_GAP_MAX_S * bpm / 60.0);
+                        let off_beat = sound_beat + dur - gap;
                         for &note in &notes {
                             events.push((
                                 sound_beat,
@@ -1270,9 +1211,7 @@ fn parse_song(text: &str) -> Result<Song, String> {
                             continue;
                         }
                         if let Some(beat) = token.strip_prefix('>') {
-                            track_beat = beat
-                                .parse::<f64>()
-                                .map_err(|_| err(format!("invalid seek '{}'", token)))?;
+                            track_beat = resolve_seek(beat, &sections).map_err(err)?;
                             continue;
                         }
                         let seg = parse_automation_token(&token)
@@ -1308,9 +1247,7 @@ fn parse_song(text: &str) -> Result<Song, String> {
                             continue;
                         }
                         if let Some(beat) = token.strip_prefix('>') {
-                            track_beat = beat
-                                .parse::<f64>()
-                                .map_err(|_| err(format!("invalid seek '{}'", token)))?;
+                            track_beat = resolve_seek(beat, &sections).map_err(err)?;
                             continue;
                         }
                         let seg = parse_automation_token(&token)
@@ -1346,6 +1283,34 @@ fn parse_song(text: &str) -> Result<Song, String> {
 
     if events.is_empty() {
         return Err("song contains no events".into());
+    }
+
+    // wav_at: the vox recording (and its pitch curve) starts playing at
+    // the first vox note-on — an implicit anchor that once let a removed
+    // chord silently shift the whole vocal 4.8 s against every other
+    // clock. When declared, the anchor is enforced.
+    if let Some(at) = vox_wav_at {
+        if vox_wav.is_none() && vox_pitch.is_none() {
+            return Err("wav_at= needs a wav= or pitch= vox track".into());
+        }
+        let first = events
+            .iter()
+            .filter(|(_, _, k)| {
+                matches!(k, EventKind::NoteOn { channel, .. }
+                    if *channel == crate::vox::VOX_CHANNEL)
+            })
+            .map(|(b, _, _)| *b)
+            .fold(f64::INFINITY, f64::min);
+        if !first.is_finite() {
+            return Err(format!("wav_at={}: the song has no vox notes to start the wav", at));
+        }
+        if (first - at).abs() > 1e-6 {
+            return Err(format!(
+                "wav_at={}: the vox wav starts at the FIRST vox note-on, which is at beat {} — \
+                 move the note or the anchor so the modulator clock stays explicit",
+                at, first
+            ));
+        }
     }
 
     events.sort_by(|a, b| {
@@ -1510,6 +1475,25 @@ enum AutoToken {
     Set(f32),
     Hold(f64),
     Ramp { to: f32, dur: f64, shape: Shape },
+}
+
+/// Resolve a `>` seek target: a plain beat number, a section name (its
+/// start), or `NAME.end` (its end).
+fn resolve_seek(
+    spec: &str,
+    sections: &std::collections::HashMap<String, (f64, f64)>,
+) -> Result<f64, String> {
+    if let Ok(beat) = spec.parse::<f64>() {
+        return Ok(beat);
+    }
+    let (name, end) = match spec.strip_suffix(".end") {
+        Some(n) => (n, true),
+        None => (spec, false),
+    };
+    sections
+        .get(name)
+        .map(|&(a, b)| if end { b } else { a })
+        .ok_or_else(|| format!("invalid seek '>{}' (not a beat or a defined section)", spec))
 }
 
 /// Parse one automation token: `V`, `V:D`, `V:D@shape`, or `R:D` / `.:D`.
@@ -2168,5 +2152,357 @@ mod tests {
             "bd_drive automation should land on the shared panel, got {}",
             vm.params.bd_drive
         );
+    }
+
+    /// Write a WAV fixture (PCM16 or float32, mono) to the temp dir.
+    fn write_fixture_wav(name: &str, rate: u32, float32: bool, samples: &[f32]) -> String {
+        let bytes_per: usize = if float32 { 4 } else { 2 };
+        let n = samples.len();
+        let mut d = Vec::with_capacity(44 + n * bytes_per);
+        d.extend_from_slice(b"RIFF");
+        d.extend_from_slice(&(36 + (n * bytes_per) as u32).to_le_bytes());
+        d.extend_from_slice(b"WAVE");
+        d.extend_from_slice(b"fmt ");
+        d.extend_from_slice(&16u32.to_le_bytes());
+        d.extend_from_slice(&(if float32 { 3u16 } else { 1u16 }).to_le_bytes());
+        d.extend_from_slice(&1u16.to_le_bytes());
+        d.extend_from_slice(&rate.to_le_bytes());
+        d.extend_from_slice(&(rate * bytes_per as u32).to_le_bytes());
+        d.extend_from_slice(&(bytes_per as u16).to_le_bytes());
+        d.extend_from_slice(&(if float32 { 32u16 } else { 16u16 }).to_le_bytes());
+        d.extend_from_slice(b"data");
+        d.extend_from_slice(&((n * bytes_per) as u32).to_le_bytes());
+        for &s in samples {
+            if float32 {
+                d.extend_from_slice(&s.to_le_bytes());
+            } else {
+                d.extend_from_slice(&((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
+            }
+        }
+        let path = std::env::temp_dir().join(name);
+        std::fs::write(&path, d).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    fn frames_rms(frames: &[(f32, f32)], t0: f64, t1: f64, sr: f64) -> f32 {
+        let a = (t0 * sr) as usize;
+        let b = ((t1 * sr) as usize).min(frames.len());
+        let ms = frames[a..b]
+            .iter()
+            .map(|&(l, r)| {
+                let m = (l + r) * 0.5;
+                m * m
+            })
+            .sum::<f32>()
+            / (b - a).max(1) as f32;
+        ms.sqrt()
+    }
+
+    /// `wav_at=` makes the vox recording's clock explicit: the anchor
+    /// must MATCH the first vox note-on at parse time, and in a render
+    /// the recording's first sample lands at exactly that beat.
+    #[test]
+    fn wav_at_anchors_the_vox_clock() {
+        // A modulator with energy from its very first sample
+        let sq: Vec<f32> = (0..48000)
+            .map(|i| if (i as f32 * 200.0 / 48000.0) % 1.0 < 0.5 { 0.8 } else { -0.8 })
+            .collect();
+        let wav = write_fixture_wav("patina-wavat.wav", 48000, false, &sq);
+
+        let song = parse_song(&format!(
+            "bpm 120\ntrack v vox wav={wav} wav_at=4\n>4 A2:4\n"
+        ))
+        .unwrap();
+        let first_on = song
+            .events
+            .iter()
+            .find(|e| matches!(e.kind, EventKind::NoteOn { .. }))
+            .unwrap();
+        assert_eq!(first_on.time, 2.0, "beat 4 at 120 bpm");
+
+        // The render: silence until the anchored beat, the recording
+        // articulating the carrier right on it
+        let frames = render_offline(&song, 48000.0);
+        let before = frames_rms(&frames, 0.0, 1.9, 48000.0);
+        let after = frames_rms(&frames, 2.0, 2.3, 48000.0);
+        assert!(after > 0.01, "the recording should speak at its beat, rms={after}");
+        assert!(
+            before < 0.1 * after,
+            "nothing may sound before the anchor: before={before}, after={after}"
+        );
+
+        // A moved first note is exactly the 4.8-second-silent-shift bug:
+        // it must fail loudly at parse time, naming both beats
+        let e = parse_song(&format!(
+            "bpm 120\ntrack v vox wav={wav} wav_at=4\n>3 A2:4\n"
+        ))
+        .err()
+        .unwrap();
+        assert!(e.contains("wav_at=4") && e.contains("beat 3"), "{e}");
+        // An anchor with no recording is meaningless
+        assert!(parse_song("bpm 120\ntrack v vox wav_at=4\n>4 A2:1=AA\n")
+            .err()
+            .unwrap()
+            .contains("wav_at"));
+    }
+
+    /// `pitch=` curves carry MIDI note numbers, so they must be float32:
+    /// a PCM16 curve would decode normalized to ±1 and silently transpose
+    /// the melody to nonsense.
+    #[test]
+    fn pitch_curves_must_be_float32() {
+        let sq: Vec<f32> = (0..24000)
+            .map(|i| if (i as f32 * 200.0 / 48000.0) % 1.0 < 0.5 { 0.8 } else { -0.8 })
+            .collect();
+        let modwav = write_fixture_wav("patina-pitch-mod.wav", 48000, false, &sq);
+        let curve = vec![62.0f32; 24000];
+        let f32wav = write_fixture_wav("patina-pitch-f32.wav", 48000, true, &curve);
+        let pcmwav = write_fixture_wav("patina-pitch-pcm.wav", 48000, false, &curve);
+
+        let song = parse_song(&format!(
+            "bpm 120\ntrack v vox wav={modwav} pitch={f32wav} wav_at=0\nA2:2\n"
+        ))
+        .unwrap();
+        let (samples, _) = song.vox_pitch.as_ref().unwrap();
+        assert!((samples[100] - 62.0).abs() < 1e-3, "values pass through unnormalized");
+
+        let e = parse_song(&format!(
+            "bpm 120\ntrack v vox wav={modwav} pitch={pcmwav}\nA2:2\n"
+        ))
+        .err()
+        .unwrap();
+        assert!(e.contains("float32"), "{e}");
+    }
+
+    /// gate carves "a small separation": proportional on short notes,
+    /// capped at 80 ms on long ones — gate 0.9 on a 64-beat pad must not
+    /// cut 6.4 beats of held keys.
+    #[test]
+    fn gate_gap_is_proportional_short_and_capped_long() {
+        let song = parse_song("bpm 120\ngate 0.9\ntrack a\nC4:64 C4:1\n").unwrap();
+        let offs: Vec<f64> = song
+            .events
+            .iter()
+            .filter_map(|e| match e.kind {
+                EventKind::NoteOff { .. } => Some(e.time),
+                _ => None,
+            })
+            .collect();
+        // long note: the gap is 80 ms (0.16 beats at 120), not 6.4 beats
+        assert!(
+            (offs[0] - (64.0 - 0.16) * 0.5).abs() < 1e-6,
+            "long-note gap must cap at 80 ms, off at {}",
+            offs[0]
+        );
+        // short note: the proportional 0.1-beat gap is under the cap
+        assert!(
+            (offs[1] - (65.0 - 0.1) * 0.5).abs() < 1e-6,
+            "short-note gap stays proportional, off at {}",
+            offs[1]
+        );
+    }
+
+    /// Sections make the beat arithmetic the parser's job: `>NAME` and
+    /// `>NAME.end` seek any track, and one-line `during` automation
+    /// brackets sections with set/restore pairs.
+    #[test]
+    fn sections_name_the_arithmetic() {
+        let song = parse_song(
+            "bpm 120\n\
+             section A 8..12\n\
+             track t\n\
+             >A C4:1 >A.end D4:1\n\
+             automate vox_mode: 1 during A base 0\n",
+        )
+        .unwrap();
+        let ons: Vec<(f64, u8)> = song
+            .events
+            .iter()
+            .filter_map(|e| match e.kind {
+                EventKind::NoteOn { note, .. } => Some((e.time, note)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ons, vec![(4.0, 60), (6.0, 62)], "section seeks land on its edges");
+        let modes: Vec<(f64, f32)> = song
+            .events
+            .iter()
+            .filter_map(|e| match e.kind {
+                EventKind::Param { param: Param::VoxModeSel, value, .. } => {
+                    Some((e.time, value))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            modes,
+            vec![(0.0, 0.0), (4.0, 1.0), (6.0, 0.0)],
+            "during = base at 0, value at start, base restored at end"
+        );
+
+        // grammar errors: backwards range, unknown section in seek and during
+        assert!(parse_song("bpm 120\nsection A 8..4\ntrack t\nC4\n").is_err());
+        assert!(parse_song("bpm 120\ntrack t\n>NOPE C4\n").is_err());
+        assert!(parse_song("bpm 120\ntrack t\nC4\nautomate cutoff: 1 during NOPE\n").is_err());
+        assert!(parse_song("bpm 120\ntrack t\nC4\nautomate bpm: 1 during A\n").is_err());
+    }
+
+    /// Read a parameter's canonical engine value back, for the sweep
+    /// test below. None = the value lives outside ParamValues (mixer
+    /// strips, sampler slots, performance controllers, enums — those are
+    /// asserted separately or by their own tests).
+    #[rustfmt::skip]
+    fn readback(vm: &VoiceManager, p: Param) -> Option<f32> {
+        let v = &vm.params;
+        Some(match p {
+            Param::Volume => v.volume,
+            Param::Detune => v.detune,
+            Param::Cutoff => v.cutoff,
+            Param::Resonance => v.resonance,
+            Param::Drive => v.drive,
+            Param::Saturation => v.saturation,
+            Param::HpfCutoff => v.hpf_cutoff,
+            Param::FuzzAmount => v.fuzz,
+            Param::NoiseLevel => v.noise,
+            Param::SpringWet => v.spring,
+            Param::Glide => v.glide,
+            Param::SubLevel => v.sub,
+            Param::Osc2Pitch => v.osc2_pitch,
+            Param::Osc2Level => v.osc2_level,
+            Param::Osc3Pitch => v.osc3_pitch,
+            Param::Osc3Level => v.osc3_level,
+            Param::KeyTrack => v.key_track,
+            Param::OscFm => v.osc_fm,
+            Param::RingAmount => v.ring,
+            Param::PulseWidth => v.pulse_width,
+            Param::MixSaw => v.mix_saw,
+            Param::MixPulse => v.mix_pulse,
+            Param::MixTri => v.mix_tri,
+            Param::MixSine => v.mix_sine,
+            Param::UiOctave => v.ui_octave,
+            Param::LfoRate => v.lfo_rate,
+            Param::LfoShape => v.lfo_shape,
+            Param::LfoPitch => v.lfo_pitch,
+            Param::LfoFilter => v.lfo_filter,
+            Param::LfoPwm => v.lfo_pwm,
+            Param::Attack => v.attack,
+            Param::Decay => v.decay,
+            Param::Sustain => v.sustain,
+            Param::Release => v.release,
+            Param::FilterEnvAmount => v.filter_env_amount,
+            Param::FilterAttack => v.filter_attack,
+            Param::FilterDecay => v.filter_decay,
+            Param::FilterSustain => v.filter_sustain,
+            Param::FilterRelease => v.filter_release,
+            Param::ReverbDecay => v.reverb_decay,
+            Param::ReverbWet => v.reverb_wet,
+            Param::ChorusRate => v.chorus_rate,
+            Param::ChorusDepth => v.chorus_depth,
+            Param::TapeWow => v.tape_wow,
+            Param::TapeFlutter => v.tape_flutter,
+            Param::TapeDrive => v.tape_drive,
+            Param::TapeAge => v.tape_age,
+            Param::BdLevel => v.bd_level,
+            Param::BdTune => v.bd_tune,
+            Param::BdAttack => v.bd_attack,
+            Param::BdDecay => v.bd_decay,
+            Param::BdSweep => v.bd_sweep,
+            Param::BdDrive => v.bd_drive,
+            Param::SdLevel => v.sd_level,
+            Param::SdTune => v.sd_tune,
+            Param::SdTone => v.sd_tone,
+            Param::SdSnappy => v.sd_snappy,
+            Param::SdDecay => v.sd_decay,
+            Param::RsLevel => v.rs_level,
+            Param::RsTune => v.rs_tune,
+            Param::CpLevel => v.cp_level,
+            Param::CpDecay => v.cp_decay,
+            Param::HhLevel => v.hh_level,
+            Param::HhTune => v.hh_tune,
+            Param::HhMetal => v.hh_metal,
+            Param::ChDecay => v.ch_decay,
+            Param::OhDecay => v.oh_decay,
+            Param::DrumDrive => v.dr_drive,
+            Param::VoxLevel => v.vox_level,
+            Param::VoxDry => v.vox_dry,
+            Param::VoxBreath => v.vox_breath,
+            Param::VoxClarity => v.vox_clarity,
+            Param::VoxVibrato => v.vox_vibrato,
+            Param::VoxModeSel => v.vox_mode,
+            Param::VoxIntonation => v.vox_intonation,
+            _ => return None,
+        })
+    }
+
+    /// The "no silently clamped params" sweep: every parameter in THE
+    /// table, driven to both documented extremes, must actually land in
+    /// the engine. This is the test that would have caught the historic
+    /// vox_mode clamp (stuck at 1.0 while the range said 3.0, silently
+    /// rerouting circuits 2 and 3 for weeks) and the vox_level 0..2
+    /// extension needing edits in three places.
+    #[test]
+    fn no_silently_clamped_params() {
+        let mut vm = VoiceManager::new(48000.0, 4);
+        for def in PARAM_DEFS {
+            let (lo, hi, _) = def.param.range();
+            for target in [lo, hi] {
+                def.param.apply(&mut vm, target);
+                if let Some(got) = readback(&vm, def.param) {
+                    assert!(
+                        (got - target).abs() < 1e-4,
+                        "param '{}' set to {} but the engine recorded {} — a stale clamp?",
+                        def.name,
+                        target,
+                        got
+                    );
+                }
+            }
+        }
+        // The enum-valued selectors, by hand: their range tops must
+        // reach the last variant
+        Param::WaveformSel.apply(&mut vm, 3.0);
+        assert!(matches!(vm.params.waveform, Waveform::Triangle));
+        Param::ChorusModeSel.apply(&mut vm, 4.0);
+        assert!(matches!(vm.params.chorus_mode, ChorusMode::IV));
+        Param::CircuitSel.apply(&mut vm, 1.0);
+        assert!(matches!(vm.params.circuit, crate::oscillator::CircuitModel::Arp));
+        Param::SyncSel.apply(&mut vm, 1.0);
+        assert!(vm.params.sync);
+        // ...and every table name must round-trip through the parser
+        for def in PARAM_DEFS {
+            assert_eq!(Param::from_name(def.name), Some(def.param), "{}", def.name);
+            assert_eq!(def.param.name(), def.name);
+            if let Some(cc) = def.cc {
+                assert_eq!(Param::from_cc(cc), Some(def.param), "cc {}", cc);
+            }
+        }
+    }
+
+    /// The render-side word-audibility check, as a Rust test: every
+    /// sung syllable must be audible in the offline bounce, standing
+    /// clear of the gaps between notes.
+    #[test]
+    fn every_syllable_lands_audibly() {
+        let song = parse_song(
+            "bpm 120\n\
+             track v vox\n\
+             A2:1=S-AH R:1 A2:1=B-AA R:1 A2:1=M-IY\n\
+             automate reverb_wet\n\
+             0\n",
+        )
+        .unwrap();
+        let frames = render_offline(&song, 48000.0);
+        for k in 0..3 {
+            let on = k as f64; // notes at beats 0, 2, 4 -> 0, 1, 2 s
+            let sung = frames_rms(&frames, on + 0.05, on + 0.4, 48000.0);
+            let gap = frames_rms(&frames, on + 0.7, on + 0.95, 48000.0);
+            // Absolute floor sized to the engine's un-normalized gain
+            // staging (a dark vowel like M-IY sits near 0.008 rms)
+            assert!(sung > 0.004, "syllable {k} must be audible, rms={sung}");
+            assert!(
+                sung > 3.0 * gap,
+                "syllable {k} must stand clear of the gap: {sung} vs {gap}"
+            );
+        }
     }
 }

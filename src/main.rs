@@ -141,6 +141,24 @@ fn say_song(text: &str) -> String {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
 
+    // `patina --params`: the automatable parameter chart, straight from
+    // the single source of truth (song::PARAM_DEFS + Param::range) — the
+    // same rows the parser, the CC map, and the sweep test read
+    if args.iter().any(|a| a == "--params") {
+        println!("{:<16} {:>10} {:>10}  {:<5} {}", "name", "min", "max", "curve", "cc");
+        for def in song::PARAM_DEFS {
+            let (lo, hi, curve) = def.param.range();
+            let curve = match curve {
+                song::Curve::Lin => "lin",
+                song::Curve::Log => "log",
+                song::Curve::Step => "step",
+            };
+            let cc = def.cc.map(|c| c.to_string()).unwrap_or_default();
+            println!("{:<16} {:>10} {:>10}  {:<5} {}", def.name, lo, hi, curve, cc);
+        }
+        return Ok(());
+    }
+
     // `patina --say "HH-AH-L-OW W-ER-L-D" [--out say.wav]`: render the
     // voice box speaking a phrase, no window, no audio device
     if let Some(text) = args
@@ -155,7 +173,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(String::as_str)
             .unwrap_or("renders/say.wav");
         let song = song::parse_song_text(&say_song(text))?;
-        patina::render::render_to_wav(&song, out)?;
+        patina::render::render_to_wav(&song, out, true)?;
         return Ok(());
     }
 
@@ -182,7 +200,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     let song_path = song_path.as_deref();
 
-    // Offline bounce: no window, no audio device, exits when the file is done
+    // Offline bounce: no window, no audio device, exits when the file is
+    // done. `--no-normalize` keeps the engine's exact gain for
+    // measurement renders.
     let render_path = args
         .iter()
         .position(|a| a == "--render")
@@ -191,7 +211,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(out) = render_path.as_deref() {
         let song = song_path.ok_or("--render requires --play <song.song>")?;
         let events = song::load_song(song)?;
-        patina::render::render_to_wav(&events, out)?;
+        let normalize = !args.iter().any(|a| a == "--no-normalize");
+        patina::render::render_to_wav(&events, out, normalize)?;
         return Ok(());
     }
 

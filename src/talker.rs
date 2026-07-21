@@ -45,6 +45,62 @@ const ORDER: usize = 12;
 const WINDOW_S: f32 = 0.025;
 const HOP_S: f32 = 0.010;
 
+/// Everything the clarity knob decides, computed ONCE per knob move.
+/// Clarity used to be arithmetic smeared across six points of the signal
+/// path; this struct makes the two voicings — the '97 caricature and the
+/// legible talkbox — explicit, comparable, and testable, and process()
+/// just reads fields instead of re-deriving them per sample.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct Voicing {
+    /// The knob position itself (0 caricature .. 1 legible); also how far
+    /// the wah's sweep floor is lifted toward fully open.
+    open: f32,
+    /// Output reconstruction band edge: 4.8 kHz is the tube's cab-like
+    /// wall; 6 kHz buys audible air at full clarity.
+    out_fc: f32,
+    /// The wah's resonance is the honk; clarity flattens it.
+    wah_q: f32,
+    /// Mix of the second lattice pass (squared formants, the wide-open
+    /// caricature mouth) vs the single pass that keeps consonant
+    /// transitions legible.
+    caricature: f32,
+    legible: f32,
+    /// VCA tracking exponent on normalized loudness: 0.45 flattens
+    /// word-level dynamics toward a driven instrument; clarity restores
+    /// the voice's own phrasing (capped at 0.8 — fully linear lets the
+    /// slow peak follower bury every word after a phrase's loudest one).
+    vca_exp: f32,
+    /// Downward-expander threshold under the compressed VCA; clarity
+    /// lowers it so post-breath consonants aren't swallowed.
+    gate_floor: f32,
+    /// Amp grit, at constant small-signal gain (makeup = 4.8 / drive):
+    /// the tube-amp squash is the caricature's, not the voice's.
+    drive: f32,
+    makeup: f32,
+    /// The clarity air band: the voice's own highs riding the speech
+    /// gate, above where the decimated tube path physically ends.
+    air: f32,
+}
+
+impl Voicing {
+    fn at(clarity: f32) -> Self {
+        let c = clarity.clamp(0.0, 1.0);
+        let drive = 1.5 - 1.35 * c;
+        Self {
+            open: c,
+            out_fc: 4800.0 + 1200.0 * c,
+            wah_q: 1.3 - 0.6 * c,
+            caricature: 1.0 - c,
+            legible: 0.48 * c,
+            vca_exp: 0.45 + 0.35 * c,
+            gate_floor: 0.02 - 0.015 * c,
+            drive,
+            makeup: 4.8 / drive,
+            air: 18.0 * c,
+        }
+    }
+}
+
 /// RBJ lowpass biquad for the anti-alias and reconstruction filters.
 #[derive(Clone, Copy, Default)]
 struct Lowpass {
@@ -168,8 +224,9 @@ pub struct Talker {
     /// deep wah) toward a clean legible talkbox (1: single tract pass,
     /// the voice's own dynamics, linear amp, open wah). Measured by ASR
     /// word recovery: the caricature scores 0/31 words on scored
-    /// speech, the clean end restores them.
-    clarity: f32,
+    /// speech, the clean end restores them. All derived values live in
+    /// the Voicing, computed once per knob move.
+    voicing: Voicing,
 }
 
 impl Talker {
@@ -219,28 +276,26 @@ impl Talker {
             wah_slew: 1.0 - (-1.0 / (0.012 * sample_rate)).exp(),
             wah: Lowpass::tuned(800.0, 1.3, sample_rate),
             noise: NoiseSource::new(),
-            clarity: 0.0,
+            voicing: Voicing::at(0.0),
         }
     }
 
     pub fn set_clarity(&mut self, c: f32) {
         let c = c.clamp(0.0, 1.0);
-        // Automation calls this every block: rebuild the output filters
-        // ONLY when the value moves, or their state resets continuously
-        // and the cascade never rings up (measured: the voice fell to
-        // 0.2% energy above 3 kHz)
-        if (c - self.clarity).abs() < 1e-4 {
+        // Automation calls this every block: rebuild the voicing and the
+        // output filters ONLY when the value moves, or the filters' state
+        // resets continuously and the cascade never rings up (measured:
+        // the voice fell to 0.2% energy above 3 kHz)
+        if (c - self.voicing.open).abs() < 1e-4 {
             return;
         }
-        self.clarity = c;
-        // Open the OUTPUT reconstruction band with clarity: 4.8 kHz is
-        // the tube's cab-like wall; 6 kHz buys audible air. Analysis
+        self.voicing = Voicing::at(c);
+        // Open the OUTPUT reconstruction band with clarity. Analysis
         // stays band-limited — that part is what makes LPC track
         // formants instead of harmonics.
-        let fc = 4800.0 + 1200.0 * c;
         self.out = [
-            Lowpass::tuned(fc, 0.6, self.sr),
-            Lowpass::tuned(fc, 1.0, self.sr),
+            Lowpass::tuned(self.voicing.out_fc, 0.6, self.sr),
+            Lowpass::tuned(self.voicing.out_fc, 1.0, self.sr),
         ];
     }
 
@@ -325,7 +380,7 @@ impl Talker {
             .powf(1.2);
         let swept = 500.0 * (4800.0f32 / 500.0).powf(openness);
         // Clarity opens the wah: its deep sweeps swallow consonants
-        self.wah_fc_target = swept + (4800.0 - swept) * self.clarity;
+        self.wah_fc_target = swept + (4800.0 - swept) * self.voicing.open;
 
         self.ring[self.write] = m;
         self.write = (self.write + 1) % self.ring.len();
@@ -361,7 +416,7 @@ impl Talker {
             self.b2[i + 1] = (self.b2[i] - self.k[i] * f2) * 0.9995;
         }
         self.b2[0] = f2;
-        let f = f2 * (1.0 - self.clarity) + f * 0.48 * self.clarity;
+        let f = f2 * self.voicing.caricature + f * self.voicing.legible;
 
         // The instrument leads, the mouth articulates: the VCA follows a
         // NORMALIZED, compressed loudness (^0.45), so word-level dynamics
@@ -375,28 +430,16 @@ impl Talker {
             self.env_peak *= self.peak_decay;
         }
         let norm = (self.env / self.env_peak.max(1e-5)).clamp(0.0, 1.0);
-        // Clarity restores the voice's own dynamics: the ^0.45 flattening
-        // erases the stop-consonant dips that carry the words. Capped at
-        // ^0.8 — fully linear tracking (^1.0) lets the 2.5 s peak
-        // follower bury every word after a phrase's loudest one
-        let mut g = norm.powf(0.45 + 0.35 * self.clarity);
-        // ...with a downward expander at the floor, so the compression
-        // doesn't hold the gate open on room silence between phrases.
-        // Clarity lowers the floor: after a loud held word the peak
-        // follower needs seconds to decay, and a 2% threshold was
-        // swallowing the first consonant of every word after a breath
-        let thr = 0.02 - 0.015 * self.clarity;
-        if norm < thr {
-            let t = norm / thr;
+        // VCA exponent, expander floor, amp drive and makeup: all
+        // precomputed in the Voicing (see its field docs for the why)
+        let v = self.voicing;
+        let mut g = norm.powf(v.vca_exp);
+        if norm < v.gate_floor {
+            let t = norm / v.gate_floor;
             g *= t * t;
         }
         self.gate = g;
-        // Amp grit backs off with clarity at constant small-signal gain.
-        // At full clarity the stage is nearly linear (drive 0.15): the
-        // "loud but constrained" tube-amp squash on program-level vowels
-        // was tanh compression, not loudness
-        let drive = 1.5 - 1.35 * self.clarity;
-        (f * drive).tanh() * (4.8 / drive) * g
+        (f * v.drive).tanh() * v.makeup * g
     }
 
     /// One engine-rate sample: anti-alias both signals, run the tract in
@@ -441,7 +484,7 @@ impl Talker {
         // full rate so the filter glides instead of stepping
         self.wah_fc += (self.wah_fc_target - self.wah_fc) * self.wah_slew;
         // The wah's resonance is the honk; clarity flattens it
-        self.wah.retune(self.wah_fc, 1.3 - 0.6 * self.clarity, self.sr);
+        self.wah.retune(self.wah_fc, self.voicing.wah_q, self.sr);
         y = self.wah.tick(y);
         // De-emphasis inversion: restore the brightness the analysis
         // whitening removed (measured: centroid 319 Hz without this vs
@@ -459,7 +502,7 @@ impl Talker {
         // (tract decimation + reconstruction), so above it the only
         // honest source is the voice itself — the same high band the
         // NuVo trick uses, but continuous, riding the speech gate
-        let air = (modulator - self.m_lp) * self.clarity * 18.0 * self.gate;
+        let air = (modulator - self.m_lp) * self.voicing.air * self.gate;
         y + sib + air
     }
 }
@@ -467,6 +510,38 @@ impl Talker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two voicings, explicit and comparable: the caricature end
+    /// leans on the exaggeration pass, flattened dynamics, and amp grit;
+    /// the legible end is single-pass, own-dynamics, near-linear — and
+    /// small-signal amp gain (drive * makeup) is constant across the
+    /// whole knob, so clarity is a character change, not a level change.
+    #[test]
+    fn voicings_are_distinct_and_gain_matched() {
+        let car = Voicing::at(0.0);
+        let leg = Voicing::at(1.0);
+        assert!(car.caricature > 0.9 && leg.caricature < 0.05);
+        assert!(car.drive > 3.0 * leg.drive, "grit belongs to the caricature");
+        assert!(leg.vca_exp > car.vca_exp, "clarity restores the voice's dynamics");
+        assert!(leg.gate_floor < car.gate_floor);
+        assert!(leg.out_fc > car.out_fc && leg.air > car.air);
+        for c in [0.0, 0.3, 0.7, 1.0] {
+            let v = Voicing::at(c);
+            assert!(
+                (v.drive * v.makeup - 4.8).abs() < 1e-4,
+                "small-signal gain must not ride the clarity knob"
+            );
+        }
+        // Idempotence: re-asserting the same clarity must not rebuild
+        // the output filters (their state carries audio between calls)
+        let mut t = Talker::new(48000.0);
+        t.set_clarity(0.6);
+        let before = t.out[0].b0;
+        t.process(0.3, 1.0);
+        t.set_clarity(0.6);
+        assert_eq!(t.out[0].b0, before);
+        assert_eq!(t.voicing, Voicing::at(0.6));
+    }
 
     /// The defining behavior: the modulator's resonance must appear ON
     /// the carrier, and a silent mouth passes nothing.

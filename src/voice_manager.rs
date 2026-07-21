@@ -1,3 +1,4 @@
+use crate::song::Param;
 use crate::voice::Voice;
 use crate::drums::{DrumMachine, DRUM_CHANNEL};
 use crate::sampler::{slot_for_channel, SamplerBank, SamplerSlot};
@@ -114,6 +115,8 @@ pub struct ParamValues {
     pub vox_vibrato: f32,
     /// 0 = TalkBox voicing, 1 = full-range vocoder.
     pub vox_mode: f32,
+    /// Talker circuit: 0 = '97 caricature voicing, 1 = legible.
+    pub vox_clarity: f32,
     /// How much the voice performs its own pitch prosody (accents,
     /// declination, final falls). Low for singing, high for speech.
     pub vox_intonation: f32,
@@ -230,6 +233,7 @@ impl Default for ParamValues {
             vox_breath: 0.12,
             vox_vibrato: 0.25,
             vox_mode: 0.0,
+            vox_clarity: 0.0,
             vox_intonation: 0.12,
         }
     }
@@ -481,13 +485,15 @@ impl VoiceManager {
             .channel_mix
             .entry(channel)
             .or_insert_with(|| ChannelMix::new(sr));
+        // one clamp, from the table row of whichever strip control this is
+        let value = param.clamp(value);
         match param {
-            P::TrackGain => m.gain = value.clamp(0.0, 2.0),
-            P::TrackPan => m.pan = value.clamp(-1.0, 1.0),
-            P::ReverbSend => m.rev_send = value.clamp(0.0, 1.0),
-            P::SpringSend => m.spr_send = value.clamp(0.0, 1.0),
-            P::ChorusSend => m.cho_send = value.clamp(0.0, 1.0),
-            P::DuckAmount => m.duck = value.clamp(0.0, 1.0),
+            P::TrackGain => m.gain = value,
+            P::TrackPan => m.pan = value,
+            P::ReverbSend => m.rev_send = value,
+            P::SpringSend => m.spr_send = value,
+            P::ChorusSend => m.cho_send = value,
+            P::DuckAmount => m.duck = value,
             P::DuckRelease => m.duck_decay = duck_decay_for(value, sr),
             _ => {}
         }
@@ -685,7 +691,7 @@ impl VoiceManager {
     /// Mod wheel (CC1, 0..1): performance vibrato on top of the LFO>Pitch
     /// knob — full wheel adds 75 cents of swing.
     pub fn set_mod_wheel(&mut self, value: f32) {
-        self.mod_wheel = value.clamp(0.0, 1.0);
+        self.mod_wheel = Param::ModWheel.clamp(value);
     }
 
     /// Sustain pedal (CC64). On lift, every note released under the pedal
@@ -706,7 +712,7 @@ impl VoiceManager {
 
     pub fn set_volume(&mut self, volume: f32) {
         // Applied as a smoothed master gain in render_next
-        self.params.volume = volume.clamp(0.0, 1.0);
+        self.params.volume = Param::Volume.clamp(volume);
     }
 
     pub fn set_waveform(&mut self, waveform: Waveform) {
@@ -717,6 +723,7 @@ impl VoiceManager {
     }
 
     pub fn set_detune(&mut self, cents: f32) {
+        // engine-safety limit, deliberately wider than the table's 0..30
         self.params.detune = cents.clamp(0.0, 50.0);
         for voice in &mut self.voices {
             voice.set_detune(self.params.detune);
@@ -752,7 +759,7 @@ impl VoiceManager {
     }
 
     pub fn set_filter_env_amount(&mut self, octaves: f32) {
-        self.params.filter_env_amount = octaves.clamp(-5.0, 5.0);
+        self.params.filter_env_amount = Param::FilterEnvAmount.clamp(octaves);
         for voice in &mut self.voices {
             voice.set_filter_env_amount(self.params.filter_env_amount);
         }
@@ -815,28 +822,29 @@ impl VoiceManager {
     }
 
     pub fn set_hpf_cutoff(&mut self, cutoff: f32) {
-        self.params.hpf_cutoff = cutoff.clamp(16.0, 8000.0);
+        self.params.hpf_cutoff = Param::HpfCutoff.clamp(cutoff);
         for voice in &mut self.voices {
             voice.hpf.set_cutoff(self.params.hpf_cutoff);
         }
     }
 
     pub fn set_fuzz(&mut self, amount: f32) {
-        self.params.fuzz = amount.clamp(0.0, 1.0);
+        self.params.fuzz = Param::FuzzAmount.clamp(amount);
         self.fuzz.set_amount(self.params.fuzz);
     }
 
     pub fn set_noise(&mut self, level: f32) {
-        self.params.noise = level.clamp(0.0, 1.0);
+        self.params.noise = Param::NoiseLevel.clamp(level);
     }
 
     pub fn set_spring(&mut self, wet: f32) {
-        self.params.spring = wet.clamp(0.0, 1.0);
+        self.params.spring = Param::SpringWet.clamp(wet);
         self.spring.set_wet(self.params.spring);
     }
 
     pub fn set_osc1_mix_component(&mut self, which: usize, level: f32) {
-        let level = level.clamp(0.0, 1.0);
+        // the four converter levels share MixSaw's 0..1 table row
+        let level = Param::MixSaw.clamp(level);
         match which {
             0 => self.params.mix_saw = level,
             1 => self.params.mix_pulse = level,
@@ -855,14 +863,14 @@ impl VoiceManager {
     }
 
     pub fn set_pulse_width(&mut self, width: f32) {
-        self.params.pulse_width = width.clamp(0.05, 0.95);
+        self.params.pulse_width = Param::PulseWidth.clamp(width);
         for voice in self.voices.iter_mut().filter(|v| v.channel() == 0) {
             voice.set_pulse_width(self.params.pulse_width);
         }
     }
 
     pub fn set_sub(&mut self, level: f32) {
-        self.params.sub = level.clamp(0.0, 1.0);
+        self.params.sub = Param::SubLevel.clamp(level);
         for voice in &mut self.voices {
             voice.set_sub_level(self.params.sub);
         }
@@ -880,7 +888,8 @@ impl VoiceManager {
     }
 
     pub fn set_osc_pitch(&mut self, which: usize, semitones: f32) {
-        let semitones = semitones.clamp(-24.0, 24.0);
+        // oscillators 2 and 3 share Osc2Pitch's table row
+        let semitones = Param::Osc2Pitch.clamp(semitones);
         match which {
             1 => self.params.osc2_pitch = semitones,
             2 => self.params.osc3_pitch = semitones,
@@ -892,7 +901,7 @@ impl VoiceManager {
     }
 
     pub fn set_osc_level(&mut self, which: usize, level: f32) {
-        let level = level.clamp(0.0, 1.0);
+        let level = Param::Osc2Level.clamp(level);
         match which {
             1 => self.params.osc2_level = level,
             2 => self.params.osc3_level = level,
@@ -911,21 +920,21 @@ impl VoiceManager {
     }
 
     pub fn set_key_track(&mut self, amount: f32) {
-        self.params.key_track = amount.clamp(0.0, 1.0);
+        self.params.key_track = Param::KeyTrack.clamp(amount);
         for voice in &mut self.voices {
             voice.set_key_track(self.params.key_track);
         }
     }
 
     pub fn set_osc_fm(&mut self, amount: f32) {
-        self.params.osc_fm = amount.clamp(0.0, 1.0);
+        self.params.osc_fm = Param::OscFm.clamp(amount);
         for voice in &mut self.voices {
             voice.set_fm_amount(self.params.osc_fm);
         }
     }
 
     pub fn set_ui_octave(&mut self, oct: f32) {
-        self.params.ui_octave = oct.clamp(0.0, 8.0);
+        self.params.ui_octave = Param::UiOctave.clamp(oct);
     }
 
     pub fn set_sync(&mut self, on: bool) {
@@ -936,7 +945,7 @@ impl VoiceManager {
     }
 
     pub fn set_ring(&mut self, amount: f32) {
-        self.params.ring = amount.clamp(0.0, 1.0);
+        self.params.ring = Param::RingAmount.clamp(amount);
         for voice in &mut self.voices {
             voice.set_ring(self.params.ring);
         }
@@ -958,25 +967,25 @@ impl VoiceManager {
     }
 
     pub fn set_lfo_rate(&mut self, rate: f32) {
-        self.params.lfo_rate = rate.clamp(0.1, 30.0);
+        self.params.lfo_rate = Param::LfoRate.clamp(rate);
         self.lfo.set_rate(self.params.lfo_rate);
     }
 
     pub fn set_lfo_shape(&mut self, shape: f32) {
-        self.params.lfo_shape = shape.clamp(0.0, 1.0);
+        self.params.lfo_shape = Param::LfoShape.clamp(shape);
         self.lfo.set_shape(self.params.lfo_shape);
     }
 
     pub fn set_lfo_pitch(&mut self, cents: f32) {
-        self.params.lfo_pitch = cents.clamp(0.0, 200.0);
+        self.params.lfo_pitch = Param::LfoPitch.clamp(cents);
     }
 
     pub fn set_lfo_filter(&mut self, octaves: f32) {
-        self.params.lfo_filter = octaves.clamp(0.0, 4.0);
+        self.params.lfo_filter = Param::LfoFilter.clamp(octaves);
     }
 
     pub fn set_lfo_pwm(&mut self, depth: f32) {
-        self.params.lfo_pwm = depth.clamp(0.0, 0.45);
+        self.params.lfo_pwm = Param::LfoPwm.clamp(depth);
     }
 
     // --- The voice box --------------------------------------------------
@@ -1008,17 +1017,18 @@ impl VoiceManager {
     }
 
     pub fn set_vox_level(&mut self, v: f32) {
-        self.params.vox_level = v.clamp(0.0, 2.0);
+        self.params.vox_level = Param::VoxLevel.clamp(v);
         self.vox.set_level(self.params.vox_level);
     }
 
     pub fn set_vox_dry(&mut self, v: f32) {
-        self.params.vox_dry = v.clamp(0.0, 1.0);
+        self.params.vox_dry = Param::VoxDry.clamp(v);
         self.vox.set_dry(self.params.vox_dry);
     }
 
     pub fn set_vox_clarity(&mut self, v: f32) {
-        self.vox.set_clarity(v.clamp(0.0, 1.0));
+        self.params.vox_clarity = Param::VoxClarity.clamp(v);
+        self.vox.set_clarity(self.params.vox_clarity);
     }
 
     pub fn set_vox_pitch(&mut self, samples: &[f32], source_rate: u32) {
@@ -1026,26 +1036,25 @@ impl VoiceManager {
     }
 
     pub fn set_vox_breath(&mut self, v: f32) {
-        self.params.vox_breath = v.clamp(0.0, 1.0);
+        self.params.vox_breath = Param::VoxBreath.clamp(v);
         self.vox.source.set_breath(self.params.vox_breath);
     }
 
     pub fn set_vox_vibrato(&mut self, v: f32) {
-        self.params.vox_vibrato = v.clamp(0.0, 1.0);
+        self.params.vox_vibrato = Param::VoxVibrato.clamp(v);
         self.vox.source.set_vibrato(self.params.vox_vibrato);
     }
 
     pub fn set_vox_mode(&mut self, v: f32) {
         // 0 TalkBox / 1 studio vocoder / 2 Talker (LPC) / 3 spectral.
-        // (This clamp once stopped at 1.0 — a stale bound that silently
-        // rerouted every Talker and Spectral request to the band
-        // vocoder. Keep it in sync with Param::VoxModeSel's range.)
-        self.params.vox_mode = v.clamp(0.0, 3.0);
+        // (A hand-written clamp here once stopped at 1.0, silently
+        // rerouting circuits 2 and 3 — bounds now come from the table.)
+        self.params.vox_mode = Param::VoxModeSel.clamp(v);
         self.vox.set_mode(crate::vocoder::VocoderMode::from_value(self.params.vox_mode));
     }
 
     pub fn set_vox_intonation(&mut self, v: f32) {
-        self.params.vox_intonation = v.clamp(0.0, 1.0);
+        self.params.vox_intonation = Param::VoxIntonation.clamp(v);
         self.vox.source.set_intonation(self.params.vox_intonation);
     }
 
@@ -1229,12 +1238,12 @@ impl VoiceManager {
     }
 
     pub fn set_reverb_decay(&mut self, decay: f32) {
-        self.params.reverb_decay = decay.clamp(0.0, 0.99);
+        self.params.reverb_decay = Param::ReverbDecay.clamp(decay);
         self.reverb.set_decay(self.params.reverb_decay);
     }
 
     pub fn set_reverb_wet(&mut self, wet: f32) {
-        self.params.reverb_wet = wet.clamp(0.0, 1.0);
+        self.params.reverb_wet = Param::ReverbWet.clamp(wet);
         self.reverb.set_wet(self.params.reverb_wet);
     }
 
@@ -1248,139 +1257,139 @@ impl VoiceManager {
     }
 
     pub fn set_chorus_rate(&mut self, rate: f32) {
-        self.params.chorus_rate = rate.clamp(0.1, 10.0);
+        self.params.chorus_rate = Param::ChorusRate.clamp(rate);
         self.chorus.set_rate(self.params.chorus_rate);
     }
 
     pub fn set_chorus_depth(&mut self, depth: f32) {
-        self.params.chorus_depth = depth.clamp(0.0, 1.0);
+        self.params.chorus_depth = Param::ChorusDepth.clamp(depth);
         self.chorus.set_depth(self.params.chorus_depth);
     }
 
     pub fn set_tape_wow(&mut self, wow: f32) {
-        self.params.tape_wow = wow.clamp(0.0, 1.0);
+        self.params.tape_wow = Param::TapeWow.clamp(wow);
         self.tape.set_wow(self.params.tape_wow);
     }
 
     pub fn set_tape_flutter(&mut self, flutter: f32) {
-        self.params.tape_flutter = flutter.clamp(0.0, 1.0);
+        self.params.tape_flutter = Param::TapeFlutter.clamp(flutter);
         self.tape.set_flutter(self.params.tape_flutter);
     }
 
     pub fn set_tape_drive(&mut self, drive: f32) {
-        self.params.tape_drive = drive.clamp(0.0, 1.0);
+        self.params.tape_drive = Param::TapeDrive.clamp(drive);
         self.tape.set_drive(self.params.tape_drive);
     }
 
     pub fn set_tape_age(&mut self, age: f32) {
-        self.params.tape_age = age.clamp(0.0, 1.0);
+        self.params.tape_age = Param::TapeAge.clamp(age);
         self.tape.set_age(self.params.tape_age);
     }
 
     // --- The rhythm section's panel ---------------------------------------
 
     pub fn set_bd_level(&mut self, v: f32) {
-        self.params.bd_level = v.clamp(0.0, 1.0);
+        self.params.bd_level = Param::BdLevel.clamp(v);
         self.drums.set_bd_level(self.params.bd_level);
     }
 
     pub fn set_bd_tune(&mut self, v: f32) {
-        self.params.bd_tune = v.clamp(0.0, 1.0);
+        self.params.bd_tune = Param::BdTune.clamp(v);
         self.drums.set_bd_tune(self.params.bd_tune);
     }
 
     pub fn set_bd_attack(&mut self, v: f32) {
-        self.params.bd_attack = v.clamp(0.0, 1.0);
+        self.params.bd_attack = Param::BdAttack.clamp(v);
         self.drums.set_bd_attack(self.params.bd_attack);
     }
 
     pub fn set_bd_decay(&mut self, v: f32) {
-        self.params.bd_decay = v.clamp(0.0, 1.0);
+        self.params.bd_decay = Param::BdDecay.clamp(v);
         self.drums.set_bd_decay(self.params.bd_decay);
     }
 
     pub fn set_bd_sweep(&mut self, v: f32) {
-        self.params.bd_sweep = v.clamp(0.0, 1.0);
+        self.params.bd_sweep = Param::BdSweep.clamp(v);
         self.drums.set_bd_sweep(self.params.bd_sweep);
     }
 
     pub fn set_bd_drive(&mut self, v: f32) {
-        self.params.bd_drive = v.clamp(0.0, 1.0);
+        self.params.bd_drive = Param::BdDrive.clamp(v);
         self.drums.set_bd_drive(self.params.bd_drive);
     }
 
     pub fn set_sd_level(&mut self, v: f32) {
-        self.params.sd_level = v.clamp(0.0, 1.0);
+        self.params.sd_level = Param::SdLevel.clamp(v);
         self.drums.set_sd_level(self.params.sd_level);
     }
 
     pub fn set_sd_tune(&mut self, v: f32) {
-        self.params.sd_tune = v.clamp(0.0, 1.0);
+        self.params.sd_tune = Param::SdTune.clamp(v);
         self.drums.set_sd_tune(self.params.sd_tune);
     }
 
     pub fn set_sd_tone(&mut self, v: f32) {
-        self.params.sd_tone = v.clamp(0.0, 1.0);
+        self.params.sd_tone = Param::SdTone.clamp(v);
         self.drums.set_sd_tone(self.params.sd_tone);
     }
 
     pub fn set_sd_snappy(&mut self, v: f32) {
-        self.params.sd_snappy = v.clamp(0.0, 1.0);
+        self.params.sd_snappy = Param::SdSnappy.clamp(v);
         self.drums.set_sd_snappy(self.params.sd_snappy);
     }
 
     pub fn set_sd_decay(&mut self, v: f32) {
-        self.params.sd_decay = v.clamp(0.0, 1.0);
+        self.params.sd_decay = Param::SdDecay.clamp(v);
         self.drums.set_sd_decay(self.params.sd_decay);
     }
 
     pub fn set_rs_level(&mut self, v: f32) {
-        self.params.rs_level = v.clamp(0.0, 1.0);
+        self.params.rs_level = Param::RsLevel.clamp(v);
         self.drums.set_rs_level(self.params.rs_level);
     }
 
     pub fn set_rs_tune(&mut self, v: f32) {
-        self.params.rs_tune = v.clamp(0.0, 1.0);
+        self.params.rs_tune = Param::RsTune.clamp(v);
         self.drums.set_rs_tune(self.params.rs_tune);
     }
 
     pub fn set_cp_level(&mut self, v: f32) {
-        self.params.cp_level = v.clamp(0.0, 1.0);
+        self.params.cp_level = Param::CpLevel.clamp(v);
         self.drums.set_cp_level(self.params.cp_level);
     }
 
     pub fn set_cp_decay(&mut self, v: f32) {
-        self.params.cp_decay = v.clamp(0.0, 1.0);
+        self.params.cp_decay = Param::CpDecay.clamp(v);
         self.drums.set_cp_decay(self.params.cp_decay);
     }
 
     pub fn set_hh_level(&mut self, v: f32) {
-        self.params.hh_level = v.clamp(0.0, 1.0);
+        self.params.hh_level = Param::HhLevel.clamp(v);
         self.drums.set_hh_level(self.params.hh_level);
     }
 
     pub fn set_hh_tune(&mut self, v: f32) {
-        self.params.hh_tune = v.clamp(0.0, 1.0);
+        self.params.hh_tune = Param::HhTune.clamp(v);
         self.drums.set_hh_tune(self.params.hh_tune);
     }
 
     pub fn set_hh_metal(&mut self, v: f32) {
-        self.params.hh_metal = v.clamp(0.0, 1.0);
+        self.params.hh_metal = Param::HhMetal.clamp(v);
         self.drums.set_hh_metal(self.params.hh_metal);
     }
 
     pub fn set_ch_decay(&mut self, v: f32) {
-        self.params.ch_decay = v.clamp(0.0, 1.0);
+        self.params.ch_decay = Param::ChDecay.clamp(v);
         self.drums.set_ch_decay(self.params.ch_decay);
     }
 
     pub fn set_oh_decay(&mut self, v: f32) {
-        self.params.oh_decay = v.clamp(0.0, 1.0);
+        self.params.oh_decay = Param::OhDecay.clamp(v);
         self.drums.set_oh_decay(self.params.oh_decay);
     }
 
     pub fn set_drum_drive(&mut self, v: f32) {
-        self.params.dr_drive = v.clamp(0.0, 1.0);
+        self.params.dr_drive = Param::DrumDrive.clamp(v);
         self.drums.set_drive(self.params.dr_drive);
     }
 }

@@ -275,12 +275,23 @@ impl Tape {
     }
 
     pub fn set_drive(&mut self, drive: f32) {
-        self.drive = drive.clamp(0.0, 1.0);
+        // House rule: automation re-asserts values every block, and
+        // update_drive runs a full calibration render — early-return on
+        // an unchanged value
+        let drive = drive.clamp(0.0, 1.0);
+        if drive == self.drive {
+            return;
+        }
+        self.drive = drive;
         self.update_drive();
     }
 
     pub fn set_age(&mut self, age: f32) {
-        self.age = age.clamp(0.0, 1.0);
+        let age = age.clamp(0.0, 1.0);
+        if age == self.age {
+            return;
+        }
+        self.age = age;
         self.update_age();
     }
 

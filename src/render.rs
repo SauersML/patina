@@ -6,13 +6,86 @@
 use std::fs::File;
 use std::io::{BufWriter, Result, Write};
 
+/// Peak in dBFS.
+fn peak_db(frames: &[(f32, f32)]) -> f32 {
+    let peak = frames
+        .iter()
+        .fold(0.0f32, |a, &(l, r)| a.max(l.abs()).max(r.abs()));
+    20.0 * peak.max(1e-9).log10()
+}
+
+/// Whole-file RMS in dBFS (both channels pooled).
+fn rms_db(frames: &[(f32, f32)]) -> f32 {
+    let ms = frames
+        .iter()
+        .map(|&(l, r)| (l as f64 * l as f64 + r as f64 * r as f64) * 0.5)
+        .sum::<f64>()
+        / frames.len().max(1) as f64;
+    10.0 * (ms.max(1e-18)).log10() as f32
+}
+
+/// Integrated loudness per ITU-R BS.1770-4: K-weighting (high shelf +
+/// RLB high-pass, the spec's 48 kHz coefficients — the render rate),
+/// 400 ms blocks at 75% overlap, -70 LUFS absolute gate, then a -10 LU
+/// relative gate. Returns LUFS (or -inf-ish for silence).
+fn lufs_integrated(frames: &[(f32, f32)]) -> f32 {
+    const B1: [f64; 3] = [1.53512485958697, -2.69169618940638, 1.19839281085285];
+    const A1: [f64; 2] = [-1.69065929318241, 0.73248077421585];
+    const B2: [f64; 3] = [1.0, -2.0, 1.0];
+    const A2: [f64; 2] = [-1.99004745483398, 0.99007225036621];
+    // K-weight both channels, accumulate per-sample weighted square sum
+    let mut sq = vec![0.0f64; frames.len()];
+    for ch in 0..2 {
+        let (mut x1, mut x2, mut y1, mut y2) = (0.0f64, 0.0, 0.0, 0.0);
+        let (mut u1, mut u2, mut v1, mut v2) = (0.0f64, 0.0, 0.0, 0.0);
+        for (i, &(l, r)) in frames.iter().enumerate() {
+            let x = if ch == 0 { l } else { r } as f64;
+            let y = B1[0] * x + B1[1] * x1 + B1[2] * x2 - A1[0] * y1 - A1[1] * y2;
+            x2 = x1;
+            x1 = x;
+            y2 = y1;
+            y1 = y;
+            let z = B2[0] * y + B2[1] * u1 + B2[2] * u2 - A2[0] * v1 - A2[1] * v2;
+            u2 = u1;
+            u1 = y;
+            v2 = v1;
+            v1 = z;
+            sq[i] += z * z;
+        }
+    }
+    let block = 19200; // 400 ms at 48 kHz
+    let hop = block / 4;
+    if sq.len() < block {
+        return -70.0;
+    }
+    let loudness = |ms: f64| -0.691 + 10.0 * ms.max(1e-18).log10();
+    let blocks: Vec<f64> = (0..=(sq.len() - block) / hop)
+        .map(|k| sq[k * hop..k * hop + block].iter().sum::<f64>() / block as f64)
+        .collect();
+    let gated: Vec<f64> = blocks.iter().copied().filter(|&m| loudness(m) > -70.0).collect();
+    if gated.is_empty() {
+        return -70.0;
+    }
+    let thresh = loudness(gated.iter().sum::<f64>() / gated.len() as f64) - 10.0;
+    let final_set: Vec<f64> = gated.into_iter().filter(|&m| loudness(m) > thresh).collect();
+    if final_set.is_empty() {
+        return -70.0;
+    }
+    loudness(final_set.iter().sum::<f64>() / final_set.len() as f64) as f32
+}
+
 /// One wav per track channel, soloed through the same engine: what each
 /// instrument contributed, with its own sends ringing in the shared tanks.
 /// Channels that share a strip (all `kit=` tracks, all sampler tracks)
 /// bounce once under the first track's name.
+///
+/// Stems are NOT normalized — they are measurement files, written at the
+/// exact gain the mix hears, and each is reported as a level-table row
+/// (peak / RMS / LUFS) so measured mixing needs no hand math.
 pub fn render_stems(song: &crate::song::Song, dir: &str) -> Result<()> {
     std::fs::create_dir_all(dir)?;
     let mut done: Vec<u16> = Vec::new();
+    let mut table: Vec<(String, f32, f32, f32)> = Vec::new();
     for (name, channel) in &song.tracks {
         // group channels that mix as one strip
         let key = if *channel == crate::drums::DRUM_CHANNEL {
@@ -28,20 +101,13 @@ pub fn render_stems(song: &crate::song::Song, dir: &str) -> Result<()> {
         done.push(key);
         let path = format!("{}/{}.wav", dir.trim_end_matches('/'), name);
         println!("stem: {} (channel {})", path, key);
-        let mut frames = crate::song::render_offline_solo(song, 48000.0, Some(key));
-        let peak = frames
-            .iter()
-            .fold(0.0f32, |a, &(l, r)| a.max(l.abs()).max(r.abs()));
-        if peak > 1e-6 {
-            // one shared gain across stems would preserve the mix, but a
-            // stem is a working file: give each the medium's headroom
-            let gain = 0.891 / peak;
-            for (l, r) in &mut frames {
-                *l *= gain;
-                *r *= gain;
-            }
-        }
+        let frames = crate::song::render_offline_solo(song, 48000.0, Some(key));
+        table.push((name.clone(), peak_db(&frames), rms_db(&frames), lufs_integrated(&frames)));
         write_wav(&path, &frames, 48000)?;
+    }
+    println!("\n{:<16} {:>10} {:>10} {:>10}", "stem", "peak dBFS", "rms dBFS", "LUFS");
+    for (name, peak, rms, lufs) in &table {
+        println!("{:<16} {:>10.1} {:>10.1} {:>10.1}", name, peak, rms, lufs);
     }
     Ok(())
 }
@@ -87,18 +153,20 @@ pub fn export_events(song: &crate::song::Song, path: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn render_to_wav(song: &crate::song::Song, path: &str) -> Result<()> {
+pub fn render_to_wav(song: &crate::song::Song, path: &str, normalize: bool) -> Result<()> {
     let sample_rate = 48000.0f32;
     println!("Rendering {} events...", song.events.len());
     let start = std::time::Instant::now();
     let mut frames = crate::song::render_offline(song, sample_rate);
 
     // Master to -1 dBFS peak: the engine's gain staging is patch-dependent,
-    // and a bounce should use the medium's headroom
+    // and a bounce should use the medium's headroom. `--no-normalize`
+    // keeps the engine's exact gain (measurement renders, A/B at matched
+    // gain against stems).
     let peak = frames
         .iter()
         .fold(0.0f32, |a, &(l, r)| a.max(l.abs()).max(r.abs()));
-    if peak > 1e-6 {
+    if normalize && peak > 1e-6 {
         let gain = 0.891 / peak; // -1 dBFS
         for (l, r) in &mut frames {
             *l *= gain;
@@ -106,6 +174,12 @@ pub fn render_to_wav(song: &crate::song::Song, path: &str) -> Result<()> {
         }
         println!("Normalized: peak {:.3} -> -1 dBFS ({:+.1} dB)", peak, 20.0 * gain.log10());
     }
+    println!(
+        "Levels: peak {:.1} dBFS, rms {:.1} dBFS, {:.1} LUFS",
+        peak_db(&frames),
+        rms_db(&frames),
+        lufs_integrated(&frames)
+    );
     let audio_seconds = frames.len() as f32 / sample_rate;
     println!(
         "Rendered {:.1}s of audio in {:.2}s ({:.1}x realtime)",
@@ -116,6 +190,32 @@ pub fn render_to_wav(song: &crate::song::Song, path: &str) -> Result<()> {
     write_wav(path, &frames, sample_rate as u32)?;
     println!("Wrote {}", path);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// BS.1770 calibration: a 997 Hz sine at -18 dBFS peak in BOTH
+    /// channels must read -18.0 LUFS — the -0.691 offset exists to
+    /// cancel the K-weighting's +0.69 dB at 1 kHz, and the two channels'
+    /// half-power mean squares sum back to the single-channel figure.
+    #[test]
+    fn lufs_reads_the_reference_tone() {
+        let amp = 10f32.powf(-18.0 / 20.0);
+        let frames: Vec<(f32, f32)> = (0..480000)
+            .map(|i| {
+                let s = (std::f32::consts::TAU * 997.0 * i as f32 / 48000.0).sin() * amp;
+                (s, s)
+            })
+            .collect();
+        let l = lufs_integrated(&frames);
+        assert!((l - (-18.0)).abs() < 0.1, "reference tone read {l} LUFS");
+        assert!((peak_db(&frames) - (-18.0)).abs() < 0.1);
+        assert!((rms_db(&frames) - (-21.0)).abs() < 0.1, "sine rms is peak - 3 dB");
+        // and silence gates out instead of returning garbage
+        assert_eq!(lufs_integrated(&vec![(0.0, 0.0); 96000]), -70.0);
+    }
 }
 
 fn write_wav(path: &str, frames: &[(f32, f32)], sample_rate: u32) -> Result<()> {

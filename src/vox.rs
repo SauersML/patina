@@ -793,6 +793,26 @@ impl VoxSource {
 /// Minimal RIFF/WAVE reader: PCM16, PCM24, or float32, mono-summed.
 /// Returns (samples, source sample rate).
 pub fn load_wav_mono(path: &str) -> Result<(Vec<f32>, u32), String> {
+    load_wav_mono_fmt(path).map(|(s, r, _, _)| (s, r))
+}
+
+/// Loader for pitch curves (`pitch=`): float32 ONLY. A PCM16 curve would
+/// decode normalized to ±1, silently transposing the whole melody to
+/// nonsense around MIDI 0 — better an error at parse time.
+pub fn load_wav_mono_float(path: &str) -> Result<(Vec<f32>, u32), String> {
+    let (samples, rate, format, bits) = load_wav_mono_fmt(path)?;
+    if format != 3 || bits != 32 {
+        return Err(format!(
+            "wav '{}': pitch curves must be float32 (got format {} / {} bits); \
+             PCM would arrive normalized and transpose the melody to nonsense",
+            path, format, bits
+        ));
+    }
+    Ok((samples, rate))
+}
+
+/// The reader itself, also reporting (format code, bits per sample).
+fn load_wav_mono_fmt(path: &str) -> Result<(Vec<f32>, u32, u16, u16), String> {
     let data = std::fs::read(path).map_err(|e| format!("wav '{}': {}", path, e))?;
     if data.len() < 12 || &data[0..4] != b"RIFF" || &data[8..12] != b"WAVE" {
         return Err(format!("wav '{}': not a RIFF/WAVE file", path));
@@ -864,12 +884,12 @@ pub fn load_wav_mono(path: &str) -> Result<(Vec<f32>, u32), String> {
         }
         pos = body + size + (size & 1); // chunks are word-aligned
     }
-    let (_, _, rate, _) = fmt.ok_or_else(|| format!("wav '{}': no fmt chunk", path))?;
+    let (format, _, rate, bits) = fmt.ok_or_else(|| format!("wav '{}': no fmt chunk", path))?;
     let samples = samples.ok_or_else(|| format!("wav '{}': no data chunk", path))?;
     if samples.is_empty() {
         return Err(format!("wav '{}': empty", path));
     }
-    Ok((samples, rate))
+    Ok((samples, rate, format, bits))
 }
 
 // ---------------------------------------------------------------------------
@@ -931,6 +951,11 @@ impl VoxBox {
     }
 
     pub fn set_mode(&mut self, mode: crate::vocoder::VocoderMode) {
+        // House rule: automation re-asserts values every block, so any
+        // setter that rebuilds state early-returns on an unchanged value
+        if mode == self.mode {
+            return;
+        }
         self.mode = mode;
         self.vocoder.set_mode(mode);
     }

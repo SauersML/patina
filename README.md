@@ -92,18 +92,23 @@ Songs speak the same language — `automate bend`, `automate mod_wheel`, and
 
 ```
 bpm 100
-gate 0.85                      # note length as a fraction of its duration
+gate 0.85                      # note separation: (1-gate) of the note, capped at 80 ms
+section CH1 16..32             # name a beat range: `>CH1` / `>CH1.end` seek to it
 
 track lead vel=0.9 len=0.5     # default velocity and duration (beats)
 E5:1 D5 C5 | [C4 E4 G4]:2@0.6 R:2
 
 automate cutoff                # ramp any parameter through breakpoints
 500 7000:16@exp R:8 600:8@smooth
+
+automate vox_mode: 1 during CH1 base 0   # one-line section automation
 ```
 
 - **Notes**: names (`C4`, `F#3`, `Eb5`, with C4 = MIDI 60) or raw MIDI numbers; `[..]` for chords; `R` or `.` for rests; `:beats` duration; `@vel` velocity; `|` bar lines (ignored).
 - **Automation**: `automate <param>` starts a curve track. The first token is the starting value; `V:D@shape` ramps to `V` over `D` beats; `R:D` holds. Shapes: `lin`, `exp` (geometric — right for frequencies), `log`, `smooth`, `step`.
-- **Parameters**: `volume`, `waveform` (0–3), `detune`, `noise` (0–1), `glide` (seconds, 0 = off), `pulse_width` (0.05–0.95), `lfo_rate` (Hz), `lfo_shape` (0 = saw, 0.5 = tri, 1 = ramp), `lfo_pitch` (cents), `lfo_filter` (octaves), `lfo_pwm` (0–0.45), `hpf` (Hz, 16 = off), `fuzz` (0–1), `spring` (0–1), `cutoff`, `resonance`, `drive`, `saturation`, `attack`, `decay`, `sustain`, `release`, `filter_env` (octaves), `filter_attack`, `filter_decay`, `filter_sustain`, `filter_release`, `reverb_decay`, `reverb_wet`, `chorus_mode` (0–4), `chorus_rate`, `chorus_depth`, `tape_wow`, `tape_flutter`, `tape_drive`, `tape_age`, `vox_level`, `vox_dry`, `vox_breath`, `vox_vibrato`, `vox_mode` (0 = TalkBox, 1 = vocoder), `vox_intonation`, and the tape deck's `smp_pitch` (semitones), `smp_start` (0–1), `smp_gain`, `smp_pan`, `smp_attack`, `smp_release`, `smp_cutoff` (Hz), `smp_res` (0–1) (per sampler track via `automate <track>.smp_pitch`, or global to all slots).
+- **Parameters**: `patina --params` prints the complete chart — every automatable name with its range, taper, and MIDI CC, straight from the single source-of-truth table in `src/song.rs` (`param_table!`). Highlights: `waveform` (0–3), `vox_mode` (0 TalkBox / 1 vocoder / 2 Talker / 3 spectral), `vox_level` (0–2: the band vocoder's per-band tanh caps its own level, so post-makeup headroom is the only push), `chorus_mode` (0–4), the 909's `bd_*`/`sd_*`/`hh_*` knobs, and the tape deck's `smp_*` transport (per sampler track via `automate <track>.smp_pitch`, or global to all slots).
+- **Sections**: `section NAME A..B` names a beat range. `>NAME` / `>NAME.end` seek any track there, and `automate <param>: <value> during NAME,NAME2 [base <b>]` brackets sections without hand-done beat arithmetic.
+- **Bounces**: `--play x.song --render out.wav` (add `--no-normalize` to keep the engine's exact gain; peak/RMS/LUFS are reported either way). `--render-stems <dir>` solos each track through the full engine, un-normalized, and prints a per-stem level table — measured mixing without text-splitting song files. Every offline render also reports its peak concurrent voice count.
 
 ## 🗣️ The voice box
 
@@ -114,9 +119,15 @@ A vox track's notes are the vocoder's **carrier**; its `=lyrics` drive the
 track choir vox
 [A2 E3 A3]:2=HH-OW1-L-D [G2 D3 G3]:2=AA-N | [A2 E3 A3 C4]:6=HH-OW1-M.
 
-track voice vox wav=renders/borrowed.wav    # a recording played on the keys
+track voice vox wav=renders/borrowed.wav wav_at=0   # a recording played on the keys
 [D3 A3 D4 F4]:2 [C3 G3 C4 E4]:2
 ```
+
+The recording starts at the **first vox note-on**. `wav_at=<beat>` pins that
+anchor: if editing ever moves the first vox note, the song errors instead of
+silently shifting the vocal against every other clock. A `pitch=curve.wav`
+performance line (float32-only, MIDI note numbers on the modulator's clock)
+rides the same anchor.
 
 Lyrics are dash-joined ARPAbet phonemes riding their note. Onsets speak at
 note-on, the vowel sustains while held (pitch = lowest held key), codas

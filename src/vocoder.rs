@@ -26,6 +26,20 @@
 //     voiced/unvoiced detector; the Talker just leaks treble noise. We
 //     hand each high band a fixed noise feed and let its own envelope
 //     decide — sibilance appears exactly when the speech has it.
+//
+// GAIN-STAGING CONTRACT (learned the hard way; encoded in
+// `carrier_level_saturates_output`): each band's VCA is an OTA — a tanh
+// INSIDE the band sum — and on any real carrier those tanh stages run
+// saturated. Consequences a mixer must know:
+//   - Pushing the CARRIER (or the modulator) changes TIMBRE, not level.
+//     A hotter carrier drives the tanh harder and buzzes; output RMS
+//     barely moves.
+//   - The only level control that scales the output is POST-tanh makeup:
+//     the per-mode `makeup` here, and `vox_level` downstream (whose
+//     0..2 range exists precisely because of this cap).
+// Do not "fix" a quiet vocoder chord by raising the carrier — raise
+// vox_level. Do not expect vox mix moves to survive a carrier rebalance
+// symmetrically — they won't, and that is the circuit, not a bug.
 
 use crate::noise::NoiseSource;
 
@@ -322,6 +336,44 @@ mod tests {
             low > 6.0 * high,
             "400 Hz speech energy must open the low bands only: low={low}, high={high}"
         );
+    }
+
+    /// The gain-staging contract from the module header: the per-band
+    /// tanh caps its own output, so doubling the carrier must NOT double
+    /// the output (timbre moves, level doesn't) — while post-tanh makeup
+    /// scales it exactly. If this test starts failing because the
+    /// architecture changed, rewrite the header contract too.
+    #[test]
+    fn carrier_level_saturates_output() {
+        let sr = 48000.0;
+        let rms_with = |carrier_gain: f32| -> f32 {
+            let mut v = Vocoder::new(sr);
+            v.set_mode(VocoderMode::Vocoder);
+            let mut acc = 0.0f64;
+            let n = sr as usize / 2;
+            for k in 0..n {
+                let t = k as f32 / sr;
+                // Voiced buzz modulator, saw carrier in program volts
+                let m = if (t * 130.0) % 1.0 < 0.5 { 0.5 } else { -0.5 };
+                let c = (((t * 110.0) % 1.0) * 2.0 - 1.0) * 5.0 * carrier_gain;
+                let y = v.process(m, c);
+                if k > n / 2 {
+                    acc += (y * y) as f64;
+                }
+            }
+            ((acc / (n / 2) as f64) as f32).sqrt()
+        };
+        let unity = rms_with(1.0);
+        let doubled = rms_with(2.0);
+        let db = 20.0 * (doubled / unity).log10();
+        // A linear board would move +6.0 dB; the saturated bands give
+        // back well under half of that (measured ~+2.6: the loudest
+        // bands are pinned, the quiet ones still linear)
+        assert!(
+            db < 3.0,
+            "per-band tanh must cap the level: +6 dB carrier moved output {db:+.2} dB"
+        );
+        assert!(unity > 0.05, "the board should still pass signal, rms={unity}");
     }
 
     /// TalkBox mode is the tube: compared to the studio vocoder, the

@@ -91,7 +91,14 @@ impl Chorus {
     }
 
     pub fn set_rate(&mut self, rate: f32) {
-        self.rate = rate.clamp(0.1, 10.0);
+        // House rule: automation re-asserts values every block; a setter
+        // that re-randomizes (or resets) state must early-return on an
+        // unchanged value, or the per-voice detune re-rolls continuously
+        let rate = rate.clamp(0.1, 10.0);
+        if rate == self.rate {
+            return;
+        }
+        self.rate = rate;
         for voice in &mut self.voices {
             voice.rate_left = self.rate * (0.9 + rand::thread_rng().gen::<f32>() * 0.2);
             voice.rate_right = self.rate * (0.9 + rand::thread_rng().gen::<f32>() * 0.2);
@@ -99,7 +106,11 @@ impl Chorus {
     }
 
     pub fn set_depth(&mut self, depth: f32) {
-        self.depth = depth.clamp(0.0, 1.0);
+        let depth = depth.clamp(0.0, 1.0);
+        if depth == self.depth {
+            return;
+        }
+        self.depth = depth;
         for voice in &mut self.voices {
             // Knob is 0..1; voice depth is the LFO delay swing in seconds.
             // Full depth = 10 ms, matching the scale of the mode presets.
@@ -108,6 +119,13 @@ impl Chorus {
     }
 
     pub fn set_mode(&mut self, mode: ChorusMode) {
+        // Re-asserting the current mode (song automation does, every
+        // block) must not rebuild the BBD voices — that resets their
+        // delay-line state mid-note — and must not stomp a chorus_mix
+        // override. Only an actual switch throw re-derives anything.
+        if mode == self.mode {
+            return;
+        }
         self.mode = mode;
         match mode {
             ChorusMode::Off => {
@@ -356,6 +374,25 @@ impl Voice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Song automation re-asserts chorus_mode with every plain set; the
+    /// switch must treat a no-op re-assert as nothing — not rebuild the
+    /// BBD voices (resetting their state mid-note) and not stomp a
+    /// chorus_mix override. The setter-idempotence house rule.
+    #[test]
+    fn reasserting_the_same_mode_is_a_no_op() {
+        let mut chorus = Chorus::new(48000.0);
+        chorus.set_mode(ChorusMode::II);
+        chorus.set_mix(0.12);
+        for n in 0..4800 {
+            let x = (n as f32 * 0.05).sin() * 0.4;
+            chorus.process(x, x);
+        }
+        let phase_before = chorus.voices[0].phase_left;
+        chorus.set_mode(ChorusMode::II);
+        assert_eq!(chorus.wet_dry_mix, 0.12, "mix override must survive");
+        assert_eq!(chorus.voices[0].phase_left, phase_before, "voices must not rebuild");
+    }
 
     #[test]
     fn off_is_transparent() {
