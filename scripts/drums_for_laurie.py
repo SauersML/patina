@@ -140,7 +140,7 @@ drone = Track("track drone patch=drone vel=0.5 len=1")
 
 a_bd_tune  = Auto("bd_tune", kick_tune(57))
 a_bd_decay = Auto("bd_decay", 0.8)
-a_bd_att   = Auto("bd_attack", 0.2)
+a_bd_att   = Auto("bd_attack", 0.35)
 a_bd_drive = Auto("bd_drive", 0.12)
 a_sd_tune  = Auto("sd_tune", 0.42)
 a_sd_snap  = Auto("sd_snappy", 0.55)
@@ -149,7 +149,9 @@ a_drum_drv = Auto("dr_drive", 0.05)
 a_fuzz     = Auto("fuzz", 0.0)
 a_wow      = Auto("tape_wow", 0.5)
 a_spring   = Auto("spring", 0.08)
-a_volume   = Auto("volume", 0.82)
+# The master volume is played, not set: Spiegel's hand-drawn control
+# line over the whole form — the loudness arc IS one of the voices.
+a_volume   = Auto("volume", 0.6)
 a_bend     = Auto("bend", 0.0)
 a_bass_cut = Auto("bass.cutoff", 340)
 a_bass_res = Auto("bass.resonance", 1.15)
@@ -185,7 +187,7 @@ def kick_theme_bars(first_bar, n_bars, vel=0.8, half_speed=False,
                 v = jit(vel + (0.1 if at == 0.0 else 0.0), 0.03)
             else:
                 a_bd_tune.set(t0 + at, 0.18)
-                v = jit(vel - 0.25, 0.03)
+                v = jit(vel - 0.2, 0.03)
             toks.append(f"BD:0.25@{v:.2f}")
             cur += 0.25
         kick.bar(t0, toks)
@@ -346,11 +348,16 @@ def drill_bar(bar, v, root=45, blast=False, breath=False, wash=False,
 
 # ---------------------------------------------------------------- A: LOOM
 
-kick_theme_bars(A0, 20, vel=0.72)
-clock_bars(4, END - 8 - 4)          # bar 4 to bar 196: the unbroken thread
+kick_theme_bars(A0, 20, vel=0.6)
+clock_bars(4, 16, vel=0.36)         # the thread, alone: let it be heard
+clock_bars(20, END - 8 - 20)        # ...then woven under, to bar 196
 
 a_wow.ramp(0.0, 0.12, 8 * BAR, "exp")
 a_wow.set(B0 * BAR, 0.09)
+a_volume.ramp(0.0, 0.7, 20 * BAR)
+a_volume.ramp(bb(B0), 0.78, 28 * BAR)
+a_volume.ramp(bb(E0), 1.0, 42 * BAR)
+a_volume.set(bb(F0), 0.62)
 
 # first whispers: ghost snares find the loom in the dark
 for bar in range(12, A0 + 28):
@@ -361,8 +368,8 @@ for bar in range(12, A0 + 28):
 
 # ---------------------------------------------------------- B: ACCUMULATE
 
-kick_theme_bars(B0, 8, vel=0.75)
-kick_theme_bars(B0 + 8, 20, vel=0.78, heartbeat=True)
+kick_theme_bars(B0, 8, vel=0.66)
+kick_theme_bars(B0 + 8, 20, vel=0.7, heartbeat=True)
 
 # hat density is the accumulation made audible: k climbs 3 -> 11
 for bar in range(B0 - 4, C0):
@@ -384,7 +391,7 @@ for bar in range(B0 - 4, C0):
 
 # the drone under the loom
 for bar in range(B0, C0, 4):
-    drone.bar(bb(bar), [f"{nn(33)}:{fmt(4 * BAR * 0.96)}@0.55"])
+    drone.bar(bb(bar), [f"{nn(33)}:{fmt(4 * BAR * 0.96)}@0.45"])
 
 # acid murmurs: fragments of the theme's floor, half asleep
 for bar in range(36, C0):
@@ -416,8 +423,8 @@ a_drum_drv.ramp(bb(40), 0.18, 8 * BAR)
 a_bass_cut.ramp(bb(36), 520, 12 * BAR, "exp")
 
 # the loom tightens for the drill: kick becomes a drum, not a voice
-a_bd_decay.ramp(bb(C0 - 1), 0.48, BAR)
-a_bd_att.set(bb(C0), 0.5)
+a_bd_decay.ramp(bb(C0 - 1), 0.52, BAR)
+a_bd_att.set(bb(C0), 0.55)
 a_bd_tune.set(bb(C0), 0.24)
 a_sd_snap.set(bb(C0), 0.72)
 a_wow.set(bb(C0), 0.06)
@@ -566,10 +573,10 @@ a_oh_dec.set(bb(E0 + 35), 0.75); a_oh_dec.set(bb(E0 + 36), 0.35)
 # ---------------------------------------------------------- F: AFTERIMAGE
 
 a_bd_decay.set(bb(F0), 0.88)
-a_bd_att.set(bb(F0), 0.2)
+a_bd_att.set(bb(F0), 0.3)
 a_sd_snap.set(bb(F0), 0.5)
 
-kick_theme_bars(F0, 16, vel=0.55, half_speed=True)
+kick_theme_bars(F0, 16, vel=0.46, half_speed=True)
 # fragments: the theme loses words, keeps only downbeats
 for bar in range(F0 + 16, F0 + 24, 2):
     t0 = bb(bar)
@@ -577,14 +584,14 @@ for bar in range(F0 + 16, F0 + 24, 2):
     kick.bar(t0, [f"BD:0.25@{jit(0.45, 0.03):.2f}"])
 
 pad.bar(bb(F0), ["[" + " ".join(nn(m) for m in CHORDS[0]) + "]"
-                 + f":{fmt(4 * BAR)}@0.5"])
+                 + f":{fmt(4 * BAR)}@0.44"])
 pad.bar(bb(F0 + 8), ["[" + " ".join(nn(m) for m in CHORDS[1]) + "]"
-                     + f":{fmt(4 * BAR)}@0.45"])
+                     + f":{fmt(4 * BAR)}@0.4"])
 pad.bar(bb(F0 + 16), ["[" + " ".join(nn(m) for m in CHORDS[0]) + "]"
-                      + f":{fmt(8 * BAR)}@0.45"])
+                      + f":{fmt(8 * BAR)}@0.4"])
 
 for bar in range(F0, F0 + 22, 4):
-    drone.bar(bb(bar), [f"{nn(33)}:{fmt(4 * BAR * 0.96)}@0.45"])
+    drone.bar(bb(bar), [f"{nn(33)}:{fmt(4 * BAR * 0.96)}@0.36"])
 
 # the bells remember three notes of it, then one, then one lower
 bell.bar(bb(F0 + 4), [f"{nn(81)}:1@0.5", f"{nn(84)}:1@0.45", f"{nn(83)}:2@0.4"])
@@ -640,11 +647,11 @@ automate tape_age
 automate bd_level
 0.92
 automate sd_level
-0.82
+0.88
 automate hh_level
-0.5
+0.58
 automate rs_level
-0.6
+0.7
 automate cp_level
 0.68
 automate hh_metal
