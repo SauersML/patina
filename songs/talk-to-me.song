@@ -1,0 +1,61 @@
+# Talk To Me — the TalkBox as a POWER LEAD, not a choir.
+#
+# One voice, one line. The lead track's carrier is rebuilt by per-track
+# automation into a talk-box rig: tight saw, octave doubler, filter
+# drive, sub weight, glide for the swoops. The lyric stabs re-mouth the
+# vowel on each note (Zapp style), and the long W-AA-W bend is a true
+# melisma: overlapping notes (seek tokens) keep the vowel open while
+# the pitch climbs under it.
+
+bpm 96
+gate 0.92
+
+automate vox_level
+  1
+automate vox_mode
+  0
+automate vox_vibrato
+  0.4
+automate vox_breath
+  0.08
+automate vox_intonation
+  0.3
+automate reverb_wet
+  0.18
+automate tape_age
+  0.25
+
+track lead vox vel=0.95
+  R:8
+  # talk — to — me
+  E3:1=T-AO1-K G3:1=T-UW1 E3:1.5=M-IY1. R:0.5
+  # can you hear me?  (the ? bends the tail upward)
+  B3:0.75=K-AE1-N A3:0.75=Y-UW0 G3:1=HH-IY1-R E3:1.5=M-IY1? R:0.5
+  # yeah: one vowel stabbed up the scale
+  E3:0.5=Y-EH1 G3:0.5=EH0 A3:0.5=EH0 B3:0.5=EH1 D4:1=EH1 B3:1=EH0-AH0. R:1
+  # the big bend: WAAAH held open across overlapping notes
+  >24 E3:4=W-AA1-W. >25 G3:3 >26 A3:2 >27 B3:3.5
+  R:0.5
+  E3:1=T-AO1-K G3:1=T-UW1 [E3 E4]:2=M-IY1.
+
+# The lead's carrier rig
+automate lead.glide
+  0.07
+automate lead.detune
+  4
+automate lead.osc2_pitch
+  12
+automate lead.osc2_level
+  0.55
+automate lead.drive
+  3.2
+automate lead.sub
+  0.5
+automate lead.resonance
+  0.6
+
+track bass patch=heartbass vel=0.75 len=0.5
+  (E2 . E2 E2 . E2 G2 . | E2 . E2 E2 . D2 . B1)x4 E1:2
+
+track beat kit=909 len=0.5
+  (BD CH CH:0.25 CH:0.25 SD@0.55 CH BD:0.25 BD:0.25 CH | BD CH BD CH SD@0.65 CH:0.25 CH:0.25 OH@0.45 CH)x4 [BD CP]:1
