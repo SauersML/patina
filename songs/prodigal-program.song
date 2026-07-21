@@ -112,6 +112,33 @@ automate hats.reverb_send
 automate hats.gain
   1.35
 
+# the sub: sine-predominant synth weight an octave under the hum —
+# the one non-voice pitch, drifting slowly on the global LFO
+track sub vel=0.8 len=8
+  R:8 D1:8
+  D1:8 R:8 C1:8 R:8
+  R:4 B1:8 R:4 G1:8 R:8
+  D1:8 R:4 A#1:8 R:4
+  G1:8 A1:8 D1:8
+  D1:16 R:8
+
+automate sub.waveform
+  0
+automate sub.sub
+  0.4
+automate sub.attack
+  0.5
+automate sub.release
+  1.5
+automate sub.gain
+  1.5
+automate sub.duck
+  0.3
+automate lfo_rate
+  0.12
+automate lfo_pitch
+  4
+
 # ---- the bed: breath, tuned and breathing ----------------------------
 track voxbass sample=renders/prodigal/mmm.wav root=G#2 psola beats=8 mode=oneshot attack=0.3 release=0.8 gain=1.7 cutoff=900 len=8
   D2:8 D2:8
@@ -155,6 +182,19 @@ automate breath.duck
   0.5
 automate breath.duck_release
   0.28
+
+# high garlands: 'Dee' varispeeded +14 st is no longer a voice, it is
+# a bell. Two-beat 16th figures at the phrase ends, never constant
+track bells sample=renders/prodigal/di.wav root=C4 mode=oneshot release=0.3 gain=0.95 len=0.25
+  R:16
+  R:7.5 D5:0.25@0.6 A4:0.25@0.5 F#5:0.25@0.55 E5:0.25@0.5 D5:0.25@0.6 E5:0.25@0.45 A5:0.5@0.6 R:14 D5:0.25@0.6 A4:0.25@0.5 F#5:0.25@0.55 E5:0.25@0.5 D5:0.25@0.6 E5:0.25@0.45 A5:0.5@0.6 R:6.5
+  R:14 D5:0.25@0.55 A4:0.25@0.45 F#5:0.25@0.5 E5:0.25@0.45 D5:0.25@0.55 E5:0.25@0.4 A5:0.5@0.55 R:16
+  R:17 A5:0.5@0.4 F#5:0.5@0.35 E5:0.5@0.4 D5:0.5@0.35 R:5
+  R:2 D5:0.25@0.6 A4:0.25@0.5 F#5:0.25@0.55 E5:0.25@0.5 D5:0.25@0.6 E5:0.25@0.45 A5:0.5@0.6 R:6 D5:0.25@0.6 A4:0.25@0.5 F#5:0.25@0.55 E5:0.25@0.5 D5:0.25@0.6 E5:0.25@0.45 A5:0.5@0.6 R:6 D5:0.25@0.65 E5:0.25@0.55 F#5:0.25@0.6 A5:0.25@0.6 D5:0.25@0.55 F#5:0.25@0.5 A5:0.5@0.65 R:4
+  R:24
+
+automate bells.reverb_send
+  0.4
 
 # ---- the songs -------------------------------------------------------
 # themeA twice with air between; once more over the bloom

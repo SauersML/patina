@@ -37,6 +37,7 @@ PHRASES = [
     ("oooh",      "af_heart",   0.5,  "Ooooooh."),
     ("mmm",       "am_michael", 0.5,  "Mmmmmm."),
     ("danced",    "am_michael", 0.9,  "I am being danced. Being entranced."),
+    ("di",        "af_heart",   1.0,  "Dee."),
 ]
 
 # one word per half-second cell, so chop=6 lands on the words
