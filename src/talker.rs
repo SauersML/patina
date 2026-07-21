@@ -362,9 +362,13 @@ impl Talker {
             self.held = self.tract_tick(m, c);
         }
         // Reconstruct the tube's band, then add what the tube never
-        // carried: the sibilant air up top, and the note's BODY below —
-        // the carrier's fundamental bled straight through (gated with
-        // the speech), which is the difference between thin and full
+        // carried: the note's BODY below (the carrier's fundamental bled
+        // straight through, gated with the speech) — and, on sibilant
+        // frames, the ORIGINAL VOICE high-passed. That is the DigiTech
+        // Talker's documented NuVo trick: its unvoiced detector switches
+        // to the voice input itself for sibilants, not to a noise
+        // generator. High-passed sibilants carry no pitch, so the
+        // consonants arrive human-crisp with zero polyphony.
         self.body_lp += self.body_k * (carrier - self.body_lp);
         let mut y = self.held;
         for f in &mut self.out {
@@ -375,8 +379,10 @@ impl Talker {
         self.wah_fc += (self.wah_fc_target - self.wah_fc) * self.wah_slew;
         self.wah.retune(self.wah_fc, 1.3, self.sr);
         y = self.wah.tick(y);
-        y + self.body_lp * 1.2 * self.gate
-            + self.noise.next() * self.unvoiced * (self.env * 6.0).min(1.2)
+        // NuVo passthrough: the modulator minus its own lows = the
+        // sibilant band, faded in only on unvoiced frames
+        let sib = (modulator - self.m_lp) * self.unvoiced * 5.0;
+        y + self.body_lp * 1.2 * self.gate + sib
     }
 }
 
