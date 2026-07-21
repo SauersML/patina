@@ -30,27 +30,27 @@ SLOT_BEATS = 8
 # The score: each phrase is one sentence spoken whole, plus one
 # (onset_beats, length_beats, level) entry PER WORD. Held words are the
 # talkbox move: "night" rides across the note change, "home" and
-# "neon" sustain like a fist on the keys. Lifts as in talkbox-flow:
-# the Talker is tuned for a high-register modulator (+5/+2 st keeps
-# both voices human; the song's tape_age does the rest).
+# "neon" sustain like a fist on the keys. Gentle lifts only: +2 st on
+# af_heart, none on am_michael — bigger lifts shift vowel formants
+# past what LPC can track (measured by ASR word recovery).
 SCORE = [
-    ("af_heart", 2 ** (5 / 12), "Give me one more night, one more night to remember.",
+    ("af_heart", 2 ** (2 / 12), "Give me one more night, one more night to remember.",
      [("Give", 0.00, 0.50, 1.0), ("me", 0.50, 0.50, 0.8),
       ("one", 1.00, 0.50, 0.9), ("more", 1.50, 0.50, 0.8),
       ("night", 2.00, 1.50, 1.0), ("one", 4.00, 0.50, 0.9),
       ("more", 4.50, 0.50, 0.8), ("night", 5.00, 1.00, 1.0),
       ("to", 6.00, 0.50, 0.7), ("remember", 6.50, 1.50, 1.0)]),
-    ("am_michael", 2 ** (2 / 12), "We are wide awake in the neon.",
+    ("am_michael", 1.0, "We are wide awake in the neon.",
      [("We", 0.00, 0.50, 0.9), ("are", 0.50, 0.50, 0.8),
       ("wide", 1.00, 1.00, 1.0), ("awake", 2.00, 1.50, 1.0),
       ("in", 3.50, 0.25, 0.7), ("the", 3.75, 0.25, 0.7),
       ("neon", 4.00, 2.50, 1.0)]),
-    ("af_heart", 2 ** (5 / 12), "Every heartbeat turning over into thunder and light.",
+    ("af_heart", 2 ** (2 / 12), "Every heartbeat turning over into thunder and light.",
      [("Every", 0.00, 0.75, 1.0), ("heartbeat", 0.75, 1.25, 1.0),
       ("turning", 2.00, 1.00, 0.9), ("over", 3.00, 1.00, 0.9),
       ("into", 4.00, 0.50, 0.8), ("thunder", 4.50, 1.50, 1.0),
       ("and", 6.00, 0.25, 0.7), ("light", 6.25, 1.75, 1.0)]),
-    ("am_michael", 2 ** (2 / 12), "Drive it home and never surrender.",
+    ("am_michael", 1.0, "Drive it home and never surrender.",
      [("Drive", 0.00, 0.75, 1.0), ("it", 0.75, 0.25, 0.7),
       ("home", 1.00, 2.00, 1.0), ("and", 3.00, 0.50, 0.7),
       ("never", 3.50, 1.00, 0.9), ("surrender", 4.50, 2.50, 1.0)]),

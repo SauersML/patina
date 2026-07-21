@@ -899,6 +899,10 @@ impl VoiceManager {
         self.vox.set_dry(self.params.vox_dry);
     }
 
+    pub fn set_vox_clarity(&mut self, v: f32) {
+        self.vox.set_clarity(v.clamp(0.0, 1.0));
+    }
+
     pub fn set_vox_breath(&mut self, v: f32) {
         self.params.vox_breath = v.clamp(0.0, 1.0);
         self.vox.source.set_breath(self.params.vox_breath);

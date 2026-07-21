@@ -928,6 +928,11 @@ impl VoxBox {
         self.vocoder.set_mode(mode);
     }
 
+    /// Talker circuit only: caricature (0) <-> legible (1).
+    pub fn set_clarity(&mut self, v: f32) {
+        self.talker.set_clarity(v);
+    }
+
     /// Load a recorded modulator, resampled to the engine rate and
     /// peak-normalized. It starts from the top at the next phrase (a vox
     /// note-on with no other vox notes held).

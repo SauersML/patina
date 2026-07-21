@@ -163,6 +163,13 @@ pub struct Talker {
     wah_slew: f32,
     wah: Lowpass,
     noise: NoiseSource,
+    /// Clarity (0..1): dials the circuit from the reference-matched
+    /// caricature (0: squared formants, flattened dynamics, amp grit,
+    /// deep wah) toward a clean legible talkbox (1: single tract pass,
+    /// the voice's own dynamics, linear amp, open wah). Measured by ASR
+    /// word recovery: the caricature scores 0/31 words on scored
+    /// speech, the clean end restores them.
+    clarity: f32,
 }
 
 impl Talker {
@@ -212,7 +219,12 @@ impl Talker {
             wah_slew: 1.0 - (-1.0 / (0.012 * sample_rate)).exp(),
             wah: Lowpass::tuned(800.0, 1.3, sample_rate),
             noise: NoiseSource::new(),
+            clarity: 0.0,
         }
+    }
+
+    pub fn set_clarity(&mut self, c: f32) {
+        self.clarity = c.clamp(0.0, 1.0);
     }
 
     /// Frame analysis at the decimated rate: windowed autocorrelation,
@@ -294,7 +306,9 @@ impl Talker {
         let openness = (self.bright_hf / self.bright_total.max(1e-6) / 0.3)
             .clamp(0.0, 1.0)
             .powf(1.2);
-        self.wah_fc_target = 500.0 * (4800.0f32 / 500.0).powf(openness);
+        let swept = 500.0 * (4800.0f32 / 500.0).powf(openness);
+        // Clarity opens the wah: its deep sweeps swallow consonants
+        self.wah_fc_target = swept + (4800.0 - swept) * self.clarity;
 
         self.ring[self.write] = m;
         self.write = (self.write + 1) % self.ring.len();
@@ -321,14 +335,16 @@ impl Talker {
             self.b[i + 1] = (self.b[i] - self.k[i] * f) * 0.9995;
         }
         self.b[0] = f;
-        // Second pass through the same mouth: the exaggeration stage
+        // Second pass through the same mouth: the exaggeration stage.
+        // Clarity blends it away — squared formants are the caricature,
+        // and the single pass is what keeps consonant transitions legible
         let mut f2 = f * 0.12;
         for i in (0..ORDER).rev() {
             f2 += self.k[i] * self.b2[i];
             self.b2[i + 1] = (self.b2[i] - self.k[i] * f2) * 0.9995;
         }
         self.b2[0] = f2;
-        let f = f2;
+        let f = f2 * (1.0 - self.clarity) + f * 0.48 * self.clarity;
 
         // The instrument leads, the mouth articulates: the VCA follows a
         // NORMALIZED, compressed loudness (^0.45), so word-level dynamics
@@ -342,7 +358,9 @@ impl Talker {
             self.env_peak *= self.peak_decay;
         }
         let norm = (self.env / self.env_peak.max(1e-5)).clamp(0.0, 1.0);
-        let mut g = norm.powf(0.45);
+        // Clarity restores the voice's own dynamics: the ^0.45 flattening
+        // erases the stop-consonant dips that carry the words
+        let mut g = norm.powf(0.45 + 0.55 * self.clarity);
         // ...with a downward expander at the floor, so the compression
         // doesn't hold the gate open on room silence between phrases
         if norm < 0.02 {
@@ -350,7 +368,9 @@ impl Talker {
             g *= t * t;
         }
         self.gate = g;
-        (f * 1.5).tanh() * 3.2 * g
+        // Amp grit backs off with clarity at constant small-signal gain
+        let drive = 1.5 - 1.1 * self.clarity;
+        (f * drive).tanh() * (4.8 / drive) * g
     }
 
     /// One engine-rate sample: anti-alias both signals, run the tract in

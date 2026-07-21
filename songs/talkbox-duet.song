@@ -18,10 +18,12 @@ gate 0.98
 
 automate vox_mode
   2
+automate vox_clarity
+  1
 automate vox_level
   1
 automate vox_dry
-  0
+  0.12
 automate reverb_wet
   0.16
 automate reverb_decay
@@ -42,15 +44,15 @@ track voice vox wav=renders/talkbox-score.wav vel=1 len=1
   D4 D4 C4 C4 A3 G3 A3 A3
 
 automate voice.detune
-  8
+  1
 automate voice.osc2_level
-  0.6
+  0.25
 automate voice.osc2_pitch
-  0
+  0.12
 automate voice.osc3_level
-  0
+  0.12
 automate voice.sub
-  0
+  0.12
 automate voice.drive
   2
 automate voice.saturation

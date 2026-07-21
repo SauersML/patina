@@ -222,6 +222,8 @@ pub enum Param {
     VoxDry,
     VoxBreath,
     VoxVibrato,
+    /// Talker circuit: 0 = reference-matched caricature, 1 = legible
+    VoxClarity,
     /// 0 = TalkBox ('97 Talker tube voicing), 1 = full-range vocoder.
     VoxModeSel,
     VoxIntonation,
@@ -383,7 +385,8 @@ impl Param {
             | Param::ChDecay | Param::OhDecay | Param::DrumDrive
             // The voice box's four knobs are unitless mixes/depths
             | Param::VoxLevel | Param::VoxDry | Param::VoxBreath
-            | Param::VoxVibrato | Param::VoxIntonation => (0.0, 1.0, Lin),
+            | Param::VoxVibrato | Param::VoxIntonation
+            | Param::VoxClarity => (0.0, 1.0, Lin),
             Param::ReverbDecay => (0.0, 0.99, Lin),
             Param::PulseWidth => (0.05, 0.95, Lin),
             Param::Detune => (0.0, 30.0, Lin),
@@ -505,6 +508,7 @@ impl Param {
             "vox_level" => Param::VoxLevel,
             "vox_dry" => Param::VoxDry,
             "vox_breath" => Param::VoxBreath,
+            "vox_clarity" => Param::VoxClarity,
             "vox_vibrato" => Param::VoxVibrato,
             "vox_mode" => Param::VoxModeSel,
             "vox_intonation" => Param::VoxIntonation,
@@ -615,6 +619,7 @@ impl Param {
             Param::VoxLevel => vm.set_vox_level(value),
             Param::VoxDry => vm.set_vox_dry(value),
             Param::VoxBreath => vm.set_vox_breath(value),
+            Param::VoxClarity => vm.set_vox_clarity(value),
             Param::VoxVibrato => vm.set_vox_vibrato(value),
             Param::VoxModeSel => vm.set_vox_mode(value),
             Param::VoxIntonation => vm.set_vox_intonation(value),
