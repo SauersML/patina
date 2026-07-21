@@ -1,5 +1,6 @@
 use crate::voice::Voice;
 use crate::drums::{DrumMachine, DRUM_CHANNEL};
+use crate::vox::{LyricPhone, VoxBox, VOX_CHANNEL};
 use crate::reverb::Reverb;
 use crate::chorus::{Chorus, ChorusMode};
 use crate::oscillator::{CircuitModel, Waveform, PROGRAM_V};
@@ -105,6 +106,13 @@ pub struct ParamValues {
     pub ch_decay: f32,
     pub oh_decay: f32,
     pub dr_drive: f32,
+    // The voice box's panel (bus-level, like the effects)
+    pub vox_level: f32,
+    pub vox_dry: f32,
+    pub vox_breath: f32,
+    pub vox_vibrato: f32,
+    /// 0 = TalkBox voicing, 1 = full-range vocoder.
+    pub vox_mode: f32,
 }
 
 impl ParamValues {
@@ -213,6 +221,11 @@ impl Default for ParamValues {
             ch_decay: 0.35,
             oh_decay: 0.5,
             dr_drive: 0.0,
+            vox_level: 0.8,
+            vox_dry: 0.0,
+            vox_breath: 0.12,
+            vox_vibrato: 0.25,
+            vox_mode: 0.0,
         }
     }
 }
@@ -242,6 +255,9 @@ pub struct VoiceManager {
     /// The rhythm section: one 909-style analog drum board sharing the
     /// chassis, the output bus, and the effects with the keyboard voices.
     pub drums: DrumMachine,
+    /// The voice box: a formant speech synthesizer driving a channel
+    /// vocoder whose carrier is the vox-channel synth voices.
+    pub vox: VoxBox,
     reverb: Reverb,
     chorus: Chorus,
     tape: Tape,
@@ -282,11 +298,25 @@ pub struct VoiceManager {
 impl VoiceManager {
     pub fn new(sample_rate: f32, num_voices: usize) -> Self {
         let params = ParamValues::default();
+        // The vocoder's carrier patch: the voices a vox track's notes
+        // play. A bright, steady saw stack — the vocoder needs harmonics
+        // to sculpt and a sustain that doesn't sag mid-word. Vox tracks
+        // can still automate any of it (`automate choir.cutoff`).
+        let mut carrier = ParamValues::default();
+        carrier.cutoff = 16000.0;
+        carrier.attack = 0.008;
+        carrier.sustain = 1.0;
+        carrier.release = 0.12;
+        carrier.key_track = 0.0;
+        carrier.sub = 0.3;
+        let mut channel_params = HashMap::new();
+        channel_params.insert(VOX_CHANNEL, carrier);
         Self {
             voices: (0..num_voices)
                 .map(|i| Voice::new(sample_rate, i, num_voices))
                 .collect(),
             drums: DrumMachine::new(sample_rate),
+            vox: VoxBox::new(sample_rate),
             reverb: Reverb::new(sample_rate),
             chorus: Chorus::new(sample_rate),
             tape: Tape::new(sample_rate),
@@ -309,7 +339,7 @@ impl VoiceManager {
             note_counter: 0,
             samples_rendered: 0,
             last_note_on_sample: u64::MAX,
-            channel_params: HashMap::new(),
+            channel_params,
             params,
             scope: VecDeque::with_capacity(SCOPE_LEN),
             gain: params.volume,
@@ -377,6 +407,12 @@ impl VoiceManager {
         if channel == DRUM_CHANNEL {
             self.drums.trigger_note(note, velocity);
             return;
+        }
+        // A vox note both speaks (the modulator articulates a syllable)
+        // and plays: it falls through to ordinary voice allocation, and
+        // those voices become the vocoder's carrier
+        if channel == VOX_CHANNEL {
+            self.vox.note_on(note, velocity);
         }
         self.note_counter += 1;
         let age = self.note_counter;
@@ -458,6 +494,11 @@ impl VoiceManager {
         // gate's falling edge does nothing on the hardware either
         if channel == DRUM_CHANNEL {
             return;
+        }
+        // The voice hears the key lift (last one up speaks the coda);
+        // the carrier voices release normally below
+        if channel == VOX_CHANNEL {
+            self.vox.note_off(note);
         }
         if self.pedal_down {
             if self
@@ -795,6 +836,45 @@ impl VoiceManager {
         self.params.lfo_pwm = depth.clamp(0.0, 0.45);
     }
 
+    // --- The voice box --------------------------------------------------
+
+    /// Queue a syllable for the voice; the next vox note-on sings it.
+    pub fn set_lyric(&mut self, channel: u16, phones: Vec<LyricPhone>) {
+        if channel == VOX_CHANNEL {
+            self.vox.source.set_syllable(phones);
+        }
+    }
+
+    /// Load a recorded modulator (any voice) for the vocoder.
+    pub fn set_vox_wav(&mut self, samples: &[f32], source_rate: u32) {
+        self.vox.set_wav(samples, source_rate);
+    }
+
+    pub fn set_vox_level(&mut self, v: f32) {
+        self.params.vox_level = v.clamp(0.0, 1.0);
+        self.vox.set_level(self.params.vox_level);
+    }
+
+    pub fn set_vox_dry(&mut self, v: f32) {
+        self.params.vox_dry = v.clamp(0.0, 1.0);
+        self.vox.set_dry(self.params.vox_dry);
+    }
+
+    pub fn set_vox_breath(&mut self, v: f32) {
+        self.params.vox_breath = v.clamp(0.0, 1.0);
+        self.vox.source.set_breath(self.params.vox_breath);
+    }
+
+    pub fn set_vox_vibrato(&mut self, v: f32) {
+        self.params.vox_vibrato = v.clamp(0.0, 1.0);
+        self.vox.source.set_vibrato(self.params.vox_vibrato);
+    }
+
+    pub fn set_vox_mode(&mut self, v: f32) {
+        self.params.vox_mode = v.clamp(0.0, 1.0);
+        self.vox.set_mode(crate::vocoder::VocoderMode::from_value(self.params.vox_mode));
+    }
+
     pub fn render_next(&mut self) -> (f32, f32) {
         self.samples_rendered = self.samples_rendered.wrapping_add(1);
         // One shared noise generator distributed to every active voice
@@ -844,6 +924,10 @@ impl VoiceManager {
         // the hardware, and unlike digital silence
         let mut left = 0.0;
         let mut right = 0.0;
+        // Voices on the vox channel never reach the bus directly: they
+        // are the vocoder's carrier, and only what the speech lets
+        // through comes back
+        let mut carrier = 0.0;
         for (i, voice) in self.voices.iter_mut().enumerate() {
             let bleed = deltas[(i + n - 1) % n.max(1)] * CROSSTALK;
             let (l, r) = voice.render_next(
@@ -854,9 +938,20 @@ impl VoiceManager {
                 substrate,
                 bleed,
             );
-            left += l;
-            right += r;
+            if voice.channel() == VOX_CHANNEL {
+                carrier += l + r;
+            } else {
+                left += l;
+                right += r;
+            }
         }
+
+        // The voice box: speech (formant voice or recorded wav) vocoding
+        // the carrier, plus however much raw voice vox_dry lets out. Mono,
+        // center — one mouth.
+        let vox_out = self.vox.process(carrier);
+        left += vox_out;
+        right += vox_out;
 
         // The rhythm section renders on the same bus, in the same volts.
         // It shares everything downstream — summing amp slew, fuzz,

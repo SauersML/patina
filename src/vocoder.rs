@@ -1,0 +1,326 @@
+// The channel vocoder — speech as a control signal for an analog circuit.
+//
+// The lineage runs from Homer Dudley's Bell Labs Voder/Vocoder (1939)
+// through the Sennheiser VSM 201 (1977), the 20-band unit behind Kraftwerk
+// and Herbie Hancock, and the DigiTech Talker's formant-following pedal
+// take on the same idea. The topology is unchanged since Dudley:
+//
+//   modulator ──► analysis filterbank ──► rectifier + RC lag ──┐  (per band)
+//                                                              ▼
+//   carrier ────► synthesis filterbank ──────────────► VCA ──► Σ ──► out
+//
+// Each band of the SPEECH signal measures "how much energy does the mouth
+// put here right now", and that envelope opens a VCA on the same band of
+// the CARRIER — the synth's own oscillators. The instrument talks; the
+// speech never reaches the output at all.
+//
+// Circuit notes, per the VSM 201 service manual's architecture:
+//   - Band filters are 4th-order bandpass (two cascaded 2nd-order
+//     sections) — steep enough that adjacent bands don't smear formants.
+//   - Envelope followers are full-wave rectifiers into an RC lag: ~3 ms
+//     attack so plosives keep their edge, ~20 ms release so speech doesn't
+//     stutter on every glottal pulse.
+//   - The top bands blend a noise generator into the carrier: fricatives
+//     (S, SH, F) are noise in the mouth, and a purely harmonic carrier has
+//     nothing up there to articulate. The VSM 201 does this with its
+//     voiced/unvoiced detector; the Talker just leaks treble noise. We
+//     hand each high band a fixed noise feed and let its own envelope
+//     decide — sibilance appears exactly when the speech has it.
+
+use crate::noise::NoiseSource;
+
+/// Number of channels. The VSM 201 has 20; 16 covers 120 Hz - 7.2 kHz at
+/// just over third-octave spacing, which keeps speech clearly legible.
+const BANDS: usize = 16;
+const F_LO: f32 = 120.0;
+const F_HI: f32 = 7200.0;
+
+/// Per-section Q of the band filters (two sections cascade per band).
+const BAND_Q: f32 = 4.0;
+
+/// The two circuits behind the front-panel switch.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum VocoderMode {
+    /// The '97 DigiTech Talker's "TalkBox" setting: the response of a
+    /// driver-and-tube rig (Heil style) done electronically. The tube
+    /// chokes the lows, the mouth cavity honks the mids around 1-2 kHz,
+    /// little survives past 5 kHz — and the articulation is effectively
+    /// instantaneous, with amp grit on the way out.
+    TalkBox,
+    /// The full-range studio board: every band equal, gentler VCAs.
+    Vocoder,
+}
+
+/// A 2nd-order bandpass section (constant peak gain).
+#[derive(Clone, Copy, Default)]
+struct Bandpass {
+    b0: f32,
+    a1: f32,
+    a2: f32,
+    x1: f32,
+    x2: f32,
+    y1: f32,
+    y2: f32,
+}
+
+impl Bandpass {
+    fn tuned(fc: f32, q: f32, sample_rate: f32) -> Self {
+        let w0 = std::f32::consts::TAU * fc / sample_rate;
+        let alpha = w0.sin() / (2.0 * q);
+        let a0 = 1.0 + alpha;
+        Self {
+            b0: alpha / a0,
+            a1: -2.0 * w0.cos() / a0,
+            a2: (1.0 - alpha) / a0,
+            ..Self::default()
+        }
+    }
+
+    #[inline]
+    fn tick(&mut self, x: f32) -> f32 {
+        // b1 = 0 and b2 = -b0 for the RBJ constant-peak bandpass
+        let y = self.b0 * (x - self.x2) - self.a1 * self.y1 - self.a2 * self.y2;
+        self.x2 = self.x1;
+        self.x1 = x;
+        self.y2 = self.y1;
+        self.y1 = y;
+        y
+    }
+}
+
+struct Channel {
+    fc: f32,
+    analysis: [Bandpass; 2],
+    synthesis: [Bandpass; 2],
+    env: f32,
+    /// How much of this band's carrier feed is the noise bus (fricative
+    /// articulation for the high bands).
+    noise_mix: f32,
+    /// The mode's frequency response, per band (the talk-box tube).
+    weight: f32,
+}
+
+pub struct Vocoder {
+    channels: Vec<Channel>,
+    noise: NoiseSource,
+    sample_rate: f32,
+    attack: f32,
+    release: f32,
+    /// VCA drive and post-gain: the TalkBox mode leans on the amp.
+    drive: f32,
+    makeup: f32,
+}
+
+impl Vocoder {
+    pub fn new(sample_rate: f32) -> Self {
+        let channels = (0..BANDS)
+            .map(|k| {
+                let fc = F_LO * (F_HI / F_LO).powf(k as f32 / (BANDS - 1) as f32);
+                Channel {
+                    fc,
+                    analysis: [Bandpass::tuned(fc, BAND_Q, sample_rate); 2],
+                    synthesis: [Bandpass::tuned(fc, BAND_Q, sample_rate); 2],
+                    env: 0.0,
+                    noise_mix: if fc >= 3500.0 {
+                        0.7
+                    } else if fc >= 2000.0 {
+                        0.25
+                    } else {
+                        0.0
+                    },
+                    weight: 1.0,
+                }
+            })
+            .collect();
+        let mut v = Self {
+            channels,
+            noise: NoiseSource::new(),
+            sample_rate,
+            attack: 0.0,
+            release: 0.0,
+            drive: 1.6,
+            makeup: 2.5,
+        };
+        v.set_mode(VocoderMode::TalkBox);
+        v
+    }
+
+    pub fn set_mode(&mut self, mode: VocoderMode) {
+        let (attack, release) = match mode {
+            // A tube in the mouth articulates at the speed of sound, and
+            // the Talker's tracker was nearly as fast
+            VocoderMode::TalkBox => (0.0015, 0.012),
+            VocoderMode::Vocoder => (0.003, 0.020),
+        };
+        self.attack = 1.0 - (-1.0 / (attack * self.sample_rate)).exp();
+        self.release = 1.0 - (-1.0 / (release * self.sample_rate)).exp();
+        match mode {
+            VocoderMode::TalkBox => {
+                self.drive = 2.6;
+                self.makeup = 2.1;
+            }
+            VocoderMode::Vocoder => {
+                self.drive = 1.6;
+                self.makeup = 2.5;
+            }
+        }
+        for ch in &mut self.channels {
+            ch.weight = match mode {
+                VocoderMode::Vocoder => 1.0,
+                VocoderMode::TalkBox => {
+                    // The tube-and-mouth passband: a broad presence bump
+                    // centered near 1.4 kHz, the driver's lows choked off,
+                    // a steeper shelf past 5 kHz (just enough spit left)
+                    let x = (ch.fc / 1400.0).log2();
+                    let bump = (-0.5 * (x / 1.35) * (x / 1.35)).exp();
+                    let low_choke = if ch.fc < 260.0 { 0.25 } else { 1.0 };
+                    let high_roll = if ch.fc > 5000.0 { 0.3 } else { 1.0 };
+                    (0.1 + 1.5 * bump) * low_choke * high_roll
+                }
+            };
+        }
+    }
+
+    /// One sample through the whole board: `modulator` is the speech
+    /// (unit-level), `carrier` the instrument (program volts). The output
+    /// is in carrier volts — the speech only ever steers.
+    #[inline]
+    pub fn process(&mut self, modulator: f32, carrier: f32) -> f32 {
+        // One noise generator serves every high band, like the shared
+        // avalanche transistor on the voice boards
+        let noise = self.noise.next() * 4.0;
+        let mut out = 0.0;
+        for ch in &mut self.channels {
+            let mut m = modulator;
+            for bp in &mut ch.analysis {
+                m = bp.tick(m);
+            }
+            // Full-wave rectifier into the RC lag
+            let rect = m.abs();
+            let k = if rect > ch.env { self.attack } else { self.release };
+            ch.env += (rect - ch.env) * k;
+
+            let mut c = carrier * (1.0 - ch.noise_mix) + noise * ch.noise_mix;
+            for bp in &mut ch.synthesis {
+                c = bp.tick(c);
+            }
+            // The VCA: an OTA stage, so a hard-driven band saturates softly
+            out += (c * ch.env * ch.weight * self.drive).tanh() * self.makeup;
+        }
+        out
+    }
+
+    /// Sum of the band envelopes — cheap "is anyone talking" telemetry for
+    /// panel meters.
+    pub fn activity(&self) -> f32 {
+        self.channels.iter().map(|c| c.env).sum()
+    }
+}
+
+impl VocoderMode {
+    pub fn from_value(v: f32) -> Self {
+        if v.round() as i32 >= 1 {
+            VocoderMode::Vocoder
+        } else {
+            VocoderMode::TalkBox
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The defining property of a vocoder: a silent modulator mutes the
+    /// carrier completely, and a talking modulator lets it through.
+    #[test]
+    fn modulator_gates_carrier() {
+        let sr = 48000.0;
+        let mut v = Vocoder::new(sr);
+        // Carrier: a loud 110 Hz saw (harmonics across the whole bank)
+        let saw = |n: usize| (((n as f32 * 110.0 / sr) % 1.0) * 2.0 - 1.0) * 5.0;
+
+        // Phase 1: modulator silent
+        let mut quiet = 0.0f32;
+        for n in 0..(sr as usize / 2) {
+            quiet = quiet.max(v.process(0.0, saw(n)).abs());
+        }
+        // Phase 2: modulator = 150 Hz buzz (a voiced "speech" stand-in)
+        let mut loud = 0.0f32;
+        for n in 0..(sr as usize / 2) {
+            let m = if (n as f32 * 150.0 / sr) % 1.0 < 0.5 { 0.5 } else { -0.5 };
+            loud = loud.max(v.process(m, saw(n)).abs());
+        }
+        assert!(quiet < 0.05, "silent modulator must mute the carrier, got {quiet}");
+        assert!(loud > 20.0 * quiet.max(1e-6), "speech should open the VCAs: {loud} vs {quiet}");
+        assert!(loud.is_finite());
+    }
+
+    /// Band selectivity: a modulator tone in one register must open that
+    /// register of the carrier and not the other end of the bank.
+    #[test]
+    fn formants_transfer_to_the_carrier() {
+        let sr = 48000.0;
+        let mut v = Vocoder::new(sr);
+        // Modulator: 400 Hz sine. Carrier: white-ish two-tone rich saw.
+        let mut out = Vec::with_capacity(sr as usize);
+        for n in 0..(sr as usize) {
+            let t = n as f32 / sr;
+            let m = (std::f32::consts::TAU * 400.0 * t).sin() * 0.6;
+            let c = (((t * 110.0) % 1.0) * 2.0 - 1.0) * 5.0;
+            out.push(v.process(m, c));
+        }
+        let goertzel = |freq: f32| -> f32 {
+            let (mut re, mut im) = (0.0f32, 0.0f32);
+            for (i, &s) in out[out.len() / 2..].iter().enumerate() {
+                let a = std::f32::consts::TAU * freq * i as f32 / sr;
+                re += s * a.cos();
+                im += s * a.sin();
+            }
+            (re * re + im * im).sqrt()
+        };
+        // Carrier harmonics near 440 Hz should sound; harmonics near 3 kHz
+        // should stay shut (no modulator energy up there)
+        let low = goertzel(440.0);
+        let high = goertzel(2970.0);
+        assert!(
+            low > 6.0 * high,
+            "400 Hz speech energy must open the low bands only: low={low}, high={high}"
+        );
+    }
+
+    /// TalkBox mode is the tube: compared to the studio vocoder, the
+    /// bottom octave must be choked relative to the mid presence region.
+    #[test]
+    fn talkbox_chokes_the_lows() {
+        let sr = 48000.0;
+        let balance = |mode: VocoderMode| -> f32 {
+            let mut v = Vocoder::new(sr);
+            v.set_mode(mode);
+            let mut out = Vec::with_capacity(sr as usize);
+            for n in 0..(sr as usize) {
+                let t = n as f32 / sr;
+                // Broadband buzz modulator opens every band
+                let m = if (t * 130.0) % 1.0 < 0.5 { 0.5 } else { -0.5 };
+                let c = (((t * 65.0) % 1.0) * 2.0 - 1.0) * 5.0;
+                out.push(v.process(m, c));
+            }
+            let goertzel = |freq: f32| -> f32 {
+                let (mut re, mut im) = (0.0f32, 0.0f32);
+                for (i, &s) in out[out.len() / 2..].iter().enumerate() {
+                    let a = std::f32::consts::TAU * freq * i as f32 / sr;
+                    re += s * a.cos();
+                    im += s * a.sin();
+                }
+                (re * re + im * im).sqrt()
+            };
+            goertzel(130.0) / goertzel(1495.0).max(1e-9)
+        };
+        let talkbox = balance(VocoderMode::TalkBox);
+        let studio = balance(VocoderMode::Vocoder);
+        assert!(
+            talkbox < 0.4 * studio,
+            "the tube should choke lows vs the studio board: talkbox={talkbox}, studio={studio}"
+        );
+    }
+}

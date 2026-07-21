@@ -24,8 +24,10 @@ pub mod song;
 pub mod spring;
 pub mod substrate;
 pub mod tape;
+pub mod vocoder;
 pub mod voice;
 pub mod voice_manager;
+pub mod vox;
 
 #[cfg(feature = "app")]
 pub mod aurora_gpu;

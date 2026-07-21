@@ -102,8 +102,47 @@ where
     }
 }
 
+/// Build a one-track song that just says the phrase: each word is a
+/// dash-joined ARPAbet syllable sung on A2, mostly dry voice with a
+/// whisper of talk-boxed carrier underneath.
+fn say_song(text: &str) -> String {
+    let mut s = String::from(
+        "bpm 60\ngate 0.97\n\
+         automate vox_dry\n0.9\n\
+         automate vox_level\n0.3\n\
+         automate vox_vibrato\n0.15\n\
+         automate reverb_wet\n0.2\n\
+         track say vox vel=0.85\n",
+    );
+    for word in text.split_whitespace() {
+        let n = word.split('-').count();
+        s.push_str(&format!("A2:{:.2}={} R:0.15 ", 0.25 + 0.15 * n as f64, word));
+    }
+    s.push('\n');
+    s
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
+
+    // `patina --say "HH-AH-L-OW W-ER-L-D" [--out say.wav]`: render the
+    // voice box speaking a phrase, no window, no audio device
+    if let Some(text) = args
+        .iter()
+        .position(|a| a == "--say")
+        .and_then(|i| args.get(i + 1))
+    {
+        let out = args
+            .iter()
+            .position(|a| a == "--out")
+            .and_then(|i| args.get(i + 1))
+            .map(String::as_str)
+            .unwrap_or("renders/say.wav");
+        let song = song::parse_song_text(&say_song(text))?;
+        patina::render::render_to_wav(&song, out)?;
+        return Ok(());
+    }
+
     let song_path = args
         .iter()
         .position(|a| a == "--play")

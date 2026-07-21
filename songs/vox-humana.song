@@ -1,0 +1,51 @@
+# Vox Humana — the machine learns to sing.
+#
+# The choir track is a vox track: its chords are the vocoder's CARRIER,
+# and the =lyrics drive the formant voice that articulates them. First
+# verse through the TalkBox circuit ('97 Talker voicing: choked lows,
+# honky mids, instant attack); the last line flips vox_mode to the
+# full-range studio board and lets the breath and vibrato bloom.
+
+bpm 84
+gate 0.9
+
+automate vox_level
+  0.85
+automate vox_breath
+  0.12 R:24 0.3:8@smooth
+automate vox_vibrato
+  0.2 R:24 0.55:10@smooth
+automate vox_mode
+  0 R:26 1
+
+# Tape and room: a slightly tired machine in a real space
+automate tape_wow
+  0.12
+automate tape_age
+  0.3
+automate reverb_wet
+  0.35
+automate reverb_decay
+  0.72
+
+track bass patch=heartbass vel=0.75 len=0.5
+  (A1 . A1 . E2 . A1 . | A1 . A1 . G1 . A1 .)x3
+  (F1 . F1 . C2 . F1 . | G1 . G1 . D2 . G1 .)x1
+  A1:8
+
+track beat kit=909 len=0.5
+  (BD CH CH:0.25 CH:0.25 SD@0.5 CH BD CH | BD CH BD:0.25 CH:0.25 SD@0.6 CH OH@0.4 CH)x4
+  BD:1 . CP@0.8
+
+# The voice. Onsets speak at note-on, vowels ride the chords, codas land
+# on the release. Velocity is the syllable's dynamics.
+track choir vox vel=0.85
+  R:8
+  [A2 E3 A3 C4]:1.5=P-AH [A2 E3 A3 C4]:1.5@0.7=T-IY [A2 E3 A3 C4]:3=N-AH
+  R:2
+  [F2 C3 F3 A3]:1=DH-AH [G2 D3 G3 B3]:2=S-ER [G2 D3 G3 B3]:1@0.7=K-IH-T
+  [A2 E3 A3 C4]:4@0.95=S-IH-NG-Z
+  R:2
+  [F2 C3 F3 A3]:2=AY [F2 C3 F3 A3]:1=AE-M [G2 D3 G3 B3]:1@0.7=DH-AH
+  [A2 E3 A3 C4]:1=M-AH [C3 G3 C4 E4]:2=SH-IY:400
+  [A2 E3 A3 C4 E4]:6@1=IY-N

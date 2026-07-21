@@ -19,6 +19,20 @@
 //                                # (BD SD RS CP CH OH) or GM notes; velocity
 //                                # is the accent bus (@1 = full accent).
 //
+//   track choir vox              # a vox track: notes play the CARRIER
+//     [A2 E3 A3]:2=HH-EH-L-OW    # (the synth chord) while the lyric drives
+//     [F2 C3 F3]:2=W-ER-L-D      # the formant voice through the vocoder.
+//                                # Lyrics are dash-joined ARPAbet phonemes
+//                                # on the note: `=S-IH-NG`. Each phoneme
+//                                # takes optional `:ms` (fixed length, ms)
+//                                # and `@amp`: `=S:200@0.6-IH-NG-Z`.
+//                                # Onsets speak at note-on, the vowel
+//                                # sustains while held (pitch = lowest held
+//                                # note), the coda speaks at note-off.
+//                                # `wav=file.wav` on the track replaces the
+//                                # built-in voice with a recording as the
+//                                # vocoder's modulator (any voice you like).
+//
 // Note-track tokens:
 //   C4  F#3  Eb5  60      note names (C4 = MIDI 60) or raw MIDI numbers
 //   [C4 E4 G4]            chord (notes start and stop together)
@@ -41,6 +55,9 @@
 // use plain sets), detune, cutoff, resonance, drive, saturation, hpf
 // (high-pass cutoff Hz, 16 = off), fuzz (0..1 germanium fuzz), noise
 // (0..1 shared noise into the voices), spring (0..1 spring reverb wet),
+// vox_level (0..1 vocoder into the bus), vox_dry (0..1 raw formant voice),
+// vox_breath (0..1 aspiration), vox_vibrato (0..1 voice vibrato depth),
+// vox_mode (0 = TalkBox tube voicing, 1 = full-range vocoder; plain sets),
 // glide (portamento seconds, 0 = off), sub (0..1 octave-down square),
 // osc2_wave/osc3_wave (0-3), osc2_pitch/osc3_pitch (semitones -24..24),
 // osc2_level/osc3_level (0..1; `waveform` is a macro setting all three
@@ -159,6 +176,14 @@ pub enum Param {
     ChDecay,
     OhDecay,
     DrumDrive,
+    // The voice box (vox.rs): vocoder mix, raw-voice mix, and the two
+    // character knobs of the formant voice
+    VoxLevel,
+    VoxDry,
+    VoxBreath,
+    VoxVibrato,
+    /// 0 = TalkBox ('97 Talker tube voicing), 1 = full-range vocoder.
+    VoxModeSel,
 }
 
 pub(crate) fn waveform_from_value(value: f32) -> Waveform {
@@ -179,6 +204,12 @@ impl Param {
     pub fn from_cc(cc: u8) -> Option<Param> {
         Some(match cc {
             1 => Param::ModWheel,
+            // CC2 is the MIDI breath controller — it belongs to the voice
+            2 => Param::VoxBreath,
+            12 => Param::VoxLevel,
+            13 => Param::VoxDry,
+            14 => Param::VoxVibrato,
+            15 => Param::VoxModeSel,
             // The rhythm section claims the 20-31 general-purpose block
             // plus 52-60 — every 909 knob is a controller away
             20 => Param::BdLevel,
@@ -287,7 +318,10 @@ impl Param {
             | Param::SdSnappy | Param::SdDecay | Param::RsLevel
             | Param::RsTune | Param::CpLevel | Param::CpDecay
             | Param::HhLevel | Param::HhTune | Param::HhMetal
-            | Param::ChDecay | Param::OhDecay | Param::DrumDrive => (0.0, 1.0, Lin),
+            | Param::ChDecay | Param::OhDecay | Param::DrumDrive
+            // The voice box's four knobs are unitless mixes/depths
+            | Param::VoxLevel | Param::VoxDry | Param::VoxBreath
+            | Param::VoxVibrato => (0.0, 1.0, Lin),
             Param::ReverbDecay => (0.0, 0.99, Lin),
             Param::PulseWidth => (0.05, 0.95, Lin),
             Param::Detune => (0.0, 30.0, Lin),
@@ -309,7 +343,7 @@ impl Param {
             Param::ChorusRate => (0.1, 10.0, Log),
             Param::ChorusModeSel => (0.0, 4.0, Step),
             Param::WaveformSel | Param::Osc2Wave | Param::Osc3Wave => (0.0, 3.0, Step),
-            Param::CircuitSel | Param::SyncSel => (0.0, 1.0, Step),
+            Param::CircuitSel | Param::SyncSel | Param::VoxModeSel => (0.0, 1.0, Step),
             Param::UiOctave => (0.0, 8.0, Step),
             Param::PitchBendSemis => (-2.0, 2.0, Lin),
         }
@@ -396,6 +430,11 @@ impl Param {
             "ch_decay" => Param::ChDecay,
             "oh_decay" => Param::OhDecay,
             "dr_drive" => Param::DrumDrive,
+            "vox_level" => Param::VoxLevel,
+            "vox_dry" => Param::VoxDry,
+            "vox_breath" => Param::VoxBreath,
+            "vox_vibrato" => Param::VoxVibrato,
+            "vox_mode" => Param::VoxModeSel,
             _ => return None,
         })
     }
@@ -492,6 +531,11 @@ impl Param {
             Param::ChDecay => vm.set_ch_decay(value),
             Param::OhDecay => vm.set_oh_decay(value),
             Param::DrumDrive => vm.set_drum_drive(value),
+            Param::VoxLevel => vm.set_vox_level(value),
+            Param::VoxDry => vm.set_vox_dry(value),
+            Param::VoxBreath => vm.set_vox_breath(value),
+            Param::VoxVibrato => vm.set_vox_vibrato(value),
+            Param::VoxModeSel => vm.set_vox_mode(value),
         }
     }
 
@@ -623,6 +667,8 @@ pub enum EventKind {
     NoteOn { note: u8, velocity: f32, channel: u16 },
     NoteOff { note: u8, channel: u16 },
     Param { param: Param, value: f32, channel: u16 },
+    /// A syllable for the voice box, landing just before its note-on.
+    Lyric { phones: Vec<crate::vox::LyricPhone>, channel: u16 },
 }
 
 pub struct SongEvent {
@@ -635,6 +681,9 @@ pub struct SongEvent {
 pub struct Song {
     pub events: Vec<SongEvent>,
     pub channels: Vec<ParamValues>,
+    /// A recorded vocoder modulator (`wav=` on a vox track): mono samples
+    /// and their source rate, resampled by the engine on registration.
+    pub vox_wav: Option<(Vec<f32>, u32)>,
 }
 
 pub fn load_song(path: &str) -> Result<Song, String> {
@@ -643,19 +692,30 @@ pub fn load_song(path: &str) -> Result<Song, String> {
     parse_song(&text)
 }
 
+/// Parse song text directly (the `--say` builder and tests use this).
+pub fn parse_song_text(text: &str) -> Result<Song, String> {
+    parse_song(text)
+}
+
 fn dispatch(vm: &mut VoiceManager, kind: &EventKind) {
-    match *kind {
-        EventKind::NoteOn { note, velocity, channel } => {
+    match kind {
+        &EventKind::NoteOn { note, velocity, channel } => {
             vm.note_on_channel(note, velocity, channel)
         }
-        EventKind::NoteOff { note, channel } => vm.note_off_channel(note, channel),
-        EventKind::Param { param, value, channel } => vm.set_channel_param(channel, param, value),
+        &EventKind::NoteOff { note, channel } => vm.note_off_channel(note, channel),
+        &EventKind::Param { param, value, channel } => {
+            vm.set_channel_param(channel, param, value)
+        }
+        EventKind::Lyric { phones, channel } => vm.set_lyric(*channel, phones.clone()),
     }
 }
 
 fn register_channels(vm: &mut VoiceManager, song: &Song) {
     for (i, p) in song.channels.iter().enumerate() {
         vm.set_channel_params((i + 1) as u16, *p);
+    }
+    if let Some((samples, rate)) = &song.vox_wav {
+        vm.set_vox_wav(samples, *rate);
     }
 }
 
@@ -718,6 +778,7 @@ fn parse_song(text: &str) -> Result<Song, String> {
     // Per-track patches: channel N+1 = channels[N]; channel 0 = the panel
     let mut channels: Vec<ParamValues> = Vec::new();
     let mut track_channels: Vec<(String, u16)> = Vec::new();
+    let mut vox_wav: Option<(Vec<f32>, u32)> = None;
 
     let mut mode = TrackMode::None;
     let mut track_beat = 0.0_f64;
@@ -760,6 +821,15 @@ fn parse_song(text: &str) -> Result<Song, String> {
                         // A drum track: notes route to the rhythm section
                         // (there is one board, so no per-track patches here)
                         channel = crate::drums::DRUM_CHANNEL;
+                    } else if opt == "vox" {
+                        // The voice box: notes play the vocoder's carrier,
+                        // `=lyric` suffixes drive the formant voice
+                        channel = crate::vox::VOX_CHANNEL;
+                    } else if let Some(v) = opt.strip_prefix("wav=") {
+                        // A recorded modulator for the vocoder, instead of
+                        // the built-in formant voice
+                        vox_wav = Some(crate::vox::load_wav_mono(v).map_err(err)?);
+                        channel = crate::vox::VOX_CHANNEL;
                     } else if let Some(v) = opt.strip_prefix("patch=") {
                         // A private patch for this track: the file's
                         // voice-level parameters become this channel
@@ -821,8 +891,36 @@ fn parse_song(text: &str) -> Result<Song, String> {
                                 .map_err(|_| err(format!("invalid seek '{}'", token)))?;
                             continue;
                         }
+                        // `=lyric` rides the note it belongs to; split it
+                        // off before note parsing (phoneme durations use
+                        // ':' and '@' of their own)
+                        let (token, lyric) = match token.rfind('=') {
+                            Some(i) => (token[..i].to_string(), Some(&token[i + 1..])),
+                            None => (token.clone(), None),
+                        };
                         let (notes, dur, vel) = parse_note_token(&token, vel, len, drums)
                             .map_err(|m| err(format!("token '{}': {}", token, m)))?;
+                        if let Some(lyric) = lyric {
+                            if channel != crate::vox::VOX_CHANNEL {
+                                return Err(err(format!(
+                                    "token '{}': lyrics need a vox track (add `vox` to the track line)",
+                                    token
+                                )));
+                            }
+                            if notes.is_empty() {
+                                return Err(err(format!(
+                                    "token '{}': a lyric needs a note to ride on, not a rest",
+                                    token
+                                )));
+                            }
+                            let phones = crate::vox::parse_lyric(lyric)
+                                .map_err(|m| err(format!("token '{}': {}", token, m)))?;
+                            events.push((
+                                track_beat,
+                                1,
+                                EventKind::Lyric { phones, channel },
+                            ));
+                        }
                         let off_beat = track_beat + dur * gate;
                         for &note in &notes {
                             events.push((
@@ -895,6 +993,7 @@ fn parse_song(text: &str) -> Result<Song, String> {
             .map(|(beats, _, kind)| SongEvent { time: beats * secs_per_beat, kind })
             .collect(),
         channels,
+        vox_wav,
     })
 }
 
@@ -1215,9 +1314,72 @@ mod tests {
         assert!(parse_song("automate cutoff\n400 800:4@bounce\n").is_err());
     }
 
+    /// Vox tracks: `vox` routes notes to the voice channel, `=lyric`
+    /// suffixes emit Lyric events just before their note-ons, and the
+    /// whole path — DSL to voice box to vocoder to bus — makes sound.
+    #[test]
+    fn vox_tracks_sing() {
+        use crate::vox::{Phoneme, VOX_CHANNEL};
+        let song = parse_song(
+            "bpm 120\n\
+             track choir vox vel=0.9\n\
+             [A2 E3]:2=HH-EH R:1 A2:1=S-IH-NG-Z:200@0.8\n",
+        )
+        .unwrap();
+        let lyrics: Vec<_> = song
+            .events
+            .iter()
+            .filter_map(|e| match &e.kind {
+                EventKind::Lyric { phones, channel } => Some((e.time, phones, *channel)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lyrics.len(), 2);
+        assert_eq!(lyrics[0].2, VOX_CHANNEL);
+        assert_eq!(lyrics[0].1[0].ph, Phoneme::HH);
+        assert_eq!(lyrics[0].1[1].ph, Phoneme::EH);
+        // per-phoneme overrides survive the trip
+        let z = lyrics[1].1.last().unwrap();
+        assert_eq!(z.ph, Phoneme::Z);
+        assert_eq!(z.ms, Some(200.0));
+        assert!((z.amp - 0.8).abs() < 1e-6);
+        // the lyric lands with (just before) its note-on
+        let first_on = song
+            .events
+            .iter()
+            .find(|e| matches!(e.kind, EventKind::NoteOn { .. }))
+            .unwrap();
+        assert_eq!(lyrics[0].0, first_on.time);
+        assert!(matches!(first_on.kind, EventKind::NoteOn { channel, .. } if channel == VOX_CHANNEL));
+
+        // lyric grammar errors
+        assert!(parse_song("bpm 120\ntrack a\nC4=AA\n").is_err(), "lyrics need a vox track");
+        assert!(parse_song("bpm 120\ntrack a vox\nR:2=AA\n").is_err(), "no lyric on a rest");
+        assert!(parse_song("bpm 120\ntrack a vox\nC4=QX\n").is_err(), "unknown phoneme");
+    }
+
+    /// The full render path: a vox chord singing a vowel must be audible
+    /// through the offline bounce (voice -> vocoder -> bus -> effects).
+    #[test]
+    fn vox_song_renders_audibly() {
+        let song = parse_song(
+            "bpm 120\n\
+             track choir vox\n\
+             [A2 E3 A3]:6=AA\n",
+        )
+        .unwrap();
+        let frames = render_offline(&song, 48000.0);
+        let peak = frames
+            .iter()
+            .fold(0.0f32, |a, &(l, r)| a.max(l.abs()).max(r.abs()));
+        assert!(peak > 0.05, "the choir should be audible, peak={peak}");
+        assert!(frames.iter().all(|&(l, r)| l.is_finite() && r.is_finite()));
+    }
+
     #[test]
     fn bundled_songs_parse() {
         for text in [
+            include_str!("../songs/vox-humana.song"),
             include_str!("../songs/ferris-wheel.song"),
             include_str!("../songs/grid-runner.song"),
             include_str!("../songs/tide-engine.song"),
@@ -1395,15 +1557,7 @@ mod tests {
         .unwrap();
         let mut vm = VoiceManager::new(48000.0, 4);
         for e in &song.events {
-            match e.kind {
-                EventKind::NoteOn { note, velocity, channel } => {
-                    vm.note_on_channel(note, velocity, channel)
-                }
-                EventKind::NoteOff { note, channel } => vm.note_off_channel(note, channel),
-                EventKind::Param { param, value, channel } => {
-                    vm.set_channel_param(channel, param, value)
-                }
-            }
+            dispatch(&mut vm, &e.kind);
         }
         assert!(
             (vm.params.bd_drive - 0.9).abs() < 1e-3,
