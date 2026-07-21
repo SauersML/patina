@@ -12,22 +12,21 @@
 # tenderness lives in the middle of it; Venetian Snares' 7/8 violence is
 # where the process ends up when nobody stops it.
 #
-# Second weaving. The first draft rolled dice every bar, and uniform
-# randomness reads as gray: nothing repeats exactly, so nothing means
-# anything. This version composes in PHRASES:
-#   - patterns (kick, ghosts, hats, the acid riff) are chosen once per
-#     8-bar phrase, repeated as riffs, and mutated only at phrase ends —
-#     repetition is what makes the mutations land
-#   - every phrase has a dynamic arc (gain crescendos, breath bars,
-#     whole cycles with no kick) — loudness moves at three timescales:
-#     hit, phrase, section
-#   - the snare is punctuation, not weather: ghosts live at fixed low-
-#     velocity spots near the backbeat, rolls happen at phrase ends
-#     (with reverb THROWS — the send is played, not set), blasts are
-#     saved for the frenzy's last quarter
-#   - pitch never sits still: the kick whispers the theme root into
-#     each drill phrase (bd_tune), snare-tune bases shift per phrase,
-#     rim tune and hat tune drift slowly across whole sections
+# Third weaving. What changed:
+#   - the drum melody is now WRITING, not a trick: the kick states the
+#     theme, the snare (snap killed, sd_tune played per-note) answers
+#     with a composed counter-line, then follows in canon at one pulse.
+#     The snare VOICE then morphs into the drill's backbeat — sd_snappy
+#     ramps open across four bars and the singer becomes the drummer.
+#     In the drill the kick keeps singing: every hit cycles the theme's
+#     pitches through bd_tune. The afterimage is the duet, augmented.
+#   - filters and effects carry dynamics: the acid's cutoff saw-tooths
+#     per phrase (reset dark at each door, opened across it), the pad
+#     blooms over the whole speech, the lead's filter swells into every
+#     sung phrase like breath, spring reverb spikes on the stomp's one
+#     big hit, tape drive leans in across the frenzy
+#   - shorter (148 bars, ~2:45), and every section moves somewhere:
+#     nothing sits still without a reason
 #
 # Deterministic: same seed, same song.  python3 scripts/drums_for_laurie.py
 # writes songs/drums-for-laurie.song.
@@ -98,8 +97,12 @@ class Auto:
 THEME = [(0, 57), (2, 60), (3, 64), (5, 62), (6, 59),
          (7, 55), (9, 57), (10, 60), (11, 59), (12, 57)]
 
-def kick_tune(midi):
-    """Map the theme's register onto the bd_tune knob: contour, not pitch."""
+# The counter-line: written against the theme's gaps, contrary where the
+# theme rises, consonant where they sound together. E4 G3 B3 D4 E4.
+COUNTER = [(1, 64), (4, 55), (8, 59), (11, 62), (13, 64)]
+
+def tune_of(midi):
+    """Map the drum choir's register onto a tune knob: contour, not pitch."""
     return round(0.16 + (midi - 55) / 9.0 * 0.52, 3)
 
 AMIN = [57, 59, 60, 62, 64, 65, 67]  # one octave of A natural minor
@@ -123,14 +126,14 @@ def scale_near(midi, step):
 
 # ---------------------------------------------------------------- sections
 #   bars      section
-#   0-16      LOOM        the kick sings the theme alone; the clock starts
-#   16-40     ACCUMULATE  one thread every four bars; the process thickens
-#   40-80     TORRENT     five phrases, each with its own posture
-#   80-112    SPEECH      four cycles; the second holds its breath
-#   112-160   FRENZY      rebuild, stomp, drill, blasts — then the tear
-#   160-192   AFTERIMAGE  half-speed theme; the clock outlives the song
+#   0-12      LOOM        theme plain, then diminished, then two voices
+#   12-28     ACCUMULATE  canon; the singer becomes the drummer
+#   28-60     TORRENT     enter / commit / stomp / weave / four-bar rise
+#   60-84     SPEECH      walk / hold breath / gather — E7's G#
+#   84-124    FRENZY      rebuild / commit / stomp / press / blasts / tear
+#   124-148   AFTERIMAGE  the duet in augmentation; the clock last
 
-A0, B0, C0, D0, E0, F0, END = 0, 16, 40, 80, 112, 160, 192
+A0, B0, C0, D0, E0, F0, END = 0, 12, 28, 60, 84, 124, 148
 
 def bb(bar_idx):
     return bar_idx * BAR
@@ -147,13 +150,14 @@ pad   = Track("track pad patch=dreampad vel=0.45 len=1")
 bell  = Track("track bell patch=glintbell vel=0.6 len=0.5")
 drone = Track("track drone patch=drone vel=0.5 len=1")
 
-a_bd_tune  = Auto("bd_tune", kick_tune(57))
+a_bd_tune  = Auto("bd_tune", tune_of(57))
 a_bd_decay = Auto("bd_decay", 0.8)
 a_bd_att   = Auto("bd_attack", 0.35)
 a_bd_drive = Auto("bd_drive", 0.12)
 a_sd_tune  = Auto("sd_tune", 0.42)
-a_sd_snap  = Auto("sd_snappy", 0.55)
-a_sd_level = Auto("sd_level", 0.6)
+a_sd_snap  = Auto("sd_snappy", 0.12)   # snap killed: the snare is a VOICE
+a_sd_tone  = Auto("sd_tone", 0.32)
+a_sd_level = Auto("sd_level", 0.55)
 a_hh_level = Auto("hh_level", 0.5)
 a_hh_tune  = Auto("hh_tune", 0.5)
 a_rs_tune  = Auto("rs_tune", 0.42)
@@ -161,63 +165,74 @@ a_oh_dec   = Auto("oh_decay", 0.35)
 a_drum_drv = Auto("dr_drive", 0.05)
 a_fuzz     = Auto("fuzz", 0.0)
 a_wow      = Auto("tape_wow", 0.5)
+a_tape_drv = Auto("tape_drive", 0.28)
 a_spring   = Auto("spring", 0.08)
 a_rev_wet  = Auto("reverb_wet", 0.16)
+a_chorus   = Auto("chorus_mode", 0)
 # The master volume is played, not set: Spiegel's hand-drawn control
 # line over the whole form — the loudness arc IS one of the voices.
 a_volume   = Auto("volume", 0.6)
 a_bend     = Auto("bend", 0.0)
 a_bass_cut = Auto("bass.cutoff", 340)
 a_bass_res = Auto("bass.resonance", 1.15)
+a_lead_cut = Auto("lead.cutoff", 2200)
+a_pad_cut  = Auto("pad.cutoff", 900)
 
 def throw(beat, wet=0.4, hold=1.5):
     """A dub throw: the reverb send opens for one gesture, then shuts."""
     a_rev_wet.set(beat, wet)
     a_rev_wet.set(beat + hold, 0.16)
 
-# ------------------------------------------------ the kick sings (A, B, F)
+# ------------------------------------------------ the drum choir (A, B, F)
 
-def kick_theme_bars(first_bar, n_bars, vel=0.6, half_speed=False,
-                    heartbeat=False, vary=False):
-    """The theme on the kick drum, bd_tune set note-by-note. Velocity
-    follows the contour the way a hand would; every 4 bars the statement
-    changes posture (full / sparse / full / lifted) when vary is on."""
-    stretch = 2 if half_speed else 1
+def voice_bars(track, drum, tune_auto, line, first_bar, n_bars, vel,
+               stretch=1, ornament_p=0.0, delay=0, heartbeat=False):
+    """A melodic line played by one drum of the choir: tune set per note,
+    velocity following the contour, passing 16ths added with probability
+    ornament_p (the additive process — the line grows notes over time)."""
     phrase_pulses = 14 * stretch
     for bar in range(first_bar, first_bar + n_bars):
         t0 = bb(bar)
-        mode = "full"
-        if vary:
-            mode = ("full", "sparse", "full", "lift")[((bar - first_bar) // 4) % 4]
+        p0 = ((bar - first_bar) * 7) % phrase_pulses
+        hits = []
+        for pulse, midi in line:
+            p = pulse * stretch + delay - p0
+            if 0 <= p < 7:
+                hits.append((float(p), midi))
+        if heartbeat:
+            hits.append((3.5, None))
+        hits.sort(key=lambda h: h[0])
+        ev = []  # (pulse, midi_or_None, is_ornament)
+        for idx, (p, midi) in enumerate(hits):
+            ev.append((p, midi, False))
+            if midi is None or not ornament_p or idx + 1 >= len(hits):
+                continue
+            np_, nm = hits[idx + 1]
+            if nm is not None and np_ - p >= 1.0 and R.random() < ornament_p:
+                passing = scale_near(midi, 1 if nm > midi else -1)
+                ev.append((np_ - 0.5, passing, True))
+        ev.sort(key=lambda e: e[0])
         toks = []
         cur = 0.0
-        phrase_pulse0 = ((bar - first_bar) * 7) % phrase_pulses
-        hits = []
-        for pulse, midi in THEME:
-            p = pulse * stretch - phrase_pulse0
-            if 0 <= p < 7:
-                hits.append((p * PULSE, midi))
-        if heartbeat:
-            hits.append((3.5 * PULSE, None))
-            hits.sort()
-        for at, midi in hits:
-            if mode == "sparse" and at > 0.0 and midi is not None \
-                    and R.random() < 0.35:
-                continue
+        for p, midi, orn in ev:
+            at = p * PULSE
             if at > cur + 1e-9:
                 toks.append(f"R:{fmt(at - cur)}")
                 cur = at
+            elif at < cur - 1e-9:
+                continue
             if midi is not None:
-                tune = kick_tune(midi) + (0.12 if mode == "lift" else 0.0)
-                a_bd_tune.set(t0 + at, min(0.78, tune))
-                v = vel + (midi - 59) * 0.012 + (0.08 if at == 0.0 else 0.0)
+                tune_auto.set(t0 + at, tune_of(midi))
+                v = vel + (midi - 59) * 0.012 + (0.08 if p == 0.0 else 0.0)
+                if orn:
+                    v *= 0.65
                 v = jit(v, 0.03)
             else:
-                a_bd_tune.set(t0 + at, 0.18)
+                tune_auto.set(t0 + at, 0.18)
                 v = jit(vel - 0.2, 0.03)
-            toks.append(f"BD:0.25@{v:.2f}")
+            toks.append(f"{drum}:0.25@{v:.2f}")
             cur += 0.25
-        kick.bar(t0, toks)
+        track.bar(t0, toks)
 
 # ------------------------------------------------ the clock (whole piece)
 
@@ -294,29 +309,36 @@ def make_acid_riff(root, oct_shift, dens, v):
             riff.append((s, m + oct_shift, False))
     return riff
 
-WHISPER = [57, 60, 64, 62, 59, 55]  # theme pitches the drill kick borrows
-_whisper_i = 0
+# Even in the drill the kick keeps singing: every hit takes the next
+# theme pitch, scaled down into drum range — melody as an undertow.
+MELODIC = [m for _, m in THEME]
+_mk_i = 0
+
+def next_kick_tune(depth=0.3):
+    global _mk_i
+    m = MELODIC[_mk_i % len(MELODIC)]
+    _mk_i += 1
+    return round(0.12 + tune_of(m) * depth, 3)
 
 def drill_phrase(first_bar, n_bars, v=(0.5, 0.6), gain=(0.9, 1.0), root=45,
                  style="drill", acid_oct=0, acid_dens=1.0, sd_base=0.42,
                  hats_on=True, ghosts_n=1, end="roll_up", breaths=(),
-                 blasts=None, washes=(), acid_on=True):
-    """One 8-bar phrase: patterns fixed at the door, dynamics arced
-    across it, mutation only in the last bar."""
-    global _whisper_i
+                 blasts=None, washes=(), acid_on=True, cut=None):
+    """One phrase: patterns fixed at the door, dynamics arced across it,
+    mutation only in the last bar. cut=(from,to) saw-tooths the acid's
+    filter across the phrase — reset dark, opened wide."""
     blasts = blasts or {}
     t_start = bb(first_bar)
 
-    # the phrase's identity, chosen once
     kick_pat = make_kick_pat(style, v[1])
     ghost_steps = R.sample([3, 5, 9, 11, 13], ghosts_n) if ghosts_n else []
     hat_rot = R.randrange(N16)
     oh_step = R.choice([7, 13])
     riff = make_acid_riff(root, acid_oct, acid_dens, v[1]) if acid_on else []
     a_sd_tune.set(t_start, sd_base)
-    # the kick whispers the theme into the drill, one root per phrase
-    a_bd_tune.set(t_start, kick_tune(WHISPER[_whisper_i % len(WHISPER)]) * 0.55)
-    _whisper_i += 1
+    if cut:
+        a_bass_cut.set(t_start, cut[0])
+        a_bass_cut.ramp(t_start, cut[1], n_bars * BAR, "exp")
 
     for i in range(n_bars):
         bar = first_bar + i
@@ -327,6 +349,7 @@ def drill_phrase(first_bar, n_bars, v=(0.5, 0.6), gain=(0.9, 1.0), root=45,
         last = i == n_bars - 1
 
         if i in breaths:   # the loom inhales: clock keeps turning, one kick
+            a_bd_tune.set(t0, next_kick_tune())
             kick.bar(t0, [f"BD:0.25@{g(0.8, gn):.2f}"])
             continue
 
@@ -336,11 +359,12 @@ def drill_phrase(first_bar, n_bars, v=(0.5, 0.6), gain=(0.9, 1.0), root=45,
             ev = roll(t0, 0.0, BAR, n, 0.7 * gn,
                       0.2 if up else 0.85, 0.9 if up else 0.18, sd_base)
             steps_to_tokens(snare, t0, ev)
+            a_bd_tune.set(t0, next_kick_tune())
             kick.bar(t0, [f"BD:0.25@{g(0.95, gn):.2f}",
                           f"R:{fmt(BAR - 0.5)}", f"BD:0.25@{g(0.9, gn):.2f}"])
             continue
 
-        # --- kick: the phrase's riff, mutated only in the last bar
+        # --- kick: the phrase's riff, every hit singing the next theme pitch
         pat = set(kick_pat)
         if last and style != "halftime":
             c = R.choice([3, 5, 8, 11, 12])
@@ -352,6 +376,8 @@ def drill_phrase(first_bar, n_bars, v=(0.5, 0.6), gain=(0.9, 1.0), root=45,
                 base = 1.0 if s == 0 else 0.85
             else:
                 base = 0.95 if s == 0 else (0.82 if s in (6, 10) else 0.68)
+            a_bd_tune.set(t0 + s * S16, next_kick_tune(
+                0.25 if style == "halftime" else 0.3))
             if style == "drill" and s != 0 and R.random() < 0.08 * vv:
                 for k3 in range(3):
                     kev.append((s * S16 + k3 * S16 / 3, S16 / 3, "BD",
@@ -377,6 +403,8 @@ def drill_phrase(first_bar, n_bars, v=(0.5, 0.6), gain=(0.9, 1.0), root=45,
                 sev = [e for e in sev if e[0] < 12 * S16 - 1e-9]
                 sev.append((12 * S16, 2 * S16, "SD", g(0.95, gn)))
                 throw(t0 + 12 * S16, 0.45, 2.0)
+                a_spring.set(t0 + 12 * S16, 0.3)   # the stomp's hit boings
+                a_spring.set(t0 + 12 * S16 + 2.0, 0.08)
             else:
                 up = end == "roll_up"
                 span = 3 * S16
@@ -442,35 +470,56 @@ def drill_phrase(first_bar, n_bars, v=(0.5, 0.6), gain=(0.9, 1.0), root=45,
             bass.bar(t0, toks)
 
 # ---------------------------------------------------------------- A: LOOM
+# Three postures, four bars each: plain / diminished / two voices.
 
-kick_theme_bars(A0, 16, vel=0.58)
-clock_bars(4, 12, vel=0.36)         # the thread, alone: let it be heard
-clock_bars(16, END - 8 - 16)        # ...then woven under, to bar 184
+voice_bars(kick, "BD", a_bd_tune, THEME, A0, 4, vel=0.58)
+voice_bars(kick, "BD", a_bd_tune, THEME, A0 + 4, 4, vel=0.6, ornament_p=0.45)
+voice_bars(kick, "BD", a_bd_tune, THEME, A0 + 8, 4, vel=0.62, ornament_p=0.3)
+voice_bars(snare, "SD", a_sd_tune, COUNTER, A0 + 8, 4, vel=0.38)
+
+clock_bars(4, 8, vel=0.36)          # the thread, alone: let it be heard
+clock_bars(B0, END - 8 - B0)        # ...then woven under, to bar 140
 
 a_wow.ramp(0.0, 0.12, 8 * BAR, "exp")
 a_wow.set(bb(B0), 0.09)
-a_volume.ramp(0.0, 0.7, 16 * BAR)
-a_volume.ramp(bb(B0), 0.78, 24 * BAR)
+a_volume.ramp(0.0, 0.7, 12 * BAR)
+a_volume.ramp(bb(B0), 0.8, 16 * BAR)
 a_volume.set(bb(E0), 0.82)
-a_volume.ramp(bb(E0), 1.0, 40 * BAR)
+a_volume.ramp(bb(E0), 1.0, 32 * BAR)
 a_volume.set(bb(F0), 0.6)
 
-# first whispers: a ghost snare finds the loom in the dark, sometimes
-for bar in range(10, 36):
-    if R.random() < 0.55:
-        t0 = bb(bar)
-        s = R.choice([3, 5, 9, 11, 13])
-        snare.lines.append(f">{fmt(t0 + s * S16)} SD:0.25@{jit(0.1, 0.03):.2f}")
-
 # ---------------------------------------------------------- B: ACCUMULATE
+# The theme in canon with itself; then the singer becomes the drummer.
 
-kick_theme_bars(B0, 8, vel=0.58, vary=True)
-kick_theme_bars(B0 + 8, 16, vel=0.62, heartbeat=True, vary=True)
-
-# hat density is the accumulation made audible: k climbs 3 -> 11
-for bar in range(B0 - 4, C0):
+# canon: the snare voice follows the kick one pulse behind, ornaments grow
+voice_bars(kick, "BD", a_bd_tune, THEME, B0, 8, vel=0.56, ornament_p=0.25)
+voice_bars(snare, "SD", a_sd_tune, THEME, B0, 8, vel=0.26, delay=1)
+# second statement: counter-line proper, heartbeat under, more ornaments
+voice_bars(kick, "BD", a_bd_tune, THEME, B0 + 8, 4, vel=0.58,
+           ornament_p=0.45, heartbeat=True)
+voice_bars(snare, "SD", a_sd_tune, COUNTER, B0 + 8, 4, vel=0.38)
+# the morph: same kick line, but the snare's snap opens — the voice
+# becomes a drum over four bars, landing as the drill's backbeat
+voice_bars(kick, "BD", a_bd_tune, THEME, B0 + 12, 4, vel=0.6,
+           ornament_p=0.55, heartbeat=True)
+a_sd_snap.ramp(bb(B0 + 12), 0.68, 4 * BAR)
+a_sd_tone.ramp(bb(B0 + 12), 0.45, 4 * BAR)
+a_sd_tune.set(bb(B0 + 12), 0.42)
+for bar in range(B0 + 12, C0):
     t0 = bb(bar)
-    k = min(9, 3 + max(0, bar - (B0 - 4)) // 4 * 2)
+    v = 0.35 + 0.25 * (bar - B0 - 12) / 4
+    snare.bar(t0, [f"R:{fmt(10 * S16)}", f"SD:0.25@{jit(v, 0.03):.2f}"])
+for bar, nroll in ((C0 - 2, 4), (C0 - 1, 6)):
+    t0 = bb(bar)
+    for at, d, nme, vv2 in roll(t0, 11 * S16, 3 * S16, nroll,
+                                0.4 + 0.15 * (bar - C0 + 2), 0.3, 0.7, 0.42):
+        snare.lines.append(f">{fmt(t0 + at)} {nme}:{fmt(d)}@{vv2:.2f}")
+throw(bb(C0 - 1) + 11 * S16, 0.4, 1.5)
+
+# hat density is the accumulation made audible: k climbs 3 -> 9
+for bar in range(B0 - 2, C0):
+    t0 = bb(bar)
+    k = min(9, 3 + max(0, bar - (B0 - 2)) // 3 * 2)
     pat = euclid(k, N16, rot=(bar * 5) % N16)
     toks = []
     cur = 0.0
@@ -481,16 +530,16 @@ for bar in range(B0 - 4, C0):
                 toks.append(f"R:{fmt(at - cur)}")
                 cur = at
             strong = i in (0, 6, 10)
-            toks.append(f"CH:0.25@{jit(0.32 if strong else 0.18, 0.05):.2f}")
+            toks.append(f"CH:0.25@{jit(0.28 if strong else 0.16, 0.05):.2f}")
             cur += 0.25
     hats.bar(t0, toks)
 
 # the drone under the loom
-for bar in range(B0, C0, 4):
+for bar in range(B0 + 4, C0, 4):
     drone.bar(bb(bar), [f"{nn(33)}:{fmt(4 * BAR * 0.96)}@0.4"])
 
-# acid murmurs: fragments of the theme's floor, half asleep
-for bar in range(28, C0):
+# acid murmurs, waking: the filter opens audibly across eight bars
+for bar in range(B0 + 8, C0):
     t0 = bb(bar)
     toks = []
     cur = 0.0
@@ -503,59 +552,54 @@ for bar in range(28, C0):
         toks.append(f"{nn(m)}:0.25@{jit(0.45, 0.05):.2f}")
         cur += 0.25
     bass.bar(t0, toks)
+a_bass_cut.ramp(bb(B0 + 8), 950, 8 * BAR, "exp")
 
-# the backbeat learns to stand: one limb first, quietly
-for bar in range(32, C0):
-    t0 = bb(bar)
-    v = 0.28 + 0.2 * (bar - 32) / (C0 - 32)
-    snare.bar(t0, [f"R:{fmt(10 * S16)}", f"SD:0.25@{jit(v, 0.03):.2f}"])
-    if bar in (35, 39):
-        for at, d, nme, vv2 in roll(t0, 12 * S16, 2 * S16, 3, 0.4,
-                                    0.3, 0.6, 0.42):
-            snare.lines.append(f">{fmt(t0 + at)} {nme}:{fmt(d)}@{vv2:.2f}")
-
-a_drum_drv.ramp(bb(32), 0.18, 8 * BAR)
-a_bass_cut.ramp(bb(28), 520, 12 * BAR, "exp")
+a_drum_drv.ramp(bb(B0 + 8), 0.2, 8 * BAR)
 
 # the loom tightens for the drill: kick becomes a drum, not a voice
 a_bd_decay.ramp(bb(C0 - 1), 0.52, BAR)
 a_bd_att.set(bb(C0), 0.55)
-a_sd_snap.set(bb(C0), 0.68)
 a_sd_level.set(bb(C0), 0.66)
 a_hh_level.set(bb(C0), 0.56)
 a_wow.set(bb(C0), 0.06)
 
 # ------------------------------------------------------------- C: TORRENT
-# Five phrases, five postures: enter / commit / stomp / weave / peak.
+# enter (4) / commit (8) / stomp (8) / weave (8) / the four-bar rise.
 
-drill_phrase(C0, 8, v=(0.3, 0.4), gain=(0.75, 0.9), style="entry",
+drill_phrase(C0, 4, v=(0.32, 0.42), gain=(0.78, 0.9), style="entry",
              hats_on=False, ghosts_n=0, sd_base=0.38, acid_dens=0.7,
-             end="roll_up", breaths={6})
-drill_phrase(C0 + 8, 8, v=(0.4, 0.55), gain=(0.9, 1.05), style="drill",
-             ghosts_n=1, sd_base=0.42, end="roll_up")
-drill_phrase(C0 + 16, 8, v=(0.5, 0.5), gain=(1.0, 1.0), style="halftime",
+             end="roll_up", cut=(500, 750))
+drill_phrase(C0 + 4, 8, v=(0.42, 0.58), gain=(0.9, 1.05), style="drill",
+             ghosts_n=1, sd_base=0.42, end="roll_up", cut=(600, 1200))
+drill_phrase(C0 + 12, 8, v=(0.5, 0.5), gain=(1.0, 1.0), style="halftime",
              root=41, acid_oct=-12, acid_dens=0.5, sd_base=0.5,
-             ghosts_n=0, end="big", breaths={7})
-drill_phrase(C0 + 24, 8, v=(0.5, 0.62), gain=(0.9, 1.05), style="drill",
-             ghosts_n=2, sd_base=0.4, washes={5}, end="roll_down")
-drill_phrase(C0 + 32, 7, v=(0.6, 0.72), gain=(0.95, 1.1), style="drill",
-             ghosts_n=2, sd_base=0.44, blasts={4: "up"}, end="none")
+             ghosts_n=0, end="big", breaths={7}, cut=(420, 800))
+drill_phrase(C0 + 20, 8, v=(0.55, 0.7), gain=(0.9, 1.08), style="drill",
+             root=43, ghosts_n=2, sd_base=0.44, washes={5},
+             end="roll_down", cut=(750, 1700))
 
-# C's seam into SPEECH: one rising ratchet, then the floor drops
-t0 = bb(D0 - 1)
-sev = roll(t0, 0.0, BAR - 0.5, 10, 0.8, 0.25, 0.88, 0.42)
+# the rise: two committed bars, one rising surface, one bar of air
+drill_phrase(C0 + 28, 2, v=(0.7, 0.75), gain=(1.0, 1.1), style="drill",
+             ghosts_n=1, sd_base=0.46, end="none", cut=(1000, 1900))
+t0 = bb(C0 + 30)
+sev = roll(t0, 0.0, BAR, 21, 0.75, 0.2, 0.9, 0.42)
 steps_to_tokens(snare, t0, sev)
+a_bd_tune.set(t0, next_kick_tune())
 kick.bar(t0, ["BD:0.25@0.95"])
-throw(t0, 0.45, 2.5)
+hats.bar(t0, " ".join(f"OH:0.5@{jit(0.5, 0.04):.2f}" for _ in range(7)).split())
+a_oh_dec.set(t0, 0.7)
+a_oh_dec.set(bb(D0), 0.35)
+throw(t0, 0.45, 3.0)
+t0 = bb(C0 + 31)
+a_bd_tune.set(t0, tune_of(57))
+kick.bar(t0, ["BD:0.25@0.9"])
 
-a_bass_cut.ramp(bb(C0), 1500, 36 * BAR, "exp")
-a_bass_res.ramp(bb(C0 + 8), 1.45, 24 * BAR)
-a_drum_drv.ramp(bb(C0), 0.3, (D0 - C0) * BAR)
+a_bass_res.ramp(bb(C0 + 4), 1.45, 24 * BAR)
+a_drum_drv.ramp(bb(C0), 0.32, (D0 - C0) * BAR)
 a_rs_tune.ramp(bb(C0), 0.55, (D0 - C0) * BAR)
-a_oh_dec.set(bb(C0 + 29), 0.7)
-a_oh_dec.set(bb(C0 + 30), 0.35)
 
 # -------------------------------------------------------------- D: SPEECH
+# Three cycles: walk / hold breath / gather. The pad blooms all the way.
 
 CHORDS = [
     [45, 52, 59, 60],   # Am(add9)  A2 E3 B3 C4
@@ -565,15 +609,19 @@ CHORDS = [
 ]
 E7 = [40, 47, 56, 62]   # the piece's only G#: the ache toward home
 
-for cyc in range(4):
+for cyc in range(3):
     for ci in range(4):
         bar = D0 + cyc * 8 + ci * 2
-        chord = CHORDS[ci]
-        if ci == 3 and cyc >= 2:
-            chord = E7
+        chord = E7 if (ci == 3 and cyc == 2) else CHORDS[ci]
         pad.bar(bb(bar), ["[" + " ".join(nn(m) for m in chord) + "]"
                           + f":{fmt(2 * BAR * 0.96)}@0.5"])
+a_pad_cut.set(bb(D0), 700)
+a_pad_cut.ramp(bb(D0), 2400, 24 * BAR, "exp")   # the bloom is the build
 
+a_bd_decay.set(bb(D0), 0.75)    # the kick sings again under the chords
+a_bd_att.set(bb(D0), 0.3)
+a_bd_decay.set(bb(E0), 0.52)
+a_bd_att.set(bb(E0), 0.55)
 a_sd_level.set(bb(D0), 0.5)
 a_hh_level.set(bb(D0), 0.42)
 a_hh_tune.set(bb(D0), 0.42)
@@ -581,15 +629,17 @@ a_rs_tune.set(bb(D0), 0.32)
 a_sd_snap.set(bb(D0), 0.5)
 a_sd_tune.set(bb(D0), 0.38)
 
-# four cycles, four postures: walk / hold breath / tick / gather
-for cyc in range(4):
+for cyc in range(3):
     for i in range(8):
         bar = D0 + cyc * 8 + i
         t0 = bb(bar)
-        gn = 0.75 if cyc < 3 else 0.75 + 0.25 * i / 7
-        if cyc != 1:
+        gn = 0.75 if cyc < 2 else 0.75 + 0.25 * i / 7
+        if cyc == 0 and i % 2 == 0:
+            pass  # sotto voce kick handled below, half-speed theme
+        elif cyc == 2:
             kev = [(0, S16, "BD", g(jit(0.82, 0.03), gn)),
                    (6 * S16, S16, "BD", g(jit(0.58, 0.03), gn))]
+            a_bd_tune.set(t0, next_kick_tune(0.25))
             steps_to_tokens(kick, t0, kev)
         sv = 0.42 if cyc == 1 else 0.6
         snare.bar(t0, [f"R:1", f"SD:0.25@{g(jit(sv, 0.03), gn):.2f}",
@@ -605,29 +655,21 @@ for cyc in range(4):
                 toks.append(f"CH:0.25@{jit(0.16, 0.03):.2f}")
                 cur += 0.25
             hats.bar(t0, toks)
-        elif cyc != 1:
-            pat = euclid(5, N16, rot=(D0 * 3 + cyc * 5) % N16)
-            toks = []
-            cur = 0.0
-            for s in range(N16):
-                if pat[s]:
-                    at = s * S16
-                    if at > cur + 1e-9:
-                        toks.append(f"R:{fmt(at - cur)}")
-                        cur = at
-                    toks.append(f"CH:0.25@{jit(0.22, 0.03):.2f}")
-                    cur += 0.25
-            hats.bar(t0, toks)
-        if cyc == 3 and i == 7:
+        if cyc == 2 and i == 7:
             for at, d, nme, vv2 in roll(t0, 11 * S16, 3 * S16, 8, 0.6,
                                         0.3, 0.8, 0.42):
                 snare.lines.append(
                     f">{fmt(t0 + at)} {nme}:{fmt(d)}@{vv2:.2f}")
             throw(t0 + 11 * S16, 0.45, 2.0)
 
-# the confession: the theme sung plainly, then ornamented, then higher
+# the kick sings under the first cycle, half speed, sotto voce
+voice_bars(kick, "BD", a_bd_tune, THEME, D0, 8, vel=0.34, stretch=2)
+
+# the confession: the theme sung, the filter swelling into every phrase
 def sing(first_bar, transpose, vel, ornament):
     t0 = bb(first_bar)
+    a_lead_cut.set(t0, 900)
+    a_lead_cut.ramp(t0, 3200, 6.5, "exp")   # the breath into the phrase
     toks = []
     cur = 0.0
     for i, (pulse, midi) in enumerate(THEME):
@@ -650,114 +692,124 @@ def sing(first_bar, transpose, vel, ornament):
 
 sing(D0 + 2, 12, 0.62, False)
 sing(D0 + 10, 12, 0.68, True)
-sing(D0 + 18, 24, 0.6, True)
-sing(D0 + 26, 12, 0.72, True)
+sing(D0 + 18, 24, 0.66, True)
 # over the E7 bars the lead leans on the G#, unresolved until FRENZY
-lead.bar(bb(D0 + 30), [f"{nn(68)}:2@0.7", f"{nn(69)}:1@0.6",
+a_lead_cut.set(bb(D0 + 22), 1100)
+a_lead_cut.ramp(bb(D0 + 22), 3600, 2 * BAR, "exp")
+lead.bar(bb(D0 + 22), [f"{nn(68)}:2@0.7", f"{nn(69)}:1@0.6",
                        f"{nn(71)}:{fmt(2 * BAR - 3)}@0.65"])
 
-for at_bar, m in ((D0 + 7, 76), (D0 + 15, 72), (D0 + 23, 79)):
+for at_bar, m in ((D0 + 7, 76), (D0 + 15, 72)):
     bell.bar(bb(at_bar) + 12 * S16, [f"{nn(m)}:1@0.55"])
 
 # -------------------------------------------------------------- E: FRENZY
-# Six phrases: rebuild / commit / stomp / weave / press / tear.
+# rebuild / commit / stomp / press / the blast phrase / the tear.
 
 a_sd_level.set(bb(E0), 0.62)
-a_sd_level.ramp(bb(E0), 0.72, 40 * BAR)
+a_sd_level.ramp(bb(E0), 0.72, 32 * BAR)
 a_hh_level.set(bb(E0), 0.52)
-a_hh_level.ramp(bb(E0), 0.6, 40 * BAR)
+a_hh_level.ramp(bb(E0), 0.6, 32 * BAR)
 a_hh_tune.set(bb(E0), 0.5)
-a_hh_tune.ramp(bb(E0), 0.64, 40 * BAR)
+a_hh_tune.ramp(bb(E0), 0.64, 32 * BAR)
 a_rs_tune.set(bb(E0), 0.38)
-a_rs_tune.ramp(bb(E0), 0.6, 44 * BAR)
+a_rs_tune.ramp(bb(E0), 0.6, 38 * BAR)
 a_sd_snap.set(bb(E0), 0.7)
+a_tape_drv.ramp(bb(E0), 0.5, 38 * BAR)   # the tape leans in
 
 drill_phrase(E0, 8, v=(0.45, 0.55), gain=(0.8, 0.9), style="drill",
              hats_on=False, ghosts_n=0, sd_base=0.4, acid_dens=0.85,
-             end="none")
+             end="none", cut=(700, 1000))
 drill_phrase(E0 + 8, 8, v=(0.6, 0.72), gain=(0.9, 1.0), style="drill",
-             ghosts_n=1, sd_base=0.42, blasts={7: "up"}, end="none")
+             ghosts_n=1, sd_base=0.42, blasts={7: "up"}, end="none",
+             cut=(900, 1800))
 drill_phrase(E0 + 16, 8, v=(0.6, 0.6), gain=(1.0, 1.0), style="halftime",
              root=41, acid_oct=-12, acid_dens=0.5, sd_base=0.5,
-             ghosts_n=0, washes={3, 7}, end="big")
-drill_phrase(E0 + 24, 8, v=(0.75, 0.85), gain=(0.9, 1.0), style="drill",
-             root=43, ghosts_n=2, sd_base=0.44, end="roll_down")
-drill_phrase(E0 + 32, 8, v=(0.85, 0.95), gain=(0.95, 1.05), style="drill",
-             ghosts_n=2, sd_base=0.46, blasts={6: "down"}, end="roll_up")
-drill_phrase(E0 + 40, 6, v=(0.95, 1.0), gain=(1.0, 1.1), style="drill",
+             ghosts_n=0, washes={3, 7}, end="big", cut=(500, 1000))
+drill_phrase(E0 + 24, 8, v=(0.78, 0.9), gain=(0.92, 1.02), style="drill",
+             root=43, ghosts_n=2, sd_base=0.44, end="roll_down",
+             cut=(1000, 2200))
+drill_phrase(E0 + 32, 6, v=(0.92, 1.0), gain=(1.0, 1.1), style="drill",
              root=40, ghosts_n=1, sd_base=0.48,
-             blasts={1: "up", 3: "down"}, end="none")
+             blasts={1: "up", 3: "down"}, end="none", cut=(1200, 2600))
 
 # the tear: one full-bar rising roll, one last kick, then air
-t0 = bb(E0 + 46)
+t0 = bb(E0 + 38)
 sev = roll(t0, 0.0, BAR, 21, 0.85, 0.2, 0.92, 0.42)
 steps_to_tokens(snare, t0, sev)
 kick.bar(t0, ["BD:0.25@1"])
 throw(t0, 0.5, 3.0)
-t0 = bb(E0 + 47)
+t0 = bb(E0 + 39)
 kick.bar(t0, ["BD:0.25@1"])
 a_wow.set(t0 + 0.5, 0.3)
 
 # the lead returns possessed: theme an octave up, then the long high cry
-sing(E0 + 8, 24, 0.7, True)
+sing(E0 + 8, 24, 0.72, True)
+a_lead_cut.set(bb(E0 + 16), 1200)
+a_lead_cut.ramp(bb(E0 + 16), 4200, 4 * BAR, "exp")
 lead.bar(bb(E0 + 16), [f"{nn(81)}:{fmt(4 * BAR)}@0.72"])
-sing(E0 + 20, 24, 0.74, True)
+sing(E0 + 20, 24, 0.75, True)
 sing(E0 + 28, 24, 0.78, True)
-lead.bar(bb(E0 + 36), [f"{nn(80)}:{fmt(BAR)}@0.75",
+a_lead_cut.set(bb(E0 + 32), 1400)
+a_lead_cut.ramp(bb(E0 + 32), 4600, 6 * BAR, "exp")
+lead.bar(bb(E0 + 32), [f"{nn(80)}:{fmt(BAR)}@0.75",
                        f"{nn(81)}:{fmt(3 * BAR)}@0.78"])
-lead.bar(bb(E0 + 42), [f"{nn(84)}:{fmt(2 * BAR)}@0.75",
-                       f"{nn(83)}:1@0.7", f"{nn(81)}:{fmt(2 * BAR - 1)}@0.72"])
+lead.bar(bb(E0 + 36), [f"{nn(84)}:{fmt(BAR)}@0.75",
+                       f"{nn(83)}:1@0.7", f"{nn(81)}:{fmt(BAR - 1)}@0.72"])
 
-a_fuzz.ramp(bb(E0), 0.18, 32 * BAR)
-a_fuzz.set(bb(E0 + 46), 0.0)
-a_drum_drv.ramp(bb(E0), 0.42, 40 * BAR)
+a_fuzz.ramp(bb(E0), 0.18, 28 * BAR)
+a_fuzz.set(bb(E0 + 38), 0.0)
+a_drum_drv.ramp(bb(E0), 0.42, 32 * BAR)
 a_drum_drv.set(bb(F0), 0.08)
-a_bass_cut.set(bb(E0), 900)
-a_bass_cut.ramp(bb(E0), 2400, 44 * BAR, "exp")
-a_bass_res.ramp(bb(E0), 1.65, 44 * BAR)
-a_bd_drive.ramp(bb(E0), 0.35, 40 * BAR)
+a_bass_res.ramp(bb(E0), 1.65, 38 * BAR)
+a_bd_drive.ramp(bb(E0), 0.35, 32 * BAR)
 a_bd_drive.set(bb(F0), 0.1)
-a_oh_dec.set(bb(E0 + 19), 0.75); a_oh_dec.set(bb(E0 + 20), 0.35)
-a_oh_dec.set(bb(E0 + 23), 0.75); a_oh_dec.set(bb(E0 + 24), 0.35)
 
 # ---------------------------------------------------------- F: AFTERIMAGE
+# The duet returns in augmentation: two drum voices, remembering.
 
 a_bd_decay.set(bb(F0), 0.88)
 a_bd_att.set(bb(F0), 0.3)
-a_sd_snap.set(bb(F0), 0.5)
-a_sd_level.set(bb(F0), 0.48)
+a_sd_snap.set(bb(F0), 0.12)     # the drummer becomes the singer again
+a_sd_tone.set(bb(F0), 0.3)
+a_sd_level.set(bb(F0), 0.45)
 a_hh_level.set(bb(F0), 0.4)
 a_rs_tune.set(bb(F0), 0.5)
 a_rev_wet.set(bb(F0), 0.3)
+a_tape_drv.set(bb(F0), 0.25)
 
-kick_theme_bars(F0, 12, vel=0.44, half_speed=True)
+voice_bars(kick, "BD", a_bd_tune, THEME, F0, 8, vel=0.44, stretch=2)
+voice_bars(snare, "SD", a_sd_tune, COUNTER, F0, 8, vel=0.3, stretch=2,
+           delay=1)
 # fragments: the theme loses words, keeps only downbeats
-for bar in range(F0 + 12, F0 + 18, 2):
+for bar in range(F0 + 8, F0 + 14, 2):
     t0 = bb(bar)
-    a_bd_tune.set(t0, kick_tune(57))
+    a_bd_tune.set(t0, tune_of(57))
     kick.bar(t0, [f"BD:0.25@{jit(0.42, 0.03):.2f}"])
 
 pad.bar(bb(F0), ["[" + " ".join(nn(m) for m in CHORDS[0]) + "]"
                  + f":{fmt(4 * BAR)}@0.44"])
 pad.bar(bb(F0 + 8), ["[" + " ".join(nn(m) for m in CHORDS[1]) + "]"
-                     + f":{fmt(4 * BAR)}@0.4"])
-pad.bar(bb(F0 + 16), ["[" + " ".join(nn(m) for m in CHORDS[0]) + "]"
+                     + f":{fmt(3 * BAR)}@0.4"])
+pad.bar(bb(F0 + 14), ["[" + " ".join(nn(m) for m in CHORDS[0]) + "]"
                       + f":{fmt(8 * BAR)}@0.4"])
+a_pad_cut.set(bb(F0), 1800)
+a_pad_cut.ramp(bb(F0), 500, 20 * BAR, "exp")   # the light going out
+a_chorus.set(bb(F0 + 8), 2)                    # the room widens as it dims
 
-for bar in range(F0, F0 + 18, 4):
+for bar in range(F0, F0 + 14, 4):
     drone.bar(bb(bar), [f"{nn(33)}:{fmt(4 * BAR * 0.96)}@0.36"])
 
 # the bells remember three notes of it, then two, then one, then lower
 bell.bar(bb(F0 + 4), [f"{nn(81)}:1@0.5", f"{nn(84)}:1@0.45", f"{nn(83)}:2@0.4"])
-bell.bar(bb(F0 + 12), [f"{nn(76)}:1@0.45", f"{nn(74)}:2@0.4"])
-bell.bar(bb(F0 + 20), [f"{nn(81)}:2@0.35"])
-bell.bar(bb(F0 + 26), [f"{nn(69)}:2@0.3"])
+bell.bar(bb(F0 + 10), [f"{nn(76)}:1@0.45", f"{nn(74)}:2@0.4"])
+bell.bar(bb(F0 + 16), [f"{nn(81)}:2@0.35"])
+bell.bar(bb(F0 + 20), [f"{nn(69)}:2@0.3"])
 
 # the clock alone, fading — the process outlives the song
 clock_bars(END - 8, 7, vel=0.26, fade_to=0.08)
 
-a_wow.ramp(bb(F0 + 12), 0.55, 20 * BAR, "exp")
-a_spring.ramp(bb(F0), 0.35, 16 * BAR)
+a_wow.ramp(bb(F0 + 8), 0.55, 16 * BAR, "exp")
+a_spring.ramp(bb(F0), 0.35, 12 * BAR)
 a_volume.ramp(bb(END - 6), 0.0, 6 * BAR, "smooth")
 a_bend.ramp(bb(END - 3), -2.0, 3 * BAR, "smooth")
 
@@ -768,26 +820,23 @@ HEADER = f"""# Drums, For Laurie — 190 bpm, 7/8, A minor. Generated, on purpos
 # way "Drums" was a program on the GROOVE system at Bell Labs — pitched
 # drum voices driven by pattern logic, steered by hand-drawn curves.
 #
-# Here the process is allowed to accelerate until it becomes breakcore.
-# One 10-note theme is the whole piece: the KICK sings it first (bd_tune
-# played per-note — the pitched drum as melodic voice), the acid bass
-# chews it into riffs, the lead confesses it over chords, the bells
+# The process is allowed to accelerate until it becomes breakcore.
+# One 10-note theme is the whole piece, and the drums are a CHOIR:
+# the kick states the theme (bd_tune played per-note), the snare —
+# snap killed — answers with a counter-line and follows in canon,
+# then MORPHS into the drill's backbeat as its snap ramps open. Even
+# in the drill every kick hit sings the next theme pitch. The acid
+# bass chews the theme into riffs, the lead confesses it over chords
+# (its filter swelling into each phrase like breath), the bells
 # remember three notes of it, and a rimshot Euclidean clock E(5,14),
-# rotating one step per bar, runs from bar 4 to the last bar without
-# ever breaking — the thread the loom never drops.
+# rotating one step per bar, never breaks until it is all that's left.
 #
-# Second weaving: composed in 8-bar phrases (patterns fixed at each
-# phrase's door, mutated only at its close), dynamics at three
-# timescales (hit, phrase arc, section), the snare demoted from weather
-# to punctuation, reverb played as dub throws, and every drum's pitch
-# knob moving — the kick whispers the theme root into each drill phrase.
-#
-#   bars   0-16    LOOM        the kick alone, tuned like a drum choir
-#   bars  16-40    ACCUMULATE  a thread every 4 bars; hats climb E(3..11,14)
-#   bars  40-80    TORRENT     enter / commit / stomp / weave / peak
-#   bars  80-112   SPEECH      walk / hold breath / tick / gather — E7's G#
-#   bars 112-160   FRENZY      rebuild / commit / stomp / weave / press / tear
-#   bars 160-192   AFTERIMAGE  half-speed theme, wow flood, the clock last
+#   bars   0-12    LOOM        plain / diminished / two voices
+#   bars  12-28    ACCUMULATE  canon; the singer becomes the drummer
+#   bars  28-60    TORRENT     enter / commit / stomp / weave / the rise
+#   bars  60-84    SPEECH      walk / hold breath / gather — E7's G#
+#   bars  84-124   FRENZY      rebuild / commit / stomp / press / tear
+#   bars 124-148   AFTERIMAGE  the duet in augmentation; the clock last
 #
 # Regenerate: python3 scripts/drums_for_laurie.py
 
@@ -798,8 +847,6 @@ automate reverb_decay
 0.62
 automate tape_flutter
 0.05
-automate tape_drive
-0.28
 automate tape_age
 0.3
 automate bd_level
@@ -810,21 +857,22 @@ automate cp_level
 0.62
 automate hh_metal
 0.55
-automate sd_tone
-0.45
 automate sd_decay
 0.42
 """
 
 parts = [HEADER]
 for a in (a_bd_tune, a_bd_decay, a_bd_att, a_bd_drive, a_sd_tune, a_sd_snap,
-          a_sd_level, a_hh_level, a_hh_tune, a_rs_tune, a_oh_dec, a_drum_drv,
-          a_fuzz, a_wow, a_spring, a_rev_wet, a_volume, a_bend):
+          a_sd_tone, a_sd_level, a_hh_level, a_hh_tune, a_rs_tune, a_oh_dec,
+          a_drum_drv, a_fuzz, a_wow, a_tape_drv, a_spring, a_rev_wet,
+          a_chorus, a_volume, a_bend):
     parts.append(a.text())
 for t in (kick, snare, hats, clock, bass, drone, pad, bell, lead):
     parts.append(t.text())
 parts.append(a_bass_cut.text())
 parts.append(a_bass_res.text())
+parts.append(a_lead_cut.text())
+parts.append(a_pad_cut.text())
 
 out = "\n\n".join(parts) + "\n"
 repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
