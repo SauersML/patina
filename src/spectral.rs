@@ -113,6 +113,17 @@ pub struct Spectral {
     fill: usize,
     out_pos: usize,
     window: [f32; N],
+    // SHAPE-FREEZE: the held, smoothed mouth shape. The voice's envelope
+    // is normalized to unit mean (pure shape, no loudness) and slewed at
+    // two rates — fast on syllable onsets, slow inside vowels — and when
+    // the voice goes quiet the shape FREEZES instead of tracking
+    // silence. A held note keeps the mouth open; every trace of the
+    // voice's amplitude micro-flutter (glottal ripple, breath shimmer,
+    // frame-rate wobble — the "vocodery" instability) is erased, because
+    // the carrier's own envelope is the only thing that moves the level.
+    shape: [f32; N],
+    have_shape: bool,
+    prev_energy: f32,
 }
 
 impl Spectral {
@@ -129,6 +140,9 @@ impl Spectral {
             fill: 0,
             out_pos: 0,
             window,
+            shape: [0.0; N],
+            have_shape: false,
+            prev_energy: 0.0,
         }
     }
 
@@ -155,12 +169,33 @@ impl Spectral {
         envelope(&m_mag, self.lifter_bins, &mut m_env);
         envelope(&c_mag, self.lifter_bins, &mut c_env);
 
-        // Whiten the carrier, dress it in the voice: per-bin real gain =
-        // modulator envelope / carrier envelope (floored and capped) —
-        // phases untouched, so the carrier's harmonic core is preserved
+        // Update the held mouth shape only while the voice is actually
+        // speaking; silence freezes it (the mouth stays open)
+        let energy = m_mag.iter().map(|v| v * v).sum::<f32>() / N as f32;
+        if energy > 1e-4 {
+            let mean = m_env.iter().sum::<f32>() / N as f32;
+            // Onset (energy doubled since last frame): snap in one frame.
+            // Inside a vowel: glide at ~40 ms so nothing can flutter.
+            let k_slew = if energy > 2.0 * self.prev_energy || !self.have_shape {
+                1.0
+            } else {
+                0.12
+            };
+            for k in 0..N {
+                let target = m_env[k] / mean.max(1e-9);
+                self.shape[k] += (target - self.shape[k]) * k_slew;
+            }
+            self.have_shape = true;
+        }
+        self.prev_energy = energy;
+
+        // Whiten the carrier, dress it in the HELD shape: per-bin real
+        // gain, phases untouched — the carrier's harmonic core, level,
+        // and envelope are the only things that move
         let c_peak = c_env.iter().fold(1e-9f32, |a, &v| a.max(v));
         for k in 0..N {
-            let g = (m_env[k] / c_env[k].max(WHITEN_FLOOR * c_peak)).min(MAX_GAIN);
+            let g = (self.shape[k] * 0.35 / (c_env[k].max(WHITEN_FLOOR * c_peak) / c_peak))
+                .min(MAX_GAIN);
             cr[k] *= g;
             ci[k] *= g;
         }
@@ -200,12 +235,26 @@ impl Spectral {
 mod tests {
     use super::*;
 
-    /// A 1 kHz-resonant voice must open the carrier near 1 kHz and leave
-    /// the rest shut; a silent voice must pass nothing.
+    /// A 1 kHz-resonant voice must shape the carrier near 1 kHz and
+    /// leave the rest shut; BEFORE any voice has spoken the output is
+    /// silent, and AFTER the voice stops the frozen shape holds — the
+    /// carrier keeps sounding through the open mouth.
     #[test]
     fn envelope_transfers_at_high_resolution() {
         let sr = 48000.0;
         let mut s = Spectral::new(sr);
+        // Phase 0: carrier plays, but no voice has EVER spoken — no
+        // shape exists yet, so nothing may pass
+        let mut virgin = 0.0f32;
+        for n in 0..(sr as usize / 4) {
+            let carrier = (((n as f32 * 110.0 / sr) % 1.0) * 2.0 - 1.0) * 5.0;
+            let v = s.process(0.0, carrier).abs();
+            if n > (0.1 * sr) as usize {
+                virgin = virgin.max(v);
+            }
+        }
+        assert!(virgin < 0.05, "no shape yet: carrier must stay shut, got {virgin}");
+
         let mut noise = crate::noise::NoiseSource::new();
         let (mut y1, mut y2) = (0.0f32, 0.0f32);
         let c = -(-std::f32::consts::TAU * 100.0 / sr).exp();
@@ -243,14 +292,20 @@ mod tests {
             "1 kHz voice energy must shape the carrier sharply: near={near}, far={far}"
         );
 
-        let mut quiet = 0.0f32;
+        // Phase 2: the voice stops but the carrier holds — the FROZEN
+        // shape must keep the carrier sounding (the mouth stays open;
+        // the note's own envelope owns the dynamics now)
+        let mut held = 0.0f32;
         for n in 0..(sr as usize / 4) {
             let carrier = (((n as f32 * 110.0 / sr) % 1.0) * 2.0 - 1.0) * 5.0;
             let v = s.process(0.0, carrier).abs();
             if n > (0.1 * sr) as usize {
-                quiet = quiet.max(v);
+                held = held.max(v);
             }
         }
-        assert!(quiet < 0.06, "silent voice must gate the carrier, got {quiet}");
+        assert!(
+            held > 0.2,
+            "the frozen mouth must keep the held note sounding, got {held}"
+        );
     }
 }
