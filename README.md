@@ -127,9 +127,7 @@ fall or rise. `vox_intonation` scales the voice's own prosody (accents,
 declination, final falls): keep it low when singing, high when speaking.
 
 - `patina --say "HH-AH-L-OW1. AY1 K-AE-N S-P-IY1-K." [--out say.wav]` speaks from the command line.
-- `scripts/borrow-voice.sh "text" out.wav [voice]` renders a recording for `wav=` (Piper if installed, else the macOS system voice).
-- `scripts/chatterbox-say.py "text" out.wav` uses Resemble AI's Chatterbox (open-source neural TTS). Setup: `uv venv --python 3.12 .venv-voice && uv pip install --python .venv-voice/bin/python chatterbox-tts "setuptools<81"` (the pin restores `pkg_resources` for the perth watermarker). Defaults to the Turbo engine (~2 GB, fits an 8 GB machine, CPU) with an RSS watchdog; `--full` unlocks the original model's `--exaggeration` emotion knob on 12+ GB machines. `--voice ref.wav` clones a speaker.
-- Neural voices on Metal via [mlx-audio](https://github.com/Blaizzy/mlx-audio) (`uv pip install --python .venv-voice/bin/python mlx-audio "misaki[en]"`, then run with `VIRTUAL_ENV=$PWD/.venv-voice PATH=$PWD/.venv-voice/bin:$PATH` so its internal installs land in the venv): Kokoro-82M (`--model mlx-community/Kokoro-82M-bf16 --voice af_heart`, ~300 MB, #1 on TTS Arena at 82M params) and quantized Chatterbox Turbo (`--model mlx-community/chatterbox-turbo-8bit`, 0.7 GB, supports `[laugh]`-style tags).
+- `scripts/borrow-voice.sh "text" out.wav [voice]` renders a recording for `wav=` with the house voice: **Kokoro-82M** on MLX (Apache 2.0, ~300 MB, #1 on TTS Arena at 82M params — chosen by shootout over Piper and Chatterbox Turbo, which have been retired from the repo). `[voice]` picks any of Kokoro's ~50 voices: `af_heart` (default, warm) for songs, `am_michael` (low, steady) for Talker-circuit leads, `bf_emma`/`bm_george` for British color, plus Spanish/French/Hindi/Italian/Japanese/Portuguese/Chinese sets. One-time setup: `uv venv --python 3.12 .venv-voice && uv pip install --python .venv-voice/bin/python mlx-audio "misaki[en]" torch`. Falls back to the macOS system voice when the venv is absent.
 
 ## 📼 The tape deck
 

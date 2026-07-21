@@ -17,8 +17,19 @@ automate vox_level
 # against the melody and reads as a second voice
 automate vox_dry
   0
+# The glue: Juno chorus for width, tape for weight, a real room
+automate chorus_mode
+  2
+automate chorus_depth
+  0.35
+automate tape_drive
+  0.3
+automate tape_age
+  0.12
 automate reverb_wet
-  0.1
+  0.2
+automate reverb_decay
+  0.6
 
 track lead vox wav=renders/lead-voice.wav vel=0.9
   R:1
@@ -37,11 +48,11 @@ automate lead.osc3_level
 automate lead.sub
   0
 automate lead.drive
-  1.6
+  2.4
 automate lead.saturation
-  0.3
-automate lead.resonance
   0.4
+automate lead.resonance
+  0.6
 automate lead.cutoff
   14000
 # functionally mono: no release tail ringing the old pitch under the

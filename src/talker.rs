@@ -7,32 +7,96 @@
 // SINGLE time-varying filter: the mouth's resonances, imposed whole on
 // the instrument. One throat shape, sliding continuously, on one note.
 //
-// The engineering here is linear predictive coding, the same mathematics
-// inside the TI TMS5220 (Speak & Spell) and every LPC-10 radio codec:
+// The engineering is linear predictive coding, the same mathematics
+// inside the TI TMS5220 (Speak & Spell) and every LPC-10 radio codec —
+// and like all of those, it runs BAND-LIMITED, in a 4:1 decimated
+// domain (~12 kHz):
 //
-//   modulator ──► 25 ms frames ──► autocorrelation ──► Levinson-Durbin
-//                                   └► reflection coefficients k1..k16
-//   carrier ──► all-pole LATTICE filter (the k's, slewed) ──► VCA ──► out
+//   modulator ─► LP 4.8k ─► ÷4 ─► 25 ms frames ─► autocorr ─► Levinson
+//                                  └► reflection coefficients k1..k12
+//   carrier ──► LP 4.8k ─► ÷4 ─► all-pole LATTICE (the k's, slewed)
+//                                  └► ×4 hold ─► LP 4.8k ─► VCA ─► out
 //
-// The lattice form matters: reflection coefficients can be interpolated
-// freely and the filter stays stable as long as every |k| < 1 — which is
-// exactly what a vocal tract (a lossy tube) guarantees. Direct-form LPC
-// coefficients explode when you morph them; lattices are how the
-// hardware did it, and how we do it.
+// The decimation is not a cost cut — it is what makes the circuit WORK
+// on real voices. Full-band LPC on a high-pitched speaker locks its
+// poles onto the source's individual harmonics instead of the formant
+// envelope, and the recording's own pitch bleeds onto the carrier as a
+// ghost tone (it reads as a chord). At 12 kHz with 12 poles, the model
+// can only afford the envelope — which is the mouth, which is the
+// point. It is also why a talk box sounds like a talk box: the tube
+// never passed 5 kHz either.
+//
+// The lattice form matters too: reflection coefficients interpolate
+// freely and the filter stays stable while they morph, as long as every
+// |k| < 1 — the guarantee a lossy tube provides. Direct-form LPC
+// coefficients explode when morphed; lattices are how the hardware did
+// it, and how we do it.
 
 use crate::noise::NoiseSource;
 
-/// Prediction order: 16 poles at 48 kHz resolves 4-5 formants plus
-/// spectral tilt, the LPC-vocoder standard for full-band speech.
-const ORDER: usize = 16;
+/// 4:1 decimation: 48 kHz engine -> 12 kHz analysis/tract domain.
+const DECIM: usize = 4;
+
+/// Prediction order in the decimated domain: 12 poles across 6 kHz
+/// resolves 4-5 formants — the LPC-10 ballpark.
+const ORDER: usize = 12;
 
 /// Analysis window 25 ms, new coefficients every 10 ms — phoneme-rate.
 const WINDOW_S: f32 = 0.025;
 const HOP_S: f32 = 0.010;
 
+/// RBJ lowpass biquad for the anti-alias and reconstruction filters.
+#[derive(Clone, Copy, Default)]
+struct Lowpass {
+    b0: f32,
+    b1: f32,
+    b2: f32,
+    a1: f32,
+    a2: f32,
+    x1: f32,
+    x2: f32,
+    y1: f32,
+    y2: f32,
+}
+
+impl Lowpass {
+    fn tuned(fc: f32, q: f32, sample_rate: f32) -> Self {
+        let w0 = std::f32::consts::TAU * fc / sample_rate;
+        let alpha = w0.sin() / (2.0 * q);
+        let cw = w0.cos();
+        let a0 = 1.0 + alpha;
+        Self {
+            b0: (1.0 - cw) / 2.0 / a0,
+            b1: (1.0 - cw) / a0,
+            b2: (1.0 - cw) / 2.0 / a0,
+            a1: -2.0 * cw / a0,
+            a2: (1.0 - alpha) / a0,
+            ..Self::default()
+        }
+    }
+
+    #[inline]
+    fn tick(&mut self, x: f32) -> f32 {
+        let y = self.b0 * x + self.b1 * self.x1 + self.b2 * self.x2
+            - self.a1 * self.y1
+            - self.a2 * self.y2;
+        self.x2 = self.x1;
+        self.x1 = x;
+        self.y2 = self.y1;
+        self.y1 = y;
+        y
+    }
+}
+
 pub struct Talker {
-    sample_rate: f32,
-    // Modulator history for analysis
+    // Anti-alias filters (4th order: two cascaded biquads each) and the
+    // output reconstruction pair
+    in_m: [Lowpass; 2],
+    in_c: [Lowpass; 2],
+    out: [Lowpass; 2],
+    decim: usize,
+    held: f32,
+    // Modulator history at the decimated rate
     ring: Vec<f32>,
     write: usize,
     hop: usize,
@@ -46,42 +110,64 @@ pub struct Talker {
     // Loudness follower (the modulator's energy opens the VCA)
     env_target: f32,
     env: f32,
+    env_peak: f32,
+    peak_decay: f32,
     attack: f32,
     release: f32,
-    // Fricative path: modulator HF fraction blends noise into the carrier
+    // Fricative path: modulator HF fraction swaps the carrier for noise
     m_lp: f32,
     hf_env: f32,
     lf_env: f32,
     unvoiced: f32,
+    unvoiced_k: f32,
+    split_k: f32,
+    // The body path: the carrier's low end bled straight through, the
+    // way a talk-box rig mixes the direct instrument under the tube —
+    // the mouth articulates the mids, the note keeps its chest
+    body_lp: f32,
+    body_k: f32,
+    gate: f32,
     noise: NoiseSource,
 }
 
 impl Talker {
     pub fn new(sample_rate: f32) -> Self {
+        let ar = sample_rate / DECIM as f32; // analysis/tract rate
         Self {
-            sample_rate,
-            ring: vec![0.0; (WINDOW_S * sample_rate) as usize + 1],
+            in_m: [Lowpass::tuned(4800.0, 0.6, sample_rate), Lowpass::tuned(4800.0, 1.0, sample_rate)],
+            in_c: [Lowpass::tuned(4800.0, 0.6, sample_rate), Lowpass::tuned(4800.0, 1.0, sample_rate)],
+            out: [Lowpass::tuned(4800.0, 0.6, sample_rate), Lowpass::tuned(4800.0, 1.0, sample_rate)],
+            decim: 0,
+            held: 0.0,
+            ring: vec![0.0; (WINDOW_S * ar) as usize + 1],
             write: 0,
-            hop: (HOP_S * sample_rate) as usize,
+            hop: (HOP_S * ar) as usize,
             since_hop: 0,
             k_target: [0.0; ORDER],
             k: [0.0; ORDER],
-            k_slew: 1.0 - (-1.0 / (0.004 * sample_rate)).exp(),
+            k_slew: 1.0 - (-1.0 / (0.004 * ar)).exp(),
             b: [0.0; ORDER + 1],
             env_target: 0.0,
             env: 0.0,
-            attack: 1.0 - (-1.0 / (0.002 * sample_rate)).exp(),
-            release: 1.0 - (-1.0 / (0.015 * sample_rate)).exp(),
+            env_peak: 1e-4,
+            peak_decay: 1.0 - 1.0 / (2.5 * ar),
+            attack: 1.0 - (-1.0 / (0.002 * ar)).exp(),
+            release: 1.0 - (-1.0 / (0.015 * ar)).exp(),
             m_lp: 0.0,
             hf_env: 0.0,
             lf_env: 0.0,
             unvoiced: 0.0,
+            unvoiced_k: (250.0 / sample_rate).min(1.0),
+            split_k: 1.0 - (-std::f32::consts::TAU * 3000.0 / sample_rate).exp(),
+            body_lp: 0.0,
+            body_k: 1.0 - (-std::f32::consts::TAU * 230.0 / sample_rate).exp(),
+            gate: 0.0,
             noise: NoiseSource::new(),
         }
     }
 
-    /// Frame analysis: windowed autocorrelation to ORDER lags, then
-    /// Levinson-Durbin recursion for the reflection coefficients.
+    /// Frame analysis at the decimated rate: windowed autocorrelation,
+    /// then Levinson-Durbin for the reflection coefficients.
     fn analyze(&mut self) {
         let n = self.ring.len();
         // Unwrap the ring into time order, pre-emphasized (whitens the
@@ -144,11 +230,9 @@ impl Talker {
         self.env_target = (energy / n as f32).sqrt();
     }
 
-    /// One sample: push the modulator, and play the carrier through the
-    /// mouth. Carrier in program volts; output in program volts.
-    #[inline]
-    pub fn process(&mut self, modulator: f32, carrier: f32) -> f32 {
-        self.ring[self.write] = modulator;
+    /// One decimated-domain tick: analysis bookkeeping and the lattice.
+    fn tract_tick(&mut self, m: f32, c: f32) -> f32 {
+        self.ring[self.write] = m;
         self.write = (self.write + 1) % self.ring.len();
         self.since_hop += 1;
         if self.since_hop >= self.hop {
@@ -156,37 +240,83 @@ impl Talker {
             self.analyze();
         }
 
-        // Fricative detector: HF share of the modulator (one-pole split
-        // at ~3 kHz) blends noise into the carrier — consonants are
-        // breath, and a low saw has nothing up there to shape
-        let klp = 1.0 - (-std::f32::consts::TAU * 3000.0 / self.sample_rate).exp();
-        self.m_lp += klp * (modulator - self.m_lp);
-        let hf = modulator - self.m_lp;
-        self.hf_env += 0.002 * (hf.abs() - self.hf_env);
-        self.lf_env += 0.002 * (modulator.abs() - self.lf_env);
-        let target = if self.hf_env > 0.55 * self.lf_env.max(1e-6) { 0.85 } else { 0.0 };
-        self.unvoiced += (target - self.unvoiced) * (250.0 / self.sample_rate).min(1.0);
-
-        // Slew the live tract toward the analysis targets, VCA follower too
+        // Slew the live tract toward the analysis targets; VCA follower
         for i in 0..ORDER {
             self.k[i] += (self.k_target[i] - self.k[i]) * self.k_slew;
         }
         let ke = if self.env_target > self.env { self.attack } else { self.release };
         self.env += (self.env_target - self.env) * ke;
 
-        // The carrier (plus consonant breath) through the lattice tract
-        let x = carrier * (1.0 - self.unvoiced) + self.noise.next() * 4.0 * self.unvoiced;
+        // Consonants are breath: swap the carrier for noise on fricatives
+        let x = c * (1.0 - self.unvoiced) + self.noise.next() * 4.0 * self.unvoiced;
         let mut f = x * 0.25; // headroom: the poles ring hard at formants
         for i in (0..ORDER).rev() {
             f += self.k[i] * self.b[i];
-            // The 0.9995 is wall loss: a real tract is lossy, and it keeps
-            // the lattice bounded while coefficients morph mid-frame
+            // 0.9995 is wall loss: a real tract is lossy, and it keeps the
+            // lattice bounded while coefficients morph mid-frame
             self.b[i + 1] = (self.b[i] - self.k[i] * f) * 0.9995;
         }
         self.b[0] = f;
 
-        // The mouth's loudness opens the VCA; soft OTA limit on the way out
-        (f * self.env * 2.2).tanh() * 3.2
+        // The instrument leads, the mouth articulates: the VCA follows a
+        // NORMALIZED, compressed loudness (^0.45), so word-level dynamics
+        // flatten toward a driven instrument instead of a singer's
+        // phrasing — the difference between a talk box and autotune. The
+        // drive stays constant for the same reason: it is the amp's
+        // character, not the voice's.
+        if self.env > self.env_peak {
+            self.env_peak = self.env;
+        } else {
+            self.env_peak *= self.peak_decay;
+        }
+        let norm = (self.env / self.env_peak.max(1e-5)).clamp(0.0, 1.0);
+        let mut g = norm.powf(0.45);
+        // ...with a downward expander at the floor, so the compression
+        // doesn't hold the gate open on room silence between phrases
+        if norm < 0.02 {
+            let t = norm / 0.02;
+            g *= t * t;
+        }
+        self.gate = g;
+        (f * 1.5).tanh() * 3.2 * g
+    }
+
+    /// One engine-rate sample: anti-alias both signals, run the tract in
+    /// the decimated domain, reconstruct. Carrier and output in volts.
+    #[inline]
+    pub fn process(&mut self, modulator: f32, carrier: f32) -> f32 {
+        // Fricative detector at the full rate (that's where the S lives)
+        self.m_lp += self.split_k * (modulator - self.m_lp);
+        let hf = modulator - self.m_lp;
+        self.hf_env += 0.002 * (hf.abs() - self.hf_env);
+        self.lf_env += 0.002 * (modulator.abs() - self.lf_env);
+        let target = if self.hf_env > 0.55 * self.lf_env.max(1e-6) { 0.85 } else { 0.0 };
+        self.unvoiced += (target - self.unvoiced) * self.unvoiced_k;
+
+        let mut m = modulator;
+        for f in &mut self.in_m {
+            m = f.tick(m);
+        }
+        let mut c = carrier;
+        for f in &mut self.in_c {
+            c = f.tick(c);
+        }
+        self.decim += 1;
+        if self.decim >= DECIM {
+            self.decim = 0;
+            self.held = self.tract_tick(m, c);
+        }
+        // Reconstruct the tube's band, then add what the tube never
+        // carried: the sibilant air up top, and the note's BODY below —
+        // the carrier's fundamental bled straight through (gated with
+        // the speech), which is the difference between thin and full
+        self.body_lp += self.body_k * (carrier - self.body_lp);
+        let mut y = self.held;
+        for f in &mut self.out {
+            y = f.tick(y);
+        }
+        y + self.body_lp * 1.7 * self.gate
+            + self.noise.next() * self.unvoiced * (self.env * 6.0).min(1.2)
     }
 }
 
@@ -249,5 +379,52 @@ mod tests {
             }
         }
         assert!(quiet < 0.05, "silent mouth must mute the carrier, got {quiet}");
+    }
+
+    /// The reason the Talker decimates: a HIGH-pitched modulator (220 Hz
+    /// source through a 900 Hz mouth) must not stamp its own pitch onto
+    /// the carrier. The output should carry the carrier's 110 Hz series,
+    /// not the modulator's 220 Hz series offset from it.
+    #[test]
+    fn high_voice_does_not_ghost_its_pitch() {
+        let sr = 48000.0;
+        let mut t = Talker::new(sr);
+        let (mut y1, mut y2) = (0.0f32, 0.0f32);
+        let cc = -(-std::f32::consts::TAU * 120.0 / sr).exp();
+        let bcoef = 2.0 * (-std::f32::consts::PI * 120.0 / sr).exp()
+            * (std::f32::consts::TAU * 900.0 / sr).cos();
+        let a = 1.0 - bcoef - cc;
+        let mut out = Vec::with_capacity(sr as usize);
+        for n in 0..(sr as usize) {
+            // Modulator: 220 Hz pulse train (a high voice) through the mouth
+            let src = if (n as f32 * 220.0 / sr) % 1.0 < 0.1 { 1.0 } else { -0.02 };
+            let m = {
+                let y = a * src + bcoef * y1 + cc * y2;
+                y2 = y1;
+                y1 = y;
+                y * 0.4
+            };
+            // Carrier: 130.8 Hz saw (C3) — harmonics at 130.8*k
+            let cwave = (((n as f32 * 130.8 / sr) % 1.0) * 2.0 - 1.0) * 5.0;
+            out.push(t.process(m, cwave));
+        }
+        let goertzel = |freq: f32| -> f32 {
+            let (mut re, mut im) = (0.0f32, 0.0f32);
+            for (i, &s) in out[out.len() / 2..].iter().enumerate() {
+                let ph = std::f32::consts::TAU * freq * i as f32 / sr;
+                re += s * ph.cos();
+                im += s * ph.sin();
+            }
+            (re * re + im * im).sqrt()
+        };
+        // 916 Hz = carrier harmonic (130.8*7) near the formant: should be
+        // strong. 880/1100 = modulator harmonics (220*4, 220*5) that fall
+        // BETWEEN carrier harmonics: must stay weak — no ghost pitch.
+        let carrier_h = goertzel(915.6);
+        let ghost = goertzel(880.0).max(goertzel(1100.0));
+        assert!(
+            carrier_h > 2.5 * ghost,
+            "output must be the carrier's series, not the voice's: carrier={carrier_h}, ghost={ghost}"
+        );
     }
 }
