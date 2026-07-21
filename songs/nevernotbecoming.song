@@ -27,15 +27,15 @@ gate 1
 automate vox_clarity
   1
 automate vox_level
-  0.9 R:8 2:0.2 R:7.8 0.9:0.2 R:127.8 2:0.2 R:43.8 0.9:0.2 R:79.8 2:0.2 R:35.8 0.9:0.2 R:119.8 2:0.2 R:19.8 0.9:0.2 R:7.6
+  0.9 R:8 2:0.2 R:7.8 0.9:0.2 R:111.8 2:0.2 R:59.8 0.9:0.2 R:63.8 2:0.2 R:51.8 0.9:0.2 R:119.8 2:0.2 R:19.8 0.9:0.2 R:7.6
 automate vox_mode
-  2 R:8 1:0.2 R:7.8 2:0.2 R:127.8 1:0.2 R:43.8 2:0.2 R:79.8 1:0.2 R:35.8 2:0.2 R:119.8 1:0.2 R:19.8 2:0.2 R:7.6
+  2 R:8 1:0.2 R:7.8 2:0.2 R:111.8 1:0.2 R:59.8 2:0.2 R:63.8 1:0.2 R:51.8 2:0.2 R:119.8 1:0.2 R:19.8 2:0.2 R:7.6
 automate vox_dry
-  0.22 R:8 0.08:0.2 R:7.8 0.22:0.2 R:127.8 0.08:0.2 R:43.8 0.22:0.2 R:79.8 0.08:0.2 R:35.8 0.22:0.2 R:119.8 0.08:0.2 R:19.8 0.22:0.2 R:7.6
+  0.22 R:8 0.08:0.2 R:7.8 0.22:0.2 R:111.8 0.08:0.2 R:59.8 0.22:0.2 R:63.8 0.08:0.2 R:51.8 0.22:0.2 R:119.8 0.08:0.2 R:19.8 0.22:0.2 R:7.6
 automate reverb_wet
-  0.2 R:144 0.3:1 R:43 0.2:1 R:79 0.3:1 R:35 0.2:1 R:119 0.32:1 R:26.4
+  0.2 R:128 0.3:1 R:59 0.2:1 R:63 0.3:1 R:51 0.2:1 R:119 0.32:1 R:26.4
 automate reverb_decay
-  0.6
+  0.6 R:128 0.75:1 R:59 0.6:1 R:63 0.75:1 R:51 0.6:1 R:119 0.72:1 R:26.4
 automate tape_drive
   0.15
 automate tape_age
@@ -44,17 +44,19 @@ automate tape_age
 # ---- the voice -------------------------------------------------------
 track voice vox wav=renders/nevernot-line.wav pitch=renders/nevernot-pitch.wav vel=1 len=1
   R:8 [E2 B2 E3 B3]:8
-  E4:128
-  [A3 E4 B4 E5]:2 [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [G3 E4 G4 B4]:2
-  [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [C#4 A4 C#5 E5]:2 [B3 F#4 B4 D5]:2
-  [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:2 [A3 A4 C#5]:2
-  [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:4 [B3 G#4 E5]:4
+  E4:112
+  E4:2 G4:2 A4:2 B4:3 A4:1.5 B4:1.5 C#5:2 B4:2
+  [A2 A3 E4 B4 E5]:2 [A2 A3 E4 A4 C#5]:2 [B2 B3 F#4 B4 D5]:2 [G2 G3 E4 G4 B4]:2
+  [A2 A3 E4 A4 C#5]:2 [B2 B3 F#4 B4 D5]:2 [C#3 C#4 A4 C#5 E5]:2 [B2 B3 F#4 B4 D5]:2
+  [D3 D4 A4 D5]:2 [C#3 C#4 A4 C#5]:2 [B2 B3 B4 E5]:2 [A2 A3 A4 C#5]:2
+  [D3 D4 A4 D5]:2 [C#3 C#4 A4 C#5]:2 [B2 B3 B4 E5]:4 [B2 B3 G#4 E5]:4
   [E3 B3 E4 G4]:4 [E3 B3 E4 F#4]:4
-  E4:80
-  [A3 E4 B4 E5]:2 [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [G3 E4 G4 B4]:2
-  [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [C#4 A4 C#5 E5]:2 [B3 F#4 B4 D5]:2
-  [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:2 [A3 A4 C#5]:2
-  [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:4 [B3 G#4 E5]:4
+  E4:64
+  E4:2 G4:2 A4:2 B4:3 A4:1.5 B4:1.5 C#5:2 B4:2
+  [A2 A3 E4 B4 E5]:2 [A2 A3 E4 A4 C#5]:2 [B2 B3 F#4 B4 D5]:2 [G2 G3 E4 G4 B4]:2
+  [A2 A3 E4 A4 C#5]:2 [B2 B3 F#4 B4 D5]:2 [C#3 C#4 A4 C#5 E5]:2 [B2 B3 F#4 B4 D5]:2
+  [D3 D4 A4 D5]:2 [C#3 C#4 A4 C#5]:2 [B2 B3 B4 E5]:2 [A2 A3 A4 C#5]:2
+  [D3 D4 A4 D5]:2 [C#3 C#4 A4 C#5]:2 [B2 B3 B4 E5]:4 [B2 B3 G#4 E5]:4
   E4:120
   [A3 E4 A4 C#5]:4 [G#3 E4 B4 E5]:4 [E3 B3 E4 G#4]:4
   [E2 B2 E3 B3]:8
@@ -63,13 +65,15 @@ track voice vox wav=renders/nevernot-line.wav pitch=renders/nevernot-pitch.wav v
 # spans' carrier for density
 track choir vox vel=1 len=1
   R:8 [E2 B2 E3 B3]:8
-  R:128
+  R:112
+  G3:3 E3:3 F#3:3 A3:3 G#3:4
   [A3 E4 B4 E5]:2 [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [G3 E4 G4 B4]:2
   [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [C#4 A4 C#5 E5]:2 [B3 F#4 B4 D5]:2
   [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:2 [A3 A4 C#5]:2
   [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:4 [B3 G#4 E5]:4
   [E3 B3 E4 G4]:4 [E3 B3 E4 F#4]:4
-  R:80
+  R:64
+  G3:3 E3:3 F#3:3 A3:3 G#3:4
   [A3 E4 B4 E5]:2 [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [G3 E4 G4 B4]:2
   [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [C#4 A4 C#5 E5]:2 [B3 F#4 B4 D5]:2
   [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:2 [A3 A4 C#5]:2
@@ -83,8 +87,22 @@ automate choir.gain
 automate choir.glide
   1.2
 
+# The third voice of the pre-chorus trio: inner-voice steps, then one
+# leap of a fifth on 'dissolve' — paid for with a stepwise descent
+track third vox vel=1 len=1
+  R:128
+  C4:2 D4:2 C4:1 G4:3 F#4:2 E4:2 F#4:2 G#4:2
+  R:108
+  C4:2 D4:2 C4:1 G4:3 F#4:2 E4:2 F#4:2 G#4:2
+  R:184
+
+automate third.gain
+  2
+automate third.glide
+  1.2
+
 automate voice.gain
-  1 R:8 2:0.2 R:7.8 1:0.2 R:127.8 2:0.2 R:43.8 1:0.2 R:79.8 2:0.2 R:35.8 1:0.2 R:119.8 2:0.2 R:19.8 1:0.2 R:7.6
+  1 R:8 2:0.2 R:7.8 1:0.2 R:111.8 2:0.2 R:59.8 1:0.2 R:63.8 2:0.2 R:51.8 1:0.2 R:119.8 2:0.2 R:19.8 1:0.2 R:7.6
 automate voice.glide
   1.2
 automate voice.detune
@@ -107,7 +125,7 @@ automate voice.attack
   0.004
 
 # ---- the saw wall: slow counterpoint, one step at a time -------------
-track sawS vel=0.62 len=4
+track sawS vel=0.72 len=4
   E4:6 F#4:4 E4:6
   (E4:5 F#4:4 E4:5 D4:2)x7
   G4:6 A4:6 B4:4
@@ -126,11 +144,11 @@ track sawS vel=0.62 len=4
 track sawA vel=0.58 len=4
   G3:7 F#3:3 G3:6
   (G3:3 F#3:4 E3:4 D3:5)x7
-  E4:6 F#4:6 G#4:4
+  E3:6 F#3:6 G#3:4
   (A3:5 B3:4 A3:4 G3:3)x2 B3:4
   G3:5 F#3:3
   (G3:3 F#3:4 E3:4 D3:5)x4
-  E4:6 F#4:6 G#4:4
+  E3:6 F#3:6 G#3:4
   (A3:5 B3:4 A3:4 G3:3)x2 B3:4
   R:48
   (G3:3 F#3:4 E3:4 D3:5)
@@ -142,12 +160,12 @@ track sawA vel=0.58 len=4
 track sawT vel=0.58 len=4
   B3:16
   (B3:6 A3:5 B3:5)x7
-  C4:6 D4:6 E4:4
-  (E4:5 F#4:7 E4:4)x2 E4:4
+  C3:6 D3:6 E3:4
+  (E3:5 F#3:7 E3:4)x2 E3:4
   B3:8
   (B3:6 A3:5 B3:5)x4
-  C4:6 D4:6 E4:4
-  (E4:5 F#4:7 E4:4)x2 E4:4
+  C3:6 D3:6 E3:4
+  (E3:5 F#3:7 E3:4)x2 E3:4
   B3:8 A#3:8 A3:8 G#3:8 A3:8 A#3:8
   (B3:6 A3:5 B3:5)
   G#3:4 A3:4 C#4:4 B3:4 E4:4
@@ -175,11 +193,11 @@ track bass patch=deepsine vel=0.85 len=4
   E1:4 E1:4 E1:4 D1:4
   (E1:4 D1:4 A1:4 B1:4)x7
   C1:6 D1:6 E1:4
-  (A1:2 A1:2 B1:2 B1:2 D1:2 D1:2 E1:2 E1:2)x2 E1:4
+  (A1:2 A2:2 B1:2 B2:2 D1:2 D2:2 E1:2 E2:2)x2 E1:4
   E1:4 D1:4
   (E1:4 D1:4 A1:4 B1:4)x4
   C1:6 D1:6 E1:4
-  (A1:2 A1:2 B1:2 B1:2 D1:2 D1:2 E1:2 E1:2)x2 E1:4
+  (A1:2 A2:2 B1:2 B2:2 D1:2 D2:2 E1:2 E2:2)x2 E1:4
   E1:8 E1:8 E1:8 E1:8 E1:8 E1:8
   (E1:4 D1:4 A1:4 B1:4)
   E1:4 F#1:4 A1:4 B1:4 E1:4
@@ -191,35 +209,39 @@ automate bass.gain
   2
 
 # ---- pad voicing -----------------------------------------------------
+# the halo: a single sine partial riding the top line — presence
+# above the voice without harmonics in the formant band
+automate sawS.waveform
+  0
 automate sawS.gain
-  1.8 R:144 1.45:1 R:43 1.8:1 R:79 1.45:1 R:35 1.8:1 R:119 1.5:1 R:26.4
+  1.8 R:128 1.45:1 R:59 1.8:1 R:63 1.45:1 R:51 1.8:1 R:119 1.5:1 R:26.4
 automate sawS.pan
   -0.35
 automate sawS.detune
-  9
+  0
 automate sawS.osc2_level
-  0.7
+  0
 automate sawS.osc3_level
-  0.7
+  0
 automate sawS.drive
-  1.2
+  1
 automate sawS.saturation
-  0.2
+  0
 automate sawS.attack
-  0.3
+  0.4
 automate sawS.release
-  1.2
+  1.4
 automate sawS.cutoff
-  9500
+  16000
 automate sawS.glide
   2.5 R:364 5:8@lin R:80
 
 automate sawA.gain
-  1.8 R:144 1.45:1 R:43 1.8:1 R:79 1.45:1 R:35 1.8:1 R:119 1.5:1 R:26.4
+  1.8 R:128 1.45:1 R:59 1.8:1 R:63 1.45:1 R:51 1.8:1 R:119 1.5:1 R:26.4
 automate sawA.pan
   0.35
 automate sawA.detune
-  9
+  5
 automate sawA.osc2_level
   0.7
 automate sawA.osc3_level
@@ -233,16 +255,16 @@ automate sawA.attack
 automate sawA.release
   1.2
 automate sawA.cutoff
-  7500
+  600 2600:16@exp R:112 4000:2@smooth R:58 2600:2@smooth R:62 4000:2@smooth R:50 2000:2@smooth R:62 5500:20@exp R:36 1100:24@exp
 automate sawA.glide
   3.5 R:364 5:8@lin R:80
 
 automate sawT.gain
-  1.8 R:144 1.45:1 R:43 1.8:1 R:79 1.45:1 R:35 1.8:1 R:119 1.5:1 R:26.4
+  1.8 R:128 1.45:1 R:59 1.8:1 R:63 1.45:1 R:51 1.8:1 R:119 1.5:1 R:26.4
 automate sawT.pan
   -0.2
 automate sawT.detune
-  9
+  5
 automate sawT.osc2_level
   0.7
 automate sawT.osc3_level
@@ -258,7 +280,7 @@ automate sawT.release
 automate sawT.sub
   0.2
 automate sawT.cutoff
-  6500
+  600 2800:16@exp R:112 4200:2@smooth R:58 2800:2@smooth R:62 4200:2@smooth R:50 2400:2@smooth R:62 6000:20@exp R:36 1200:24@exp
 automate sawT.glide
   4 R:364 5:8@lin R:80
 
@@ -283,6 +305,6 @@ automate sawB.release
 automate sawB.sub
   0.5
 automate sawB.cutoff
-  4500
+  500 2000:16@exp R:112 3000:2@smooth R:58 2000:2@smooth R:62 3000:2@smooth R:50 1600:2@smooth R:62 4500:20@exp R:36 900:24@exp
 automate sawB.glide
   0.15

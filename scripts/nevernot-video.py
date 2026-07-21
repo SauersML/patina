@@ -97,8 +97,14 @@ def chord_events():
         for ch, dur in seq:
             ev.append((b * SPB, [N[n] for n in ch.split()]))
             b += dur
+    PRE_TRIO = [("G3 C4 E4",2),("G3 D4 G4",2),("E3 C4 A4",1),
+                ("E3 G4 A4",1),("F#3 G4 B4",2),("F#3 F#4 B4",1),
+                ("A3 F#4 A4",1.5),("A3 E4 B4",1.5),("G#3 F#4 C#5",2),
+                ("G#3 G#4 B4",2)]
     add(8, BUZZ_CHORD)
+    add(128, PRE_TRIO)
     add(144, CHORUS_CHORDS)
+    add(252, PRE_TRIO)
     add(180, [("E3 B3 E4 G4",4),("E3 B3 E4 F#4",4)])
     add(268, CHORUS_CHORDS)
     add(424, [("A3 E4 A4 C#5",4),("G#3 E4 B4 E5",4),("E3 B3 E4 G#4",4)])

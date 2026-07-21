@@ -39,7 +39,7 @@ N = {"D3": 50, "E3": 52, "F#3": 54, "G3": 55, "A3": 57, "B3": 59,
 BUZZ = (8, "vocoder", "Bzzzzz.",
         [("Bzzzzz", 0.5, 7.0, 0.9, "E4", {})])
 
-PRECHORUS = (16, "All concepts of self as separate dissolve into the "
+PRECHORUS = (16, "vocoder", "All concepts of self as separate dissolve into the "
                  "blistering kevala, the One great overmindhearth of "
                  "this Acherontic athanor.",
     [("All", 0.0, 0.75, 0.9, "E4", {}),
