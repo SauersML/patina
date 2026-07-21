@@ -54,13 +54,16 @@ pub struct Voice {
     /// faster than once per two seconds), with small residue per core.
     common_drift: f32,
     drift_rng: u32,
-    /// Portamento, per US 3,991,645: the keyboard CV charges the hold
-    /// capacitor through a glide resistance, so pitch settles exponentially
-    /// in CV (octave) space BEFORE the expo converter. `glide_offset` is the
-    /// remaining octave distance from the target note; `glide_k` the
-    /// per-sample RC coefficient (1.0 = instant).
+    /// Portamento as the SH-101/303 lineage does it: a LINEAR slew of the
+    /// CV at constant octaves-per-second, applied BEFORE the expo
+    /// converter. Constant rate means a semitone snaps and a leap takes
+    /// proportionally longer — and the pitch ARRIVES and stops, no
+    /// asymptotic flat crawl into every note (the old RC glide's
+    /// perpetual last-few-cents sag was the "silly" in the sound).
+    /// `glide_offset` is the remaining octave distance; `glide_rate` the
+    /// per-sample slew step (1.0 = effectively instant).
     glide_offset: f32,
-    glide_k: f32,
+    glide_rate: f32,
     /// Juno-style sub-oscillator level: the first oscillator's divide-by-two
     /// square, mixed in before the filter.
     sub_level: f32,
@@ -175,7 +178,7 @@ impl Voice {
             common_drift: 0.0,
             drift_rng: seed.wrapping_mul(0x27D4_EB2F) | 1,
             glide_offset: 0.0,
-            glide_k: 1.0,
+            glide_rate: 1.0,
             sub_level: 0.0,
             osc_pitch_semi: [0.0, 0.0],
             osc_level: [0.72, 0.72],
@@ -245,8 +248,13 @@ impl Voice {
         self.filter_env_amount = octaves.clamp(-5.0, 5.0);
     }
 
-    pub fn set_glide_coef(&mut self, k: f32) {
-        self.glide_k = k.clamp(1e-5, 1.0);
+    pub fn set_glide_rate(&mut self, rate: f32) {
+        self.glide_rate = rate.clamp(1e-7, 1.0);
+    }
+
+    /// Diagnostic: remaining glide distance in octaves (0 = arrived).
+    pub fn glide_remaining(&self) -> f32 {
+        self.glide_offset
     }
 
     pub fn set_sub_level(&mut self, level: f32) {
@@ -318,12 +326,13 @@ impl Voice {
         self.filter.set_drive(p.drive);
         self.filter.set_saturation(p.saturation);
         self.hpf.set_cutoff(p.hpf_cutoff);
-        let k = if p.glide < 1e-3 {
+        let rate = if p.glide < 1e-3 {
             1.0
         } else {
-            1.0 - (-3.0 / (p.glide * self.sample_rate)).exp()
+            // `glide` is seconds per OCTAVE of travel (linear slew)
+            1.0 / (p.glide * self.sample_rate)
         };
-        self.set_glide_coef(k);
+        self.set_glide_rate(rate);
     }
 
     pub fn set_key_track(&mut self, amount: f32) {
@@ -348,7 +357,7 @@ impl Voice {
     /// through the glide pot.
     pub fn trigger(&mut self, note: u8, velocity: f32, age: u64, glide_from_cv: Option<f32>) {
         let new_cv = (note as f32 - 69.0) / 12.0;
-        if self.glide_k < 0.999 {
+        if self.glide_rate < 0.999 {
             if let Some(prev_cv) = glide_from_cv {
                 self.glide_offset = (prev_cv - new_cv).clamp(-5.0, 5.0);
             }
@@ -427,9 +436,15 @@ impl Voice {
 
         // Glide: the CV settles toward the target note; exponential in
         // octave space, so the audible swoop is geometric in frequency
-        let pitch_mult = if self.glide_offset.abs() > 1e-5 {
-            self.glide_offset -= self.glide_offset * self.glide_k;
-            pitch_mult * self.glide_offset.exp2()
+        let pitch_mult = if self.glide_offset != 0.0 {
+            // Linear slew, exact arrival: step toward the target and STOP
+            if self.glide_offset.abs() <= self.glide_rate {
+                self.glide_offset = 0.0;
+                pitch_mult
+            } else {
+                self.glide_offset -= self.glide_rate * self.glide_offset.signum();
+                pitch_mult * self.glide_offset.exp2()
+            }
         } else {
             pitch_mult
         };

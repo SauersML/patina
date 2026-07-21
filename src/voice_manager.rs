@@ -267,6 +267,9 @@ pub struct VoiceManager {
     pedal_down: bool,
     sustained: [bool; 128],
     note_counter: u64,
+    /// Sample clock, for the chord-detection window on glide.
+    samples_rendered: u64,
+    last_note_on_sample: u64,
     /// Per-song-channel parameter snapshots (the per-track patches).
     channel_params: HashMap<u16, ParamValues>,
     pub params: ParamValues,
@@ -304,6 +307,8 @@ impl VoiceManager {
             pedal_down: false,
             sustained: [false; 128],
             note_counter: 0,
+            samples_rendered: 0,
+            last_note_on_sample: u64::MAX,
             channel_params: HashMap::new(),
             params,
             scope: VecDeque::with_capacity(SCOPE_LEN),
@@ -378,8 +383,18 @@ impl VoiceManager {
         // A fresh press owns the note again; it is no longer the pedal's
         self.sustained[note as usize] = false;
 
-        // Glide starts from the most recently played note, mono-synth style
-        let glide_from = self.last_note_cv;
+        // Glide starts from the most recently played note, mono-synth
+        // style — EXCEPT within a chord: notes struck together (within
+        // ~25 ms) must not swoop in formation from one pitch, which was
+        // the old glissando-comedy bug. Chord members start in tune.
+        let chord_window = (self.sample_rate * 0.025) as u64;
+        let is_chord = self
+            .samples_rendered
+            .checked_sub(self.last_note_on_sample)
+            .map(|d| d < chord_window)
+            .unwrap_or(false);
+        let glide_from = if is_chord { None } else { self.last_note_cv };
+        self.last_note_on_sample = self.samples_rendered;
         self.last_note_cv = Some((note as f32 - 69.0) / 12.0);
 
         let chan_params = if channel > 0 {
@@ -744,17 +759,17 @@ impl VoiceManager {
     }
 
     pub fn set_glide(&mut self, seconds: f32) {
-        // Range per the Polymoog factory spec: full glide is 3.75-8.75 s
-        // across the keyboard, so the knob reaches well past 2 s
+        // Seconds per OCTAVE of travel: the SH-101/303-style linear CV
+        // slew. A semitone snaps, a leap takes proportionally longer, and
+        // the pitch arrives exactly (no RC tail).
         self.params.glide = seconds.clamp(0.0, 5.0);
-        // RC coefficient: reach ~95% of the interval in `glide` seconds
-        let k = if self.params.glide < 1e-3 {
+        let rate = if self.params.glide < 1e-3 {
             1.0
         } else {
-            1.0 - (-3.0 / (self.params.glide * self.sample_rate)).exp()
+            1.0 / (self.params.glide * self.sample_rate)
         };
         for voice in &mut self.voices {
-            voice.set_glide_coef(k);
+            voice.set_glide_rate(rate);
         }
     }
 
@@ -781,6 +796,7 @@ impl VoiceManager {
     }
 
     pub fn render_next(&mut self) -> (f32, f32) {
+        self.samples_rendered = self.samples_rendered.wrapping_add(1);
         // One shared noise generator distributed to every active voice
         // (903A / Juno-106 architecture) — filtered per voice, gated by
         // each voice's envelope, but a single correlated source
@@ -1138,6 +1154,60 @@ mod tests {
             (early_f as f32) < late_f as f32 * 0.85,
             "glide should start near the old pitch: early={early_f}, late={late_f} crossings"
         );
+    }
+
+    /// Glide is a linear constant-rate slew now: it must ARRIVE exactly
+    /// (no RC tail), a small interval must travel faster than a leap,
+    /// and chord members struck together must NOT glide in formation.
+    #[test]
+    fn glide_slews_linearly_and_chords_stay_in_tune() {
+        let sr = 44100.0;
+        let mut vm = VoiceManager::new(sr, 8);
+        vm.warm_up();
+        vm.set_glide(0.2); // 0.2 s per octave
+        vm.note_on(45, 0.8);
+        for _ in 0..(0.1 * sr) as usize {
+            vm.render_next();
+        }
+        // Legato leap of one octave: should be mid-glide at 0.1 s and
+        // ARRIVED (exactly zero) shortly after 0.2 s
+        vm.note_on(57, 0.8);
+        for _ in 0..(0.1 * sr) as usize {
+            vm.render_next();
+        }
+        let v57 = vm.voices.iter().find(|v| v.note == Some(57)).unwrap();
+        let mid = v57.glide_remaining().abs();
+        assert!(
+            mid > 0.3 && mid < 0.7,
+            "octave glide at halfway should have ~half remaining, got {mid}"
+        );
+        for _ in 0..(0.15 * sr) as usize {
+            vm.render_next();
+        }
+        let v57 = vm.voices.iter().find(|v| v.note == Some(57)).unwrap();
+        assert_eq!(
+            v57.glide_remaining(),
+            0.0,
+            "linear glide must arrive EXACTLY, no asymptotic tail"
+        );
+        // A chord struck together must not swoop from the last note
+        for _ in 0..(0.2 * sr) as usize {
+            vm.render_next();
+        }
+        vm.note_on(60, 0.8);
+        vm.note_on(64, 0.8);
+        vm.note_on(67, 0.8);
+        for &n in &[64u8, 67u8] {
+            let v = vm.voices.iter().find(|v| v.note == Some(n)).unwrap();
+            assert_eq!(
+                v.glide_remaining(),
+                0.0,
+                "chord member {n} must start in tune, not glide in formation"
+            );
+        }
+        // ...but the chord's FIRST note may glide from the previous line
+        let v60 = vm.voices.iter().find(|v| v.note == Some(60)).unwrap();
+        assert!(v60.glide_remaining().abs() > 0.0);
     }
 
     /// Channel isolation: a dark channel patch and the bright panel must
