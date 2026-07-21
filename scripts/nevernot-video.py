@@ -39,42 +39,55 @@ N = {"D2": 38, "E2": 40, "F#2": 42, "G2": 43, "A2": 45, "B2": 47,
 def expand(seq, times=1):
     return seq * times
 
-SAW = {
- "S": (2.5, expand([("E4",6),("F#4",4),("E4",6)]) +
-       expand([("E4",5),("F#4",4),("E4",5),("D4",2)], 4) +
-       expand([("E5",5),("D5",8),("E5",3)], 2) + [("E5",8)] +
-       expand([("E4",5),("F#4",4),("E4",5),("D4",2)], 2) +
-       expand([("E5",5),("D5",8),("E5",3)], 2) +
-       [("B4",4),("C#5",4),("D5",4),("E5",4),("F#5",4),("E5",20)]),
- "A": (3.5, expand([("G3",7),("F#3",3),("G3",6)]) +
-       expand([("G3",3),("F#3",4),("E3",4),("D3",5)], 4) +
-       expand([("A3",5),("B3",4),("A3",4),("G3",3)], 2) +
-       [("G3",5),("F#3",3)] +
-       expand([("G3",3),("F#3",4),("E3",4),("D3",5)], 2) +
-       expand([("A3",5),("B3",4),("A3",4),("G3",3)], 2) +
-       [("B3",4),("C#4",4),("E4",4),("F#4",4),("G4",4),("G4",20)]),
- "T": (4.0, [("B3",16)] +
-       expand([("B3",6),("A3",5),("B3",5)], 4) +
-       expand([("E4",5),("F#4",7),("E4",4)], 2) + [("B3",8)] +
-       expand([("B3",6),("A3",5),("B3",5)], 2) +
-       expand([("E4",5),("F#4",7),("E4",4)], 2) +
-       [("G3",4),("A3",4),("C#4",4),("B3",4),("E4",4),("B3",20)]),
- "B": (0.15, expand([("E2",4),("E2",4),("E2",4),("D2",4)]) +
-       expand([("E2",4),("D2",4),("A2",4),("B2",4)], 4) +
-       expand([("A2",4),("B2",4),("D2",4),("E2",4)], 2) +
-       [("E2",4),("D2",4)] +
-       expand([("E2",4),("D2",4),("A2",4),("B2",4)], 2) +
-       expand([("A2",4),("B2",4),("D2",4),("E2",4)], 2) +
-       [("E2",4),("F#2",4),("A2",4),("B2",4),("E2",4),
-        ("A2",4),("G2",4),("E2",12)]),
-}
+VERSE = {"S": [("E4",5),("F#4",4),("E4",5),("D4",2)],
+         "A": [("G3",3),("F#3",4),("E3",4),("D3",5)],
+         "T": [("B3",6),("A3",5),("B3",5)],
+         "B": [("E2",4),("D2",4),("A2",4),("B2",4)]}
+PRE = {"S": [("E4",4),("F#4",4),("G4",4),("A4",4)],
+       "A": [("G3",4),("A3",4),("B3",4),("C#4",4)],
+       "T": [("B3",4),("B3",4),("D4",4),("E4",4)],
+       "B": [("E2",4),("F#2",4),("G2",4),("A2",4)]}
+CHOR = {"S": expand([("E5",5),("D5",8),("E5",3)], 2) + [("E5",4)],
+        "A": expand([("A3",5),("B3",4),("A3",4),("G3",3)], 2) + [("A3",4)],
+        "T": expand([("E4",5),("F#4",7),("E4",4)], 2) + [("E4",4)],
+        "B": expand([("A2",4),("B2",4),("D2",4),("E2",4)], 2) + [("A2",4)]}
+RISE = {"S": [("B4",4),("C#5",4),("D5",4),("E5",4),("F#5",4)],
+        "A": [("B3",4),("C#4",4),("E4",4),("F#4",4),("G4",4)],
+        "T": [("G3",4),("A3",4),("C#4",4),("B3",4),("E4",4)],
+        "B": [("E2",4),("F#2",4),("A2",4),("B2",4),("E2",4)]}
+
+
+def track_seq(k):
+    intro = {"S": [("E4",6),("F#4",4),("E4",6)],
+             "A": [("G3",7),("F#3",3),("G3",6)],
+             "T": [("B3",16)],
+             "B": [("E2",4),("E2",4),("E2",4),("D2",4)]}[k]
+    il = {"S": [("E5",8)], "A": [("G3",5),("F#3",3)],
+          "T": [("B3",8)], "B": [("E2",4),("D2",4)]}[k]
+    br = {"S": [(None,48)], "A": [(None,48)],
+          "T": expand([("B3",8),("A3",8)], 3),
+          "B": [("E2",8)]*6}[k]
+    conv = {"S": [("E5",20)], "A": [("G4",8),("E4",12)],
+            "T": [("B3",8),("E4",12)], "B": [("A2",4),("G2",4),("E2",12)]}[k]
+    tail = {"S": [("E5",12),(None,16)], "A": [("E4",12),(None,16)],
+            "T": [("E4",12),(None,16)], "B": [("E2",28)]}[k]
+    return (intro + VERSE[k]*7 + PRE[k] + CHOR[k] + il + VERSE[k]*4 +
+            PRE[k] + CHOR[k] + br + VERSE[k] + RISE[k] + VERSE[k] +
+            conv + tail)
+
+
+SAW = {k: (g, track_seq(k))
+       for k, g in (("S", 2.5), ("A", 3.5), ("T", 4.0), ("B", 0.15))}
 
 CHORUS_CHORDS = ([("A3 E4 B4 E5",2),("A3 E4 A4 C#5",2),("B3 F#4 B4 D5",2),
                   ("G3 E4 G4 B4",2),("A3 E4 A4 C#5",2),("B3 F#4 B4 D5",2),
                   ("C#4 A4 C#5 E5",2),("B3 F#4 B4 D5",2),
                   ("D4 A4 D5",2),("C#4 A4 C#5",2),("B3 B4 E5",2),
                   ("A3 A4 C#5",2),("D4 A4 D5",2),("C#4 A4 C#5",2),
-                  ("B3 B4 E5",4)])
+                  ("B3 B4 E5",4),("C#4 A4 E5",4)])
+BUZZ_CHORD = [("E2 B2 E3 B3", 8)]
+
+
 def chord_events():
     ev = []
     def add(start_beat, seq):
@@ -82,10 +95,12 @@ def chord_events():
         for ch, dur in seq:
             ev.append((b * SPB, [N[n] for n in ch.split()]))
             b += dur
-    add(80, CHORUS_CHORDS)
-    add(112, [("E3 B3 E4 G4",4),("E3 B3 E4 F#4",4)])
-    add(152, CHORUS_CHORDS)
-    add(204, [("A3 E4 A4 C#5",4),("G3 D4 G4 B4",4),("E3 B3 E4 G4",4)])
+    add(8, BUZZ_CHORD)
+    add(144, CHORUS_CHORDS)
+    add(180, [("E3 B3 E4 G4",4),("E3 B3 E4 F#4",4)])
+    add(268, CHORUS_CHORDS)
+    add(424, [("A3 E4 A4 C#5",4),("G3 D4 G4 B4",4),("E3 B3 E4 G4",4)])
+    add(436, BUZZ_CHORD)
     return sorted(ev)
 
 
@@ -100,7 +115,7 @@ def glide_track(seq, glide, total_s, rate=FPS):
     changes = []
     b = 0.0
     for note, beats in seq:
-        changes.append((b * SPB, N[note] / 12.0))
+        changes.append((b * SPB, None if note is None else N[note] / 12.0))
         b += beats
     ci = 0
     step = (1.0 / max(glide, 1e-3)) / rate
@@ -109,6 +124,9 @@ def glide_track(seq, glide, total_s, rate=FPS):
         while ci < len(changes) and changes[ci][0] <= tt:
             tgt = changes[ci][1]
             ci += 1
+        if tgt is None:
+            out[i] = np.nan
+            continue
         d = tgt - cur
         if abs(d) <= step:
             cur = tgt
@@ -211,7 +229,7 @@ def main():
             cy = gy * 100
             d0.line(hexagon(cx, cy, 56), fill=(14, 15, 14), width=1)
 
-    probes = {int(s * FPS): s for s in (15.0, 52.0, 70.0, 116.0)}
+    probes = {int(s * FPS): s for s in (15.0, 95.0, 109.0, 228.0)}
 
     for f in (sorted(probes) if probe_only else range(nframes)):
         t = f / FPS
@@ -223,13 +241,18 @@ def main():
         # and all — song starts them at beat 0
         for k, arr in saws.items():
             pts = []
+            wgt = 3 if k in ("B",) else 2
             for px in range(0, W, 4):
                 tt = t0w + px / PX_PER_S
                 i = int(tt * FPS)
-                if 0 <= i < len(arr):
-                    pts.append((px, m2y(arr[i])))
+                v = arr[i] if 0 <= i < len(arr) else np.nan
+                if np.isnan(v):
+                    if len(pts) > 1:
+                        dr.line(pts, fill=(196, 132, 45, 110), width=wgt)
+                    pts = []
+                else:
+                    pts.append((px, m2y(v)))
             if len(pts) > 1:
-                wgt = 3 if k in ("B",) else 2
                 dr.line(pts, fill=(196, 132, 45, 110), width=wgt)
 
         # phosphor scope: the mix itself, folded along the bottom

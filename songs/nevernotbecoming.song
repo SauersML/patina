@@ -1,27 +1,25 @@
-# Nevernotbecoming — the bee transmission, sung.
+# Nevernotbecoming — the COMPLETE bee transmission, sung.
 #
-# Female voice (af_heart, +2 st; af_bella doubles the vocoder choir)
-# through two circuits: verses are the legible Talker steered by the
-# scored pitch line (renders/nevernot-pitch.wav — recitation-tone
-# melody, movement saved for accents and cadences), and each CHORUS
-# breaks into the 20-band vocoder as CHORDS: the curve writes its
-# release sentinel, vox_mode flips on the beat, and the keys take over
-# with gliding voice-led voicings. The interlude and the coda are
-# wordless doubled "aaah" choir over melting Em voicings.
+# Every word of the text, framed by its own bzzzz (a vocoded /z/
+# cluster on a low Em stack — the choir literally buzzes). Verses are
+# the legible Talker on the scored pitch line (one strophic tune:
+# E4-G4-A4 rise, B4 peak, F#4-E4 fall; breaths at the commas). "All
+# concepts of self as separate dissolve..." is a rising PRE-CHORUS;
+# the chorus is the full egregore sentence in 20-band vocoder chords
+# with gliding voicings; paragraph five is a low recitative bridge
+# over a bass pedal with the pads thinned to the tenor alone;
+# "abeeing" holds its pun, "nevernotbecoming" takes the B4->F#5
+# ascent; the last verse settles home and the choir exhales one
+# final aaah before the buzz recedes.
 #
-# The pad is four saw tracks panned into a wall, written as slow
-# COUNTERPOINT rather than gestures: common tones hold across chord
-# changes, every other voice moves by STEP (glide 2.5-4 s/oct turns
-# each step into a slow melt), and suspensions resolve mid-chord —
-# the soprano's E rings over D as a ninth, then eases to F#; the
-# alto walks G-F#-E-D one step per chord. E dorian, 100, no drums.
+# Pads: slow counterpoint (common tones hold, steps melt at 2.5-4
+# s/octave, suspensions resolve mid-chord). Mixed by measurement:
+# vox_level rides to 2 in choir spans (the band vocoder's tanh caps
+# its own output), pads duck under the choir, bass at gain 2.
 #
-# Mix (measured on un-normalized stems): the vocoder ran 15 dB under
-# the verse lead — chorus modulator now +7 dB and carrier gain 1.8x
-# during vocoder spans; pads +6 dB (gain 2, vel up); bass +9 dB; chorus modulator soft-limited at 0.35 RMS.
-#
-# Form (beats): intro 16 | V1 32 | V2 32 | CH 32 | interlude 8 |
-#               V3 32 | CH 32 | outro 20 | coda 12 | tail 8   = 224
+# Form (beats): intro 16 (buzz 8) | V1-3 48 | V4-7 64 | PRE 16 |
+#   CH 36 | aaah 8 | V8-11 64 | PRE 16 | CH 36 | bridge 48 |
+#   OUT 36 | FIN 36 | aaah 12 | bzzz 8 | tail 8   = 452
 
 bpm 100
 gate 0.98
@@ -29,13 +27,13 @@ gate 0.98
 automate vox_clarity
   1
 automate vox_level
-  0.9 R:80 2:0.2 R:39.8 0.9:0.2 R:31.8 2:0.2 R:31.8 0.9:0.2 R:19.8 2:0.2 R:19.6
+  0.9 R:8 2:0.2 R:7.8 0.9:0.2 R:127.8 2:0.2 R:43.8 0.9:0.2 R:79.8 2:0.2 R:35.8 0.9:0.2 R:119.8 2:0.2 R:19.8 0.9:0.2 R:7.6
 automate vox_mode
-  2 R:80 1:0.2 R:39.8 2:0.2 R:31.8 1:0.2 R:31.8 2:0.2 R:19.8 1:0.2 R:19.6
+  2 R:8 1:0.2 R:7.8 2:0.2 R:127.8 1:0.2 R:43.8 2:0.2 R:79.8 1:0.2 R:35.8 2:0.2 R:119.8 1:0.2 R:19.8 2:0.2 R:7.6
 automate vox_dry
-  0.22 R:80 0.08:0.2 R:39.8 0.22:0.2 R:31.8 0.08:0.2 R:31.8 0.22:0.2 R:19.8 0.08:0.2 R:19.6
+  0.22 R:8 0.08:0.2 R:7.8 0.22:0.2 R:127.8 0.08:0.2 R:43.8 0.22:0.2 R:79.8 0.08:0.2 R:35.8 0.22:0.2 R:119.8 0.08:0.2 R:19.8 0.22:0.2 R:7.6
 automate reverb_wet
-  0.2 R:80 0.3:1 R:31 0.2:1 R:39 0.3:1 R:31 0.2:1 R:19 0.32:1 R:19.6
+  0.2 R:144 0.3:1 R:43 0.2:1 R:79 0.3:1 R:35 0.2:1 R:119 0.32:1 R:26.4
 automate reverb_decay
   0.6
 automate tape_drive
@@ -44,40 +42,41 @@ automate tape_age
   0.3
 
 # ---- the voice -------------------------------------------------------
-# Verses: one held key, the curve is the pitch. Choruses, interlude,
-# coda: real chords, voice-led, gliding between voicings.
 track voice vox wav=renders/nevernot-line.wav pitch=renders/nevernot-pitch.wav vel=1 len=1
-  R:16 E4:64
+  R:8 [E2 B2 E3 B3]:8
+  E4:128
   [A3 E4 B4 E5]:2 [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [G3 E4 G4 B4]:2
   [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [C#4 A4 C#5 E5]:2 [B3 F#4 B4 D5]:2
   [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:2 [A3 A4 C#5]:2
-  [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:4
+  [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:4 [C#4 A4 E5]:4
   [E3 B3 E4 G4]:4 [E3 B3 E4 F#4]:4
-  E4:32
+  E4:80
   [A3 E4 B4 E5]:2 [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [G3 E4 G4 B4]:2
   [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [C#4 A4 C#5 E5]:2 [B3 F#4 B4 D5]:2
   [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:2 [A3 A4 C#5]:2
-  [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:4
-  E4:20
+  [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:4 [C#4 A4 E5]:4
+  E4:120
   [A3 E4 A4 C#5]:4 [G3 D4 G4 B4]:4 [E3 B3 E4 G4]:4
+  [E2 B2 E3 B3]:8
 
-# A second bank of keys on the same vox channel: the vocoder's output
-# scales with its carrier, so doubling the chord voices during the
-# choir spans is a clean +6 dB that no mixer knob could give
+# A second bank of keys on the same vox channel: doubles the choir
+# spans' carrier for density
 track choir vox vel=1 len=1
+  R:8 [E2 B2 E3 B3]:8
+  R:128
+  [A3 E4 B4 E5]:2 [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [G3 E4 G4 B4]:2
+  [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [C#4 A4 C#5 E5]:2 [B3 F#4 B4 D5]:2
+  [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:2 [A3 A4 C#5]:2
+  [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:4 [C#4 A4 E5]:4
+  [E3 B3 E4 G4]:4 [E3 B3 E4 F#4]:4
   R:80
   [A3 E4 B4 E5]:2 [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [G3 E4 G4 B4]:2
   [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [C#4 A4 C#5 E5]:2 [B3 F#4 B4 D5]:2
   [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:2 [A3 A4 C#5]:2
-  [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:4
-  [E3 B3 E4 G4]:4 [E3 B3 E4 F#4]:4
-  R:32
-  [A3 E4 B4 E5]:2 [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [G3 E4 G4 B4]:2
-  [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [C#4 A4 C#5 E5]:2 [B3 F#4 B4 D5]:2
-  [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:2 [A3 A4 C#5]:2
-  [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:4
-  R:20
+  [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:4 [C#4 A4 E5]:4
+  R:120
   [A3 E4 A4 C#5]:4 [G3 D4 G4 B4]:4 [E3 B3 E4 G4]:4
+  [E2 B2 E3 B3]:8
 
 automate choir.gain
   2
@@ -85,7 +84,7 @@ automate choir.glide
   1.2
 
 automate voice.gain
-  1 R:80 2:0.2 R:39.8 1:0.2 R:31.8 2:0.2 R:31.8 1:0.2 R:19.8 2:0.2 R:19.6
+  1 R:8 2:0.2 R:7.8 1:0.2 R:127.8 2:0.2 R:43.8 1:0.2 R:79.8 2:0.2 R:35.8 1:0.2 R:119.8 2:0.2 R:19.8 1:0.2 R:7.6
 automate voice.glide
   1.2
 automate voice.detune
@@ -108,66 +107,92 @@ automate voice.attack
   0.004
 
 # ---- the saw wall: slow counterpoint, one step at a time -------------
-# Verse cycle Em|D|A|Bm — soprano: E (9th over D!) eases to F#, back
-# to E (4th over Bm) down to D. Alto: G F# E D, one step per chord.
-# Tenor: B suspends over D, resolves to A, holds through A (common
-# tone), steps back to B as the harmony becomes Bm.
 track sawS vel=0.62 len=4
   E4:6 F#4:4 E4:6
-  (E4:5 F#4:4 E4:5 D4:2)x4
-  (E5:5 D5:8 E5:3)x2
+  (E4:5 F#4:4 E4:5 D4:2)x7
+  E4:4 F#4:4 G4:4 A4:4
+  (E5:5 D5:8 E5:3)x2 E5:4
   E5:8
-  (E4:5 F#4:4 E4:5 D4:2)x2
-  (E5:5 D5:8 E5:3)x2
+  (E4:5 F#4:4 E4:5 D4:2)x4
+  E4:4 F#4:4 G4:4 A4:4
+  (E5:5 D5:8 E5:3)x2 E5:4
+  R:48
+  (E4:5 F#4:4 E4:5 D4:2)
   B4:4 C#5:4 D5:4 E5:4 F#5:4
+  (E4:5 F#4:4 E4:5 D4:2)
   E5:20
+  E5:12 R:16
 
 track sawA vel=0.58 len=4
   G3:7 F#3:3 G3:6
-  (G3:3 F#3:4 E3:4 D3:5)x4
-  (A3:5 B3:4 A3:4 G3:3)x2
+  (G3:3 F#3:4 E3:4 D3:5)x7
+  G3:4 A3:4 B3:4 C#4:4
+  (A3:5 B3:4 A3:4 G3:3)x2 A3:4
   G3:5 F#3:3
-  (G3:3 F#3:4 E3:4 D3:5)x2
-  (A3:5 B3:4 A3:4 G3:3)x2
+  (G3:3 F#3:4 E3:4 D3:5)x4
+  G3:4 A3:4 B3:4 C#4:4
+  (A3:5 B3:4 A3:4 G3:3)x2 A3:4
+  R:48
+  (G3:3 F#3:4 E3:4 D3:5)
   B3:4 C#4:4 E4:4 F#4:4 G4:4
+  (G3:3 F#3:4 E3:4 D3:5)
   G4:8 E4:12
+  E4:12 R:16
 
 track sawT vel=0.58 len=4
   B3:16
-  (B3:6 A3:5 B3:5)x4
-  (E4:5 F#4:7 E4:4)x2
+  (B3:6 A3:5 B3:5)x7
+  B3:4 B3:4 D4:4 E4:4
+  (E4:5 F#4:7 E4:4)x2 E4:4
   B3:8
-  (B3:6 A3:5 B3:5)x2
-  (E4:5 F#4:7 E4:4)x2
+  (B3:6 A3:5 B3:5)x4
+  B3:4 B3:4 D4:4 E4:4
+  (E4:5 F#4:7 E4:4)x2 E4:4
+  B3:8 A3:8 B3:8 A3:8 B3:8 A3:8
+  (B3:6 A3:5 B3:5)
   G3:4 A3:4 C#4:4 B3:4 E4:4
+  (B3:6 A3:5 B3:5)
   B3:8 E4:12
+  E4:12 R:16
 
 track sawB vel=0.62 len=4
   E2:4 E2:4 E2:4 D2:4
-  (E2:4 D2:4 A2:4 B2:4)x4
-  (A2:4 B2:4 D2:4 E2:4)x2
+  (E2:4 D2:4 A2:4 B2:4)x7
+  E2:4 F#2:4 G2:4 A2:4
+  (A2:4 B2:4 D2:4 E2:4)x2 A2:4
   E2:4 D2:4
-  (E2:4 D2:4 A2:4 B2:4)x2
-  (A2:4 B2:4 D2:4 E2:4)x2
+  (E2:4 D2:4 A2:4 B2:4)x4
+  E2:4 F#2:4 G2:4 A2:4
+  (A2:4 B2:4 D2:4 E2:4)x2 A2:4
+  E2:8 E2:8 E2:8 E2:8 E2:8 E2:8
+  (E2:4 D2:4 A2:4 B2:4)
   E2:4 F#2:4 A2:4 B2:4 E2:4
+  (E2:4 D2:4 A2:4 B2:4)
   A2:4 G2:4 E2:12
+  E2:28
 
 track bass patch=deepsine vel=0.85 len=4
   E1:4 E1:4 E1:4 D1:4
-  (E1:4 D1:4 A1:4 B1:4)x4
-  (A1:2 A1:2 B1:2 B1:2 D1:2 D1:2 E1:2 E1:2)x2
+  (E1:4 D1:4 A1:4 B1:4)x7
+  E1:4 F#1:4 G1:4 A1:4
+  (A1:2 A1:2 B1:2 B1:2 D1:2 D1:2 E1:2 E1:2)x2 A1:4
   E1:4 D1:4
-  (E1:4 D1:4 A1:4 B1:4)x2
-  (A1:2 A1:2 B1:2 B1:2 D1:2 D1:2 E1:2 E1:2)x2
+  (E1:4 D1:4 A1:4 B1:4)x4
+  E1:4 F#1:4 G1:4 A1:4
+  (A1:2 A1:2 B1:2 B1:2 D1:2 D1:2 E1:2 E1:2)x2 A1:4
+  E1:8 E1:8 E1:8 E1:8 E1:8 E1:8
+  (E1:4 D1:4 A1:4 B1:4)
   E1:4 F#1:4 A1:4 B1:4 E1:4
+  (E1:4 D1:4 A1:4 B1:4)
   A1:4 G1:4 E1:12
+  E1:28
 
 automate bass.gain
   2
 
-# ---- pad voicing: soft-edged, breathing, long inner bends ------------
+# ---- pad voicing -----------------------------------------------------
 automate sawS.gain
-  1.8 R:80 1.45:1 R:31 1.8:1 R:39 1.45:1 R:31 1.8:1 R:19 1.5:1 R:19.6
+  1.8 R:144 1.45:1 R:43 1.8:1 R:79 1.45:1 R:35 1.8:1 R:119 1.5:1 R:26.4
 automate sawS.pan
   -0.35
 automate sawS.detune
@@ -185,12 +210,12 @@ automate sawS.attack
 automate sawS.release
   1.2
 automate sawS.cutoff
-  8000 R:80 11000:4@smooth R:28 8000:4@smooth R:36 11000:4@smooth R:28 9000:4@smooth R:28
+  9500
 automate sawS.glide
-  2.5 R:176 5:12@lin R:36
+  2.5 R:364 5:8@lin R:80
 
 automate sawA.gain
-  1.8 R:80 1.45:1 R:31 1.8:1 R:39 1.45:1 R:31 1.8:1 R:19 1.5:1 R:19.6
+  1.8 R:144 1.45:1 R:43 1.8:1 R:79 1.45:1 R:35 1.8:1 R:119 1.5:1 R:26.4
 automate sawA.pan
   0.35
 automate sawA.detune
@@ -208,12 +233,12 @@ automate sawA.attack
 automate sawA.release
   1.2
 automate sawA.cutoff
-  6500 R:80 9000:4@smooth R:28 6500:4@smooth R:36 9000:4@smooth R:28 7500:4@smooth R:28
+  7500
 automate sawA.glide
-  3.5 R:176 5:12@lin R:36
+  3.5 R:364 5:8@lin R:80
 
 automate sawT.gain
-  1.8 R:80 1.45:1 R:31 1.8:1 R:39 1.45:1 R:31 1.8:1 R:19 1.5:1 R:19.6
+  1.8 R:144 1.45:1 R:43 1.8:1 R:79 1.45:1 R:35 1.8:1 R:119 1.5:1 R:26.4
 automate sawT.pan
   -0.2
 automate sawT.detune
@@ -233,9 +258,9 @@ automate sawT.release
 automate sawT.sub
   0.2
 automate sawT.cutoff
-  5500 R:80 8000:4@smooth R:28 5500:4@smooth R:36 8000:4@smooth R:28 6500:4@smooth R:28
+  6500
 automate sawT.glide
-  4 R:176 5:12@lin R:36
+  4 R:364 5:8@lin R:80
 
 automate sawB.gain
   1.9

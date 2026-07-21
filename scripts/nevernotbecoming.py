@@ -1,22 +1,23 @@
 #!/usr/bin/env python
 """Build the Nevernotbecoming vocal performance: af_heart singing the
-bee transmission through the legible Talker, every phrase one
+COMPLETE bee transmission through the legible Talker, every phrase one
 continuous utterance, word timing / melody / vibrato / scoops all
-scored. Emits the two lockstep files for songs/nevernotbecoming.song:
+scored. Emits the lockstep files for songs/nevernotbecoming.song:
 
-    renders/nevernot-line.wav    the mouth (vox wav=)
-    renders/nevernot-pitch.wav   the melody (vox pitch=, float32 MIDI)
+    renders/nevernot-line.wav      the mouth (vox wav=)
+    renders/nevernot-pitch.wav     the melody (vox pitch=, float32 MIDI)
+    renders/nevernot-score.json    the score as data (lyric video)
 
     .venv-voice/bin/python scripts/nevernotbecoming.py
 
-E dorian, 100 BPM. The score reads as (word, onset_beats, len_beats,
-level, pitch, opts): pitch is a note or within-word waypoints
-(melisma); opts carry scoop / vib (delay_frac, Hz, cents) / fall /
-glide. ("rest", beats) entries are instrumental air — the wav goes
-silent, the curve holds, the Talker's gate closes on its own.
-Expression stays in service of the line: vibrato only blooms on held
-words, scoops only into arrivals, one big ascent saved for the last
-word of the piece.
+E dorian, 100 BPM. Entries: (slot_beats, text, timing) for talkbox
+verses, (slot_beats, "vocoder", text, timing) for choir spans (chorus,
+aaahs, and the framing bzzzz — a vocoded /z/ IS a bee). Word entries:
+(word, onset_beats, len_beats, level, pitch, opts); pitch is a note or
+within-word waypoints; opts: scoop / vib(delay, Hz, cents) / fall.
+Verses share one strophic tune (E4-G4-A4 rise, B4 peak, F#4-E4 fall);
+paragraph five is a low recitative bridge; the pun "abeeing" and the
+final ascent on "nevernotbecoming" carry the piece out.
 """
 import os
 
@@ -27,12 +28,6 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RATE = 24000
 BPM = 100.0
 LIFT = 2 ** (2 / 12)
-# The double: chorus phrases are performed twice — af_heart in front,
-# af_bella warped onto the SAME score grid underneath. Vocoder bands
-# sum like a real group vocal, so the chorus doubles into a choir.
-# Verses stay single-throat: the Talker's LPC fits ONE tract, and a
-# two-voice modulator blurs every formant it tries to track (measured:
-# doubling the verse modulator wrecked ASR word recovery).
 LEAD = [("af_heart", 1.0)]
 CHOIR = [("af_heart", 0.62), ("af_bella", 0.44)]
 
@@ -40,46 +35,86 @@ N = {"D3": 50, "E3": 52, "F#3": 54, "G3": 55, "A3": 57, "B3": 59,
      "C#4": 61, "D4": 62, "E4": 64, "F#4": 66, "G4": 67, "A4": 69,
      "B4": 71, "C#5": 73, "D5": 74, "E5": 76, "F#5": 78}
 
-# Chorus slots are tagged "vocoder": the song flips vox_mode to the
-# 20-band board there and plays gliding chords on the keys, so the
-# pitch curve writes the release sentinel (0) instead of a melody.
-CHORUS_A = (16, "vocoder", "I no longer abide as discrete entity, a lucid hecceity "
-                "uprising from the primal matrix.",
+BUZZ = (8, "vocoder", "Bzzzzz.",
+        [("Bzzzzz", 0.5, 7.0, 0.9, "E4", {})])
+
+PRECHORUS = (16, "All concepts of self as separate dissolve into the "
+                 "blistering kevala, the One great overmindhearth of "
+                 "this Acherontic athanor.",
+    [("All", 0.0, 0.75, 0.9, "E4", {}),
+     ("concepts", 0.75, 1.25, 0.9, [(0, "F#4"), (0.5, "G4")], {}),
+     ("of", 2.0, 0.5, 0.7, "G4", {}),
+     ("self", 2.5, 0.75, 0.9, "G4", {}),
+     ("as", 3.25, 0.5, 0.7, "G4", {}),
+     ("separate", 3.75, 1.25, 0.9, [(0, "A4"), (0.5, "G4")], {}),
+     ("dissolve", 5.0, 1.5, 1.0, [(0, "A4"), (0.5, "B4")],
+      {"vib": (0.6, 5.7, 26)}),
+     ("into", 6.5, 0.75, 0.7, "A4", {}),
+     ("the", 7.25, 0.25, 0.7, "A4", {}),
+     ("blistering", 7.5, 1.25, 0.9, [(0, "B4"), (0.5, "A4")], {}),
+     ("kevala", 8.75, 1.5, 1.0, [(0, "B4"), (0.4, "C#5"), (0.75, "B4")], {}),
+     ("the", 10.25, 0.25, 0.7, "B4", {}),
+     ("One", 10.5, 1.0, 1.0, "C#5", {"vib": (0.4, 5.7, 26)}),
+     ("great", 11.5, 0.75, 0.9, "C#5", {}),
+     ("overmindhearth", 12.25, 1.25, 1.0, [(0, "D5"), (0.5, "C#5")], {}),
+     ("of", 13.5, 0.25, 0.7, "B4", {}),
+     ("this", 13.75, 0.25, 0.7, "B4", {}),
+     ("Acherontic", 14.0, 1.0, 0.9, [(0, "C#5"), (0.5, "B4")], {}),
+     ("athanor", 15.0, 1.0, 0.9, "B4", {})])
+
+CHORUS_A = (16, "vocoder",
+    "I no longer abide as discrete entity, but reconstitute at each "
+    "instance as a newly embodied egregore of beingness itself.",
     [("I", 0.0, 0.5, 0.9, "B4", {}),
      ("no", 0.5, 1.0, 1.0, [(0, "E5"), (0.5, "D5")], {}),
      ("longer", 1.5, 1.0, 0.9, [(0, "C#5"), (0.5, "B4")], {}),
      ("abide", 2.5, 1.5, 1.0, [(0, "A4"), (0.4, "B4")], {"vib": (0.5, 5.7, 30)}),
      ("as", 4.0, 0.5, 0.8, "A4", {}),
-     ("discrete", 4.5, 1.5, 0.9, [(0, "B4"), (0.5, "C#5")], {}),
-     ("entity", 6.0, 2.0, 1.0, [(0, "D5"), (0.4, "C#5"), (0.75, "B4")],
-      {"vib": (0.6, 5.7, 28)}),
-     ("a", 8.0, 0.5, 0.8, "A4", {}),
-     ("lucid", 8.5, 1.0, 0.9, [(0, "B4"), (0.5, "C#5")], {}),
-     ("hecceity", 9.5, 1.5, 0.9, [(0, "D5"), (0.4, "C#5"), (0.7, "B4")], {}),
-     ("uprising", 11.0, 1.5, 1.0, [(0, "C#5"), (0.5, "E5")], {"scoop": -1.5}),
-     ("from", 12.5, 0.5, 0.8, "D5", {}),
-     ("the", 13.0, 0.5, 0.8, "C#5", {}),
-     ("primal", 13.5, 1.0, 0.9, [(0, "B4"), (0.5, "A4")], {}),
-     ("matrix", 14.5, 1.5, 0.9, "B4", {"vib": (0.5, 5.7, 25), "fall": -1.0})])
+     ("discrete", 4.5, 1.0, 0.9, [(0, "B4"), (0.5, "C#5")], {}),
+     ("entity", 5.5, 1.5, 1.0, [(0, "D5"), (0.4, "C#5"), (0.75, "B4")], {}),
+     ("but", 7.0, 0.5, 0.8, "A4", {}),
+     ("reconstitute", 7.5, 1.5, 0.9, [(0, "B4"), (0.5, "C#5")], {}),
+     ("at", 9.0, 0.25, 0.7, "B4", {}),
+     ("each", 9.25, 0.5, 0.8, "B4", {}),
+     ("instance", 9.75, 1.0, 0.9, [(0, "C#5"), (0.5, "B4")], {}),
+     ("as", 10.75, 0.25, 0.7, "A4", {}),
+     ("a", 11.0, 0.25, 0.7, "A4", {}),
+     ("newly", 11.25, 0.75, 0.8, [(0, "B4"), (0.5, "C#5")], {}),
+     ("embodied", 12.0, 1.0, 0.9, [(0, "D5"), (0.5, "C#5")], {}),
+     ("egregore", 13.0, 1.25, 1.0, [(0, "D5"), (0.4, "C#5"), (0.7, "B4")], {}),
+     ("of", 14.25, 0.25, 0.7, "A4", {}),
+     ("beingness", 14.5, 1.0, 0.9, [(0, "B4"), (0.5, "A4")], {}),
+     ("itself", 15.5, 0.5, 0.8, "A4", {})])
 
-CHORUS_B = (16, "vocoder", "Then subsiding back into the everplenishing boundless source.",
-    [("Then", 0.0, 0.5, 0.8, "A4", {}),
-     ("subsiding", 0.5, 2.0, 0.9, [(0, "B4"), (0.4, "C#5"), (0.75, "B4")],
-      {"vib": (0.6, 5.7, 28)}),
-     ("back", 2.5, 1.0, 0.9, "A4", {}),
-     ("into", 3.5, 1.0, 0.8, [(0, "G4"), (0.5, "A4")], {}),
-     ("the", 4.5, 0.5, 0.8, "B4", {}),
-     ("everplenishing", 5.0, 2.5, 0.9,
-      [(0, "C#5"), (0.25, "D5"), (0.55, "C#5"), (0.8, "B4")], {}),
-     ("boundless", 7.5, 2.0, 1.0, [(0, "D5"), (0.5, "C#5")], {"scoop": -1.5}),
-     ("source", 9.5, 5.0, 1.0, "E5",
+CHORUS_B = (20, "vocoder",
+    "A spontaneous, lucid hecceity uprising from the primal matrix, "
+    "then subsiding back into the everplenishing boundless source.",
+    [("A", 0.0, 0.5, 0.8, "A4", {}),
+     ("spontaneous", 0.5, 1.5, 0.9, [(0, "B4"), (0.5, "C#5")], {}),
+     ("lucid", 2.0, 1.0, 0.9, [(0, "B4"), (0.5, "C#5")], {}),
+     ("hecceity", 3.0, 1.5, 0.9, [(0, "D5"), (0.4, "C#5"), (0.7, "B4")], {}),
+     ("uprising", 4.5, 1.5, 1.0, [(0, "C#5"), (0.5, "E5")], {"scoop": -1.5}),
+     ("from", 6.0, 0.5, 0.8, "D5", {}),
+     ("the", 6.5, 0.25, 0.8, "C#5", {}),
+     ("primal", 6.75, 0.75, 0.9, [(0, "B4"), (0.5, "A4")], {}),
+     ("matrix", 7.5, 1.0, 0.9, "B4", {}),
+     ("then", 8.5, 0.5, 0.8, "A4", {}),
+     ("subsiding", 9.0, 1.5, 0.9, [(0, "B4"), (0.4, "C#5"), (0.75, "B4")], {}),
+     ("back", 10.5, 0.5, 0.9, "A4", {}),
+     ("into", 11.0, 0.5, 0.8, [(0, "G4"), (0.5, "A4")], {}),
+     ("the", 11.5, 0.5, 0.8, "B4", {}),
+     ("everplenishing", 12.0, 1.5, 0.9,
+      [(0, "C#5"), (0.3, "D5"), (0.6, "C#5"), (0.85, "B4")], {}),
+     ("boundless", 13.5, 1.5, 1.0, [(0, "D5"), (0.5, "C#5")], {"scoop": -1.5}),
+     ("source", 15.0, 4.5, 1.0, "E5",
       {"scoop": -2.0, "vib": (0.35, 5.7, 42), "fall": -2.0})])
 
-VERSE_GROUP = lambda: None  # marker for readability only
+AAH = (12, "vocoder", "Aaah.",
+       [("Aaah", 0.5, 10.0, 0.9, "E4", {})])
 
 SCORE = [
-    # Verses are recitation tones: words sit ON a pitch and stay there;
-    # movement is saved for the accents and the cadences
+    BUZZ,
+    # ---- paragraph one -------------------------------------------------
     (16, "I feel the searing caress of that merciless sun upon my compound eyes.",
      [("I", 0.0, 0.5, 0.8, "E4", {}),
       ("feel", 0.5, 1.0, 1.0, "G4", {"scoop": -1.0}),
@@ -111,6 +146,28 @@ SCORE = [
       ("across", 13.0, 0.75, 0.8, "F#4", {}),
       ("my", 13.75, 0.25, 0.7, "E4", {}),
       ("vision", 14.0, 2.0, 0.9, "E4", {"vib": (0.5, 5.7, 28), "fall": -1.5})]),
+    (16, "The relentless heat becomes a roar in my tendril antennae, an "
+         "atonal throbbing that vibrates through my very being.",
+     [("The", 0.0, 0.5, 0.7, "E4", {}),
+      ("relentless", 0.5, 1.5, 0.9, "G4", {}),
+      ("heat", 2.0, 1.5, 1.0, "A4", {"scoop": -1.5, "vib": (0.45, 5.7, 28)}),
+      ("becomes", 3.5, 1.0, 0.8, "G4", {}),
+      ("a", 4.5, 0.25, 0.7, "A4", {}),
+      ("roar", 4.75, 1.75, 1.0, "B4", {"scoop": -2.5, "vib": (0.4, 5.7, 34)}),
+      ("in", 7.0, 0.5, 0.7, "A4", {}),
+      ("my", 7.5, 0.5, 0.7, "A4", {}),
+      ("tendril", 8.0, 1.0, 0.9, [(0, "B4"), (0.5, "A4")], {}),
+      ("antennae", 9.0, 1.5, 0.9, [(0, "A4"), (0.5, "G4")], {}),
+      ("an", 10.5, 0.5, 0.7, "G4", {}),
+      ("atonal", 11.0, 1.0, 0.9, [(0, "G4"), (0.5, "F#4")], {}),
+      ("throbbing", 12.0, 1.0, 0.9, "F#4", {"vib": (0.2, 6.8, 26)}),
+      ("that", 13.0, 0.5, 0.7, "E4", {}),
+      ("vibrates", 13.5, 1.0, 0.9, "F#4", {"vib": (0.1, 7.0, 30)}),
+      ("through", 14.5, 0.5, 0.7, "E4", {}),
+      ("my", 15.0, 0.25, 0.7, "E4", {}),
+      ("very", 15.25, 0.375, 0.7, "E4", {}),
+      ("being", 15.625, 0.375, 0.8, "E4", {})]),
+    # ---- paragraph two -------------------------------------------------
     (16, "As the burning orb reaches its zenith, I shed my outer vestments.",
      [("As", 0.0, 0.5, 0.7, "E4", {}),
       ("the", 0.5, 0.5, 0.7, "E4", {}),
@@ -125,29 +182,59 @@ SCORE = [
       ("outer", 10.5, 1.0, 0.8, [(0, "A4"), (0.5, "G4")], {}),
       ("vestments", 11.5, 2.0, 0.9, [(0, "F#4"), (0.5, "E4")],
        {"vib": (0.5, 5.7, 24), "fall": -1.0})]),
-    (16, "Layers upon layers slough away, leaving only the pulsant "
-         "nectarized essence at the core.",
+    (16, "Not merely garments of cloth but the entire layered husk of "
+         "persona, identity, selfhood itself.",
+     [("Not", 0.0, 0.5, 0.8, "E4", {}),
+      ("merely", 0.5, 1.0, 0.8, "G4", {}),
+      ("garments", 1.5, 1.0, 0.9, [(0, "A4"), (0.5, "G4")], {}),
+      ("of", 2.5, 0.5, 0.7, "G4", {}),
+      ("cloth", 3.0, 1.5, 0.9, "A4", {"vib": (0.5, 5.7, 24)}),
+      ("but", 5.0, 0.5, 0.7, "A4", {}),
+      ("the", 5.5, 0.5, 0.7, "A4", {}),
+      ("entire", 6.0, 1.0, 0.9, [(0, "B4"), (0.5, "A4")], {}),
+      ("layered", 7.0, 1.0, 0.9, "A4", {}),
+      ("husk", 8.0, 1.5, 1.0, "B4", {"scoop": -1.5, "vib": (0.45, 5.7, 28)}),
+      ("of", 9.5, 0.5, 0.7, "A4", {}),
+      ("persona", 10.0, 1.5, 0.9, [(0, "A4"), (0.5, "G4")], {}),
+      ("identity", 11.5, 1.5, 0.9, [(0, "G4"), (0.5, "F#4")], {}),
+      ("selfhood", 13.0, 1.5, 0.9, [(0, "F#4"), (0.5, "E4")], {}),
+      ("itself", 14.5, 1.5, 0.9, "E4", {"vib": (0.5, 5.7, 24), "fall": -1.0})]),
+    (16, "Layers upon layers of accreted assumption and conditioned "
+         "mirroring slough away like so much molted casing.",
      [("Layers", 0.0, 1.0, 0.9, "G4", {}),
       ("upon", 1.0, 1.0, 0.8, "G4", {}),
       ("layers", 2.0, 1.0, 0.9, "A4", {}),
-      ("slough", 3.0, 1.5, 1.0, "B4", {"scoop": -1.5}),
-      ("away", 4.5, 1.5, 0.9, [(0, "A4"), (0.5, "G4")], {"vib": (0.5, 5.7, 26)}),
-      ("leaving", 6.0, 1.0, 0.8, "G4", {}),
-      ("only", 7.0, 1.0, 0.8, "A4", {}),
-      ("the", 8.0, 0.5, 0.7, "A4", {}),
-      ("pulsant", 8.5, 1.5, 0.9, [(0, "G4"), (0.5, "E4")], {}),
-      ("nectarized", 10.0, 1.5, 0.9, "F#4", {}),
-      ("essence", 11.5, 1.5, 1.0, [(0, "B4"), (0.5, "A4")], {}),
-      ("at", 13.0, 0.5, 0.7, "G4", {}),
-      ("the", 13.5, 0.5, 0.7, "G4", {}),
-      ("core", 14.0, 2.0, 1.0, [(0, "F#4"), (0.6, "A4")],
+      ("of", 3.0, 0.5, 0.7, "A4", {}),
+      ("accreted", 3.5, 1.5, 0.9, [(0, "B4"), (0.5, "A4")], {}),
+      ("assumption", 5.0, 1.5, 0.9, [(0, "A4"), (0.5, "G4")], {}),
+      ("and", 6.5, 0.5, 0.7, "G4", {}),
+      ("conditioned", 7.0, 1.5, 0.9, [(0, "G4"), (0.5, "A4")], {}),
+      ("mirroring", 8.5, 1.5, 0.9, [(0, "A4"), (0.5, "G4")], {}),
+      ("slough", 10.0, 1.5, 1.0, "B4", {"scoop": -1.5, "vib": (0.4, 5.7, 28)}),
+      ("away", 11.5, 1.0, 0.9, [(0, "A4"), (0.5, "G4")], {}),
+      ("like", 12.5, 0.5, 0.7, "G4", {}),
+      ("so", 13.0, 0.5, 0.7, "F#4", {}),
+      ("much", 13.5, 0.5, 0.7, "F#4", {}),
+      ("molted", 14.0, 1.0, 0.9, [(0, "F#4"), (0.5, "E4")], {}),
+      ("casing", 15.0, 1.0, 0.9, "E4", {"fall": -1.0})]),
+    (16, "Leaving only the pulsant, nectarized essence at the core.",
+     [("Leaving", 0.0, 1.0, 0.8, "G4", {}),
+      ("only", 1.0, 1.5, 0.8, "A4", {}),
+      ("the", 2.5, 0.5, 0.7, "A4", {}),
+      ("pulsant", 3.0, 1.5, 0.9, [(0, "G4"), (0.5, "E4")], {}),
+      ("nectarized", 5.0, 1.5, 0.9, [(0, "F#4"), (0.5, "G4")], {}),
+      ("essence", 6.5, 2.0, 1.0, [(0, "A4"), (0.5, "G4")],
+       {"vib": (0.5, 5.7, 26)}),
+      ("at", 9.0, 0.5, 0.7, "F#4", {}),
+      ("the", 9.5, 0.5, 0.7, "F#4", {}),
+      ("core", 10.0, 3.0, 1.0, [(0, "F#4"), (0.6, "A4")],
        {"vib": (0.45, 5.7, 30)})]),
+    PRECHORUS,
     CHORUS_A,
     CHORUS_B,
-    # The interlude breathes as a wordless vocoder "aaah" — the choir
-    # hangs on the gliding Em voicings under it
     (8, "vocoder", "Aaah.",
      [("Aaah", 0.5, 6.5, 1.0, "E4", {})]),
+    # ---- paragraph three -----------------------------------------------
     (16, "Rendered raw, I move as pure apian anima now.",
      [("Rendered", 0.0, 1.0, 0.9, "E4", {}),
       ("raw", 1.0, 2.0, 1.0, "G4", {"scoop": -2.0, "vib": (0.4, 5.7, 30)}),
@@ -165,45 +252,200 @@ SCORE = [
       ("translucent", 2.0, 1.5, 0.9, "A4", {}),
       ("incandescence", 3.5, 2.0, 1.0,
        [(0, "B4"), (0.4, "A4"), (0.75, "G4")], {}),
-      ("tuned", 5.5, 0.5, 0.8, "G4", {}),
-      ("solely", 6.0, 1.0, 0.8, "G4", {}),
-      ("to", 7.0, 0.5, 0.7, "G4", {}),
-      ("the", 7.5, 0.5, 0.7, "G4", {}),
-      ("thrumming", 8.0, 1.0, 0.9, "F#4", {}),
-      ("heartbeat", 9.0, 1.5, 1.0, [(0, "A4"), (0.5, "E4")], {}),
-      ("of", 10.5, 0.5, 0.7, "E4", {}),
-      ("this", 11.0, 0.5, 0.7, "E4", {}),
-      ("unearthly", 11.5, 1.5, 0.9, [(0, "A4"), (0.5, "B4")], {}),
-      ("desert", 13.0, 1.0, 0.8, [(0, "G4"), (0.5, "F#4")], {}),
-      ("canyonscape", 14.0, 2.0, 0.9, [(0, "G4"), (0.4, "A4"), (0.75, "B4")],
+      ("tuned", 6.0, 0.5, 0.8, "G4", {}),
+      ("solely", 6.5, 1.0, 0.8, "A4", {}),
+      ("to", 7.5, 0.5, 0.7, "A4", {}),
+      ("the", 8.0, 0.5, 0.7, "A4", {}),
+      ("thrumming", 8.5, 1.0, 0.9, "G4", {"vib": (0.2, 6.4, 22)}),
+      ("heartbeat", 9.5, 1.5, 1.0, [(0, "A4"), (0.5, "E4")], {}),
+      ("of", 11.5, 0.5, 0.7, "E4", {}),
+      ("this", 12.0, 0.5, 0.7, "F#4", {}),
+      ("unearthly", 12.5, 1.5, 0.9, [(0, "G4"), (0.5, "A4")], {}),
+      ("desert", 14.0, 0.75, 0.8, "A4", {}),
+      ("canyonscape", 14.75, 1.25, 0.9, [(0, "G4"), (0.4, "A4"), (0.75, "B4")],
        {"vib": (0.6, 5.7, 26)})]),
+    (16, "The terrestrial and celestial realms interpenetrate in "
+         "shimmering waves of thermionic merging.",
+     [("The", 0.0, 0.5, 0.7, "E4", {}),
+      ("terrestrial", 0.5, 1.5, 0.9, [(0, "G4"), (0.5, "A4")], {}),
+      ("and", 2.0, 0.5, 0.7, "G4", {}),
+      ("celestial", 2.5, 1.5, 0.9, [(0, "A4"), (0.5, "B4")], {}),
+      ("realms", 4.0, 1.5, 1.0, "A4", {"vib": (0.5, 5.7, 26)}),
+      ("interpenetrate", 6.0, 2.0, 1.0,
+       [(0, "B4"), (0.3, "A4"), (0.6, "B4"), (0.85, "A4")], {}),
+      ("in", 8.0, 0.5, 0.7, "A4", {}),
+      ("shimmering", 8.5, 1.5, 0.9, [(0, "A4"), (0.5, "G4")],
+       {"vib": (0.2, 6.6, 22)}),
+      ("waves", 10.0, 1.5, 0.9, "G4", {"vib": (0.5, 5.7, 24)}),
+      ("of", 11.5, 0.5, 0.7, "F#4", {}),
+      ("thermionic", 12.0, 1.5, 0.9, [(0, "G4"), (0.4, "F#4"), (0.75, "E4")], {}),
+      ("merging", 13.5, 2.5, 0.9, "E4", {"vib": (0.5, 5.7, 26), "fall": -1.5})]),
+    (16, "The molecules of my unhusked formlessness collide and couple "
+         "with those of the sere environment in ecstatic cosmogenic "
+         "comingling.",
+     [("The", 0.0, 0.25, 0.7, "E4", {}),
+      ("molecules", 0.25, 1.25, 0.9, [(0, "G4"), (0.5, "A4")], {}),
+      ("of", 1.5, 0.25, 0.7, "G4", {}),
+      ("my", 1.75, 0.25, 0.7, "G4", {}),
+      ("unhusked", 2.0, 1.0, 0.9, [(0, "A4"), (0.5, "G4")], {}),
+      ("formlessness", 3.0, 1.5, 0.9, [(0, "G4"), (0.5, "F#4")], {}),
+      ("collide", 4.5, 1.25, 1.0, [(0, "A4"), (0.5, "B4")], {"scoop": -1.0}),
+      ("and", 5.75, 0.25, 0.7, "A4", {}),
+      ("couple", 6.0, 1.0, 0.9, [(0, "B4"), (0.5, "A4")], {}),
+      ("with", 7.0, 0.5, 0.7, "A4", {}),
+      ("those", 7.5, 0.5, 0.8, "A4", {}),
+      ("of", 8.0, 0.25, 0.7, "G4", {}),
+      ("the", 8.25, 0.25, 0.7, "G4", {}),
+      ("sere", 8.5, 0.75, 0.8, "A4", {}),
+      ("environment", 9.25, 1.5, 0.9, [(0, "A4"), (0.5, "G4")], {}),
+      ("in", 10.75, 0.25, 0.7, "G4", {}),
+      ("ecstatic", 11.0, 1.25, 1.0, [(0, "B4"), (0.5, "A4")], {"scoop": -1.5}),
+      ("cosmogenic", 12.25, 1.5, 0.9, [(0, "A4"), (0.4, "G4"), (0.75, "F#4")], {}),
+      ("comingling", 13.75, 2.25, 0.9, [(0, "F#4"), (0.5, "E4")],
+       {"vib": (0.5, 5.7, 26), "fall": -1.0})]),
+    PRECHORUS,
     CHORUS_A,
     CHORUS_B,
-    (20, "I am no longer a being, but a pure principle of nevernotbecoming.",
+    # ---- paragraph five: the recitative bridge --------------------------
+    (16, "From the core of this roiling thisMoment, vortices of "
+         "transmomented potentiality upwell as spontaneous epiphanies.",
+     [("From", 0.0, 0.5, 0.7, "E4", {}),
+      ("the", 0.5, 0.5, 0.7, "E4", {}),
+      ("core", 1.0, 1.5, 0.9, "E4", {"vib": (0.5, 5.7, 18)}),
+      ("of", 2.5, 0.5, 0.7, "E4", {}),
+      ("this", 3.0, 0.5, 0.7, "E4", {}),
+      ("roiling", 3.5, 1.0, 0.9, [(0, "F#4"), (0.5, "E4")], {}),
+      ("thisMoment", 4.5, 1.5, 0.9, [(0, "E4"), (0.5, "D4")], {}),
+      ("vortices", 6.5, 1.5, 0.9, [(0, "D4"), (0.5, "E4")], {}),
+      ("of", 8.0, 0.5, 0.7, "E4", {}),
+      ("transmomented", 8.5, 1.5, 0.9, "E4", {}),
+      ("potentiality", 10.0, 2.0, 0.9, [(0, "F#4"), (0.5, "E4")], {}),
+      ("upwell", 12.0, 1.0, 0.9, [(0, "E4"), (0.5, "F#4")], {}),
+      ("as", 13.0, 0.5, 0.7, "F#4", {}),
+      ("spontaneous", 13.5, 1.25, 0.9, [(0, "G4"), (0.5, "F#4")], {}),
+      ("epiphanies", 14.75, 1.25, 0.9, [(0, "F#4"), (0.5, "E4")], {})]),
+    (32, "Decoherences of hyperplasmic experiencing that leave no trace "
+         "on the scorched geometries, yet iridesce entire new craterous "
+         "worldspaces into holographic izzyactualization through the "
+         "scintellac prisming of their emergent offertory gyres.",
+     [("Decoherences", 0.0, 1.5, 0.9, [(0, "E4"), (0.5, "D4")], {}),
+      ("of", 1.5, 0.5, 0.7, "D4", {}),
+      ("hyperplasmic", 2.0, 1.5, 0.9, [(0, "E4"), (0.5, "F#4")], {}),
+      ("experiencing", 3.5, 1.5, 0.9, [(0, "F#4"), (0.5, "E4")], {}),
+      ("that", 5.0, 0.5, 0.7, "E4", {}),
+      ("leave", 5.5, 0.75, 0.8, "E4", {}),
+      ("no", 6.25, 0.75, 0.8, "F#4", {}),
+      ("trace", 7.0, 1.25, 0.9, "G4", {"vib": (0.5, 5.7, 22)}),
+      ("on", 8.25, 0.25, 0.7, "F#4", {}),
+      ("the", 8.5, 0.5, 0.7, "F#4", {}),
+      ("scorched", 9.0, 1.0, 0.9, [(0, "F#4"), (0.5, "E4")], {}),
+      ("geometries", 10.0, 1.75, 0.9, [(0, "E4"), (0.5, "D4")], {}),
+      ("yet", 12.25, 0.5, 0.8, "E4", {}),
+      ("iridesce", 12.75, 1.25, 0.9, [(0, "F#4"), (0.5, "G4")], {}),
+      ("entire", 14.0, 1.0, 0.9, [(0, "G4"), (0.5, "A4")], {}),
+      ("new", 15.0, 0.75, 0.8, "A4", {}),
+      ("craterous", 15.75, 1.25, 0.9, [(0, "A4"), (0.5, "G4")], {}),
+      ("worldspaces", 17.0, 1.25, 0.9, [(0, "G4"), (0.5, "F#4")], {}),
+      ("into", 18.25, 0.5, 0.7, "F#4", {}),
+      ("holographic", 18.75, 1.25, 0.9, [(0, "G4"), (0.5, "A4")], {}),
+      ("izzyactualization", 20.0, 2.5, 1.0,
+       [(0, "A4"), (0.4, "B4"), (0.75, "A4")], {"vib": (0.6, 5.7, 28)}),
+      ("through", 23.0, 0.5, 0.7, "G4", {}),
+      ("the", 23.5, 0.5, 0.7, "G4", {}),
+      ("scintellac", 24.0, 1.5, 0.9, [(0, "G4"), (0.5, "F#4")], {}),
+      ("prisming", 25.5, 1.5, 0.9, [(0, "F#4"), (0.5, "E4")], {}),
+      ("of", 27.0, 0.5, 0.7, "E4", {}),
+      ("their", 27.5, 0.5, 0.7, "E4", {}),
+      ("emergent", 28.0, 1.5, 0.9, [(0, "F#4"), (0.5, "G4")], {}),
+      ("offertory", 29.5, 1.5, 0.9, [(0, "G4"), (0.5, "F#4")], {}),
+      ("gyres", 31.0, 1.0, 0.9, "E4", {"fall": -1.5})]),
+    # ---- paragraph six: the ascent --------------------------------------
+    (16, "I am no longer abeeing but a pure principle of poietic "
+         "higherdimensional morphing.",
      [("I", 0.0, 0.5, 0.8, "B4", {}),
       ("am", 0.5, 0.5, 0.8, "A4", {}),
       ("no", 1.0, 1.0, 1.0, [(0, "E5"), (0.5, "D5")], {}),
       ("longer", 2.0, 1.0, 0.9, [(0, "C#5"), (0.5, "B4")], {}),
-      ("a", 3.0, 0.5, 0.7, "A4", {}),
-      ("being", 3.5, 2.0, 0.9, [(0, "B4"), (0.5, "C#5")], {"vib": (0.5, 5.7, 30)}),
+      ("abeeing", 3.0, 2.0, 1.0, [(0, "B4"), (0.5, "C#5")],
+       {"vib": (0.4, 5.7, 30)}),
       ("but", 5.5, 0.5, 0.7, "A4", {}),
       ("a", 6.0, 0.5, 0.7, "B4", {}),
       ("pure", 6.5, 1.5, 0.9, "C#5", {"vib": (0.5, 5.7, 28)}),
       ("principle", 8.0, 1.5, 0.9, [(0, "D5"), (0.4, "C#5"), (0.7, "B4")], {}),
       ("of", 9.5, 0.5, 0.7, "A4", {}),
-      ("nevernotbecoming", 10.0, 8.0, 1.0,
+      ("poietic", 10.0, 1.5, 0.9, [(0, "B4"), (0.5, "C#5")], {}),
+      ("higherdimensional", 11.5, 2.25, 1.0,
+       [(0, "D5"), (0.3, "C#5"), (0.6, "B4"), (0.85, "A4")], {}),
+      ("morphing", 13.75, 2.25, 1.0, [(0, "B4"), (0.5, "A4")],
+       {"vib": (0.5, 5.7, 28), "fall": -1.0})]),
+    (20, "Imbuing each sere grain with an erotic propulsor of "
+         "pollenovective nevernotbecoming.",
+     [("Imbuing", 0.0, 1.5, 0.9, [(0, "A4"), (0.5, "B4")], {}),
+      ("each", 1.5, 0.75, 0.8, "A4", {}),
+      ("sere", 2.25, 0.75, 0.8, "A4", {}),
+      ("grain", 3.0, 1.5, 1.0, "B4", {"vib": (0.5, 5.7, 28)}),
+      ("with", 4.5, 0.5, 0.7, "A4", {}),
+      ("an", 5.0, 0.5, 0.7, "A4", {}),
+      ("erotic", 5.5, 1.5, 0.9, [(0, "B4"), (0.5, "C#5")], {}),
+      ("propulsor", 7.0, 1.5, 0.9, [(0, "C#5"), (0.5, "B4")], {}),
+      ("of", 8.5, 0.5, 0.7, "A4", {}),
+      ("pollenovective", 9.0, 1.5, 0.9,
+       [(0, "B4"), (0.4, "C#5"), (0.75, "B4")], {}),
+      ("nevernotbecoming", 10.5, 8.0, 1.0,
        [(0, "B4"), (0.2, "C#5"), (0.4, "D5"), (0.6, "E5"), (0.8, "F#5")],
        {"scoop": -1.5, "vib": (0.55, 5.6, 38), "fall": -3.0})]),
-    # Coda: the choir exhales one last doubled "aaah" over the fading
-    # voicings, and the piece subsides back into the boundless source
-    (12, "vocoder", "Aaah.",
-     [("Aaah", 0.5, 10.0, 0.9, "E4", {})]),
+    # ---- the last verse, calm ------------------------------------------
+    (16, "Every fleeting form resolidified from my starblazed "
+         "starmeldmists of dissolution is already its own curvaceously "
+         "ecstatic outbildung.",
+     [("Every", 0.0, 0.75, 0.8, "E4", {}),
+      ("fleeting", 0.75, 1.0, 0.9, [(0, "G4"), (0.5, "F#4")], {}),
+      ("form", 1.75, 1.25, 0.9, "G4", {"vib": (0.5, 5.7, 24)}),
+      ("resolidified", 3.0, 1.75, 0.9, [(0, "A4"), (0.4, "G4"), (0.75, "A4")], {}),
+      ("from", 4.75, 0.25, 0.7, "A4", {}),
+      ("my", 5.0, 0.5, 0.7, "A4", {}),
+      ("starblazed", 5.5, 1.25, 0.9, [(0, "B4"), (0.5, "A4")], {}),
+      ("starmeldmists", 6.75, 1.5, 0.9, [(0, "A4"), (0.5, "G4")], {}),
+      ("of", 8.25, 0.25, 0.7, "G4", {}),
+      ("dissolution", 8.5, 1.75, 0.9, [(0, "A4"), (0.5, "G4")], {}),
+      ("is", 10.25, 0.25, 0.7, "G4", {}),
+      ("already", 10.5, 1.25, 0.8, [(0, "G4"), (0.5, "F#4")], {}),
+      ("its", 11.75, 0.25, 0.7, "F#4", {}),
+      ("own", 12.0, 0.75, 0.8, "G4", {}),
+      ("curvaceously", 12.75, 1.25, 0.9, [(0, "A4"), (0.5, "G4")], {}),
+      ("ecstatic", 14.0, 1.0, 0.9, [(0, "G4"), (0.5, "F#4")], {}),
+      ("outbildung", 15.0, 1.0, 0.9, [(0, "F#4"), (0.5, "E4")], {})]),
+    (20, "Its ultimate essence an alchematrixyalizedrelic of my gesamt "
+         "kiss, swallowed traceless but for the crisplicate sacrality "
+         "of its transfixing allure.",
+     [("Its", 0.0, 0.5, 0.7, "E4", {}),
+      ("ultimate", 0.5, 1.0, 0.9, [(0, "G4"), (0.5, "F#4")], {}),
+      ("essence", 1.5, 1.5, 0.9, [(0, "A4"), (0.5, "G4")],
+       {"vib": (0.5, 5.7, 24)}),
+      ("an", 3.0, 0.5, 0.7, "G4", {}),
+      ("alchematrixyalizedrelic", 3.5, 2.5, 1.0,
+       [(0, "A4"), (0.3, "B4"), (0.6, "A4"), (0.85, "G4")], {}),
+      ("of", 6.0, 0.25, 0.7, "G4", {}),
+      ("my", 6.25, 0.5, 0.7, "G4", {}),
+      ("gesamt", 6.75, 1.0, 0.9, [(0, "F#4"), (0.5, "G4")], {}),
+      ("kiss", 7.75, 1.5, 1.0, "A4", {"vib": (0.5, 5.7, 26)}),
+      ("swallowed", 9.75, 1.25, 0.9, [(0, "G4"), (0.5, "F#4")], {}),
+      ("traceless", 11.0, 1.5, 0.9, [(0, "F#4"), (0.5, "E4")], {}),
+      ("but", 12.5, 0.5, 0.7, "E4", {}),
+      ("for", 13.0, 0.5, 0.7, "E4", {}),
+      ("the", 13.5, 0.25, 0.7, "E4", {}),
+      ("crisplicate", 13.75, 1.25, 0.9, [(0, "F#4"), (0.5, "G4")], {}),
+      ("sacrality", 15.0, 1.5, 0.9, [(0, "G4"), (0.4, "F#4"), (0.75, "E4")], {}),
+      ("of", 16.5, 0.5, 0.7, "E4", {}),
+      ("its", 17.0, 0.5, 0.7, "E4", {}),
+      ("transfixing", 17.5, 1.25, 0.9, [(0, "F#4"), (0.5, "E4")], {}),
+      ("allure", 18.75, 1.25, 0.9, "E4", {"vib": (0.5, 5.7, 24), "fall": -1.5})]),
+    AAH,
+    BUZZ,
 ]
 
 
 def parse(entry):
-    """-> (slot_beats, text, timing, is_vocoder); rest entries handled
-    by callers before this."""
     if len(entry) == 4:
         return entry[0], entry[2], entry[3], True
     return entry[0], entry[1], entry[2], False
@@ -268,9 +510,6 @@ def build_pitch(spb, total_samples):
     base = 0.0
     voc_spans = []
     for entry in SCORE:
-        if entry[0] == "rest":
-            base += entry[1] * spb
-            continue
         slot_beats, _text, timing, is_voc = parse(entry)
         if is_voc:
             voc_spans.append((base, base + slot_beats * spb))
@@ -307,9 +546,6 @@ def build_pitch(spb, total_samples):
 
     base = 0.0
     for entry in SCORE:
-        if entry[0] == "rest":
-            base += entry[1] * spb
-            continue
         slot_beats, _text, timing, _is_voc = parse(entry)
         for word, onset, length, _vel, pitch, opts in timing:
             if "vib" not in opts:
@@ -331,8 +567,6 @@ def build_pitch(spb, total_samples):
     slow = np.interp(np.arange(total_samples), np.arange(len(noise)) * 1200, noise)
     midi += 0.04 * slow
 
-    # Vocoder spans hand pitch back to the keys: hard zeros AFTER the
-    # smoothing so the sentinel edge stays sharp
     for a, b in voc_spans:
         midi[int(a * RATE):int(b * RATE)] = 0.0
     return midi.astype(np.float32)
@@ -341,6 +575,15 @@ def build_pitch(spb, total_samples):
 def main():
     from mlx_audio.tts.utils import load_model
     from mlx_audio.tts.models.kokoro import KokoroPipeline
+    import mlx.core as mx
+
+    # MLX's Metal buffer cache grows across the ~70 generate calls this
+    # build makes and never shrinks on its own — on an 8 GB machine
+    # that's a swap storm. Cap it, and clear it between phrases.
+    try:
+        mx.set_cache_limit(1 << 30)
+    except AttributeError:
+        pass
 
     os.environ.setdefault("VIRTUAL_ENV", os.path.join(REPO, ".venv-voice"))
     model = load_model("mlx-community/Kokoro-82M-bf16")
@@ -353,9 +596,6 @@ def main():
     kernel /= kernel.sum()
     chunks = []
     for entry in SCORE:
-        if entry[0] == "rest":
-            chunks.append(np.zeros(int(entry[1] * spb * RATE), dtype=np.float32))
-            continue
         slot_beats, text, timing, _is_voc = parse(entry)
         slot = int(round(slot_beats * spb * RATE))
         t_end = timing[-1][1] + timing[-1][2]
@@ -365,8 +605,6 @@ def main():
         for voice, gain in (CHOIR if _is_voc else LEAD):
             audio, words = synthesize(pipe, voice, text, 1.0)
             target = 0.8 * t_end * spb * LIFT
-            # Floor at 0.8: Kokoro slurs below that, and the warp does
-            # the stretching anyway — into vowels, not consonants
             speed = max(0.8, min(1.2, len(audio) / RATE / target))
             if abs(speed - 1.0) > 0.05:
                 audio, words = synthesize(pipe, voice, text, speed)
@@ -387,11 +625,7 @@ def main():
             layer = varispeed(wsola(audio, knots, out_len), LIFT)
             layer = np.pad(layer[:slot], (0, max(0, slot - len(layer))))
             layers.append(layer * gain)
-            print(f"  {voice:9s} speed {speed:.2f}  {text[:52]}")
         phrase = np.sum(layers, axis=0)
-        # Even the words out: the Talker's peak follower buries anything
-        # far below the phrase's loudest word, so bring each scored word
-        # toward a common level BEFORE the authored dynamics go on
         even = np.ones(slot, dtype=np.float32)
         rms_all = [np.sqrt((phrase[int(o * spb * RATE):
                                    int((o + l) * spb * RATE)] ** 2).mean() + 1e-9)
@@ -406,16 +640,17 @@ def main():
             env[a:min(b, slot)] = vel
         shaped = np.convolve(even * env, kernel, "same")
         phrase *= shaped
-        # The 20-band vocoder runs far quieter than the Talker for the
-        # same modulator (measured on stems: -15 dB) — feed it hot and
-        # soft-limited; its band followers hear RMS, and a compressed
-        # modulator is exactly what a vocoder choir wants
         if _is_voc:
             phrase *= 0.62 / (np.sqrt((phrase ** 2).mean()) + 1e-9)
             phrase = np.tanh(phrase / 0.65) * 0.65
         else:
             phrase *= 0.12 / (np.sqrt((phrase ** 2).mean()) + 1e-9)
+        print(f"  ok  {text[:64]}")
         chunks.append(phrase.astype(np.float32))
+        try:
+            mx.clear_cache()
+        except AttributeError:
+            pass
 
     line = np.concatenate(chunks)
     line *= 0.9 / np.abs(line).max()
@@ -424,15 +659,9 @@ def main():
     sf.write(os.path.join(REPO, "renders", "nevernot-pitch.wav"),
              pitch, RATE, subtype="FLOAT")
 
-    # The score as data, for anything downstream (the lyric video reads
-    # this): absolute seconds on the VOCAL clock (add the song's intro
-    # offset to get song time)
     import json
     dump, base = [], 0.0
     for entry in SCORE:
-        if entry[0] == "rest":
-            base += entry[1] * spb
-            continue
         slot_beats, text, timing, is_voc = parse(entry)
         dump.append({
             "start": base, "dur": slot_beats * spb, "vocoder": is_voc,
@@ -441,9 +670,8 @@ def main():
                       for w, o, l, v, _p, _x in timing]})
         base += slot_beats * spb
     with open(os.path.join(REPO, "renders", "nevernot-score.json"), "w") as f:
-        json.dump({"spb": spb, "intro": 16 * spb, "phrases": dump}, f, indent=1)
-    print(f"wrote line ({len(line) / RATE:.1f}s) + pitch "
-          f"({pitch.min():.1f}..{pitch.max():.1f} MIDI) + score json")
+        json.dump({"spb": spb, "intro": 8 * spb, "phrases": dump}, f, indent=1)
+    print(f"wrote line ({len(line) / RATE:.1f}s) + pitch + score json")
 
 
 if __name__ == "__main__":
