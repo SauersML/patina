@@ -30,12 +30,6 @@ automate tape_age
   0.55
 automate tape_drive
   0.3
-automate chorus_mode
-  1
-automate chorus_rate
-  0.35
-automate chorus_depth
-  0.3
 automate reverb_wet
   0.25
 automate reverb_decay
@@ -114,18 +108,14 @@ automate hats.gain
 
 # the sub: sine-predominant synth weight an octave under the hum —
 # the one non-voice pitch, drifting slowly on the global LFO
-track sub vel=0.8 len=8
+track sub patch=deepsine vel=0.8 len=8
   R:8 D1:8
   D1:8 R:8 C1:8 R:8
-  R:4 B1:8 R:4 G1:8 R:8
-  D1:8 R:4 A#1:8 R:4
+  R:4 B0:8 R:4 G1:8 R:8
+  D1:8 R:4 A#0:8 R:4
   G1:8 A1:8 D1:8
   D1:16 R:8
 
-automate sub.waveform
-  0
-automate sub.sub
-  0.4
 automate sub.attack
   0.5
 automate sub.release
@@ -152,8 +142,6 @@ automate voxbass.smp_pitch
   -0.47
 automate voxbass.duck
   0.38
-automate voxbass.chorus_send
-  0.12
 automate voxbass.duck_release
   0.22
 automate voxbass.smp_cutoff
@@ -185,7 +173,7 @@ automate breath.duck_release
 
 # high garlands: 'Dee' varispeeded +14 st is no longer a voice, it is
 # a bell. Two-beat 16th figures at the phrase ends, never constant
-track bells sample=renders/prodigal/di.wav root=C4 mode=oneshot release=0.3 gain=0.95 len=0.25
+track bells sample=renders/prodigal/di-flat.wav root=C4 mode=oneshot release=0.3 gain=0.95 len=0.25
   R:16
   R:7.5 D5:0.25@0.6 A4:0.25@0.5 F#5:0.25@0.55 E5:0.25@0.5 D5:0.25@0.6 E5:0.25@0.45 A5:0.5@0.6 R:14 D5:0.25@0.6 A4:0.25@0.5 F#5:0.25@0.55 E5:0.25@0.5 D5:0.25@0.6 E5:0.25@0.45 A5:0.5@0.6 R:6.5
   R:14 D5:0.25@0.55 A4:0.25@0.45 F#5:0.25@0.5 E5:0.25@0.45 D5:0.25@0.55 E5:0.25@0.4 A5:0.5@0.55 R:16
