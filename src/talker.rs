@@ -359,8 +359,10 @@ impl Talker {
         }
         let norm = (self.env / self.env_peak.max(1e-5)).clamp(0.0, 1.0);
         // Clarity restores the voice's own dynamics: the ^0.45 flattening
-        // erases the stop-consonant dips that carry the words
-        let mut g = norm.powf(0.45 + 0.55 * self.clarity);
+        // erases the stop-consonant dips that carry the words. Capped at
+        // ^0.8 — fully linear tracking (^1.0) lets the 2.5 s peak
+        // follower bury every word after a phrase's loudest one
+        let mut g = norm.powf(0.45 + 0.35 * self.clarity);
         // ...with a downward expander at the floor, so the compression
         // doesn't hold the gate open on room silence between phrases
         if norm < 0.02 {

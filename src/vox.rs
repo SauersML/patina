@@ -984,13 +984,20 @@ impl VoxBox {
     }
 
     /// The performance line's pitch right now, as CV in octaves from
-    /// A440 — None when no curve is loaded or the recording is idle.
+    /// A440 — None when no curve is loaded, the recording is idle, or
+    /// the curve holds the release sentinel (values below MIDI 1, which
+    /// no melody uses): sentinel spans hand pitch control back to the
+    /// keys, so a song can drop from the pitch-line talkbox into
+    /// chordal vocoder and back mid-performance.
     pub fn pitch_cv(&self) -> Option<f32> {
         let curve = self.pitch_curve.as_ref()?;
         if !self.wav_active || curve.is_empty() {
             return None;
         }
         let m = curve[self.wav_pos.min(curve.len() - 1)];
+        if m < 1.0 {
+            return None;
+        }
         Some((m - 69.0) / 12.0)
     }
 

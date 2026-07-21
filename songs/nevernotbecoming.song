@@ -1,0 +1,208 @@
+# Nevernotbecoming — the bee transmission, sung.
+#
+# Doubled female voice (af_heart + af_bella on one score grid, +2 st)
+# through two circuits: verses are the legible Talker steered by the
+# scored pitch line (renders/nevernot-pitch.wav — portamento, scoops,
+# delayed vibrato, the final melisma), and each CHORUS breaks into the
+# 20-band vocoder as CHORDS: the pitch curve writes its release
+# sentinel there, vox_mode flips on the beat, and the keys take over
+# with gliding voice-led voicings (voice.glide 1.2) — the chord itself
+# melts between shapes while the words keep articulating through it.
+#
+# The pad is four monophonic saw tracks, voice-led. Inner voices carry
+# LONG pitch changes: alto and tenor at 3.5-4 s/octave portamento turn
+# every tone change into a bar-long morph; the outro opens every pot
+# and the wall rises slowly under the final ascent. Cutoffs breathe
+# per section. E dorian, 100 BPM, no drums.
+#
+# Form (beats): intro 16 | V1 32 | V2 32 | CH 32 | interlude 8 |
+#               V3 32 | CH 32 | outro 20 | tail 8   = 212
+
+bpm 100
+gate 0.98
+
+automate vox_clarity
+  1
+automate vox_level
+  0.9
+automate vox_mode
+  2 R:80 1:0.2 R:31.8 2:0.2 R:39.8 1:0.2 R:31.8 2:0.2 R:27.6
+automate vox_dry
+  0.22 R:80 0.08:0.2 R:31.8 0.22:0.2 R:39.8 0.08:0.2 R:31.8 0.22:0.2 R:27.6
+automate reverb_wet
+  0.2
+automate reverb_decay
+  0.6
+automate tape_drive
+  0.15
+automate tape_age
+  0.3
+
+# ---- the voice -------------------------------------------------------
+# Verses: one held key, the curve is the pitch. Choruses: real chords,
+# voice-led, gliding between voicings under the vocoded words.
+track voice vox wav=renders/nevernot-line.wav pitch=renders/nevernot-pitch.wav vel=1 len=1
+  R:16 E4:64
+  [A3 E4 B4 E5]:2 [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [G3 E4 G4 B4]:2
+  [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [C#4 A4 C#5 E5]:2 [B3 F#4 B4 D5]:2
+  [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:2 [A3 A4 C#5]:2
+  [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:4
+  R:8 E4:32
+  [A3 E4 B4 E5]:2 [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [G3 E4 G4 B4]:2
+  [A3 E4 A4 C#5]:2 [B3 F#4 B4 D5]:2 [C#4 A4 C#5 E5]:2 [B3 F#4 B4 D5]:2
+  [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:2 [A3 A4 C#5]:2
+  [D4 A4 D5]:2 [C#4 A4 C#5]:2 [B3 B4 E5]:4
+  E4:20
+
+automate voice.glide
+  1.2
+automate voice.detune
+  1
+automate voice.osc2_level
+  0.25
+automate voice.osc2_pitch
+  0.12
+automate voice.osc3_level
+  0.12
+automate voice.sub
+  0.12
+automate voice.drive
+  1.3
+automate voice.saturation
+  0.15
+automate voice.release
+  0.03
+automate voice.attack
+  0.004
+
+# ---- the saw wall: four voices, individually led ---------------------
+track sawS vel=0.5 len=4
+  E4:2 F#4:2 G4:4 F#4:2 E4:2 B3:4
+  (E4:4 D4:2 E4:2 C#4:4 D4:2 F#4:2)x4
+  (E5:2 D5:2 C#5:2 B4:2 D5:4 E5:2 B4:2)x2
+  E5:4 G4:4
+  (E4:4 D4:2 E4:2 C#4:4 D4:2 F#4:2)x2
+  (E5:2 D5:2 C#5:2 B4:2 D5:4 E5:2 B4:2)x2
+  B4:4 C#5:4 D5:4 E5:4 F#5:4
+  E5:8
+
+track sawA vel=0.45 len=4
+  G3:4 F#3:4 G3:4 F#3:4
+  (G3:4 F#3:2 A3:2 E3:4 F#3:4)x4
+  (E4:4 D4:4 A3:2 B3:2 G3:4)x2
+  E4:4 B3:4
+  (G3:4 F#3:2 A3:2 E3:4 F#3:4)x2
+  (E4:4 D4:4 A3:2 B3:2 G3:4)x2
+  B3:4 C#4:4 E4:4 F#4:4 G4:4
+  G4:8
+
+track sawT vel=0.45 len=4
+  B3:4 B3:2 A3:2 B3:4 A3:2 F#3:2
+  (B3:3 A3:1 F#3:4 E3:2 C#4:2 B3:2 F#3:2)x4
+  (C#4:4 D4:3 B3:1 F#4:2 D4:2 E4:4)x2
+  G3:4 F#3:4
+  (B3:3 A3:1 F#3:4 E3:2 C#4:2 B3:2 F#3:2)x2
+  (C#4:4 D4:3 B3:1 F#4:2 D4:2 E4:4)x2
+  G3:4 A3:4 C#4:4 B3:4 E4:4
+  B3:8
+
+track sawB vel=0.5 len=4
+  E2:4 E2:4 E2:4 D2:4
+  (E2:4 D2:4 A2:4 B2:4)x4
+  (A2:4 B2:4 D2:4 E2:4)x2
+  E2:4 D2:4
+  (E2:4 D2:4 A2:4 B2:4)x2
+  (A2:4 B2:4 D2:4 E2:4)x2
+  E2:4 F#2:4 A2:4 B2:4 E2:4
+  E2:8
+
+track bass patch=deepsine vel=0.6 len=4
+  E1:4 E1:4 E1:4 D1:4
+  (E1:4 D1:4 A1:4 B1:4)x4
+  (A1:4 B1:4 D1:4 E1:4)x2
+  E1:4 D1:4
+  (E1:4 D1:4 A1:4 B1:4)x2
+  (A1:4 B1:4 D1:4 E1:4)x2
+  E1:4 F#1:4 A1:4 B1:4 E1:4
+  E1:8
+
+# ---- pad voicing: soft-edged, breathing, long inner bends ------------
+automate sawS.detune
+  9
+automate sawS.osc2_level
+  0.7
+automate sawS.osc3_level
+  0.7
+automate sawS.drive
+  1.2
+automate sawS.saturation
+  0.2
+automate sawS.attack
+  0.3
+automate sawS.release
+  1.2
+automate sawS.cutoff
+  8000 R:80 11000:4@smooth R:28 8000:4@smooth R:36 11000:4@smooth R:28 9000:4@smooth R:28
+automate sawS.glide
+  0.6 R:176 5:12@lin R:24
+
+automate sawA.detune
+  9
+automate sawA.osc2_level
+  0.7
+automate sawA.osc3_level
+  0.7
+automate sawA.drive
+  1.2
+automate sawA.saturation
+  0.2
+automate sawA.attack
+  0.35
+automate sawA.release
+  1.2
+automate sawA.cutoff
+  6500 R:80 9000:4@smooth R:28 6500:4@smooth R:36 9000:4@smooth R:28 7500:4@smooth R:28
+automate sawA.glide
+  3.5 R:176 5:12@lin R:24
+
+automate sawT.detune
+  9
+automate sawT.osc2_level
+  0.7
+automate sawT.osc3_level
+  0.7
+automate sawT.drive
+  1.2
+automate sawT.saturation
+  0.2
+automate sawT.attack
+  0.35
+automate sawT.release
+  1.2
+automate sawT.sub
+  0.2
+automate sawT.cutoff
+  5500 R:80 8000:4@smooth R:28 5500:4@smooth R:36 8000:4@smooth R:28 6500:4@smooth R:28
+automate sawT.glide
+  4 R:176 5:12@lin R:24
+
+automate sawB.detune
+  7
+automate sawB.osc2_level
+  0.7
+automate sawB.osc3_level
+  0.7
+automate sawB.drive
+  1.2
+automate sawB.saturation
+  0.2
+automate sawB.attack
+  0.25
+automate sawB.release
+  1.0
+automate sawB.sub
+  0.5
+automate sawB.cutoff
+  4500
+automate sawB.glide
+  0.15
