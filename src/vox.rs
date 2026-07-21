@@ -880,6 +880,7 @@ pub struct VoxBox {
     pub source: VoxSource,
     vocoder: Vocoder,
     talker: crate::talker::Talker,
+    spectral: crate::spectral::Spectral,
     mode: crate::vocoder::VocoderMode,
     sample_rate: f32,
     // Optional recorded modulator: any voice, poured through the same circuit
@@ -900,6 +901,7 @@ impl VoxBox {
             source: VoxSource::new(sample_rate),
             vocoder: Vocoder::new(sample_rate),
             talker: crate::talker::Talker::new(sample_rate),
+            spectral: crate::spectral::Spectral::new(sample_rate),
             mode: crate::vocoder::VocoderMode::TalkBox,
             sample_rate,
             wav: None,
@@ -992,10 +994,10 @@ impl VoxBox {
         // Two different machines behind one knob: the band vocoder, or
         // the LPC formant tracker (vox_mode 2) — one continuous filter,
         // the true talk-box circuit
-        let vocoded = if self.mode == crate::vocoder::VocoderMode::Talker {
-            self.talker.process(m, carrier)
-        } else {
-            self.vocoder.process(m, carrier)
+        let vocoded = match self.mode {
+            crate::vocoder::VocoderMode::Talker => self.talker.process(m, carrier),
+            crate::vocoder::VocoderMode::Spectral => self.spectral.process(m, carrier),
+            _ => self.vocoder.process(m, carrier),
         };
         self.level += (self.level_t - self.level) * 0.001;
         self.dry += (self.dry_t - self.dry) * 0.001;

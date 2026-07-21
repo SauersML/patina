@@ -88,7 +88,9 @@
 // vox_breath (0..1 aspiration), vox_vibrato (0..1 voice vibrato depth),
 // vox_mode (0 = TalkBox-voiced band vocoder, 1 = full-range band
 // vocoder, 2 = true Talker: LPC formant tracking, one continuous
-// filter, no bands — the real talk-box circuit; plain sets),
+// filter, no bands — the real talk-box circuit, 3 = spectral
+// cross-synthesis: ~500-band FFT envelopes, words fully clear over the
+// carrier's tone; plain sets),
 // vox_intonation (0..1 autonomous pitch prosody: accents, declination,
 // final falls — keep low when singing, high when speaking),
 // glide (portamento seconds, 0 = off), sub (0..1 octave-down square),
@@ -404,7 +406,7 @@ impl Param {
             Param::ChorusModeSel => (0.0, 4.0, Step),
             Param::WaveformSel | Param::Osc2Wave | Param::Osc3Wave => (0.0, 3.0, Step),
             Param::CircuitSel | Param::SyncSel => (0.0, 1.0, Step),
-            Param::VoxModeSel => (0.0, 2.0, Step),
+            Param::VoxModeSel => (0.0, 3.0, Step),
             Param::UiOctave => (0.0, 8.0, Step),
             Param::PitchBendSemis => (-2.0, 2.0, Lin),
             // The tape deck's transport

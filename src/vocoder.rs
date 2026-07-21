@@ -53,6 +53,10 @@ pub enum VocoderMode {
     /// The true Talker circuit (talker.rs): LPC formant tracking — one
     /// continuous filter, no bands at all. Routed in VoxBox.
     Talker,
+    /// The FFT cross-synthesizer (spectral.rs): ~500 effective bands,
+    /// cepstral envelopes, whitened carrier. Words fully clear, tone
+    /// fully the instrument's. Routed in VoxBox.
+    Spectral,
 }
 
 /// A 2nd-order bandpass section (constant peak gain).
@@ -161,7 +165,7 @@ impl Vocoder {
             // A tube in the mouth articulates at the speed of sound, and
             // the Talker's tracker was nearly as fast
             VocoderMode::TalkBox => (0.0015, 0.012),
-            VocoderMode::Vocoder | VocoderMode::Talker => (0.003, 0.020),
+            VocoderMode::Vocoder | VocoderMode::Talker | VocoderMode::Spectral => (0.003, 0.020),
         };
         self.attack = 1.0 - (-1.0 / (attack * self.sample_rate)).exp();
         self.release = 1.0 - (-1.0 / (release * self.sample_rate)).exp();
@@ -170,7 +174,7 @@ impl Vocoder {
                 self.drive = 2.6;
                 self.makeup = 2.6;
             }
-            VocoderMode::Vocoder | VocoderMode::Talker => {
+            VocoderMode::Vocoder | VocoderMode::Talker | VocoderMode::Spectral => {
                 // Makeup sized for a SINGLE carrier voice split across
                 // 20 bands (measured ~10 dB shy on one-note leads when
                 // this was 2.5, tuned on chord beds)
@@ -180,7 +184,7 @@ impl Vocoder {
         }
         for ch in &mut self.channels {
             ch.weight = match mode {
-                VocoderMode::Vocoder | VocoderMode::Talker => 1.0,
+                VocoderMode::Vocoder | VocoderMode::Talker | VocoderMode::Spectral => 1.0,
                 VocoderMode::TalkBox => {
                     // The tube-and-mouth passband: a broad presence bump
                     // centered near 1.4 kHz, the driver's lows choked off,
@@ -252,7 +256,8 @@ impl VocoderMode {
         match v.round() as i32 {
             i32::MIN..=0 => VocoderMode::TalkBox,
             1 => VocoderMode::Vocoder,
-            _ => VocoderMode::Talker,
+            2 => VocoderMode::Talker,
+            _ => VocoderMode::Spectral,
         }
     }
 }

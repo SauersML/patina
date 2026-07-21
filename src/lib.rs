@@ -22,6 +22,7 @@ pub mod render;
 pub mod reverb;
 pub mod sampler;
 pub mod song;
+pub mod spectral;
 pub mod spring;
 pub mod substrate;
 pub mod talker;

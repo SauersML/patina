@@ -1,0 +1,56 @@
+# Spectral Lead — pitch-locked cross-synthesis at full resolution.
+#
+# vox_mode 3: the FFT circuit. The modulator (varispeed-pitched chops,
+# same melody as the carrier) contributes ONLY its ~500-bin spectral
+# envelope; the carrier saw contributes every Hz of actual tone. The
+# gain is applied to the carrier's own bins, so sound can only exist at
+# the carrier's harmonics — structurally monophonic, no dry anywhere.
+
+bpm 120
+gate 0.98
+
+automate vox_mode
+  3
+automate vox_level
+  1
+automate vox_dry
+  0
+automate reverb_wet
+  0.15
+automate reverb_decay
+  0.5
+automate tape_drive
+  0.3
+automate tape_age
+  0.1
+
+track voice vox wav=renders/pitched-vox.wav vel=1 len=1
+  C3 C3 D#3 D#3 G3 G3 A#3 G3
+  C3 C3 A#2 A#2 D#3 D#3 F3 D#3
+  C3 C3 D#3 D#3 G3 G3 C4 C4
+  G2 G2 C3 C3 D#3 D#3 G3 A#3
+
+automate voice.detune
+  10
+automate voice.osc2_level
+  0.65
+automate voice.osc2_pitch
+  0
+automate voice.osc3_level
+  0
+automate voice.sub
+  0.35
+automate voice.drive
+  2.5
+automate voice.saturation
+  0.4
+automate voice.release
+  0.03
+automate voice.attack
+  0.004
+
+track bass patch=deepsine vel=0.7 len=0.5
+  (C1 . C1 . C1 . C1 D#1 | C1 . C1 . A#0 . G0 .)x2 C1:2
+
+track beat kit=909 len=0.5
+  (BD CH:0.25 CH:0.25 OH@0.5 BD CH SD@0.5 CH | BD CH:0.25 CH:0.25 OH@0.5 BD CH SD@0.6 [CH OH]@0.5)x2 [BD CP]:1
