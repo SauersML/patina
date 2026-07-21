@@ -30,6 +30,12 @@ automate tape_age
   0.55
 automate tape_drive
   0.3
+automate chorus_mode
+  1
+automate chorus_rate
+  0.35
+automate chorus_depth
+  0.3
 automate reverb_wet
   0.25
 automate reverb_decay
@@ -86,17 +92,21 @@ track hats sample=renders/prodigal/percgrid.wav root=C3 chop=4 mono bits=12 rate
 track snare sample=renders/prodigal/percgrid.wav root=C3 chop=4 bits=12 rate=26040 gain=1.7 len=1
   R:16
   (R:0.75 D3:0.25@0.3 D3:2@0.9 D3:1@0.85 R:1 D3:2@0.9 D3:0.5@0.85 C3:0.25@0.5 C#3:0.25@0.45)x3
-  R:0.75 D3:0.25@0.3 D3:2@0.9 D3:1@0.85 R:1 D3:1@0.9 R:2
+  R:0.75 D3:0.25@0.3 D3:2@0.9 D3:1@0.85 R:1 D3:1@0.9 R:1 D3:0.125@0.35 D3:0.125@0.45 C#3:0.125@0.5 D3:0.125@0.6 D3:0.125@0.7 D3:0.125@0.8 D3:0.125@0.88 C3:0.125@0.6
   (R:0.75 D3:0.25@0.3 D3:2@0.9 D3:1@0.85 R:1 D3:2@0.9 D3:0.5@0.85 C3:0.25@0.5 C#3:0.25@0.45)x3
-  R:0.75 D3:0.25@0.3 D3:2@0.9 D3:1@0.85 R:1 D3:1@0.9 R:2
+  R:0.75 D3:0.25@0.3 D3:2@0.9 D3:1@0.85 R:1 D3:1@0.9 R:1.5 C#3:0.125@0.35 C#3:0.125@0.45 C#3:0.125@0.6 D#3:0.125@0.7
   (R:0.75 D3:0.25@0.3 D3:2@0.9 D3:1@0.85 R:1 D3:2@0.9 D3:0.5@0.85 C3:0.25@0.5 C#3:0.25@0.45)x2
-  R:1 D3:0.5@0.4 R:2.5 D3:0.25@0.3 D3:0.25@0.4 R:3.5
+  R:1 D3:0.5@0.4 R:2.5 D3:0.25@0.3 D3:0.25@0.4 R:2 D3:0.0833@0.3 D3:0.0833@0.35 D3:0.0833@0.42 D3:0.0833@0.5 C#3:0.0833@0.55 D3:0.0833@0.62 D3:0.0833@0.7 D3:0.0833@0.76 C#3:0.0833@0.82 D3:0.0833@0.88 D3:0.0833@0.93 C3:0.0834@0.97 R:0.5
   (R:0.75 D3:0.25@0.3 D3:2@0.9 D3:1@0.85 R:1 D3:2@0.9 D3:0.5@0.85 C3:0.25@0.5 C#3:0.25@0.45)x2
   R:0.75 D3:0.25@0.3 D3:2@0.9 D3:1@0.85 R:1 D3:1@0.9 R:2
   R:24
 
 automate snare.reverb_send
-  0.35
+  0.3
+automate snare.spring_send
+  0.22
+automate beat.reverb_send
+  0.1
 automate hats.reverb_send
   0.12
 automate hats.gain
@@ -115,6 +125,8 @@ automate voxbass.smp_pitch
   -0.47
 automate voxbass.duck
   0.38
+automate voxbass.chorus_send
+  0.12
 automate voxbass.duck_release
   0.22
 automate voxbass.smp_cutoff
