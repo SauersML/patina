@@ -23,7 +23,7 @@ bpm 72
 gate 0.98
 
 automate tape_wow
-  0.5
+  0.5 R:128 0.72:12@lin R:12
 automate tape_flutter
   0.28
 automate tape_age
@@ -38,8 +38,15 @@ automate reverb_decay
 # ---- the groove ------------------------------------------------------
 track beat kit=909 len=1
   R:16
-  (BD:2.5@0.85 BD:1.5@0.65 BD:2.25@0.85 BD:0.25@0.45 BD:1.5@0.7)x14
+  (BD:1@0.85 SD:0.75@0.7 BD:1.25@0.6 SD:1@0.75 BD:1@0.85 SD:1.5@0.7 BD:0.5@0.65 SD:1@0.75)x14
   R:24
+
+automate sd_level
+  0.5
+automate sd_tune
+  0.3
+automate sd_snappy
+  0.35
 
 automate bd_level
   0.8
@@ -48,19 +55,26 @@ automate bd_decay
 automate bd_drive
   0.15
 
-# swung eighths: 0.28/0.22 pairs put every off-hat at 56% — groove,
-# not a clock
-track hats sample=renders/prodigal/percgrid.wav root=C3 chop=4 mono bits=12 rate=26040 gain=1.35 len=1
+# hats: four swung '&'s per bar, silent through C, a small fill
+# closing every fourth bar — an accent pattern, not wallpaper
+track hats sample=renders/prodigal/percgrid.wav root=C3 chop=4 mono bits=12 rate=26040 gain=1.2 len=1
   R:16
-  (C3:0.28@0.5 C#3:0.22@0.3 C3:0.28@0.45 C#3:0.22@0.28 C3:0.28@0.55 C#3:0.22@0.3 C3:0.28@0.45 C#3:0.22@0.35)x28
+  ((R:0.53 C#3:0.97@0.4 C#3:1.03@0.3 C#3:0.97@0.4 C#3:0.5@0.3)x3 R:3 D#3:0.5@0.45 C#3:0.5@0.35)x2
+  R:32
+  R:24
+  (R:0.53 C#3:0.97@0.4 C#3:1.03@0.3 C#3:0.97@0.4 C#3:0.5@0.3)x5 R:3 D#3:0.5@0.45 C#3:0.5@0.35
   R:24
 
-# the backbeat breathes on its own track (the old mono kit let every
-# hat choke the snare tail): TSS on 1 and 3 with a dragging ghost
+# the TSS air layered over the 909 snare body — two spectra, one hit
 track snare sample=renders/prodigal/percgrid.wav root=C3 chop=4 bits=12 rate=26040 gain=1.5 len=1
   R:16
-  (R:1 D3:1@0.85 R:0.9 D3:0.1@0.3 D3:1@0.8)x28
+  (R:1 D3:0.75@0.8 R:1.25 D3:1@0.85 R:1 D3:1.5@0.8 R:0.5 D3:1@0.85)x14
   R:24
+
+automate snare.reverb_send
+  0.35
+automate hats.reverb_send
+  0.12
 
 # ---- the bed: breath, tuned and breathing ----------------------------
 track voxbass sample=renders/prodigal/mmm.wav root=G#2 loop=0.90:2.06 xfade=0.31 attack=0.3 release=0.8 gain=1.7 cutoff=900 len=8
@@ -73,16 +87,28 @@ track voxbass sample=renders/prodigal/mmm.wav root=G#2 loop=0.90:2.06 xfade=0.31
 
 automate voxbass.smp_pitch
   -0.47
+automate voxbass.smp_cutoff
+  700 R:104 1400:8@smooth R:40
 
-# the bloom's three chords are single un-looped breaths — a breath
-# that ends cannot go ao-ao-ao
-track breath sample=renders/prodigal/oooh.wav root=G#3 mode=oneshot attack=0.5 release=1.2 gain=1.05 len=8
-  R:104
-  [G2 D3 G3]:8 [A2 C#3 E3]:8 [D3 F#3 A3]:8
-  R:24
+# The harmonic bed, reborn on the engine's new circuit: PSOLA
+# breath-chords. Un-looped oooh one-shots time-stretched 3.5x
+# (psola makes speed a pure time-stretch) — each chord one long
+# human exhale, formants true at every voicing, nothing cycles.
+# The chords get to be REAL: common-tone add9s in B, Bm7 to Gmaj7
+# in C, a borrowed Dm7-Bb6-C7 run under the wormhole, IV-V7-Iadd9
+# at the bloom.
+track breath sample=renders/prodigal/oooh.wav root=G#3 psola beats=5 mode=oneshot attack=0.6 release=1.4 gain=1.15 len=8
+  R:8 [D3 A3 E4]:8
+  ([D3 F#3 A3 E4]:8 [C3 E3 G3 D4]:8)x2
+  ([B2 D3 F#3 A3]:8 [G2 B2 D3 F#3]:8)x2
+  [D3 F3 A3 C4]:8 [A#2 D3 F3 G3]:8 [C3 E3 G3 A#3]:8
+  [G2 B2 D3 G3]:8 [A2 C#3 E3 G3]:8 [D3 F#3 A3 E4]:8
+  [D3 F#3 A3]:8 R:16
 
 automate breath.smp_pitch
   0.06
+automate breath.reverb_send
+  0.5
 
 # ---- the songs -------------------------------------------------------
 # themeA twice with air between; once more over the bloom
@@ -102,6 +128,19 @@ track themeB sample=renders/prodigal/themeB.wav root=C3 mode=oneshot gain=1.35 l
   R:24
   R:8 C3:8 R:8
   R:24
+
+automate themeB.reverb_send
+  0.25
+
+track rebootS sample=renders/prodigal/rebootS.wav root=C3 mode=oneshot gain=1.3 len=1
+  R:24 C3:6 R:2 C3:6 R:2 R:8
+  R:32
+  R:12 C3:6 R:6
+  R:24
+  R:24
+
+automate rebootS.reverb_send
+  0.2
 
 track shib sample=renders/prodigal/shibboleth.wav root=C3 mode=oneshot gain=1.2 len=1
   R:56 C3:8 R:88
