@@ -1,0 +1,183 @@
+# The Prodigal Program — speech as speech, the sampler as instrument.
+#
+# No vocoder, no talkbox: Kokoro speaks the user's text naturally and
+# the tape-deck sampler plays the voice — stuttered chops ("I am. I
+# am."), whole phrases retriggered at falling varispeed ("the
+# prodigal program returns", -2, -4), a looped "Aaah" vowel played as
+# chords (a Mellotron made of voice), the wormhole ladder as chop=6
+# word-slices walking down the mode, one phrase reversed for the
+# dissolve, and a final "returns" tape-stopped two octaves into the
+# dark. Stutters and word-slices run through the SP-1200 converters
+# (bits=12 rate=26040).
+#
+# Under it, the Kaini blueprint: the tape deck IS the lead instrument
+# (wow/flutter finally alive), a seasick tri/sine lead, dark two-osc
+# pads on the D<->C seesaw, sine bass. D mixolydian, 72 BPM, no drums.
+#
+# Form (beats): A hiss+stutter 16 | B prodigal falls 32 | C voicepads
+#   + her phrases 32 | D wormhole ladder 24 | E grateful bloom 24 |
+#   F reverse + tape-stop 24   = 152
+
+bpm 72
+gate 0.98
+
+automate tape_wow
+  0.5
+automate tape_flutter
+  0.28
+automate tape_age
+  0.55
+automate tape_drive
+  0.3
+automate reverb_wet
+  0.25
+automate reverb_decay
+  0.65
+automate lfo_rate
+  0.5
+automate lfo_pitch
+  10
+
+# ---- the band --------------------------------------------------------
+track padA vel=0.6 len=8
+  [D3 A3 E4]:8 [D3 F#3 A3 E4]:8
+  ([D3 F#3 A3]:8 [C3 E3 G3 D4]:8)x2
+  ([B2 D3 F#3 A3]:8 [G2 B2 D3]:8)x2
+  [D3 F3 A3]:8 [C3 E3 G3]:8 [A#2 D3 F3]:8
+  [G2 B2 D3 G3]:8 [A2 C#3 E3 G3]:8 [D3 F#3 A3 E4]:8
+  [D3 A3]:8 [D3 A3 D4]:16
+
+automate padA.waveform
+  3
+automate padA.osc2_wave
+  2
+automate padA.osc2_level
+  0.4
+automate padA.detune
+  4
+automate padA.cutoff
+  1600
+automate padA.attack
+  0.6
+automate padA.release
+  1.5
+automate padA.pan
+  -0.3
+automate padA.gain
+  1.3
+
+track padB vel=0.45 len=8
+  R:48
+  [F#4 B4]:16 [D4 G4]:16
+  R:24
+  [B3 D4]:8 [C#4 E4]:8 [D4 F#4]:8
+  R:24
+
+automate padB.waveform
+  3
+automate padB.cutoff
+  1300
+automate padB.attack
+  0.8
+automate padB.release
+  1.6
+automate padB.pan
+  0.3
+automate padB.gain
+  1.1
+
+track lead vel=0.7 len=1
+  R:16
+  R:1 F#4:1.5 B4:2.5 A4:3 F#4:1.5 B4:2.5 A4:2 G4:2 R:16
+  R:4 B4:2 F#4:2 G4:4 R:4 D4:2 G4:2 F#4:4 R:8
+  R:24
+  E4:2 F#4:2 G4:4 A4:2 B4:2 C#5:4 D5:4 A4:2 D4:2
+  R:24
+
+automate lead.waveform
+  3
+automate lead.osc2_wave
+  0
+automate lead.osc2_level
+  0.5
+automate lead.cutoff
+  2400
+automate lead.glide
+  0.05
+automate lead.saturation
+  0.4
+automate lead.attack
+  0.05
+automate lead.release
+  0.4
+automate lead.gain
+  1.6
+
+track bass patch=deepsine vel=0.7 len=8
+  R:16
+  (D1:8 C1:8)x2
+  (B1:8 G1:8)x2
+  D1:8 C1:8 A#1:8
+  G1:8 A1:8 D1:8
+  D1:24
+
+automate bass.gain
+  1.6
+
+# ---- the voice, played -----------------------------------------------
+# A Mellotron whose reels are one held vowel
+track voxpad sample=renders/prodigal/aaah.wav root=A3 loop=0.32:0.74 xfade=0.11 attack=0.4 release=1.0 gain=0.9 len=8
+  R:48
+  ([B2 D3 F#3]:8 [G2 B2 D3]:8)x2
+  R:24
+  [G2 D3 G3]:8 [A2 C#3 E3]:8 [D3 F#3 A3]:8
+  R:24
+
+# the stutter: "I" and "am" as two crushed pads
+track stut sample=renders/prodigal/iam.wav root=C3 chop=2 mono bits=12 rate=26040 gain=1.1 len=1
+  C3:2 R:2 C3:1 C3:1 C#3:2 R:2 C3:1 R:1 C#3:2 R:2
+  R:88
+  C3:1 R:1 C3:1 R:1 C#3:2 R:18
+  R:24
+
+# the thesis, falling away from itself: 0, -2, -4 semitones
+track phraseP sample=renders/prodigal/prodigal.wav root=C3 mode=oneshot gain=1.4 len=1
+  R:16
+  C3:8 A#2:8 R:16
+  R:104
+
+track rets sample=renders/prodigal/returns.wav root=C3 mono gain=1.3 len=1
+  R:44 C3:1 A#2:1 G#2:2
+  R:80
+  C3:24
+
+automate rets.smp_pitch
+  0 R:128 -24:20@lin R:4
+
+track shib sample=renders/prodigal/shibboleth.wav root=C3 mode=oneshot gain=1.2 len=1
+  R:48 C3:16 R:88
+
+track flute sample=renders/prodigal/flute.wav root=C3 mode=oneshot gain=1.2 len=1
+  R:64 C3:16 R:72
+
+# the ladder: six words, chop=6, walking down the mode
+track worm sample=renders/prodigal/wormhole.wav root=C3 chop=6 mono bits=12 rate=26040 gain=1.3 len=1
+  R:80
+  (C3:2 C#3:2 D3:2 D#3:2 E3:2 F3:2)x2
+  R:48
+
+automate worm.smp_pitch
+  0 R:82 -2 R:2 -3 R:2 -5 R:2 -7 R:2 -8 R:2 0 R:2 -2 R:2 -3 R:2 -5 R:2 -7 R:2 -8 R:2 0 R:46
+
+track danced sample=renders/prodigal/danced.wav root=C3 mode=oneshot gain=1.0 len=1
+  R:88 C3:16 R:48
+
+track grat sample=renders/prodigal/grateful.wav root=C3 mode=oneshot gain=1.3 len=1
+  R:104 C3:16 R:32
+
+# the dissolve: the thesis backwards, and a whisper
+track rev sample=renders/prodigal/prodigal-rev.wav root=C3 mode=oneshot attack=0.8 gain=1.0 len=1
+  R:120 C3:24 R:8
+
+track noti sample=renders/prodigal/noti.wav root=C3 mode=oneshot gain=1.1 len=1
+  R:136 C3:8 R:8
