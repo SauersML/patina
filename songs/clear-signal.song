@@ -1,0 +1,70 @@
+# Clear Signal — the voice as a clean synth lead.
+#
+# The opposite pole from talk-to-me: vox_mode 1 (full-range studio
+# board), and the lead's carrier stripped to a clean bright saw with an
+# octave shimmer — no sub, no drive, no tape. Breath is UP because in
+# the clear circuit air reads as air, and the lyric leans on sibilants
+# (clear, signal) to show off the open top end.
+
+bpm 100
+gate 0.94
+
+automate vox_mode
+  1
+automate vox_level
+  1
+automate vox_vibrato
+  0.3
+automate vox_breath
+  0.18
+automate vox_intonation
+  0.25
+automate reverb_wet
+  0.22
+automate reverb_decay
+  0.6
+automate chorus_mode
+  2
+automate chorus_depth
+  0.3
+
+track lead vox vel=0.9
+  R:8
+  # i am clear
+  A3:1=AY1 C4:1=AE1-M A3:2=K-L-IH1-R. R:0.5
+  # can you hear the signal?
+  E4:0.75=K-AE1-N D4:0.75=Y-UW0 C4:1=HH-IY1-R A3:0.5=DH-AH0 C4:2.5=S-IH1-G-N-AH0-L? R:0.75
+  # vowel stabs up the scale, clean
+  A3:0.5=AH1 C4:0.5=AH0 D4:0.5=AH0 E4:0.5=AH1 G4:1=AH1 E4:1=AH0-OW0. R:1
+  # the octave bend: one open AA carried from A3 to A4 on overlapping notes
+  >26 A3:4=W-AA1-W. >27 C4:3 >28 E4:2 >29 A4:3.5
+  R:0.5
+  A3:1=AY1 C4:1=AE1-M [A3 E4 A4]:3=K-L-IH1-R.
+
+# The clean rig: one saw + octave shimmer, wide open, no dirt
+automate lead.glide
+  0.05
+automate lead.detune
+  2
+automate lead.osc2_pitch
+  12
+automate lead.osc2_level
+  0.45
+automate lead.osc3_level
+  0
+automate lead.sub
+  0
+automate lead.drive
+  1
+automate lead.saturation
+  0.3
+automate lead.cutoff
+  16000
+automate lead.resonance
+  0.3
+
+track bass patch=deepsine vel=0.7 len=0.5
+  (A1 . . A1 . . A1 . | F1 . . F1 . G1 . .)x4 A1:2
+
+track beat kit=909 len=0.5
+  (BD CH:0.25 CH:0.25 CH SD@0.5 CH CH:0.25 CH:0.25 CH | BD CH BD CH SD@0.6 CH:0.25 CH:0.25 OH@0.5 CH)x4 [BD CP]:1
