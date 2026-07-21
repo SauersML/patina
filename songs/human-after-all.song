@@ -16,7 +16,7 @@ automate vox_mode
 automate vox_level
   1
 automate vox_dry
-  0.38
+  0.08
 automate reverb_wet
   0.16
 automate reverb_decay
@@ -27,22 +27,24 @@ automate tape_age
   0.1
 
 # The carrier: the same melody the chops were pitched to
-track voice vox wav=renders/pitched-vox.wav vel=0.95 len=1
+track voice vox wav=renders/pitched-vox.wav vel=1 len=1
   C3 C3 D#3 D#3 G3 G3 A#3 G3
   C3 C3 A#2 A#2 D#3 D#3 F3 D#3
   C3 C3 D#3 D#3 G3 G3 C4 C4
   G2 G2 C3 C3 D#3 D#3 G3 A#3
 
 automate voice.detune
-  6
+  10
 automate voice.osc2_level
+  0.65
+automate voice.osc2_pitch
   0
 automate voice.osc3_level
   0
 automate voice.sub
-  0.25
+  0.35
 automate voice.drive
-  1.8
+  2.5
 automate voice.saturation
   0.4
 automate voice.release

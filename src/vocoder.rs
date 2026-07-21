@@ -168,11 +168,14 @@ impl Vocoder {
         match mode {
             VocoderMode::TalkBox => {
                 self.drive = 2.6;
-                self.makeup = 2.1;
+                self.makeup = 2.6;
             }
             VocoderMode::Vocoder | VocoderMode::Talker => {
+                // Makeup sized for a SINGLE carrier voice split across
+                // 20 bands (measured ~10 dB shy on one-note leads when
+                // this was 2.5, tuned on chord beds)
                 self.drive = 1.6;
-                self.makeup = 2.5;
+                self.makeup = 4.2;
             }
         }
         for ch in &mut self.channels {
