@@ -1,22 +1,52 @@
-# Strobe Engine — 128 bpm French-house muscle for a dark room.
-# Filtered Am7 vamp that opens over a full minute (the Daft Punk move),
-# octave-pump disco bass, four-on-the-floor 909 with offbeat opens,
-# an acid lead on the drop, and the germanium fuzz kicking the door in
-# right when the snare roll lands.
+# Strobe Engine v2 — 128 bpm, A minor. Not a loop with a fuzz knob:
+# a song with a THEME. The hook is stated three ways — as a tape-warped
+# memory before the song starts, at full acid pressure in the drops,
+# and at half speed as the breakdown's lullaby — so every section is
+# the same melody wearing different clothes.
 #
-#   beats   0-32    intro: chords under a closed filter, hats sneak in
-#   beats  32-96    groove: kick + bass, clap and open hats join at 48
-#   beats  96-128   breakdown: drums thin out, verb swells, hpf climbs,
-#                   16 beats of rising snare roll into the drop
-#   beats 128-208   drop: filter wide open, fuzz on, acid lead at 136
-#   beats 208-240   outro: filter closes, hats fade, one held Am
+# The machines this version actually uses:
+#   - the SOURCE MIXER (mix_saw/mix_pulse): drop 2 morphs the chord
+#     saws into PWM by mixing the comparator's pulse into osc 1 and
+#     letting the global LFO chew the width — phase-locked, no restart
+#   - HARD SYNC (syncscream.patch): the build's riser is VCO1
+#     mastering VCO2 while osc2_pitch climbs 19 semitones — the reset
+#     comb sweeping the harmonic series, not a filter trick
+#   - RING MOD (glintbell.patch): echo-answers on a fifth-up ring mod,
+#     whose sidebands stay in key (0.5f + 2.5f)
+#   - the FERRIC deck as narrative: wow 0.55 while the intro is a
+#     memory, snapping to 0.08 as the song comes into focus, drowning
+#     everything again at the end; bend -2 for the tape-brake droop
+#   - the 909 as an instrument: bd_tune rises through the build,
+#     sd_tune pitches the snare roll upward, oh_decay washes open in
+#     the lift — knobs played, not set
+#
+#   beats   0-16   MEMORY  bocuma sings the hook half-speed, wow 0.55
+#   beats  16-48   VAMP    Am7/Fmaj7/G6 stabs, swung hats, kick at 32
+#   beats  48-80   DROP 1  the hook, clean funk, filter still opening
+#   beats  80-96   ANSWER  ring-bell echoes, rim funk; beat 95 = THE GAP
+#   beats  96-128  BLOOM   chords become a pad (attack/release automate),
+#                          F G6 Am9 / F G6 Cmaj7 E7 — the first G# of
+#                          the piece aches back toward A minor
+#   beats 128-144  BUILD   snare roll pitching up, sync scream, kick
+#                          re-enters at 136 with its tune climbing;
+#                          everything cuts at 142.5
+#   beats 144-208  DROP 2  fuzz + PWM chords + 16th funk bass; at 176
+#                          the bloom's progression returns AT FULL
+#                          ENERGY under a climbing lead — the payoff —
+#                          landing on E7's G# and resolving into the
+#                          final hook
+#   beats 208-240  OUTRO   filter closes, bocuma restates the tail,
+#                          held Am9, wow floods, bend -2: tape brake
 
 bpm 128
-gate 0.6
+gate 0.7
 
-# ---- the panel = the chord machine: detuned saws, fast stab envelope
+# ---- the panel = the chord machine. Mixer mode from bar one (saw via
+# the source mixer) so drop 2's PWM morph is a crossfade, not a jump.
 automate waveform
 2
+automate mix_saw
+0.8
 automate detune
 6
 automate sub
@@ -25,14 +55,6 @@ automate noise
 0
 automate glide
 0
-automate attack
-0.004
-automate decay
-0.22
-automate sustain
-0.5
-automate release
-0.18
 automate filter_env
 1.4
 automate filter_attack
@@ -43,40 +65,32 @@ automate filter_sustain
 0.25
 automate filter_release
 0.15
+automate sustain
+0.5
+automate decay
+0.22
 automate chorus_mode
 2
 automate chorus_rate
 0.4
 automate chorus_depth
 0.35
-automate spring
-0.12
-automate reverb_decay
+automate lfo_rate
+0.45
+automate lfo_shape
 0.5
-automate tape_wow
-0.05
-automate tape_flutter
-0.06
-automate tape_drive
-0.32
 automate tape_age
 0.25
 
-# ---- the 909 board, voiced for the club
+# ---- the 909 board
 automate bd_level
 0.9
-automate bd_tune
-0.28
 automate bd_attack
 0.65
-automate bd_decay
-0.5
 automate bd_sweep
 0.55
 automate sd_level
 0.72
-automate sd_tune
-0.4
 automate sd_tone
 0.5
 automate sd_snappy
@@ -102,81 +116,197 @@ automate oh_decay
 automate dr_drive
 0.3
 
-# ---- chords: one syncopated 4-bar vamp (Am7 Am7 Fmaj7 G6), all song.
-# The filter automation is the actual melody here.
+# ======================================================================
+# VOICES
+# ======================================================================
+
+# ---- the memory: bocuma (SH-101 voice) sings the hook at half speed
+# before the song exists, and again after it's gone
+track memory patch=bocuma vel=0.6 len=1
+A3:1.5 A3:0.5@0.45 C4:1 E4:1 G4:2 E4:2 D4:1 C4:1 D4:1 C4:1 A3:3 R:1
+>96 C5:3@0.5 B4:1@0.45 A4:3@0.5 G4:1@0.45 E4:2@0.5 G4:1 A4:1 B4:4@0.55 C5:3@0.5 D5:1 B4:2@0.5 G4:2@0.45 E5:3@0.55 D5:0.5 B4:0.5 E4:4@0.5
+>216 D4:1 C4:1 D4:1 C4:1 A3:3 E4:1@0.5 A4:8@0.55
+
+# ---- chords: stab vamp that becomes a pad in the bloom and PWM in drop 2
 track chords vel=0.75 len=0.25
-([A3 C4 E4 G4] R R [A3 C4 E4 G4] R R [A3 C4 E4 G4] R R R [A3 C4 E4 G4] R [A3 C4 E4 G4] R R R [A3 C4 E4 G4] R R [A3 C4 E4 G4] R R [A3 C4 E4 G4] R R R [A3 C4 E4 G4] R [A3 C4 E4 G4] R [A3 C4 E4 G4] R [F3 A3 C4 E4] R R [F3 A3 C4 E4] R R [F3 A3 C4 E4] R R R [F3 A3 C4 E4] R [F3 A3 C4 E4] R R R [G3 B3 D4 E4] R R [G3 B3 D4 E4] R R [G3 B3 D4 E4] R R R [G3 B3 D4 E4] R [G3 B3 D4 E4] [G3 B3 D4 E4] R R)x14
+>16 ([A3 C4 E4 G4] R R [A3 C4 E4 G4] R R [A3 C4 E4 G4] R R R [A3 C4 E4 G4] R [A3 C4 E4 G4] R R R [A3 C4 E4 G4] R R [A3 C4 E4 G4] R R [A3 C4 E4 G4] R R R [A3 C4 E4 G4] R [A3 C4 E4 G4] R [A3 C4 E4 G4] R [F3 A3 C4 E4] R R [F3 A3 C4 E4] R R [F3 A3 C4 E4] R R R [F3 A3 C4 E4] R [F3 A3 C4 E4] R R R [G3 B3 D4 E4] R R [G3 B3 D4 E4] R R [G3 B3 D4 E4] R R R [G3 B3 D4 E4] R [G3 B3 D4 E4] [G3 B3 D4 E4] R R)x4
 [A3 C4 E4 G4] R R [A3 C4 E4 G4] R R [A3 C4 E4 G4] R R R [A3 C4 E4 G4] R [A3 C4 E4 G4] R R R
-[A2 E3 A3 C4 E4]:12@0.9
+[A3 C4 E4 G4] R R [A3 C4 E4 G4] R R [A3 C4 E4 G4] R R R [A3 C4 E4 G4] R [A3 C4 E4 G4] R [A3 C4 E4 G4] R
+[F3 A3 C4 E4] R R [F3 A3 C4 E4] R R [F3 A3 C4 E4] R R R [F3 A3 C4 E4] R [F3 A3 C4 E4] R R R
+[G3 B3 D4 E4] R R [G3 B3 D4 E4] R R [G3 B3 D4 E4] R R R R:1.5
+# the bloom: same instrument, pad clothes (attack/release automated up)
+[F3 A3 C4 E4]:3.5 [F3 A3 C4 E4]:0.5@0.5
+[G3 B3 D4 E4]:3.5 [G3 B3 D4 E4]:0.5@0.5
+[A3 C4 G4 B4]:3.5 [A3 C4 G4 B4]:0.5@0.5
+[A3 C4 G4 B4]:4
+[F3 A3 C4 E4]:3.5 [F3 A3 C4 E4]:0.5@0.5
+[G3 B3 D4 E4]:3.5 [G3 B3 D4 E4]:0.5@0.5
+[C4 E4 G4 B4]:3.5 [C4 E4 G4 B4]:0.5@0.5
+[E3 G#3 B3 D4]:4
+R:16
+([A3 C4 E4 G4] R R [A3 C4 E4 G4] R R [A3 C4 E4 G4] R R R [A3 C4 E4 G4] R [A3 C4 E4 G4] R R R [A3 C4 E4 G4] R R [A3 C4 E4 G4] R R [A3 C4 E4 G4] R R R [A3 C4 E4 G4] R [A3 C4 E4 G4] R [A3 C4 E4 G4] R [F3 A3 C4 E4] R R [F3 A3 C4 E4] R R [F3 A3 C4 E4] R R R [F3 A3 C4 E4] R [F3 A3 C4 E4] R R R [G3 B3 D4 E4] R R [G3 B3 D4 E4] R R [G3 B3 D4 E4] R R R [G3 B3 D4 E4] R [G3 B3 D4 E4] [G3 B3 D4 E4] R R)x2
+# the lift: the bloom's progression at full stab energy
+[F3 A3 C4 E4] R R [F3 A3 C4 E4] R R [F3 A3 C4 E4] R R R [F3 A3 C4 E4] R [F3 A3 C4 E4] R R R
+[G3 B3 D4 E4] R R [G3 B3 D4 E4] R R [G3 B3 D4 E4] R R R [G3 B3 D4 E4] R [G3 B3 D4 E4] R R R
+[C4 E4 G4 B4] R R [C4 E4 G4 B4] R R [C4 E4 G4 B4] R R R [C4 E4 G4 B4] R [C4 E4 G4 B4] R R R
+[E3 G#3 B3 D4] R R [E3 G#3 B3 D4] R R [E3 G#3 B3 D4] R R R [E3 G#3 B3 D4] R [E3 G#3 B3 D4] [E3 G#3 B3 D4] R R
+([A3 C4 E4 G4] R R [A3 C4 E4 G4] R R [A3 C4 E4 G4] R R R [A3 C4 E4 G4] R [A3 C4 E4 G4] R R R [A3 C4 E4 G4] R R [A3 C4 E4 G4] R R [A3 C4 E4 G4] R R R [A3 C4 E4 G4] R [A3 C4 E4 G4] R [A3 C4 E4 G4] R [F3 A3 C4 E4] R R [F3 A3 C4 E4] R R [F3 A3 C4 E4] R R R [F3 A3 C4 E4] R [F3 A3 C4 E4] R R R [G3 B3 D4 E4] R R [G3 B3 D4 E4] R R [G3 B3 D4 E4] R R R [G3 B3 D4 E4] R [G3 B3 D4 E4] [G3 B3 D4 E4] R R)x2
+[A2 E3 A3 C4 E4 B4]:14@0.85
 
-# ---- bass: octave-pump disco line following the roots, A A F G(->E)
+# ---- bass: octave pump in act one, 16th funk in drop 2, tacet in the bloom
 track bass patch=rawbass vel=0.9 len=0.5
->32 ((A1 A2@0.55)x8 (F1 F2@0.55)x4 (G1 G2@0.55)x3 E1 E2@0.55)x4
->128 ((A1 A2@0.55)x8 (F1 F2@0.55)x4 (G1 G2@0.55)x3 E1 E2@0.55)x5
+>32 ((A1 A2@0.55)x8 (F1 F2@0.55)x4 (G1 G2@0.55)x3 E1 E2@0.55)x3
+(A1 A2@0.55)x8 (F1 F2@0.55)x4
+G1 G2@0.55 G1 G2@0.55 R:2
+>144 (A1 A2@0.55 A1 A1:0.25@0.5 C2:0.25@0.6 A2@0.55 G1@0.7 A1 A2:0.5@0.5 A1 A2@0.55 A1 A1:0.25@0.5 C2:0.25@0.6 A2@0.55 G1@0.7 A1 A2:0.5@0.5 F1 F2@0.55 F1 F1:0.25@0.5 A1:0.25@0.6 F2@0.55 E1@0.7 F1 F2:0.5@0.5 G1 G2@0.55 G1 G2 B1:0.5@0.6 G1 E1@0.7 E2:0.5@0.5)x2
+(F1 F2@0.55)x4 (G1 G2@0.55)x4 (C2 C3@0.55)x4 (E1 E2@0.55)x4
+A1 A2@0.55 A1 A1:0.25@0.5 C2:0.25@0.6 A2@0.55 G1@0.7 A1 A2:0.5@0.5 A1 A2@0.55 A1 A1:0.25@0.5 C2:0.25@0.6 A2@0.55 G1@0.7 A1 A2:0.5@0.5 F1 F2@0.55 F1 F1:0.25@0.5 A1:0.25@0.6 F2@0.55 E1@0.7 F1 F2:0.5@0.5 G1 G2@0.55 G1 G2 B1:0.5@0.6 G1 E1@0.7 E2:0.5@0.5
 
-# ---- acid lead, drop only: pentatonic robot hook
+# ---- the hook: stated at 48 and 144, climbing through the lift at 176
 track lead patch=acidline vel=0.85 len=0.5
->136 (E5 E5@0.6 G5 E5@0.6 D5 C5@0.6 D5 C5@0.6 A4 A4@0.6 C5 A4@0.6 G4 E4@0.6 G4 A4@0.6)x6
-E5 G5 A5 G5 E5 D5 C5 D5 E5:1 C5:0.5 A4:0.5 G4:1 A4:1
-(E5 E5@0.6 G5 E5@0.6 D5 C5@0.6 D5 C5@0.6 A4 A4@0.6 C5 A4@0.6 G4 E4@0.6 G4 A4@0.6)x2
+>48 (A4:0.75 A4:0.25@0.6 C5 E5 G5:1 E5:1 D5 C5@0.7 D5 C5@0.7 A4:1.5 R:0.5 A4:0.75 A4:0.25@0.6 C5 E5 G5:1 E5:1 D5 E5 G5 A5 G5:0.75 E5:0.75 D5:0.5)x2
+>144 (A4:0.75 A4:0.25@0.6 C5 E5 G5:1 E5:1 D5 C5@0.7 D5 C5@0.7 A4:1.5 R:0.5 A4:0.75 A4:0.25@0.6 C5 E5 G5:1 E5:1 D5 E5 G5 A5 G5:0.75 E5:0.75 D5:0.5)x2
+C5:0.75 C5:0.25@0.6 E5 G5 A5:1 G5:1
+B4:0.75 B4:0.25@0.6 D5 G5 B5:1 A5:1
+C6 B5 A5 G5 E5:1 G5:1
+E5 D5 B4 G#4 E5:2
+A4:0.75 A4:0.25@0.6 C5 E5 G5:1 E5:1 D5 C5@0.7 D5 C5@0.7 A4:1.5 R:0.5 A4:0.75 A4:0.25@0.6 C5 E5 G5:1 E5:1 D5 E5 G5 A5 G5:0.75 E5:0.75 D5:0.5
 
-# ---- drums
+# ---- ring-bell echo answers in the breather
+track bell patch=glintbell vel=0.5 len=0.5
+>80 R:2 E5 D5@0.45 C5 A4@0.4 R:4 R:2 C5 D5@0.45 E5 G5@0.55 R:2
+
+# ---- the sync scream: one held note, osc2 climbing 19 semitones
+# written 20.7 so gate 0.7 holds it exactly 14.5 beats: the note-off
+# IS the gap
+track riser patch=syncscream vel=0.85 len=1
+>128 A3:20.7
+
+# ======================================================================
+# DRUMS
+# ======================================================================
+
 track kick kit=909 vel=0.97
->32 (BD BD@0.9 BD@0.94 BD@0.9)x15 BD BD@0.9 BD:0.5 BD:0.5@0.85
->128 (BD BD@0.9 BD@0.94 BD@0.9)x19 BD BD@0.9 BD:0.5 BD:0.5@0.85
->208 (BD@0.9 BD@0.82 BD@0.86 BD@0.82)x4
+>32 (BD BD@0.9 BD@0.94 BD@0.9)x15 BD BD@0.9 BD@0.94 R
+>136 BD BD@0.9 BD@0.92 BD@0.9 BD BD@0.9 BD@0.92 R
+>144 (BD BD@0.9 BD@0.94 BD@0.9)x15 BD BD@0.9 BD:0.5@0.85 BD:0.5@0.9 BD@0.95
+>208 (BD@0.88 BD@0.8 BD@0.84 BD@0.8)x4
 
+# 54% swing on the 16ths: pairs of 0.27/0.23, eighth grid stays straight
 track hats kit=909 len=0.25 vel=0.6
->16 (CH@0.5 CH@0.2 CH@0.6 CH@0.25)x32
-(CH@0.55 CH@0.2 R CH@0.25)x48
-(CH@0.45 R R R)x16
->128 (CH@0.55 CH@0.2 R CH@0.25)x80
->208 (CH@0.4 CH@0.15 CH@0.45 CH@0.2)x16
+>12 (CH:0.27@0.3 CH:0.23@0.12 CH:0.27@0.35 CH:0.23@0.15)x4
+(CH:0.27@0.55 CH:0.23@0.2 CH:0.27@0.6 CH:0.23@0.25)x32
+(CH:0.27@0.55 CH:0.23@0.2 R:0.27 CH:0.23@0.3)x47
+R:1
+>128 (CH:0.5@0.4 CH:0.5@0.55)x7
+>144 (CH:0.27@0.55 CH:0.23@0.2 R:0.27 CH:0.23@0.3)x64
+>208 (CH:0.27@0.4 CH:0.23@0.15 CH:0.27@0.45 CH:0.23@0.18)x16
 
 track openhat kit=909 len=0.5 vel=0.7
->48 (R OH)x48
->128 (R OH)x80
+>48 (R OH)x47
+>144 (R OH)x64
 
 track clap kit=909 vel=0.88
->48 (R CP R CP)x12
->128 (R CP R CP)x19 R CP R:0.5 CP:0.5@0.7 CP@0.95
+>40 (R CP R CP)x14
+>144 (R CP R CP)x15
+R CP CP:0.5@0.7 CP:0.5@0.8 CP@0.95
 
+# the roll: 14.5 beats rising, 1.5 beats of nothing, then the crack
 track roll kit=909 len=0.25 vel=0.9
->112 (SD@0.35)x16 (SD@0.45)x16 (SD@0.55)x8 (SD@0.65)x8 (SD@0.78)x8 (SD@0.9)x4 (SD@1)x4
-[SD CP]@1
+>128 (SD@0.35)x16 (SD@0.45)x16 (SD@0.6)x12 (SD@0.75)x8 (SD@0.9)x6 R:1.5 [SD CP]@1
 
-track rim kit=909 len=0.5 vel=0.5
->160 (R R R RS R R RS R)x8
+# rim funk + ghost snares
+track perc kit=909 len=0.5 vel=0.5
+>80 (R:1.5 RS:0.5@0.5 R:1 RS:0.25@0.45 SD:0.25@0.25 R:0.5)x3
+>160 (R:1.5 RS:0.5@0.5 R:1.75 SD:0.25@0.3)x12
 
-# ---- the filter is the story: closed, opening, slammed shut, riser, wide open, closed
+# ======================================================================
+# AUTOMATION — the performance
+# ======================================================================
+
+# the filter is still the story
 automate cutoff
-320 950:32@exp 2400:64@exp 520:4@smooth R:8 5200:20@exp 3000:2@exp R:78 480:24@exp
+380 R:16 1500:32@exp 3000:32@exp 900:2@smooth 1200:12@lin R:2 1400:2@smooth R:30 5000:15@exp 3200:1 R:64 420:26@exp
 
 automate resonance
-1.35 R:96 2.3:24@lin 1.25:6@smooth
+1.3 R:48 1.7:32@lin 1.2:16@smooth R:32 2.6:15@lin 1.35:1
+
+# the bloom: stabs become a pad, then back
+automate attack
+0.004 R:96 0.05:1 R:30 0.004:1
+
+automate release
+0.18 R:96 0.6:1 R:30 0.15:1
 
 automate hpf
-95 R:96 600:16@exp 95:14@exp
+95 R:128 700:14@exp 95:2@exp
+
+# drop 2's PWM morph: pulse into osc 1, LFO chewing the width
+automate mix_pulse
+0 R:144 0.5:2@lin R:60 0:8@lin
+
+automate lfo_pwm
+0 R:144 0.3:2 R:60 0:4
 
 automate drive
-1.7 2.5:96@lin R:32 3.1:1 R:79 1.5:16@smooth
+1.7 2.4:80@lin R:16 1.9:4@smooth R:28 3.0:16@lin R:60 1.5:12@smooth
 
-# the germanium stage IS the drop
+# the germanium stage is drop 2's signature, not drop 1's
 automate fuzz
-0 R:128 0.38:1 R:63 0.22:8@lin R:8 0:8@smooth
+0 R:144 0.35:1 R:47 0.2:8@lin R:4 0:6@smooth
 
 automate reverb_wet
-0.14 R:96 0.42:12@smooth R:20 0.1:1 R:79 0.34:24@lin
+0.14 R:94 0.45:6@smooth R:42 0.12:2 R:64 0.4:20@lin
+
+automate reverb_decay
+0.5 R:94 0.8:2 R:46 0.5:2
+
+automate spring
+0.12 R:96 0.32:4 R:40 0.12:4
+
+# the deck as narrative: memory -> focus -> memory
+automate tape_wow
+0.55 0.08:14@exp R:82 0.2:4@smooth R:28 0.08:2 R:94 0.85:12@lin
+
+automate tape_flutter
+0.06 R:224 0.3:12@lin
+
+automate tape_drive
+0.32 R:142 0.5:2 R:62 0.3:8
+
+# tape brake at the very end
+automate bend
+0 R:232 -2:6@smooth
+
+# the 909's knobs are played
+automate bd_tune
+0.28 R:136 0.5:7@lin 0.28:1
+
+automate sd_tune
+0.4 R:128 0.68:14@lin 0.4:2
+
+automate bd_decay
+0.5 R:144 0.6:1 R:59 0.5:8
 
 automate bd_drive
-0.42 R:128 0.62:1 R:79 0.42:8
+0.42 R:144 0.6:1 R:59 0.42:8
+
+automate oh_decay
+0.5 R:176 0.68:1 R:15 0.5:1
 
 automate hh_level
-0.62 R:208 0.3:16@lin 0:8@lin
+0.62 R:208 0.28:14@lin 0:6
 
-# the acid lead squelches harder as the drop runs
+# the acid voice squelches harder each act
 automate lead.cutoff
-400 R:136 900:56@exp 500:16@smooth
+400 R:48 850:30@exp 500:2 R:64 950:56@exp 550:8@smooth
 
 automate lead.resonance
-1.2 R:136 2.6:48@lin 3.2:16@lin 1.5:8
+1.3 R:48 2.2:30@lin R:66 2.9:48@lin 3.3:8@lin 1.5:8
+
+# the riser's own arc
+automate riser.osc2_pitch
+0 R:128 24:14@lin 0:2
+
+automate riser.cutoff
+900 R:128 5200:14@exp 900:2

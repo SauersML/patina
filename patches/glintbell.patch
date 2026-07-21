@@ -1,0 +1,37 @@
+# Strobe Engine — the glint: ring modulation with oscillator two a
+# FIFTH up, not a tritone. Ring mod of f and 1.5f yields 0.5f and 2.5f
+# — an octave-down ghost plus a bright sheen, all of it still IN key.
+# A bell that sparkles without leaving the song's harmony.
+waveform 0
+osc2_wave 0
+osc2_pitch 7
+osc2_level 0.5
+osc3_wave 0
+osc3_pitch 0
+osc3_level 0
+detune 2
+sub 0
+circuit 1
+key_track 0.7
+osc_fm 0
+sync 0
+ring 0.85
+glide 0
+pulse_width 0.5
+attack 0.003
+decay 1.1
+sustain 0.0
+release 1.4
+filter_env 0.3
+filter_attack 0.001
+filter_decay 0.7
+filter_sustain 0.3
+filter_release 1.0
+cutoff 5000
+resonance 0.5
+drive 1.0
+saturation 1.0
+hpf 150
+volume 0.5
+noise 0
+fuzz 0
