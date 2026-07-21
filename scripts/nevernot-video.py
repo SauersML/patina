@@ -459,6 +459,7 @@ def main():
                 y0 = m2y(m0 if m0 > 1 else 64.0)
                 dr.text((x0, y0 - size), text, font=font,
                         fill=col((0, 170, 155), int(150 * fade ** 2)))
+                ppts = []
                 for j in range(len(fr0)):
                     if age > life[j]:
                         continue
@@ -467,6 +468,18 @@ def main():
                     aa = int(200 * fade * (1 - age / life[j]))
                     if aa > 4:
                         dr.line(hexagon(px_, py_, 2.6), fill=col((90, 220, 200), aa))
+                        ppts.append((px_, py_))
+                # mid-flight the fragments COALESCE: for a breath the
+                # dust aligns into a sigil — a ciphered glyph of the
+                # word that was — then disperses on
+                sig = max(0.0, 1.0 - abs(age - 1.2) / 0.5)
+                if sig > 0 and len(ppts) >= 4:
+                    sa = int(140 * sig * fade)
+                    for q in range(0, len(ppts) - 1, 2):
+                        dr.line([ppts[q], ppts[q + 1]],
+                                fill=col((150, 240, 220), sa), width=1)
+                    dr.line([ppts[0], ppts[-1]],
+                            fill=col((150, 240, 220), int(sa * 0.6)), width=1)
                 continue
             col_w = (col((225, 255, 245), 255) if active
                      else col((90, 130, 125), 150))

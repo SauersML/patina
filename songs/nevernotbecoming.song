@@ -43,7 +43,7 @@ automate tape_age
 
 # ---- the voice -------------------------------------------------------
 track voice vox wav=renders/nevernot-line-sung.wav pitch=renders/nevernot-pitch.wav vel=1 len=1
-  R:16
+  R:8 E2:8@0.02
   E4:112
   E4:2 G4:2 A4:2 B4:3 A4:1.5 B4:1.5 C#5:2 B4:2
   [A2 A3 E4 C#5 E5]:2 [B2 B3 F#4 B4 E5]:2 [D3 D4 F#4 A4 E5]:2 [E3 E4 G#4 B4 C#5]:2

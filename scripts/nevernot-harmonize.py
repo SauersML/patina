@@ -57,20 +57,21 @@ def harmony_breakpoints():
                 bp += [(base, drone), (base + slot * spb, drone)]
             base += slot * spb
             continue
-        for word, onset, dur, _vel, pitch, opts in timing:
-            t0, t1 = base + onset * spb, base + (onset + dur) * spb
-            lead = nb.N[pitch] if isinstance(pitch, str) else nb.N[pitch[0][1]]
-            i = snap_idx(lead)
-            h = SCALE[i - 2]                     # the third below
-            if "fall" in opts:
-                # cadence: the lead falls, the harmony RISES a step
-                bp += [(t0, h), (t1 - 0.25, h), (t1, SCALE[i - 1])]
-            elif dur >= 1.5:
-                # under a hold, the harmony moves: neighbor dip
-                bp += [(t0, h), (t0 + dur * spb * 0.45, SCALE[i - 3]),
-                       (t0 + dur * spb * 0.8, h), (t1, h)]
-            else:
-                bp += [(t0, h), (t1, h)]
+        # The double abides: LOW (at or under the speech's own
+        # register, so no chipmunk shifts) and nearly still — one
+        # chord tone per bar, stepwise G3-A3-A3-B3 with the verse
+        # harmony Em-D-A-Bm, while the tube lead moves above it.
+        # The bridge sinks to a constant E3 under the recitative.
+        if _text.startswith(("From the core", "Decoherences")):
+            bp += [(base, 52), (base + slot * spb, 52)]
+        else:
+            bar_tones = [55, 57, 57, 59]
+            nbars = int(np.ceil(slot / 4))
+            for bidx in range(nbars):
+                tone = bar_tones[bidx % 4]
+                b0 = base + bidx * 4 * spb
+                b1 = min(base + (bidx + 1) * 4 * spb, base + slot * spb)
+                bp += [(b0, tone), (b1, tone)]
         base += slot * spb
     return bp, voc
 
