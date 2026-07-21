@@ -78,17 +78,19 @@ CHORUS_B = (16, "vocoder", "Then subsiding back into the everplenishing boundles
 VERSE_GROUP = lambda: None  # marker for readability only
 
 SCORE = [
+    # Verses are recitation tones: words sit ON a pitch and stay there;
+    # movement is saved for the accents and the cadences
     (16, "I feel the searing caress of that merciless sun upon my compound eyes.",
      [("I", 0.0, 0.5, 0.8, "E4", {}),
-      ("feel", 0.5, 1.5, 1.0, [(0, "G4"), (0.6, "F#4")], {"scoop": -1.0}),
-      ("the", 2.0, 0.5, 0.7, "E4", {}),
+      ("feel", 0.5, 1.5, 1.0, "G4", {"scoop": -1.0}),
+      ("the", 2.0, 0.5, 0.7, "G4", {}),
       ("searing", 2.5, 1.5, 0.9, [(0, "A4"), (0.5, "B4")], {}),
-      ("caress", 4.0, 1.5, 0.9, [(0, "A4"), (0.6, "G4")], {}),
-      ("of", 5.5, 0.5, 0.7, "F#4", {}),
-      ("that", 6.0, 0.5, 0.7, "G4", {}),
-      ("merciless", 6.5, 1.5, 0.9, [(0, "F#4"), (0.4, "E4"), (0.75, "D4")], {}),
+      ("caress", 4.0, 1.5, 0.9, "A4", {}),
+      ("of", 5.5, 0.5, 0.7, "A4", {}),
+      ("that", 6.0, 0.5, 0.7, "A4", {}),
+      ("merciless", 6.5, 1.5, 0.9, [(0, "G4"), (0.5, "F#4")], {}),
       ("sun", 8.0, 2.0, 1.0, "B4", {"scoop": -2.0, "vib": (0.4, 5.7, 32)}),
-      ("upon", 10.0, 1.0, 0.8, [(0, "A4"), (0.5, "B4")], {}),
+      ("upon", 10.0, 1.0, 0.8, "B4", {}),
       ("my", 11.0, 0.5, 0.8, "C#5", {}),
       ("compound", 11.5, 1.5, 1.0, [(0, "B4"), (0.5, "A4")], {}),
       ("eyes", 13.0, 2.5, 1.0, [(0, "G4"), (0.5, "F#4")],
@@ -96,80 +98,82 @@ SCORE = [
     (16, "Its rays refracting into kaleidoscopic fractals that shimmer "
          "and pulsate across my vision.",
      [("Its", 0.0, 0.5, 0.8, "E4", {}),
-      ("rays", 0.5, 1.5, 0.9, [(0, "G4"), (0.6, "A4")], {"vib": (0.6, 5.7, 25)}),
-      ("refracting", 2.0, 1.5, 0.9, [(0, "B4"), (0.4, "A4"), (0.75, "G4")], {}),
-      ("into", 3.5, 1.0, 0.7, [(0, "F#4"), (0.5, "G4")], {}),
+      ("rays", 0.5, 1.5, 0.9, "G4", {"vib": (0.6, 5.7, 25)}),
+      ("refracting", 2.0, 1.5, 0.9, [(0, "A4"), (0.5, "G4")], {}),
+      ("into", 3.5, 1.0, 0.7, "G4", {}),
       ("kaleidoscopic", 4.5, 2.5, 1.0,
-       [(0, "E4"), (0.2, "F#4"), (0.4, "G4"), (0.6, "A4"), (0.8, "B4")], {}),
+       [(0, "E4"), (0.25, "G4"), (0.5, "A4"), (0.75, "B4")], {}),
       ("fractals", 7.0, 1.5, 0.9, [(0, "C#5"), (0.5, "B4")], {}),
       ("that", 8.5, 0.5, 0.7, "A4", {}),
-      ("shimmer", 9.0, 1.5, 0.9, [(0, "B4"), (0.5, "A4")], {"vib": (0.6, 6.2, 22)}),
-      ("and", 10.5, 0.5, 0.7, "G4", {}),
-      ("pulsate", 11.0, 1.5, 0.9, [(0, "A4"), (0.5, "F#4")], {}),
-      ("across", 12.5, 1.0, 0.8, [(0, "E4"), (0.5, "F#4")], {}),
-      ("my", 13.5, 0.5, 0.7, "D4", {}),
+      ("shimmer", 9.0, 1.5, 0.9, "A4", {"vib": (0.6, 6.2, 22)}),
+      ("and", 10.5, 0.5, 0.7, "A4", {}),
+      ("pulsate", 11.0, 1.5, 0.9, [(0, "G4"), (0.5, "F#4")], {}),
+      ("across", 12.5, 1.0, 0.8, "E4", {}),
+      ("my", 13.5, 0.5, 0.7, "E4", {}),
       ("vision", 14.0, 2.0, 0.9, "E4", {"vib": (0.5, 5.7, 28), "fall": -1.5})]),
     (16, "As the burning orb reaches its zenith, I shed my outer vestments.",
      [("As", 0.0, 0.5, 0.7, "E4", {}),
-      ("the", 0.5, 0.5, 0.7, "F#4", {}),
-      ("burning", 1.0, 1.5, 0.9, [(0, "G4"), (0.5, "A4")], {}),
+      ("the", 0.5, 0.5, 0.7, "E4", {}),
+      ("burning", 1.0, 1.5, 0.9, "G4", {}),
       ("orb", 2.5, 1.5, 1.0, "B4", {"scoop": -1.5, "vib": (0.45, 5.7, 30)}),
-      ("reaches", 4.0, 1.0, 0.8, [(0, "A4"), (0.5, "G4")], {}),
-      ("its", 5.0, 0.5, 0.7, "F#4", {}),
+      ("reaches", 4.0, 1.0, 0.8, "A4", {}),
+      ("its", 5.0, 0.5, 0.7, "A4", {}),
       ("zenith", 5.5, 1.5, 0.9, [(0, "A4"), (0.5, "G4")], {}),
       ("I", 7.0, 0.5, 0.8, "E4", {}),
       ("shed", 7.5, 1.5, 1.0, "G4", {"vib": (0.5, 5.7, 26)}),
-      ("my", 9.0, 0.5, 0.7, "F#4", {}),
+      ("my", 9.0, 0.5, 0.7, "G4", {}),
       ("outer", 9.5, 1.0, 0.8, [(0, "G4"), (0.5, "F#4")], {}),
       ("vestments", 10.5, 2.5, 0.9, [(0, "E4"), (0.5, "D4")],
        {"vib": (0.5, 5.7, 24), "fall": -1.0})]),
     (16, "Layers upon layers slough away, leaving only the pulsant "
          "nectarized essence at the core.",
-     [("Layers", 0.0, 1.0, 0.9, [(0, "G4"), (0.5, "F#4")], {}),
-      ("upon", 1.0, 1.0, 0.8, [(0, "E4"), (0.5, "F#4")], {}),
-      ("layers", 2.0, 1.0, 0.9, [(0, "G4"), (0.5, "A4")], {}),
+     [("Layers", 0.0, 1.0, 0.9, "G4", {}),
+      ("upon", 1.0, 1.0, 0.8, "G4", {}),
+      ("layers", 2.0, 1.0, 0.9, "A4", {}),
       ("slough", 3.0, 1.5, 1.0, "B4", {"scoop": -1.5}),
       ("away", 4.5, 1.5, 0.9, [(0, "A4"), (0.5, "G4")], {"vib": (0.5, 5.7, 26)}),
-      ("leaving", 6.0, 1.0, 0.8, [(0, "F#4"), (0.5, "G4")], {}),
-      ("only", 7.0, 1.0, 0.8, [(0, "A4"), (0.5, "G4")], {}),
-      ("the", 8.0, 0.5, 0.7, "F#4", {}),
+      ("leaving", 6.0, 1.0, 0.8, "G4", {}),
+      ("only", 7.0, 1.0, 0.8, "A4", {}),
+      ("the", 8.0, 0.5, 0.7, "A4", {}),
       ("pulsant", 8.5, 1.5, 0.9, [(0, "G4"), (0.5, "E4")], {}),
-      ("nectarized", 10.0, 1.5, 0.9, [(0, "F#4"), (0.4, "G4"), (0.75, "A4")], {}),
+      ("nectarized", 10.0, 1.5, 0.9, "F#4", {}),
       ("essence", 11.5, 1.5, 1.0, [(0, "B4"), (0.5, "A4")], {}),
       ("at", 13.0, 0.5, 0.7, "G4", {}),
-      ("the", 13.5, 0.5, 0.7, "F#4", {}),
+      ("the", 13.5, 0.5, 0.7, "G4", {}),
       ("core", 14.0, 2.0, 1.0, [(0, "F#4"), (0.6, "A4")],
        {"vib": (0.45, 5.7, 30)})]),
     CHORUS_A,
     CHORUS_B,
-    ("rest", 8),
+    # The interlude breathes as a wordless vocoder "aaah" — the choir
+    # hangs on the gliding Em voicings under it
+    (8, "vocoder", "Aaah.",
+     [("Aaah", 0.5, 6.5, 1.0, "E4", {})]),
     (16, "Rendered raw, I move as pure apian anima now.",
-     [("Rendered", 0.0, 1.0, 0.9, [(0, "E4"), (0.5, "F#4")], {}),
+     [("Rendered", 0.0, 1.0, 0.9, "E4", {}),
       ("raw", 1.0, 2.0, 1.0, "G4", {"scoop": -2.0, "vib": (0.4, 5.7, 30)}),
-      ("I", 3.0, 0.5, 0.7, "F#4", {}),
-      ("move", 3.5, 1.5, 0.9, [(0, "A4"), (0.5, "G4")], {}),
-      ("as", 5.0, 0.5, 0.7, "F#4", {}),
-      ("pure", 5.5, 1.5, 1.0, [(0, "B4"), (0.5, "A4")], {"vib": (0.5, 5.7, 28)}),
-      ("apian", 7.0, 1.5, 0.9, [(0, "G4"), (0.4, "F#4"), (0.75, "E4")], {}),
-      ("anima", 8.5, 1.5, 0.9, [(0, "F#4"), (0.4, "G4"), (0.7, "A4")], {}),
+      ("I", 3.0, 0.5, 0.7, "G4", {}),
+      ("move", 3.5, 1.5, 0.9, "A4", {}),
+      ("as", 5.0, 0.5, 0.7, "A4", {}),
+      ("pure", 5.5, 1.5, 1.0, "B4", {"vib": (0.5, 5.7, 28)}),
+      ("apian", 7.0, 1.5, 0.9, [(0, "G4"), (0.5, "F#4")], {}),
+      ("anima", 8.5, 1.5, 0.9, [(0, "F#4"), (0.5, "A4")], {}),
       ("now", 10.0, 2.5, 1.0, "B4", {"vib": (0.4, 5.7, 32), "fall": -1.5})]),
     (16, "A quivering translucent incandescence, tuned solely to the "
          "thrumming heartbeat of this unearthly desert canyonscape.",
      [("A", 0.0, 0.5, 0.7, "E4", {}),
-      ("quivering", 0.5, 1.5, 0.9, [(0, "G4"), (0.4, "A4"), (0.75, "G4")],
-       {"vib": (0.2, 6.8, 22)}),
-      ("translucent", 2.0, 1.5, 0.9, [(0, "F#4"), (0.5, "A4")], {}),
+      ("quivering", 0.5, 1.5, 0.9, "G4", {"vib": (0.2, 6.8, 22)}),
+      ("translucent", 2.0, 1.5, 0.9, "A4", {}),
       ("incandescence", 3.5, 2.0, 1.0,
-       [(0, "B4"), (0.3, "A4"), (0.6, "G4"), (0.85, "F#4")], {}),
+       [(0, "B4"), (0.4, "A4"), (0.75, "G4")], {}),
       ("tuned", 5.5, 0.5, 0.8, "G4", {}),
-      ("solely", 6.0, 1.0, 0.8, [(0, "A4"), (0.5, "G4")], {}),
-      ("to", 7.0, 0.5, 0.7, "F#4", {}),
-      ("the", 7.5, 0.5, 0.7, "E4", {}),
-      ("thrumming", 8.0, 1.0, 0.9, [(0, "F#4"), (0.5, "G4")], {}),
+      ("solely", 6.0, 1.0, 0.8, "G4", {}),
+      ("to", 7.0, 0.5, 0.7, "G4", {}),
+      ("the", 7.5, 0.5, 0.7, "G4", {}),
+      ("thrumming", 8.0, 1.0, 0.9, "F#4", {}),
       ("heartbeat", 9.0, 1.5, 1.0, [(0, "A4"), (0.5, "E4")], {}),
-      ("of", 10.5, 0.5, 0.7, "F#4", {}),
-      ("this", 11.0, 0.5, 0.7, "G4", {}),
-      ("unearthly", 11.5, 1.5, 0.9, [(0, "A4"), (0.4, "B4"), (0.75, "A4")], {}),
+      ("of", 10.5, 0.5, 0.7, "E4", {}),
+      ("this", 11.0, 0.5, 0.7, "E4", {}),
+      ("unearthly", 11.5, 1.5, 0.9, [(0, "A4"), (0.5, "B4")], {}),
       ("desert", 13.0, 1.0, 0.8, [(0, "G4"), (0.5, "F#4")], {}),
       ("canyonscape", 14.0, 2.0, 0.9, [(0, "G4"), (0.4, "A4"), (0.75, "B4")],
        {"vib": (0.6, 5.7, 26)})]),
@@ -190,6 +194,10 @@ SCORE = [
       ("nevernotbecoming", 10.0, 8.0, 1.0,
        [(0, "B4"), (0.2, "C#5"), (0.4, "D5"), (0.6, "E5"), (0.8, "F#5")],
        {"scoop": -1.5, "vib": (0.55, 5.6, 38), "fall": -3.0})]),
+    # Coda: the choir exhales one last doubled "aaah" over the fading
+    # voicings, and the piece subsides back into the boundless source
+    (12, "vocoder", "Aaah.",
+     [("Aaah", 0.5, 10.0, 0.9, "E4", {})]),
 ]
 
 
@@ -398,7 +406,15 @@ def main():
             env[a:min(b, slot)] = vel
         shaped = np.convolve(even * env, kernel, "same")
         phrase *= shaped
-        phrase *= 0.12 / (np.sqrt((phrase ** 2).mean()) + 1e-9)
+        # The 20-band vocoder runs far quieter than the Talker for the
+        # same modulator (measured on stems: -15 dB) — feed it hot and
+        # soft-limited; its band followers hear RMS, and a compressed
+        # modulator is exactly what a vocoder choir wants
+        if _is_voc:
+            phrase *= 0.35 / (np.sqrt((phrase ** 2).mean()) + 1e-9)
+            phrase = np.tanh(phrase / 0.75) * 0.75
+        else:
+            phrase *= 0.12 / (np.sqrt((phrase ** 2).mean()) + 1e-9)
         chunks.append(phrase.astype(np.float32))
 
     line = np.concatenate(chunks)
