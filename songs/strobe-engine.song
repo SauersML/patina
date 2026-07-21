@@ -52,6 +52,8 @@ automate mix_saw
 0.8
 automate detune
 6
+automate hpf
+130
 automate sub
 0
 automate noise
@@ -72,8 +74,11 @@ automate sustain
 0.5
 automate decay
 0.22
+# the space is arranged, not set: the bus chorus would smear kick and
+# bass, so it only runs when the track is being a memory or a bloom —
+# every mode switch lands on a masked downbeat
 automate chorus_mode
-2
+1 R:32 0:0.1 R:63.9 2:0.1 R:31.9 0:0.1 R:87.9 2:0.1
 automate chorus_rate
 0.4
 automate chorus_depth
@@ -167,7 +172,7 @@ R:1.5 [A3 C4 E4 G4]:0.25 R:2 [A3 C4 E4 G4]:0.25 R:1.5 [A3 C4 E4 G4]:0.25 R:2 [A3
 # ---- bass: no octave bounce. Offbeat-only pump between the kicks in
 # act one; a one-register roller with accent waves in drop 2. Passing
 # tones only at phrase ends. Tacet in the bloom.
-track bass patch=rawbass vel=0.9 len=0.5
+track bass patch=depthcharge vel=0.9 len=0.5
 >32 ((R A1@0.85)x8 (R F1@0.85)x4 (R G1@0.85)x3 R E1@0.85)x3
 (R A1@0.85)x8 (R F1@0.85)x4
 # alone: the walkdown into the bloom
@@ -293,14 +298,16 @@ automate drive
 automate fuzz
 0 R:144 0.35:1 R:47 0.2:8@lin R:4 0:6@smooth
 
+# dry and close in the room states; wide only in memory and bloom,
+# contracting through the build as the pressure rises
 automate reverb_wet
-0.14 R:94 0.45:6@smooth R:42 0.12:2 R:64 0.4:20@lin
+0.3 0.09:16@lin R:78 0.45:6@smooth R:38 0.1:4@lin R:64 0.38:20@lin
 
 automate reverb_decay
-0.5 R:94 0.8:2 R:46 0.5:2
+0.45 R:94 0.8:2 R:46 0.45:2
 
 automate spring
-0.12 R:96 0.32:4 R:40 0.12:4
+0.2 0.05:16@lin R:76 0.3:4@smooth R:32 0.06:4@lin R:76 0.25:12@lin
 
 # the deck as narrative: memory -> focus -> memory
 automate tape_wow
@@ -317,14 +324,18 @@ automate bend
 0 R:232 -2:6@smooth
 
 # the 909's knobs are played
+# the kick shell rings at A (42*(88/42)^0.365 = 55 Hz) — unison with
+# the bass root instead of beating 3 Hz against it
 automate bd_tune
-0.28 R:128 0.5:15@lin 0.28:1
+0.365 R:128 0.55:15@lin 0.365:1
 
 automate sd_tune
 0.4 R:138 0.66:4.5@lin 0.4:1.5
 
+# drop 2's kick gets SHORTER, not longer — the bass roller owns the
+# sustained low end there
 automate bd_decay
-0.5 R:144 0.6:1 R:59 0.5:8
+0.5 R:144 0.44:1 R:59 0.5:8
 
 automate bd_drive
 0.42 R:144 0.6:1 R:59 0.42:8
