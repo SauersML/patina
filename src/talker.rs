@@ -136,6 +136,11 @@ pub struct Talker {
     body_lp: f32,
     body_k: f32,
     gate: f32,
+    /// Output tilt: the complement of the analysis pre-emphasis. The
+    /// poles were fitted to a whitened voice, so the tube band needs its
+    /// brightness restored — this one-zero (+6 dB/oct above ~1 kHz) is
+    /// what moves the centroid from bass-heavy to the talk-box mid-honk.
+    tilt_prev: f32,
     // The mouth-opening wah. Pre-emphasis makes LPC deliberately
     // tilt-blind (poles chase formant POSITIONS), which flattens the
     // dark<->bright swing of a closing/opening mouth — the very thing a
@@ -190,6 +195,7 @@ impl Talker {
             body_lp: 0.0,
             body_k: 1.0 - (-std::f32::consts::TAU * 230.0 / sample_rate).exp(),
             gate: 0.0,
+            tilt_prev: 0.0,
             bright_lp: 0.0,
             bright_split_k: 1.0 - (-std::f32::consts::TAU * 900.0 / ar).exp(),
             bright_hf: 0.0,
@@ -274,10 +280,14 @@ impl Talker {
         let hf = m - self.bright_lp;
         self.bright_hf += 0.004 * (hf.abs() - self.bright_hf);
         self.bright_total += 0.004 * (m.abs() - self.bright_total);
-        let openness = (self.bright_hf / self.bright_total.max(1e-6) / 0.6)
+        // Calibrated on sung vowels (measured HF ratios ~0.1-0.35), not
+        // speech fricatives: typical singing sits mid-open, bright
+        // vowels reach the top, and the floor starts at 500 Hz so the
+        // wah shades rather than smothers
+        let openness = (self.bright_hf / self.bright_total.max(1e-6) / 0.3)
             .clamp(0.0, 1.0)
-            .powf(1.5);
-        self.wah_fc_target = 280.0 * (4800.0f32 / 280.0).powf(openness);
+            .powf(1.2);
+        self.wah_fc_target = 500.0 * (4800.0f32 / 500.0).powf(openness);
 
         self.ring[self.write] = m;
         self.write = (self.write + 1) % self.ring.len();
@@ -379,10 +389,18 @@ impl Talker {
         self.wah_fc += (self.wah_fc_target - self.wah_fc) * self.wah_slew;
         self.wah.retune(self.wah_fc, 1.3, self.sr);
         y = self.wah.tick(y);
+        // De-emphasis inversion: restore the brightness the analysis
+        // whitening removed (measured: centroid 319 Hz without this vs
+        // the reference's 1219 Hz)
+        let tilted = y - 0.85 * self.tilt_prev;
+        self.tilt_prev = y;
+        let y = tilted * 3.5;
         // NuVo passthrough: the modulator minus its own lows = the
         // sibilant band, faded in only on unvoiced frames
-        let sib = (modulator - self.m_lp) * self.unvoiced * 5.0;
-        y + self.body_lp * 1.2 * self.gate + sib
+        let sib = (modulator - self.m_lp) * self.unvoiced * 6.5;
+        // Body kept to seasoning: measured at 0.5 it was 86% of the
+        // output's energy and buried the mouth entirely
+        y + self.body_lp * 0.05 * self.gate + sib
     }
 }
 

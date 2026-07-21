@@ -910,7 +910,11 @@ impl VoiceManager {
     }
 
     pub fn set_vox_mode(&mut self, v: f32) {
-        self.params.vox_mode = v.clamp(0.0, 1.0);
+        // 0 TalkBox / 1 studio vocoder / 2 Talker (LPC) / 3 spectral.
+        // (This clamp once stopped at 1.0 — a stale bound that silently
+        // rerouted every Talker and Spectral request to the band
+        // vocoder. Keep it in sync with Param::VoxModeSel's range.)
+        self.params.vox_mode = v.clamp(0.0, 3.0);
         self.vox.set_mode(crate::vocoder::VocoderMode::from_value(self.params.vox_mode));
     }
 
