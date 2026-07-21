@@ -141,6 +141,11 @@ pub struct Talker {
     /// brightness restored — this one-zero (+6 dB/oct above ~1 kHz) is
     /// what moves the centroid from bass-heavy to the talk-box mid-honk.
     tilt_prev: f32,
+    /// Fundamental cut: the reference's high-register material carries
+    /// only 3% of its energy below 300 Hz — the tube barely passes the
+    /// fundamental, and the warmth lives in harmonics 2-5.
+    hp_lp: f32,
+    hp_k: f32,
     // The mouth-opening wah. Pre-emphasis makes LPC deliberately
     // tilt-blind (poles chase formant POSITIONS), which flattens the
     // dark<->bright swing of a closing/opening mouth — the very thing a
@@ -196,6 +201,8 @@ impl Talker {
             body_k: 1.0 - (-std::f32::consts::TAU * 230.0 / sample_rate).exp(),
             gate: 0.0,
             tilt_prev: 0.0,
+            hp_lp: 0.0,
+            hp_k: 1.0 - (-std::f32::consts::TAU * 280.0 / sample_rate).exp(),
             bright_lp: 0.0,
             bright_split_k: 1.0 - (-std::f32::consts::TAU * 900.0 / ar).exp(),
             bright_hf: 0.0,
@@ -392,15 +399,16 @@ impl Talker {
         // De-emphasis inversion: restore the brightness the analysis
         // whitening removed (measured: centroid 319 Hz without this vs
         // the reference's 1219 Hz)
-        let tilted = y - 0.85 * self.tilt_prev;
+        let tilted = y - 0.8 * self.tilt_prev;
         self.tilt_prev = y;
-        let y = tilted * 3.5;
+        let mut y = tilted * 3.5;
+        // Fundamental cut (one-pole HP at 280 Hz): the tube's real voice
+        self.hp_lp += self.hp_k * (y - self.hp_lp);
+        y -= self.hp_lp;
         // NuVo passthrough: the modulator minus its own lows = the
         // sibilant band, faded in only on unvoiced frames
         let sib = (modulator - self.m_lp) * self.unvoiced * 6.5;
-        // Body kept to seasoning: measured at 0.5 it was 86% of the
-        // output's energy and buried the mouth entirely
-        y + self.body_lp * 0.05 * self.gate + sib
+        y + sib
     }
 }
 
