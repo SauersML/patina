@@ -1,0 +1,182 @@
+# Strobe Engine — 128 bpm French-house muscle for a dark room.
+# Filtered Am7 vamp that opens over a full minute (the Daft Punk move),
+# octave-pump disco bass, four-on-the-floor 909 with offbeat opens,
+# an acid lead on the drop, and the germanium fuzz kicking the door in
+# right when the snare roll lands.
+#
+#   beats   0-32    intro: chords under a closed filter, hats sneak in
+#   beats  32-96    groove: kick + bass, clap and open hats join at 48
+#   beats  96-128   breakdown: drums thin out, verb swells, hpf climbs,
+#                   16 beats of rising snare roll into the drop
+#   beats 128-208   drop: filter wide open, fuzz on, acid lead at 136
+#   beats 208-240   outro: filter closes, hats fade, one held Am
+
+bpm 128
+gate 0.6
+
+# ---- the panel = the chord machine: detuned saws, fast stab envelope
+automate waveform
+2
+automate detune
+6
+automate sub
+0
+automate noise
+0
+automate glide
+0
+automate attack
+0.004
+automate decay
+0.22
+automate sustain
+0.5
+automate release
+0.18
+automate filter_env
+1.4
+automate filter_attack
+0.001
+automate filter_decay
+0.18
+automate filter_sustain
+0.25
+automate filter_release
+0.15
+automate chorus_mode
+2
+automate chorus_rate
+0.4
+automate chorus_depth
+0.35
+automate spring
+0.12
+automate reverb_decay
+0.5
+automate tape_wow
+0.05
+automate tape_flutter
+0.06
+automate tape_drive
+0.32
+automate tape_age
+0.25
+
+# ---- the 909 board, voiced for the club
+automate bd_level
+0.9
+automate bd_tune
+0.28
+automate bd_attack
+0.65
+automate bd_decay
+0.5
+automate bd_sweep
+0.55
+automate sd_level
+0.72
+automate sd_tune
+0.4
+automate sd_tone
+0.5
+automate sd_snappy
+0.75
+automate sd_decay
+0.42
+automate cp_level
+0.85
+automate cp_decay
+0.5
+automate rs_level
+0.6
+automate rs_tune
+0.5
+automate hh_tune
+0.55
+automate hh_metal
+0.65
+automate ch_decay
+0.28
+automate oh_decay
+0.5
+automate dr_drive
+0.3
+
+# ---- chords: one syncopated 4-bar vamp (Am7 Am7 Fmaj7 G6), all song.
+# The filter automation is the actual melody here.
+track chords vel=0.75 len=0.25
+([A3 C4 E4 G4] R R [A3 C4 E4 G4] R R [A3 C4 E4 G4] R R R [A3 C4 E4 G4] R [A3 C4 E4 G4] R R R [A3 C4 E4 G4] R R [A3 C4 E4 G4] R R [A3 C4 E4 G4] R R R [A3 C4 E4 G4] R [A3 C4 E4 G4] R [A3 C4 E4 G4] R [F3 A3 C4 E4] R R [F3 A3 C4 E4] R R [F3 A3 C4 E4] R R R [F3 A3 C4 E4] R [F3 A3 C4 E4] R R R [G3 B3 D4 E4] R R [G3 B3 D4 E4] R R [G3 B3 D4 E4] R R R [G3 B3 D4 E4] R [G3 B3 D4 E4] [G3 B3 D4 E4] R R)x14
+[A3 C4 E4 G4] R R [A3 C4 E4 G4] R R [A3 C4 E4 G4] R R R [A3 C4 E4 G4] R [A3 C4 E4 G4] R R R
+[A2 E3 A3 C4 E4]:12@0.9
+
+# ---- bass: octave-pump disco line following the roots, A A F G(->E)
+track bass patch=rawbass vel=0.9 len=0.5
+>32 ((A1 A2@0.55)x8 (F1 F2@0.55)x4 (G1 G2@0.55)x3 E1 E2@0.55)x4
+>128 ((A1 A2@0.55)x8 (F1 F2@0.55)x4 (G1 G2@0.55)x3 E1 E2@0.55)x5
+
+# ---- acid lead, drop only: pentatonic robot hook
+track lead patch=acidline vel=0.85 len=0.5
+>136 (E5 E5@0.6 G5 E5@0.6 D5 C5@0.6 D5 C5@0.6 A4 A4@0.6 C5 A4@0.6 G4 E4@0.6 G4 A4@0.6)x6
+E5 G5 A5 G5 E5 D5 C5 D5 E5:1 C5:0.5 A4:0.5 G4:1 A4:1
+(E5 E5@0.6 G5 E5@0.6 D5 C5@0.6 D5 C5@0.6 A4 A4@0.6 C5 A4@0.6 G4 E4@0.6 G4 A4@0.6)x2
+
+# ---- drums
+track kick kit=909 vel=0.97
+>32 (BD BD@0.9 BD@0.94 BD@0.9)x15 BD BD@0.9 BD:0.5 BD:0.5@0.85
+>128 (BD BD@0.9 BD@0.94 BD@0.9)x19 BD BD@0.9 BD:0.5 BD:0.5@0.85
+>208 (BD@0.9 BD@0.82 BD@0.86 BD@0.82)x4
+
+track hats kit=909 len=0.25 vel=0.6
+>16 (CH@0.5 CH@0.2 CH@0.6 CH@0.25)x32
+(CH@0.55 CH@0.2 R CH@0.25)x48
+(CH@0.45 R R R)x16
+>128 (CH@0.55 CH@0.2 R CH@0.25)x80
+>208 (CH@0.4 CH@0.15 CH@0.45 CH@0.2)x16
+
+track openhat kit=909 len=0.5 vel=0.7
+>48 (R OH)x48
+>128 (R OH)x80
+
+track clap kit=909 vel=0.88
+>48 (R CP R CP)x12
+>128 (R CP R CP)x19 R CP R:0.5 CP:0.5@0.7 CP@0.95
+
+track roll kit=909 len=0.25 vel=0.9
+>112 (SD@0.35)x16 (SD@0.45)x16 (SD@0.55)x8 (SD@0.65)x8 (SD@0.78)x8 (SD@0.9)x4 (SD@1)x4
+[SD CP]@1
+
+track rim kit=909 len=0.5 vel=0.5
+>160 (R R R RS R R RS R)x8
+
+# ---- the filter is the story: closed, opening, slammed shut, riser, wide open, closed
+automate cutoff
+320 950:32@exp 2400:64@exp 520:4@smooth R:8 5200:20@exp 3000:2@exp R:78 480:24@exp
+
+automate resonance
+1.35 R:96 2.3:24@lin 1.25:6@smooth
+
+automate hpf
+95 R:96 600:16@exp 95:14@exp
+
+automate drive
+1.7 2.5:96@lin R:32 3.1:1 R:79 1.5:16@smooth
+
+# the germanium stage IS the drop
+automate fuzz
+0 R:128 0.38:1 R:63 0.22:8@lin R:8 0:8@smooth
+
+automate reverb_wet
+0.14 R:96 0.42:12@smooth R:20 0.1:1 R:79 0.34:24@lin
+
+automate bd_drive
+0.42 R:128 0.62:1 R:79 0.42:8
+
+automate hh_level
+0.62 R:208 0.3:16@lin 0:8@lin
+
+# the acid lead squelches harder as the drop runs
+automate lead.cutoff
+400 R:136 900:56@exp 500:16@smooth
+
+automate lead.resonance
+1.2 R:136 2.6:48@lin 3.2:16@lin 1.5:8
