@@ -5,17 +5,17 @@ automate chorus_mode
 automate chorus_depth
 0.2
 automate reverb_wet
-0.22
+0.3
 automate reverb_decay
-0.6
+0.75
 automate tape_wow
-0.16
+0.42
 automate tape_flutter
-0.05
+0.06
 automate tape_age
-0.18
+0.25
 automate tape_drive
-0.12
+0.3
 automate noise
 0.02
 track v patch=bocuma
