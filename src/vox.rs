@@ -948,7 +948,10 @@ impl VoxBox {
     }
 
     pub fn note_on(&mut self, note: u8, velocity: f32) {
-        if self.wav.is_some() && self.held == 0 {
+        // The recording starts at a phrase start and then FLOWS: the brief
+        // all-keys-up gap between legato chords must not rewind it. It
+        // rearms only once it has played out.
+        if self.wav.is_some() && self.held == 0 && !self.wav_active {
             self.wav_pos = 0;
             self.wav_active = true;
         }

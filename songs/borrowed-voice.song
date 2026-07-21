@@ -1,0 +1,32 @@
+# Borrowed Voice — a real human voice, played on the keys.
+#
+# The vox track's wav= loads a recording (made with
+# scripts/borrow-voice.sh) as the vocoder's modulator instead of the
+# built-in formant voice. The recording starts at the first chord and
+# flows across the legato changes: every word you hear is the chord
+# progression talking. First pass through the TalkBox circuit; the
+# second pass replays the same recording on the studio vocoder.
+
+bpm 92
+gate 0.95
+
+automate vox_level
+  1
+automate vox_mode
+  0 R:13.8 1
+automate reverb_wet
+  0.25
+automate tape_age
+  0.2
+
+track voice vox wav=renders/borrowed.wav vel=0.9
+  R:4
+  [D3 A3 D4 F4]:2 [C3 G3 C4 E4]:2 [Bb2 F3 Bb3 D4]:2 [A2 E3 A3 C#4]:3.5
+  R:0.5
+  [D3 A3 D4 F4]:2 [C3 G3 C4 E4]:2 [Bb2 F3 Bb3 D4]:2 [D3 A3 D4 F4]:4
+
+track bass patch=heartbass vel=0.7 len=0.5
+  (D2 . D2 D2 . D2 . . | D2 . C2 C2 . Bb1 . A1)x3
+
+track beat kit=909 len=0.5
+  (BD CH CH:0.25 CH:0.25 SD@0.5 CH BD CH | BD CH BD CH SD@0.6 CH OH@0.4 CH)x3
