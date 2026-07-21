@@ -61,18 +61,22 @@ struct Lowpass {
 
 impl Lowpass {
     fn tuned(fc: f32, q: f32, sample_rate: f32) -> Self {
+        let mut lp = Self::default();
+        lp.retune(fc, q, sample_rate);
+        lp
+    }
+
+    /// Recompute coefficients, keeping filter state (for swept filters).
+    fn retune(&mut self, fc: f32, q: f32, sample_rate: f32) {
         let w0 = std::f32::consts::TAU * fc / sample_rate;
         let alpha = w0.sin() / (2.0 * q);
         let cw = w0.cos();
         let a0 = 1.0 + alpha;
-        Self {
-            b0: (1.0 - cw) / 2.0 / a0,
-            b1: (1.0 - cw) / a0,
-            b2: (1.0 - cw) / 2.0 / a0,
-            a1: -2.0 * cw / a0,
-            a2: (1.0 - alpha) / a0,
-            ..Self::default()
-        }
+        self.b0 = (1.0 - cw) / 2.0 / a0;
+        self.b1 = (1.0 - cw) / a0;
+        self.b2 = (1.0 - cw) / 2.0 / a0;
+        self.a1 = -2.0 * cw / a0;
+        self.a2 = (1.0 - alpha) / a0;
     }
 
     #[inline]
@@ -89,6 +93,7 @@ impl Lowpass {
 }
 
 pub struct Talker {
+    sr: f32,
     // Anti-alias filters (4th order: two cascaded biquads each) and the
     // output reconstruction pair
     in_m: [Lowpass; 2],
@@ -131,6 +136,22 @@ pub struct Talker {
     body_lp: f32,
     body_k: f32,
     gate: f32,
+    // The mouth-opening wah. Pre-emphasis makes LPC deliberately
+    // tilt-blind (poles chase formant POSITIONS), which flattens the
+    // dark<->bright swing of a closing/opening mouth — the very thing a
+    // talk box exaggerates. Ranked by brightness dynamic range:
+    // vocoder < speech < talk box. So the tilt gets its own circuit: the
+    // modulator's measured brightness sweeps a big resonant lowpass over
+    // a 280 Hz - 4.8 kHz log range with an EXPANSION curve — larger
+    // "cutoff" swings than the speech itself. A wah, played by a mouth.
+    bright_lp: f32,
+    bright_split_k: f32,
+    bright_hf: f32,
+    bright_total: f32,
+    wah_fc_target: f32,
+    wah_fc: f32,
+    wah_slew: f32,
+    wah: Lowpass,
     noise: NoiseSource,
 }
 
@@ -138,6 +159,7 @@ impl Talker {
     pub fn new(sample_rate: f32) -> Self {
         let ar = sample_rate / DECIM as f32; // analysis/tract rate
         Self {
+            sr: sample_rate,
             in_m: [Lowpass::tuned(4800.0, 0.6, sample_rate), Lowpass::tuned(4800.0, 1.0, sample_rate)],
             in_c: [Lowpass::tuned(4800.0, 0.6, sample_rate), Lowpass::tuned(4800.0, 1.0, sample_rate)],
             out: [Lowpass::tuned(4800.0, 0.6, sample_rate), Lowpass::tuned(4800.0, 1.0, sample_rate)],
@@ -168,6 +190,14 @@ impl Talker {
             body_lp: 0.0,
             body_k: 1.0 - (-std::f32::consts::TAU * 230.0 / sample_rate).exp(),
             gate: 0.0,
+            bright_lp: 0.0,
+            bright_split_k: 1.0 - (-std::f32::consts::TAU * 900.0 / ar).exp(),
+            bright_hf: 0.0,
+            bright_total: 1e-6,
+            wah_fc_target: 800.0,
+            wah_fc: 800.0,
+            wah_slew: 1.0 - (-1.0 / (0.012 * sample_rate)).exp(),
+            wah: Lowpass::tuned(800.0, 1.3, sample_rate),
             noise: NoiseSource::new(),
         }
     }
@@ -238,6 +268,17 @@ impl Talker {
 
     /// One decimated-domain tick: analysis bookkeeping and the lattice.
     fn tract_tick(&mut self, m: f32, c: f32) -> f32 {
+        // Mouth-opening tracker: brightness = HF share above ~900 Hz,
+        // expanded (^1.5) and mapped onto a log cutoff sweep
+        self.bright_lp += self.bright_split_k * (m - self.bright_lp);
+        let hf = m - self.bright_lp;
+        self.bright_hf += 0.004 * (hf.abs() - self.bright_hf);
+        self.bright_total += 0.004 * (m.abs() - self.bright_total);
+        let openness = (self.bright_hf / self.bright_total.max(1e-6) / 0.6)
+            .clamp(0.0, 1.0)
+            .powf(1.5);
+        self.wah_fc_target = 280.0 * (4800.0f32 / 280.0).powf(openness);
+
         self.ring[self.write] = m;
         self.write = (self.write + 1) % self.ring.len();
         self.since_hop += 1;
@@ -329,6 +370,11 @@ impl Talker {
         for f in &mut self.out {
             y = f.tick(y);
         }
+        // The wah: the mouth's openness as LARGE cutoff motion, swept at
+        // full rate so the filter glides instead of stepping
+        self.wah_fc += (self.wah_fc_target - self.wah_fc) * self.wah_slew;
+        self.wah.retune(self.wah_fc, 1.3, self.sr);
+        y = self.wah.tick(y);
         y + self.body_lp * 1.2 * self.gate
             + self.noise.next() * self.unvoiced * (self.env * 6.0).min(1.2)
     }

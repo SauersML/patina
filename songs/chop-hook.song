@@ -1,0 +1,39 @@
+# Chop Hook — the voice IS the oscillator.
+#
+# The fundamental rethink: no carrier, no filter tracking, no vocoder
+# anywhere in the path. renders/chops.wav is eight Kokoro syllables on
+# an exact beat grid ("love it break it make it sing it", one per
+# 0.5 s slot); chop=8 maps them chromatically from C3, each key fires
+# its syllable at natural speed, mono chokes each into the next, and a
+# stepped smp_pitch line replays them VARISPEED at melody pitches —
+# formants shifting with pitch, which is the sound. The human voice,
+# played like a drum machine.
+
+bpm 120
+gate 0.98
+
+automate tape_drive
+  0.35
+automate tape_age
+  0.1
+automate reverb_wet
+  0.15
+automate reverb_decay
+  0.45
+
+track hook sample=renders/chops.wav root=C3 chop=8 mono vel=0.95 len=1
+  (C3 C#3 D3 D#3 E3 F3 F#3 G3)x4
+
+# The melody lives here: one varispeed pitch per syllable, stepped just
+# before each note fires
+automate hook.smp_pitch
+  0 R:1 0 R:1 3 R:1 3 R:1 7 R:1 7 R:1 10 R:1 7 R:1
+  0 R:1 0 R:1 -2 R:1 -2 R:1 3 R:1 3 R:1 5 R:1 3 R:1
+  0 R:1 0 R:1 3 R:1 3 R:1 7 R:1 7 R:1 12 R:1 12 R:1
+  -5 R:1 -5 R:1 0 R:1 0 R:1 3 R:1 3 R:1 7 R:1 10 R:1
+
+track bass patch=deepsine vel=0.7 len=0.5
+  (E1 . E1 . E1 . E1 G1 | E1 . E1 . D1 . B0 .)x2 E1:2
+
+track beat kit=909 len=0.5
+  (BD CH:0.25 CH:0.25 OH@0.5 BD CH SD@0.5 CH | BD CH:0.25 CH:0.25 OH@0.5 BD CH SD@0.6 [CH OH]@0.5)x2 [BD CP]:1
