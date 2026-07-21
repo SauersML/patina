@@ -12,7 +12,16 @@ TEXT=${1:?usage: borrow-voice.sh "text" out.wav [voice]}
 OUT=${2:?usage: borrow-voice.sh "text" out.wav [voice]}
 VOICE=${3:-}
 
-if command -v piper >/dev/null 2>&1; then
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+PIPER_PY="$REPO/.venv-voice/bin/python"
+PIPER_MODEL="$REPO/.venv-voice/voices/en_US-lessac-medium.onnx"
+
+if [ -x "$PIPER_PY" ] && [ -f "${VOICE:-$PIPER_MODEL}" ]; then
+    # Piper: open-source neural TTS, ~60 MB voice, runs in a few hundred
+    # MB of RAM. --length-scale slows delivery, --noise-scale varies it.
+    echo "$TEXT" | "$PIPER_PY" -m piper -m "${VOICE:-$PIPER_MODEL}" \
+        --length-scale 1.15 --noise-scale 0.75 -f "$OUT"
+elif command -v piper >/dev/null 2>&1; then
     echo "$TEXT" | piper ${VOICE:+--model "$VOICE"} --output_file "$OUT"
 elif [ "$(uname)" = "Darwin" ]; then
     say ${VOICE:+-v "$VOICE"} -o "$OUT" --data-format=LEI16@22050 "$TEXT"

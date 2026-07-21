@@ -24,7 +24,20 @@ def main():
     p.add_argument("--exaggeration", type=float, default=0.5)
     p.add_argument("--cfg-weight", type=float, default=0.5)
     p.add_argument("--voice", default=None, help="reference wav to clone")
+    p.add_argument("--force", action="store_true", help="run even on a small-RAM machine")
     a = p.parse_args()
+
+    # Chatterbox wants ~8 GB for itself (three fp32 model stacks + torch).
+    # On a small machine it swap-storms the whole system — refuse unless
+    # forced, and point at Piper (scripts/borrow-voice.sh), which runs in
+    # a few hundred MB.
+    ram_gb = ram_gigabytes()
+    if ram_gb is not None and ram_gb < 12 and not a.force:
+        raise SystemExit(
+            f"this machine has {ram_gb:.0f} GB RAM; Chatterbox needs ~8 GB for "
+            "itself and will thrash the system. Use scripts/borrow-voice.sh "
+            "(Piper) instead, or pass --force if you really mean it."
+        )
 
     import time
 
@@ -61,6 +74,18 @@ def generate(model, a):
     if a.voice:
         kwargs["audio_prompt_path"] = a.voice
     return model.generate(a.text, **kwargs)
+
+
+def ram_gigabytes():
+    try:
+        import subprocess
+
+        out = subprocess.run(
+            ["sysctl", "-n", "hw.memsize"], capture_output=True, text=True
+        )
+        return int(out.stdout.strip()) / 2**30
+    except Exception:
+        return None
 
 
 if __name__ == "__main__":

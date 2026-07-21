@@ -100,7 +100,32 @@ automate cutoff                # ramp any parameter through breakpoints
 
 - **Notes**: names (`C4`, `F#3`, `Eb5`, with C4 = MIDI 60) or raw MIDI numbers; `[..]` for chords; `R` or `.` for rests; `:beats` duration; `@vel` velocity; `|` bar lines (ignored).
 - **Automation**: `automate <param>` starts a curve track. The first token is the starting value; `V:D@shape` ramps to `V` over `D` beats; `R:D` holds. Shapes: `lin`, `exp` (geometric — right for frequencies), `log`, `smooth`, `step`.
-- **Parameters**: `volume`, `waveform` (0–3), `detune`, `noise` (0–1), `glide` (seconds, 0 = off), `pulse_width` (0.05–0.95), `lfo_rate` (Hz), `lfo_shape` (0 = saw, 0.5 = tri, 1 = ramp), `lfo_pitch` (cents), `lfo_filter` (octaves), `lfo_pwm` (0–0.45), `hpf` (Hz, 16 = off), `fuzz` (0–1), `spring` (0–1), `cutoff`, `resonance`, `drive`, `saturation`, `attack`, `decay`, `sustain`, `release`, `filter_env` (octaves), `filter_attack`, `filter_decay`, `filter_sustain`, `filter_release`, `reverb_decay`, `reverb_wet`, `chorus_mode` (0–4), `chorus_rate`, `chorus_depth`, `tape_wow`, `tape_flutter`, `tape_drive`, `tape_age`.
+- **Parameters**: `volume`, `waveform` (0–3), `detune`, `noise` (0–1), `glide` (seconds, 0 = off), `pulse_width` (0.05–0.95), `lfo_rate` (Hz), `lfo_shape` (0 = saw, 0.5 = tri, 1 = ramp), `lfo_pitch` (cents), `lfo_filter` (octaves), `lfo_pwm` (0–0.45), `hpf` (Hz, 16 = off), `fuzz` (0–1), `spring` (0–1), `cutoff`, `resonance`, `drive`, `saturation`, `attack`, `decay`, `sustain`, `release`, `filter_env` (octaves), `filter_attack`, `filter_decay`, `filter_sustain`, `filter_release`, `reverb_decay`, `reverb_wet`, `chorus_mode` (0–4), `chorus_rate`, `chorus_depth`, `tape_wow`, `tape_flutter`, `tape_drive`, `tape_age`, `vox_level`, `vox_dry`, `vox_breath`, `vox_vibrato`, `vox_mode` (0 = TalkBox, 1 = vocoder), `vox_intonation`.
+
+## 🗣️ The voice box
+
+A vox track's notes are the vocoder's **carrier**; its `=lyrics` drive the
+**modulator** — the built-in formant voice, or any recording:
+
+```
+track choir vox
+[A2 E3 A3]:2=HH-OW1-L-D [G2 D3 G3]:2=AA-N | [A2 E3 A3 C4]:6=HH-OW1-M.
+
+track voice vox wav=renders/borrowed.wav    # a recording played on the keys
+[D3 A3 D4 F4]:2 [C3 G3 C4 E4]:2
+```
+
+Lyrics are dash-joined ARPAbet phonemes riding their note. Onsets speak at
+note-on, the vowel sustains while held (pitch = lowest held key), codas
+land on the release. Per phoneme: `:ms` fixed length, `@amp` loudness,
+stress digits on vowels (`OW1` primary, `AH0` reduced) shaping loudness,
+length, and pitch accents. A trailing `.` or `?` ends the phrase with a
+fall or rise. `vox_intonation` scales the voice's own prosody (accents,
+declination, final falls): keep it low when singing, high when speaking.
+
+- `patina --say "HH-AH-L-OW1. AY1 K-AE-N S-P-IY1-K." [--out say.wav]` speaks from the command line.
+- `scripts/borrow-voice.sh "text" out.wav [voice]` renders a recording for `wav=` (Piper if installed, else the macOS system voice).
+- `scripts/chatterbox-say.py "text" out.wav --exaggeration 0.7` uses Resemble AI's Chatterbox (open-source neural TTS; needs `uv venv --python 3.12 .venv-voice && uv pip install --python .venv-voice/bin/python chatterbox-tts`) — emotion control and voice cloning, on Metal where available.
 
 ## 🔌 The Substrate
 

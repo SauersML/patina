@@ -1,0 +1,31 @@
+# Neural Voice — an open-source neural voice (Piper), played on the keys.
+#
+# renders/piper.wav is made by scripts/borrow-voice.sh (or directly:
+# .venv-voice/bin/python -m piper -m .venv-voice/voices/en_US-lessac-medium.onnx
+#   --length-scale 1.15 -f renders/piper.wav). The recording is the
+# vocoder's modulator; these chords are its larynx. First pass through
+# the TalkBox circuit, second through the studio board.
+
+bpm 92
+gate 0.95
+
+automate vox_level
+  1
+automate vox_mode
+  0 R:14.8 1
+automate reverb_wet
+  0.25
+automate tape_age
+  0.2
+
+track voice vox wav=renders/piper.wav vel=0.9
+  R:4
+  [D3 A3 D4 F4]:2 [C3 G3 C4 E4]:2 [Bb2 F3 Bb3 D4]:2 [A2 E3 A3 C#4]:4
+  R:1
+  [D3 A3 D4 F4]:2 [C3 G3 C4 E4]:2 [Bb2 F3 Bb3 D4]:2 [D3 A3 D4 F4]:5
+
+track bass patch=heartbass vel=0.7 len=0.5
+  (D2 . D2 D2 . D2 . . | D2 . C2 C2 . Bb1 . A1)x3 D1:2
+
+track beat kit=909 len=0.5
+  (BD CH CH:0.25 CH:0.25 SD@0.5 CH BD CH | BD CH BD CH SD@0.6 CH OH@0.4 CH)x3 BD:1
