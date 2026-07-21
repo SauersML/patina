@@ -280,7 +280,10 @@ impl Oscillator {
         // hardware topology.
         let saw_out = |o: &Self| {
             let s = o.polyblep_saw(t, detuned_frequency) + sync_fix;
-            amp_saw * (s + o.curvature * (s * s - 1.0 / 3.0))
+            // Integrator sag is a 901-era discrete-core trait; the
+            // 4027-1 generation rides a cleaner, more linear ramp —
+            // scaled by the same trim culture as skew and duty
+            amp_saw * (s + o.curvature * o.trim() * (s * s - 1.0 / 3.0))
         };
         let pulse_out =
             |o: &Self| amp_pulse * (o.polyblep_pulse(t, detuned_frequency) + sync_fix);

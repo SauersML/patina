@@ -1,4 +1,8 @@
-# The Kaini/Bocuma voice on the REAL architecture: one ramp core
+# The Kaini/Bocuma voice, circuit-corrected: the SH-101's filter is
+# the IR3109 — an OTA CASCADE, not a Moog ladder. Our gm-C core
+# (circuit 1) is the same circuit family: clean in the passband,
+# biting only near cutoff, with the trimmed stable oscillators the
+# 101 was known for. One ramp core
 # with its converter boards mixed in parallel — the engine's new
 # source mixer, phase-locked by construction like the SH-101's.
 #   mix: saw dominant, a glint of pulse (the 101 sheet's ~1.5/10),
@@ -19,7 +23,7 @@ osc3_pitch 0
 osc3_level 0
 detune 0
 sub 0.7
-circuit 0
+circuit 1
 key_track 0.7
 osc_fm 0
 sync 0
@@ -35,8 +39,8 @@ filter_attack 0.005
 filter_decay 0.8
 filter_sustain 0.55
 filter_release 0.5
-cutoff 1150
-resonance 1.1
+cutoff 1250
+resonance 0.55
 drive 1.7
 saturation 0.8
 hpf 16
