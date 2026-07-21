@@ -24,6 +24,7 @@ pub const FACTORY: &[(&str, &str)] = &[
     ("Anemone", include_str!("../patches/glass-anemone.patch")),
     ("Thunder", include_str!("../patches/thunder-organ.patch")),
     ("Choir", include_str!("../patches/cassette-choir.patch")),
+    ("Bocuma", include_str!("../patches/bocuma.patch")),
     ("Warehouse", include_str!("../patches/warehouse.patch")),
 ];
 
