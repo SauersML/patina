@@ -1,0 +1,52 @@
+# Lead Voice — the neural-model shootout, on the TRUE Talker circuit.
+#
+# vox_mode 2: LPC formant tracking. One continuous filter — the mouth —
+# imposed on ONE note at a time. No bands, no chords, no drums. The
+# carrier is a single saw (no octave doubler, no detune, no sub), so
+# every slide is the glide circuit bending one voice, and the dynamics
+# are the velocity arc plus the speech's own loudness on the VCA.
+
+bpm 100
+gate 0.99
+
+automate vox_mode
+  2
+automate vox_level
+  1
+# dry voice fully OFF: any leak sings at the recording's own pitch
+# against the melody and reads as a second voice
+automate vox_dry
+  0
+automate reverb_wet
+  0.1
+
+track lead vox wav=renders/lead-voice.wav vel=0.9
+  R:1
+  E3:1.5@0.6 G3:1@0.7 A3:2@0.85 G3:0.5@0.6 B3:2.5@0.95
+  A3:1@0.75 E3:1.5@0.65 A3:1@0.85 B3:1@0.9 E4:3@1
+
+# One voice, one pitch: everything that could stack is off
+automate lead.glide
+  0.12
+automate lead.detune
+  0
+automate lead.osc2_level
+  0
+automate lead.osc3_level
+  0
+automate lead.sub
+  0
+automate lead.drive
+  1.6
+automate lead.saturation
+  0.3
+automate lead.resonance
+  0.4
+automate lead.cutoff
+  14000
+# functionally mono: no release tail ringing the old pitch under the
+# new one at note changes
+automate lead.release
+  0.025
+automate lead.attack
+  0.004

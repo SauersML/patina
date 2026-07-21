@@ -879,6 +879,8 @@ pub fn load_wav_mono(path: &str) -> Result<(Vec<f32>, u32), String> {
 pub struct VoxBox {
     pub source: VoxSource,
     vocoder: Vocoder,
+    talker: crate::talker::Talker,
+    mode: crate::vocoder::VocoderMode,
     sample_rate: f32,
     // Optional recorded modulator: any voice, poured through the same circuit
     wav: Option<Vec<f32>>,
@@ -897,6 +899,8 @@ impl VoxBox {
         Self {
             source: VoxSource::new(sample_rate),
             vocoder: Vocoder::new(sample_rate),
+            talker: crate::talker::Talker::new(sample_rate),
+            mode: crate::vocoder::VocoderMode::TalkBox,
             sample_rate,
             wav: None,
             wav_pos: 0,
@@ -918,6 +922,7 @@ impl VoxBox {
     }
 
     pub fn set_mode(&mut self, mode: crate::vocoder::VocoderMode) {
+        self.mode = mode;
         self.vocoder.set_mode(mode);
     }
 
@@ -984,7 +989,14 @@ impl VoxBox {
         } else {
             self.source.render()
         };
-        let vocoded = self.vocoder.process(m, carrier);
+        // Two different machines behind one knob: the band vocoder, or
+        // the LPC formant tracker (vox_mode 2) — one continuous filter,
+        // the true talk-box circuit
+        let vocoded = if self.mode == crate::vocoder::VocoderMode::Talker {
+            self.talker.process(m, carrier)
+        } else {
+            self.vocoder.process(m, carrier)
+        };
         self.level += (self.level_t - self.level) * 0.001;
         self.dry += (self.dry_t - self.dry) * 0.001;
         vocoded * self.level + m * self.dry * (0.9 * PROGRAM_V)

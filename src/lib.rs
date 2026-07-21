@@ -24,6 +24,7 @@ pub mod sampler;
 pub mod song;
 pub mod spring;
 pub mod substrate;
+pub mod talker;
 pub mod tape;
 pub mod vocoder;
 pub mod voice;

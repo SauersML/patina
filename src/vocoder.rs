@@ -50,6 +50,9 @@ pub enum VocoderMode {
     TalkBox,
     /// The full-range studio board: every band equal, gentler VCAs.
     Vocoder,
+    /// The true Talker circuit (talker.rs): LPC formant tracking — one
+    /// continuous filter, no bands at all. Routed in VoxBox.
+    Talker,
 }
 
 /// A 2nd-order bandpass section (constant peak gain).
@@ -158,7 +161,7 @@ impl Vocoder {
             // A tube in the mouth articulates at the speed of sound, and
             // the Talker's tracker was nearly as fast
             VocoderMode::TalkBox => (0.0015, 0.012),
-            VocoderMode::Vocoder => (0.003, 0.020),
+            VocoderMode::Vocoder | VocoderMode::Talker => (0.003, 0.020),
         };
         self.attack = 1.0 - (-1.0 / (attack * self.sample_rate)).exp();
         self.release = 1.0 - (-1.0 / (release * self.sample_rate)).exp();
@@ -167,14 +170,14 @@ impl Vocoder {
                 self.drive = 2.6;
                 self.makeup = 2.1;
             }
-            VocoderMode::Vocoder => {
+            VocoderMode::Vocoder | VocoderMode::Talker => {
                 self.drive = 1.6;
                 self.makeup = 2.5;
             }
         }
         for ch in &mut self.channels {
             ch.weight = match mode {
-                VocoderMode::Vocoder => 1.0,
+                VocoderMode::Vocoder | VocoderMode::Talker => 1.0,
                 VocoderMode::TalkBox => {
                     // The tube-and-mouth passband: a broad presence bump
                     // centered near 1.4 kHz, the driver's lows choked off,
@@ -243,10 +246,10 @@ impl Vocoder {
 
 impl VocoderMode {
     pub fn from_value(v: f32) -> Self {
-        if v.round() as i32 >= 1 {
-            VocoderMode::Vocoder
-        } else {
-            VocoderMode::TalkBox
+        match v.round() as i32 {
+            i32::MIN..=0 => VocoderMode::TalkBox,
+            1 => VocoderMode::Vocoder,
+            _ => VocoderMode::Talker,
         }
     }
 }
