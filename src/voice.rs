@@ -278,6 +278,12 @@ impl Voice {
         self.pulse_width = width.clamp(0.05, 0.95);
     }
 
+    /// Source-mixer levels [saw, pulse, tri, sine] for oscillator 1's
+    /// core — the phase-locked parallel converter boards.
+    pub fn set_osc1_mix(&mut self, mix: [f32; 4]) {
+        self.oscs[0].set_mix(mix);
+    }
+
     /// Configure this voice from a full parameter snapshot — the song
     /// engine's per-track patches. Only voice-level parameters apply;
     /// bus effects, the LFO, and the noise source stay shared.
@@ -298,6 +304,7 @@ impl Voice {
         self.set_ring(p.ring);
         self.set_filter_env_amount(p.filter_env_amount);
         self.set_pulse_width(p.pulse_width);
+        self.set_osc1_mix([p.mix_saw, p.mix_pulse, p.mix_tri, p.mix_sine]);
         self.envelope.set_attack(p.attack);
         self.envelope.set_decay(p.decay);
         self.envelope.set_sustain(p.sustain);

@@ -113,6 +113,10 @@ pub enum Param {
     ModWheel,
     SustainPedal,
     PulseWidth,
+    MixSaw,
+    MixPulse,
+    MixTri,
+    MixSine,
     LfoRate,
     LfoShape,
     LfoPitch,
@@ -272,6 +276,9 @@ impl Param {
             | Param::TapeAge | Param::SpringWet | Param::KeyTrack
             | Param::FuzzAmount | Param::ModWheel | Param::LfoShape
             | Param::SustainPedal | Param::Osc2Level | Param::Osc3Level
+            // Oscillator 1's source mixer: four 0..1 converter levels
+            | Param::MixSaw | Param::MixPulse | Param::MixTri
+            | Param::MixSine
             // 909 panel knobs are all unitless 0..1 rotations; the
             // circuits map them onto their electrical ranges
             | Param::BdLevel | Param::BdTune | Param::BdAttack
@@ -345,6 +352,10 @@ impl Param {
             "pedal" => Param::SustainPedal,
             "ring" => Param::RingAmount,
             "pulse_width" => Param::PulseWidth,
+            "mix_saw" => Param::MixSaw,
+            "mix_pulse" => Param::MixPulse,
+            "mix_tri" => Param::MixTri,
+            "mix_sine" => Param::MixSine,
             "lfo_rate" => Param::LfoRate,
             "lfo_shape" => Param::LfoShape,
             "lfo_pitch" => Param::LfoPitch,
@@ -428,6 +439,10 @@ impl Param {
             Param::ModWheel => vm.set_mod_wheel(value.clamp(0.0, 1.0)),
             Param::SustainPedal => vm.set_sustain_pedal(value >= 0.5),
             Param::PulseWidth => vm.set_pulse_width(value),
+            Param::MixSaw => vm.set_osc1_mix_component(0, value),
+            Param::MixPulse => vm.set_osc1_mix_component(1, value),
+            Param::MixTri => vm.set_osc1_mix_component(2, value),
+            Param::MixSine => vm.set_osc1_mix_component(3, value),
             Param::LfoRate => vm.set_lfo_rate(value),
             Param::LfoShape => vm.set_lfo_shape(value),
             Param::LfoPitch => vm.set_lfo_pitch(value),
@@ -524,6 +539,10 @@ impl Param {
             Param::SyncSel => p.sync = value.round() as i32 >= 1,
             Param::RingAmount => p.ring = value,
             Param::PulseWidth => p.pulse_width = value.clamp(0.05, 0.95),
+            Param::MixSaw => p.mix_saw = value.clamp(0.0, 1.0),
+            Param::MixPulse => p.mix_pulse = value.clamp(0.0, 1.0),
+            Param::MixTri => p.mix_tri = value.clamp(0.0, 1.0),
+            Param::MixSine => p.mix_sine = value.clamp(0.0, 1.0),
             Param::FilterEnvAmount => p.filter_env_amount = value,
             Param::FilterAttack => p.filter_attack = value,
             Param::FilterDecay => p.filter_decay = value,

@@ -1,13 +1,16 @@
-# The Kaini/Bocuma voice, corrected architecture: an SH-101 is ONE
-# VCO whose saw and sub are phase-locked outputs of the same core.
-# Faking the mixer with separate free-running oscillators makes a
-# thin beating double — so this patch uses only osc1 (saw) plus the
-# TRUE sub-oscillator, which is phase-locked to the core by
-# construction (the divider shares its phase), exactly like the
-# hardware. One solid voice.
-# Filter: key-followed ladder with a breathing envelope; driven and
-# saturated for body. Wow/reverb live in the song.
+# The Kaini/Bocuma voice on the REAL architecture: one ramp core
+# with its converter boards mixed in parallel — the engine's new
+# source mixer, phase-locked by construction like the SH-101's.
+#   mix: saw dominant, a glint of pulse (the 101 sheet's ~1.5/10),
+#   plus the phase-locked sub-square an octave down. One solid
+#   voice; no free-running partners, no beating double.
+#   Key-followed ladder with a breathing envelope, driven with the
+#   saturation stage working. Wow and room live in the song.
 waveform 2
+mix_saw 0.85
+mix_pulse 0.13
+mix_tri 0
+mix_sine 0
 osc2_wave 2
 osc2_pitch 0
 osc2_level 0
@@ -22,7 +25,7 @@ osc_fm 0
 sync 0
 ring 0
 glide 0.03
-pulse_width 0.5
+pulse_width 0.42
 attack 0.018
 decay 1.0
 sustain 0.6

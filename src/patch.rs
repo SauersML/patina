@@ -83,6 +83,7 @@ pub fn serialize(p: &ParamValues) -> String {
          osc3_wave {}\nosc3_pitch {}\nosc3_level {}\n\
          circuit {}\nkey_track {}\nosc_fm {}\nsync {}\nring {}\n\
          detune {}\nnoise {}\nglide {}\nsub {}\npulse_width {}\n\
+         mix_saw {}\nmix_pulse {}\nmix_tri {}\nmix_sine {}\n\
          lfo_rate {}\nlfo_shape {}\nlfo_pitch {}\nlfo_filter {}\nlfo_pwm {}\n\
          cutoff {}\nresonance {}\ndrive {}\nsaturation {}\nhpf {}\n\
          filter_env {}\nfilter_attack {}\nfilter_decay {}\nfilter_sustain {}\nfilter_release {}\n\
@@ -100,6 +101,7 @@ pub fn serialize(p: &ParamValues) -> String {
         p.key_track, p.osc_fm,
         if p.sync { 1 } else { 0 }, p.ring,
         p.detune, p.noise, p.glide, p.sub, p.pulse_width,
+        p.mix_saw, p.mix_pulse, p.mix_tri, p.mix_sine,
         p.lfo_rate, p.lfo_shape, p.lfo_pitch, p.lfo_filter, p.lfo_pwm,
         p.cutoff, p.resonance, p.drive, p.saturation, p.hpf_cutoff,
         p.filter_env_amount, p.filter_attack, p.filter_decay, p.filter_sustain, p.filter_release,

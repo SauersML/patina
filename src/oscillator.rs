@@ -75,6 +75,12 @@ pub struct Oscillator {
     /// construction — its phase advances at exactly half the core rate.
     sub_phase: f64,
     last_sub: f32,
+    /// The SOURCE MIXER: per-core levels for [saw, pulse, triangle,
+    /// sine]. All four converters run in parallel off the ONE ramp core —
+    /// exactly as on the hardware (901-B and 4027 converter boards, the
+    /// SH-101 mixer) — so mixed waveforms are phase-locked by
+    /// construction. All zeros = classic selector mode (`waveform`).
+    mix: [f32; 4],
     /// 901-B residual tuning error, ADDITIVE IN HERTZ: the tracking
     /// resistors "lower the oscillator frequency by a given number of
     /// cycles, REGARDLESS of the magnitude of the control voltage"
@@ -132,7 +138,15 @@ impl Oscillator {
             last_wrap_frac: None,
             curvature,
             hz_offset,
+            mix: [0.0; 4],
         }
+    }
+
+    /// Set the source-mixer levels [saw, pulse, tri, sine]. Any level
+    /// above zero switches this core into mixer mode; all zeros returns
+    /// it to the classic selector.
+    pub fn set_mix(&mut self, mix: [f32; 4]) {
+        self.mix = mix.map(|m| m.clamp(0.0, 1.0));
     }
 
     /// Trim culture differs by maker: the 4027-1 converter boards carry a
@@ -260,28 +274,51 @@ impl Oscillator {
             CircuitModel::Moog => (AMP_SAW, AMP_SINE, AMP_TRI, AMP_PULSE),
             CircuitModel::Arp => (PROGRAM_V, PROGRAM_V, PROGRAM_V, 2.0 * PROGRAM_V),
         };
-        let raw_sample = match self.waveform {
-            Waveform::Sawtooth => {
-                // Integrator sag: quadratic bow (DC-corrected: mean of s^2
-                // over a saw cycle is 1/3)
-                let s = self.polyblep_saw(t, detuned_frequency) + sync_fix;
-                amp_saw * (s + self.curvature * (s * s - 1.0 / 3.0))
+        // The four converters, each computed only when audible. They all
+        // read the SAME ramp (t), so every mixed combination is
+        // phase-locked — one core, parallel converter boards, exactly the
+        // hardware topology.
+        let saw_out = |o: &Self| {
+            let s = o.polyblep_saw(t, detuned_frequency) + sync_fix;
+            amp_saw * (s + o.curvature * (s * s - 1.0 / 3.0))
+        };
+        let pulse_out =
+            |o: &Self| amp_pulse * (o.polyblep_pulse(t, detuned_frequency) + sync_fix);
+        let tri_out =
+            |o: &Self| amp_tri * o.fold_triangle(o.polyblep_triangle(t, detuned_frequency));
+        let sine_out = |o: &Self| {
+            let tri = o.fold_triangle(o.polyblep_triangle(t, detuned_frequency));
+            let shaped = match o.model {
+                // 901-B: the 1N34 diode-ladder rounding network
+                CircuitModel::Moog => o.diode_sine(tri),
+                // 4027-1: single-transistor peak rounding, no diode knee
+                CircuitModel::Arp => Self::transistor_round(tri),
+            };
+            amp_sine * shaped
+        };
+
+        let mixer_on = self.mix.iter().any(|&m| m > 0.0);
+        let raw_sample = if mixer_on {
+            let mut s = 0.0;
+            if self.mix[0] > 0.0 {
+                s += self.mix[0] * saw_out(self);
             }
-            Waveform::Square => {
-                amp_pulse * (self.polyblep_pulse(t, detuned_frequency) + sync_fix)
+            if self.mix[1] > 0.0 {
+                s += self.mix[1] * pulse_out(self);
             }
-            Waveform::Triangle => {
-                amp_tri * self.fold_triangle(self.polyblep_triangle(t, detuned_frequency))
+            if self.mix[2] > 0.0 {
+                s += self.mix[2] * tri_out(self);
             }
-            Waveform::Sine => {
-                let tri = self.fold_triangle(self.polyblep_triangle(t, detuned_frequency));
-                let shaped = match self.model {
-                    // 901-B: the 1N34 diode-ladder rounding network
-                    CircuitModel::Moog => self.diode_sine(tri),
-                    // 4027-1: single-transistor peak rounding, no diode knee
-                    CircuitModel::Arp => Self::transistor_round(tri),
-                };
-                amp_sine * shaped
+            if self.mix[3] > 0.0 {
+                s += self.mix[3] * sine_out(self);
+            }
+            s
+        } else {
+            match self.waveform {
+                Waveform::Sawtooth => saw_out(self),
+                Waveform::Square => pulse_out(self),
+                Waveform::Triangle => tri_out(self),
+                Waveform::Sine => sine_out(self),
             }
         };
 
@@ -615,6 +652,44 @@ mod tests {
             arp_low < 0.5 * moog_low,
             "trimmed 4027-1 should sit much closer to true: arp {arp_low:.3} Hz vs moog {moog_low:.3} Hz"
         );
+    }
+
+    /// The source mixer draws every waveform from the ONE ramp core, so a
+    /// mix equals the sum of the solo waveforms from identically seeded
+    /// cores — phase-locked by construction, no beating second voice.
+    #[test]
+    fn source_mixer_is_phase_locked() {
+        let sr = 48000.0;
+        let run = |mix: [f32; 4]| -> Vec<f32> {
+            let mut o = Oscillator::new(sr, 220.0, 5);
+            o.set_mix(mix);
+            (0..9600).map(|_| o.next_sample(0.0, 1.0, 0.5, None)).collect()
+        };
+        // Low levels keep the output stage in its linear region
+        let mixed = run([0.3, 0.2, 0.0, 0.0]);
+        let saw = run([0.3, 0.0, 0.0, 0.0]);
+        let pulse = run([0.0, 0.2, 0.0, 0.0]);
+        let mut worst = 0.0f32;
+        for i in 0..mixed.len() {
+            worst = worst.max((mixed[i] - (saw[i] + pulse[i])).abs());
+        }
+        assert!(
+            worst < 0.05,
+            "mix must equal the sum of phase-locked components, worst diff {worst}"
+        );
+        // all-zero mix = classic selector behavior
+        let sel = {
+            let mut o = Oscillator::new(sr, 220.0, 5);
+            o.set_waveform(Waveform::Sawtooth);
+            (0..960).map(|_| o.next_sample(0.0, 1.0, 0.5, None)).collect::<Vec<_>>()
+        };
+        let mix_off = {
+            let mut o = Oscillator::new(sr, 220.0, 5);
+            o.set_waveform(Waveform::Sawtooth);
+            o.set_mix([0.0; 4]);
+            (0..960).map(|_| o.next_sample(0.0, 1.0, 0.5, None)).collect::<Vec<_>>()
+        };
+        assert_eq!(sel, mix_off);
     }
 
     /// Hard sync locks the slave's periodicity to the master: with sync,

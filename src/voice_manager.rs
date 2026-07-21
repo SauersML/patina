@@ -51,6 +51,12 @@ pub struct ParamValues {
     pub sync: bool,
     pub ring: f32,
     pub pulse_width: f32,
+    /// Oscillator 1's source mixer [saw, pulse, tri, sine]; all zero =
+    /// classic waveform selector mode.
+    pub mix_saw: f32,
+    pub mix_pulse: f32,
+    pub mix_tri: f32,
+    pub mix_sine: f32,
     pub lfo_rate: f32,
     pub lfo_shape: f32,
     pub lfo_pitch: f32,  // vibrato depth in cents
@@ -156,6 +162,10 @@ impl Default for ParamValues {
             sync: false,
             ring: 0.0,
             pulse_width: 0.5,
+            mix_saw: 0.0,
+            mix_pulse: 0.0,
+            mix_tri: 0.0,
+            mix_sine: 0.0,
             lfo_rate: 1.0,
             lfo_shape: 0.5,
             lfo_pitch: 0.0,
@@ -624,6 +634,25 @@ impl VoiceManager {
     pub fn set_spring(&mut self, wet: f32) {
         self.params.spring = wet.clamp(0.0, 1.0);
         self.spring.set_wet(self.params.spring);
+    }
+
+    pub fn set_osc1_mix_component(&mut self, which: usize, level: f32) {
+        let level = level.clamp(0.0, 1.0);
+        match which {
+            0 => self.params.mix_saw = level,
+            1 => self.params.mix_pulse = level,
+            2 => self.params.mix_tri = level,
+            _ => self.params.mix_sine = level,
+        }
+        let mix = [
+            self.params.mix_saw,
+            self.params.mix_pulse,
+            self.params.mix_tri,
+            self.params.mix_sine,
+        ];
+        for voice in self.voices.iter_mut().filter(|v| v.channel() == 0) {
+            voice.set_osc1_mix(mix);
+        }
     }
 
     pub fn set_pulse_width(&mut self, width: f32) {
