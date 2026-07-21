@@ -118,7 +118,7 @@ automate sd_snappy
 automate sd_decay
 0.45
 automate hh_level
-0.5
+0.7
 automate hh_tune
 0.5
 automate hh_metal

@@ -8,7 +8,7 @@ osc3_wave 0
 osc3_pitch 0
 osc3_level 0
 detune 3
-sub 0.2
+sub 0
 circuit 1
 key_track 0.4
 osc_fm 0

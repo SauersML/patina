@@ -55,7 +55,7 @@ automate sd_snappy
 automate sd_decay
 0.4
 automate hh_level
-0.45
+0.65
 automate ch_decay
 0.28
 automate dr_drive

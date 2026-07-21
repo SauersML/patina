@@ -486,7 +486,14 @@ impl Param {
     /// fall through to the global path.
     pub(crate) fn apply_to_params(self, p: &mut ParamValues, value: f32) -> bool {
         match self {
-            Param::WaveformSel => p.waveform = waveform_from_value(value),
+            Param::WaveformSel => {
+                // Same macro semantics as the live panel: `waveform` sets
+                // all three oscillators; per-osc lines override after it
+                let w = waveform_from_value(value);
+                p.waveform = w;
+                p.osc2_wave = w;
+                p.osc3_wave = w;
+            }
             Param::Detune => p.detune = value,
             Param::Cutoff => p.cutoff = value,
             Param::Resonance => p.resonance = value,
@@ -532,7 +539,7 @@ impl Param {
 /// Bus-level lines are ignored — a channel patch describes a voice, not
 /// the shared effects.
 pub fn params_from_patch(text: &str) -> Result<ParamValues, String> {
-    let mut p = ParamValues::default();
+    let mut p = ParamValues::neutral();
     for (no, raw) in text.lines().enumerate() {
         let line = strip_comment(raw).trim();
         if line.is_empty() {
@@ -784,8 +791,15 @@ fn parse_song(text: &str) -> Result<Song, String> {
                 TrackMode::Notes { vel, len, channel } => {
                     let (vel, len, channel) = (*vel, *len, *channel);
                     let drums = channel == crate::drums::DRUM_CHANNEL;
-                    for token in tokenize(line).map_err(err)? {
+                    let line = expand_groups(line).map_err(err)?;
+                    for token in tokenize(&line).map_err(err)? {
                         if token == "|" {
+                            continue;
+                        }
+                        if let Some(beat) = token.strip_prefix('>') {
+                            track_beat = beat
+                                .parse::<f64>()
+                                .map_err(|_| err(format!("invalid seek '{}'", token)))?;
                             continue;
                         }
                         let (notes, dur, vel) = parse_note_token(&token, vel, len, drums)
@@ -804,8 +818,15 @@ fn parse_song(text: &str) -> Result<Song, String> {
                 }
                 TrackMode::Automation { param, current, channel } => {
                     let (param, channel) = (*param, *channel);
-                    for token in tokenize(line).map_err(err)? {
+                    let line = expand_groups(line).map_err(err)?;
+                    for token in tokenize(&line).map_err(err)? {
                         if token == "|" {
+                            continue;
+                        }
+                        if let Some(beat) = token.strip_prefix('>') {
+                            track_beat = beat
+                                .parse::<f64>()
+                                .map_err(|_| err(format!("invalid seek '{}'", token)))?;
                             continue;
                         }
                         let seg = parse_automation_token(&token)
@@ -915,6 +936,42 @@ fn parse_automation_token(token: &str) -> Result<AutoToken, String> {
         Some(dur) => Ok(AutoToken::Ramp { to: value, dur, shape }),
         None => Ok(AutoToken::Set(value)),
     }
+}
+
+/// Expand `( tokens )xN` repeat groups textually, innermost first, so
+/// loops read as loops instead of walls of copy-paste. `(...)` with no
+/// suffix is a plain grouping. Nesting works: `((C4)x2 D4)x2`.
+fn expand_groups(line: &str) -> Result<String, String> {
+    let mut s = line.to_string();
+    let mut guard = 0;
+    while let Some(open) = s.rfind('(') {
+        guard += 1;
+        if guard > 64 {
+            return Err("too many nested/expanded groups".into());
+        }
+        let close = s[open..]
+            .find(')')
+            .ok_or_else(|| "unmatched '('".to_string())?
+            + open;
+        let content = s[open + 1..close].trim().to_string();
+        let rest = &s[close + 1..];
+        let (n, rest_start) = if let Some(r) = rest.strip_prefix('x') {
+            let digits: String = r.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if digits.is_empty() {
+                return Err("repeat group needs a count, e.g. (C4 E4)x4".into());
+            }
+            let n: usize = digits.parse().map_err(|_| "bad repeat count".to_string())?;
+            if n == 0 || n > 256 {
+                return Err("repeat count must be 1-256".into());
+            }
+            (n, close + 1 + 1 + digits.len())
+        } else {
+            (1, close + 1)
+        };
+        let expanded = vec![content; n].join(" ");
+        s = format!("{} {} {}", &s[..open], expanded, &s[rest_start..]);
+    }
+    Ok(s)
 }
 
 /// A `#` starts a comment only at line start or after whitespace, so sharp
@@ -1167,6 +1224,69 @@ mod tests {
             .filter(|e| matches!(e.kind, EventKind::NoteOn { .. }))
             .count();
         assert_eq!(ons, 3);
+    }
+
+    /// `( ... )xN` groups expand to N repetitions; `>B` seeks the track
+    /// cursor to absolute beat B, in both note and automation tracks.
+    #[test]
+    fn repeat_groups_and_seek_tokens() {
+        let song = parse_song("bpm 120\ntrack a\n(C4:1)x4\n>10 E4:1\n").unwrap();
+        let ons: Vec<(f64, u8)> = song
+            .events
+            .iter()
+            .filter_map(|e| match e.kind {
+                EventKind::NoteOn { note, .. } => Some((e.time, note)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ons.len(), 5);
+        assert_eq!(ons[0], (0.0, 60));
+        assert_eq!(ons[3], (1.5, 60)); // beat 3 at 120 bpm
+        assert_eq!(ons[4], (5.0, 64)); // sought to beat 10
+        // nesting expands innermost-first
+        let song = parse_song("bpm 120\ntrack a\n((C4:1)x2 D4:1)x2\n").unwrap();
+        let pitches: Vec<u8> = song
+            .events
+            .iter()
+            .filter_map(|e| match e.kind {
+                EventKind::NoteOn { note, .. } => Some(note),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(pitches, vec![60, 60, 62, 60, 60, 62]);
+        // seek works in automation too
+        let song = parse_song("bpm 60\ntrack a\nC4:20\nautomate cutoff\n400 >16 800:2\n").unwrap();
+        let last = song
+            .events
+            .iter()
+            .filter_map(|e| match e.kind {
+                EventKind::Param { param: Param::Cutoff, value, .. } => Some((e.time, value)),
+                _ => None,
+            })
+            .last()
+            .unwrap();
+        assert_eq!(last.0, 18.0); // ramp ends at beat 18 = 18 s at 60 bpm
+        assert!((last.1 - 800.0).abs() < 0.5);
+        assert!(parse_song("track a\n(C4:1\n").is_err());
+    }
+
+    /// Channel patches build on the NEUTRAL base — nothing inherited from
+    /// the live panel's musical defaults — and `waveform` acts as the
+    /// same all-three-oscillators macro it is everywhere else.
+    #[test]
+    fn patch_base_is_neutral_and_waveform_is_a_macro() {
+        let p = params_from_patch("waveform 0\n").unwrap();
+        assert_eq!(p.osc2_level, 0.0, "no inherited second oscillator");
+        assert_eq!(p.osc3_level, 0.0);
+        assert_eq!(p.detune, 0.0);
+        assert_eq!(p.sub, 0.0);
+        assert_eq!(p.saturation, 0.0, "no inherited saturation stage");
+        assert!(matches!(p.waveform, Waveform::Sine));
+        assert!(matches!(p.osc2_wave, Waveform::Sine), "macro sets all three");
+        assert!(matches!(p.osc3_wave, Waveform::Sine));
+        // per-osc override after the macro still wins
+        let p = params_from_patch("waveform 0\nosc2_wave 2\n").unwrap();
+        assert!(matches!(p.osc2_wave, Waveform::Sawtooth));
     }
 
     /// Per-track patches: `patch=` gives the track its own channel with a

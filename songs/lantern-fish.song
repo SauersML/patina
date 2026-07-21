@@ -1,24 +1,13 @@
-# Lantern Fish — commissioned. The spec, honored to the letter:
-#   - deep sine waves, LOW octaves only (the bass is the star and
-#     the lead lives in octave three; nothing sings above C4's world)
-#   - nothing sharp: sine and triangle only, slow attacks, filters
-#     low, drive under 1.0 everywhere, saturation halved, fuzz ZERO
-#   - no flanger, no phaser — chorus fully OFF
-#   - DELAY, hand-written: every lead note is followed by its own
-#     echo, three-quarters of a beat of it, at 0.4 velocity — dotted
-#     tape-delay throw built into the score, since the machine has
-#     no delay pedal and the score can be one
-#   - "heavily sampled" as a feeling: short loops that repeat like
-#     flipped tape (wow 0.22, age 0.55, flutter — warmth without
-#     grit), and at the bridge the ENTIRE WORLD pitches down a whole
-#     step for eight bars, like a sampler dropping the record, then
-#     comes back up
-#   - slightly eerie and nice: D dorian, warm — with one borrowed
-#     Bb that drifts through the pad and once through the lead, a
-#     shadow that visits and leaves
+# Lantern Fish — commission, second pressing. Now on the upgraded
+# DSL: repeat groups instead of copy-paste walls, seek tokens for
+# placement. And the patches are honestly SINE now — the square
+# sub-oscillator that was buzzing under the "sine" bass is gone;
+# depth comes from a true sine an octave down. Channel patches build
+# on the new NEUTRAL base, so nothing arrives inherited.
 #
-# Soft drums, low hats, no bus drive. Ends gently: the deep sine
-# alone with its last echo.
+# The spec, still honored: deep sines, low octaves, nothing sharp,
+# no overdrive, no flanger/phaser (chorus off), hand-written delay
+# echoes, the whole-step "sampler drop" bridge, one borrowed Bb.
 
 bpm 80
 gate 0.92
@@ -60,7 +49,7 @@ automate sd_snappy
 automate sd_decay
 0.35
 automate hh_level
-0.3
+0.6
 automate ch_decay
 0.25
 automate dr_drive
@@ -68,23 +57,19 @@ automate dr_drive
 
 track bass vel=0.75 patch=deepsine
 D2:2 R:0.5 A1:1.5 C2:2 D2:2
-D2:2 R:0.5 A1:1.5 C2:2 D2:2 | D2:2 R:0.5 F2:1.5 E2:2 D2:2
-D2:2 R:0.5 A1:1.5 C2:2 D2:2 | D2:2 R:0.5 F2:1.5 E2:2 D2:2
-D2:2 R:0.5 A1:1.5 C2:2 D2:2 | D2:2 R:0.5 F2:1.5 E2:2 D2:2
+(D2:2 R:0.5 A1:1.5 C2:2 D2:2 D2:2 R:0.5 F2:1.5 E2:2 D2:2)x3
 C2:2 R:0.5 G1:1.5 Bb1:2 C2:2
-D2:2 R:0.5 A1:1.5 C2:2 D2:2 | D2:2 R:0.5 F2:1.5 E2:2 D2:2
-D2:2 R:0.5 A1:1.5 C2:2 D2:2
-D2:2 R:0.5 A1:1.5 C2:2 D2:2
+D2:2 R:0.5 A1:1.5 C2:2 D2:2 D2:2 R:0.5 F2:1.5 E2:2 D2:2
+(D2:2 R:0.5 A1:1.5 C2:2 D2:2)x2
 
 track pad vel=0.5 patch=softpad
-R:8
+>8
 [D3 A3 E4]:8 [C3 G3 A3]:8 [D3 A3 E4]:8 [D3 Bb3 F4]:8 [D3 A3 E4]:8 [C3 G3 A3]:8
 [C3 G3 D4]:8
 [D3 A3 E4]:8 [D3 Bb3 F4]:8 [D3 A3 E4]:8
-R:8
 
 track lead vel=0.62 patch=lowglow
-R:24
+>24
 A3:1.5 R:0.5 A3:0.75@0.4 R:1.25 F3:1.5 R:0.5 F3:0.75@0.4 R:1.25
 E3:1.5 R:0.5 E3:0.75@0.4 R:1.25 D3:1.5 R:0.5 D3:0.75@0.4 R:1.25
 C4:1.5 R:0.5 C4:0.75@0.4 R:1.25 A3:1.5 R:0.5 A3:0.75@0.4 R:1.25
@@ -96,28 +81,8 @@ A3:1.5 R:0.5 A3:0.75@0.4 R:1.25 E3:1.5 R:0.5 E3:0.75@0.4 R:1.25
 D3:3 R:1 D3:1@0.3 R:3
 
 track beat kit=909
-R:8
-BD:0.5@0.6 R:1.5 SD:0.5@0.4 R:1 CH:0.5@0.25
-BD:0.5@0.6 R:1.5 SD:0.5@0.4 R:1 CH:0.5@0.25
-BD:0.5@0.6 R:1.5 SD:0.5@0.4 R:1 CH:0.5@0.25
-BD:0.5@0.6 R:1.5 SD:0.5@0.4 R:1 CH:0.5@0.25
-BD:0.5@0.6 R:1.5 SD:0.5@0.4 R:1 CH:0.5@0.25
-BD:0.5@0.6 R:1.5 SD:0.5@0.4 R:1 CH:0.5@0.25
-BD:0.5@0.6 R:1.5 SD:0.5@0.4 R:1 CH:0.5@0.25
-BD:0.5@0.6 R:1.5 SD:0.5@0.4 R:1 CH:0.5@0.25
-BD:0.5@0.6 R:1.5 SD:0.5@0.4 R:1 CH:0.5@0.25
-BD:0.5@0.6 R:1.5 SD:0.5@0.4 R:1 CH:0.5@0.25
-BD:0.5@0.6 R:1.5 SD:0.5@0.4 R:1 CH:0.5@0.25
-BD:0.5@0.6 R:1.5 SD:0.5@0.4 R:1 CH:0.5@0.25
-BD:0.5@0.6 R:1.5 SD:0.5@0.4 R:1 CH:0.5@0.25
-BD:0.5@0.6 R:1.5 SD:0.5@0.4 R:1 CH:0.5@0.25
-BD:0.5@0.6 R:1.5 SD:0.5@0.4 R:1 CH:0.5@0.25
-BD:0.5@0.6 R:1.5 SD:0.5@0.4 R:1 CH:0.5@0.25
-BD:0.5@0.6 R:1.5 SD:0.5@0.4 R:1 CH:0.5@0.25
-BD:0.5@0.6 R:1.5 SD:0.5@0.4 R:1 CH:0.5@0.25
-BD:0.5@0.6 R:1.5 SD:0.5@0.4 R:1 CH:0.5@0.25
-BD:0.5@0.6 R:1.5 SD:0.5@0.4 R:1 CH:0.5@0.25
-R:8
+>8
+(BD:0.5@0.6 R:1.5 SD:0.5@0.4 R:1 CH:0.5@0.4)x20
 
 automate reverb_wet
-0.35 R:72 0.5:16@smooth R:8
+0.35 >72 0.5:16@smooth

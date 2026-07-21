@@ -101,6 +101,33 @@ pub struct ParamValues {
     pub dr_drive: f32,
 }
 
+impl ParamValues {
+    /// The song-channel base: a genuinely BASIC voice, unlike the live
+    /// panel's musical default (which arrives with two extra sawtooths at
+    /// 0.72, detune, and the saturation stage engaged). A patch file
+    /// describes its sound against silence-plus-one-oscillator, so what
+    /// you write is what you hear — nothing inherited "on it".
+    pub fn neutral() -> Self {
+        Self {
+            osc2_level: 0.0,
+            osc3_level: 0.0,
+            detune: 0.0,
+            sub: 0.0,
+            key_track: 0.0,
+            saturation: 0.0,
+            drive: 1.0,
+            cutoff: 18000.0,
+            resonance: 0.0,
+            filter_env_amount: 0.0,
+            attack: 0.01,
+            decay: 0.2,
+            sustain: 0.8,
+            release: 0.3,
+            ..Self::default()
+        }
+    }
+}
+
 impl Default for ParamValues {
     fn default() -> Self {
         Self {
