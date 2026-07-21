@@ -1,0 +1,40 @@
+# The Kaini / Bocuma voice — SH-101 architecture, set from the
+# community's verified SH-01A recreation sheet and checked against
+# the record by harmonic analysis:
+#   saw dominant + a touch of pulse + a touch of TWO-octave-down
+#   square (osc3 at -24 here) — noise is a bus source in Patina, so
+#   add `automate noise / 0.1` in the song. VCF key-follow ~0.7 with
+#   a real filter envelope (long decay: every note dims as it
+#   sustains). Fast attack, long decay, gentle portamento. The wow
+#   and the room are the song's job: tape_wow high, tape_drive some,
+#   reverb generous. PLAY AT WRITTEN PITCH (saw carries the note).
+waveform 2
+osc2_wave 1
+osc2_pitch 0
+osc2_level 0.18
+osc3_wave 1
+osc3_pitch -24
+osc3_level 0.22
+detune 0
+sub 0
+circuit 0
+key_track 0.7
+osc_fm 0
+sync 0
+ring 0
+glide 0.03
+pulse_width 0.5
+attack 0.018
+decay 1.0
+sustain 0.55
+release 0.6
+filter_env 1.2
+filter_attack 0.005
+filter_decay 0.8
+filter_sustain 0.35
+filter_release 0.6
+cutoff 1000
+resonance 0.8
+drive 1.2
+saturation 0.4
+hpf 16

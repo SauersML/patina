@@ -1,0 +1,26 @@
+bpm 80
+gate 0.9
+automate chorus_mode
+1
+automate chorus_depth
+0.2
+automate reverb_wet
+0.25
+automate reverb_decay
+0.6
+automate tape_wow
+0.55
+automate tape_flutter
+0.08
+automate tape_age
+0.6
+automate tape_drive
+0.35
+automate noise
+0.1
+track v patch=bocuma
+A#3:8
+>10 (A#3:0.25 D4:0.25 F4:0.25 A#4:0.25 F4:0.25 D4:0.25)x8
+>24 [A#2 F3 A#3 D4]:6
+automate v.attack
+0.018 >23 0.12
