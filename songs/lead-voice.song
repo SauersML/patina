@@ -6,7 +6,7 @@
 # every slide is the glide circuit bending one voice, and the dynamics
 # are the velocity arc plus the speech's own loudness on the VCA.
 
-bpm 100
+bpm 96
 gate 0.99
 
 automate vox_mode
@@ -31,10 +31,14 @@ automate reverb_wet
 automate reverb_decay
   0.6
 
+# One mouthed syllable per note: the wav is generated at half speed so
+# its 9 syllables land one-per-note on this 9-note riff — a performer
+# mouthing to the music, not a voice talking over a drone
 track lead vox wav=renders/lead-voice.wav vel=0.9
   R:1
-  E3:1.5@0.6 G3:1@0.7 A3:2@0.85 G3:0.5@0.6 B3:2.5@0.95
-  A3:1@0.75 E3:1.5@0.65 A3:1@0.85 B3:1@0.9 E4:3@1
+  E3:1@0.7 E3:1@0.75 G3:1@0.8 A3:1@0.85
+  B3:1@0.95 A3:1@0.8 G3:1@0.75 E3:1@0.8
+  B3:5@1
 
 # One voice, one pitch: everything that could stack is off
 automate lead.glide

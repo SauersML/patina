@@ -105,8 +105,12 @@ pub struct Talker {
     k_target: [f32; ORDER],
     k: [f32; ORDER],
     k_slew: f32,
-    // Lattice state
+    // Lattice state — TWO cascaded passes of the same tract. Squaring
+    // the transfer function doubles every formant peak in dB and deepens
+    // the valleys: the exaggerated, wide-open mouth of a real talk-box
+    // performance, not the polite average LPC measures
     b: [f32; ORDER + 1],
+    b2: [f32; ORDER + 1],
     // Loudness follower (the modulator's energy opens the VCA)
     env_target: f32,
     env: f32,
@@ -145,8 +149,10 @@ impl Talker {
             since_hop: 0,
             k_target: [0.0; ORDER],
             k: [0.0; ORDER],
-            k_slew: 1.0 - (-1.0 / (0.004 * ar)).exp(),
+            // 10 ms: a mouth MOUTHING to music, not chattering speech
+            k_slew: 1.0 - (-1.0 / (0.010 * ar)).exp(),
             b: [0.0; ORDER + 1],
+            b2: [0.0; ORDER + 1],
             env_target: 0.0,
             env: 0.0,
             env_peak: 1e-4,
@@ -257,6 +263,14 @@ impl Talker {
             self.b[i + 1] = (self.b[i] - self.k[i] * f) * 0.9995;
         }
         self.b[0] = f;
+        // Second pass through the same mouth: the exaggeration stage
+        let mut f2 = f * 0.12;
+        for i in (0..ORDER).rev() {
+            f2 += self.k[i] * self.b2[i];
+            self.b2[i + 1] = (self.b2[i] - self.k[i] * f2) * 0.9995;
+        }
+        self.b2[0] = f2;
+        let f = f2;
 
         // The instrument leads, the mouth articulates: the VCA follows a
         // NORMALIZED, compressed loudness (^0.45), so word-level dynamics
@@ -315,7 +329,7 @@ impl Talker {
         for f in &mut self.out {
             y = f.tick(y);
         }
-        y + self.body_lp * 1.7 * self.gate
+        y + self.body_lp * 1.2 * self.gate
             + self.noise.next() * self.unvoiced * (self.env * 6.0).min(1.2)
     }
 }
