@@ -140,8 +140,8 @@ pub fn export_events(song: &crate::song::Song, path: &str) -> Result<()> {
                 "\"type\":\"param\",\"param\":\"{:?}\",\"value\":{:.6},\"ch\":{}",
                 param, value, channel
             ),
-            crate::song::EventKind::Lyric { channel, .. } => {
-                format!("\"type\":\"lyric\",\"ch\":{}", channel)
+            crate::song::EventKind::VoxLead { note, .. } => {
+                format!("\"type\":\"lyric\",\"note\":{}", note)
             }
         };
         let comma = if i + 1 < n { "," } else { "" };

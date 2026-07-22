@@ -16,10 +16,14 @@
 //   track vocal vox
 //     C4:2=HH-EH   G4:2=L-OW:300@0.8
 //
-// The syllable rides the note: onset consonants speak at note-on, the
-// vowel sustains while the key is held (pitch follows the lowest held
-// note), and coda consonants speak at note-off — which is how singers
-// treat codas too. `:ms` fixes any phoneme's length in milliseconds
+// The syllable rides the note the way a singer sings it: the VOWEL owns
+// the beat. The song scheduler fires each syllable `onset_lead_ms`
+// early (`VoxLead`), so onset consonants speak INTO the beat — stealing
+// their time from the previous note's tail, never the vowel's — and the
+// nucleus lands on the note-on. The vowel sustains while the key is
+// held (pitch follows the lowest held note), and coda consonants speak
+// at note-off — which is how singers treat codas too. `:ms` fixes any
+// phoneme's length in milliseconds
 // (a vowel given an explicit length stops sustaining); `@amp` scales its
 // loudness. Note velocity scales the whole syllable.
 //
@@ -304,6 +308,38 @@ pub fn parse_lyric(s: &str) -> Result<Syllable, String> {
     Ok(Syllable { phones: out, boundary })
 }
 
+/// Milliseconds of onset material before the sustaining nucleus. The
+/// song scheduler subtracts this from the beat and fires the syllable
+/// early (`VoxLead`), so the vowel — not the first consonant — lands on
+/// the note. Mirrors `build_syllable`'s timing rules exactly.
+pub fn onset_lead_ms(syl: &Syllable) -> f32 {
+    let Some(nucleus) = syl.phones.iter().rposition(|p| p.ph.is_vowel()) else {
+        return 0.0;
+    };
+    let mut first_vowel = true;
+    let mut ms = 0.0;
+    for lp in &syl.phones[..nucleus] {
+        let spec = lp.ph.spec();
+        ms += if let Some((closure_ms, ..)) = lp.ph.stop() {
+            lp.ms.unwrap_or(closure_ms) + spec.ms // closure, then burst
+        } else if let Some(v) = lp.ms {
+            v
+        } else if lp.ph.is_vowel() {
+            let stress = lp.stress.unwrap_or(if first_vowel { 1 } else { 0 });
+            first_vowel = false;
+            let dur_scale = match stress {
+                0 => 0.7,
+                2 => 1.05,
+                _ => 1.3,
+            };
+            INNER_VOWEL_MS * dur_scale
+        } else {
+            spec.ms
+        };
+    }
+    ms
+}
+
 // ---------------------------------------------------------------------------
 // The synthesizer
 // ---------------------------------------------------------------------------
@@ -369,6 +405,9 @@ pub struct VoxSource {
     coda: Vec<Seg>,
     pending: Option<Syllable>,
     held: Vec<u8>,
+    /// A speak-ahead syllable has started but its note-on hasn't landed
+    /// yet; the previous note's lift must not close it.
+    armed: bool,
     /// Final phoneme of the last syllable, for geminate re-articulation.
     last_ph: Option<Phoneme>,
     /// Coda-final stop (phoneme, amp) awaiting a phrase-edge release.
@@ -419,6 +458,7 @@ impl VoxSource {
             coda: Vec::new(),
             pending: None,
             held: Vec::new(),
+            armed: false,
             last_ph: None,
             coda_release: None,
             intonation: 0.12,
@@ -478,7 +518,35 @@ impl VoxSource {
             self.held.push(note);
         }
         self.retune();
+        // A speak-ahead syllable is already in flight: this note-on is
+        // the beat it was aimed at — pitch and hold it, don't restart
+        self.armed = false;
         if let Some(syl) = self.pending.take() {
+            self.start_syllable(&syl, velocity);
+        }
+    }
+
+    /// Begin a syllable NOW, ahead of its note — the scheduler calls
+    /// this `onset_lead_ms` early so the nucleus, not the first
+    /// consonant, lands on the beat (sung diction: the vowel owns the
+    /// beat; onset consonants steal time from the note before, whose
+    /// sustaining tail this interrupts). The following note-on pitches
+    /// and holds the already-sounding syllable.
+    pub fn speak(&mut self, syl: &Syllable, note: u8, velocity: f32) {
+        self.pending = None;
+        if self.held.is_empty() {
+            // Nothing sounding: voiced onsets approach on the incoming
+            // pitch. In legato the old note's pitch carries the onset,
+            // as a singer's would, until the new key retunes it.
+            let hz = 440.0 * ((note as f32 - 69.0) / 12.0).exp2();
+            self.f0_target = hz.clamp(50.0, 350.0);
+        }
+        self.start_syllable(syl, velocity);
+        self.armed = true;
+    }
+
+    fn start_syllable(&mut self, syl: &Syllable, velocity: f32) {
+        {
             // Phrase bookkeeping: the count restarts after a boundary
             // syllable, and declination steps down as the phrase goes on
             if self.phrase_done {
@@ -546,6 +614,12 @@ impl VoxSource {
         self.held.retain(|&n| n != note);
         if !self.held.is_empty() {
             self.retune();
+            return;
+        }
+        // A speak-ahead syllable is in flight: this lift belongs to the
+        // PREVIOUS note, whose tail the new onset already took. Closing
+        // now would clip the incoming nucleus and misfire its coda.
+        if self.armed {
             return;
         }
         // Last key up: close the syllable — finish the vowel, speak the coda
@@ -1160,6 +1234,12 @@ impl VoxBox {
         Some((m - 69.0) / 12.0)
     }
 
+    /// Speak-ahead entry (`VoxLead`): the syllable starts sounding now;
+    /// the note-on it was aimed at arrives `onset_lead_ms` later.
+    pub fn speak(&mut self, syl: &Syllable, note: u8, velocity: f32) {
+        self.source.speak(syl, note, velocity);
+    }
+
     pub fn note_on(&mut self, note: u8, velocity: f32) {
         // The recording starts at a phrase start and then FLOWS: the brief
         // all-keys-up gap between legato chords must not rewind it. It
@@ -1450,6 +1530,63 @@ mod tests {
         let (m, p) = (win(&marked), win(&plain));
         assert!(m > 1e-3, "the released schwa must actually sound, rms={m}");
         assert!(m > 4.0 * p, "release only at the phrase edge: marked {m} vs plain {p}");
+    }
+
+    /// The vowel owns the beat: with speak-ahead, "S-T-R-AA"'s nucleus
+    /// opens at the note-on; without it, the vowel is late by the whole
+    /// onset cluster (the laid-back-singer defect).
+    #[test]
+    fn speak_ahead_lands_the_vowel_on_the_beat() {
+        let sr = 48000.0;
+        let vowel_arrival = |ahead: bool| -> f32 {
+            let mut v = VoxSource::new(sr);
+            v.set_vibrato(0.0);
+            let syl = parse_lyric("S-T-R-AA").unwrap();
+            if ahead {
+                let lead = onset_lead_ms(&syl);
+                v.speak(&syl, 45, 0.9);
+                render_secs(&mut v, lead * 0.001, sr);
+                v.note_on(45, 0.9); // the beat
+            } else {
+                v.set_syllable(syl);
+                v.note_on(45, 0.9);
+            }
+            let out = render_secs(&mut v, 0.6, sr);
+            let vowel = rms(&out[(0.35 * sr) as usize..(0.55 * sr) as usize]);
+            let w = rms_windows(&out, sr, 0.01);
+            w.iter().position(|&r| r > 0.75 * vowel).unwrap_or(w.len()) as f32 * 0.01
+        };
+        let led = vowel_arrival(true);
+        let unled = vowel_arrival(false);
+        assert!(led < 0.05, "speak-ahead must land the vowel on the beat, arrived {led:.3} s late");
+        assert!(
+            unled > led + 0.1,
+            "the un-led vowel should be late by the onset cluster: {unled:.3} vs {led:.3}"
+        );
+    }
+
+    /// Legato: the previous note's lift arrives after the next syllable
+    /// already started speaking ahead — it must not close the new
+    /// nucleus or misfire the new coda.
+    #[test]
+    fn speak_ahead_survives_the_previous_note_off() {
+        let sr = 48000.0;
+        let mut v = VoxSource::new(sr);
+        v.set_vibrato(0.0);
+        v.set_syllable(parse_lyric("AA").unwrap());
+        v.note_on(45, 0.9);
+        render_secs(&mut v, 0.3, sr);
+        v.speak(&parse_lyric("N-UW-M.").unwrap(), 47, 0.9);
+        render_secs(&mut v, 0.03, sr);
+        v.note_off(45); // the old key lifts mid-onset
+        render_secs(&mut v, 0.05, sr);
+        v.note_on(47, 0.9); // the new beat
+        let out = render_secs(&mut v, 0.4, sr);
+        let vowel = rms(&out[(0.25 * sr) as usize..(0.35 * sr) as usize]);
+        assert!(
+            vowel > 0.03,
+            "the new nucleus must still be sounding after the old note's lift, rms={vowel}"
+        );
     }
 
     /// "pale light": a syllable opening on the consonant the last one

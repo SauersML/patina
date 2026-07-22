@@ -648,8 +648,11 @@ pub enum EventKind {
     NoteOn { note: u8, velocity: f32, channel: u16 },
     NoteOff { note: u8, channel: u16 },
     Param { param: Param, value: f32, channel: u16 },
-    /// A syllable for the voice box, landing just before its note-on.
-    Lyric { syl: crate::vox::Syllable, channel: u16 },
+    /// A syllable for the voice box, fired `onset_lead_ms` BEFORE its
+    /// note-on so the onset consonants speak early and the vowel lands
+    /// on the beat (sung diction: the vowel owns the beat). `note` is
+    /// the pitch the onset approaches; the note-on holds the nucleus.
+    VoxLead { syl: crate::vox::Syllable, note: u8, velocity: f32 },
 }
 
 pub struct SongEvent {
@@ -696,7 +699,7 @@ fn dispatch(vm: &mut VoiceManager, kind: &EventKind) {
         &EventKind::Param { param, value, channel } => {
             vm.set_channel_param(channel, param, value)
         }
-        EventKind::Lyric { syl, channel } => vm.set_lyric(*channel, syl.clone()),
+        EventKind::VoxLead { syl, note, velocity } => vm.vox_speak(syl, *note, *velocity),
     }
 }
 
@@ -1183,16 +1186,17 @@ fn parse_song(text: &str) -> Result<Song, String> {
                             }
                             let syl = crate::vox::parse_lyric(lyric)
                                 .map_err(|m| err(format!("token '{}': {}", token, m)))?;
-                            let ph = track_beat.rem_euclid(0.5);
-                            let lean = if swing != 0.5 && (ph - 0.25).abs() < 1e-6 {
-                                (swing - 0.5) * 0.5
-                            } else {
-                                0.0
-                            };
+                            // The vowel owns the beat: the syllable
+                            // fires early by its onset length, so the
+                            // consonants speak into the note and the
+                            // nucleus lands on the note-on
+                            let lead_beats =
+                                crate::vox::onset_lead_ms(&syl) as f64 * 0.001 * bpm / 60.0;
+                            let note = *notes.iter().min().unwrap();
                             events.push((
-                                (track_beat + lean).max(0.0),
+                                (sound_beat - lead_beats).max(0.0),
                                 1,
-                                EventKind::Lyric { syl, channel },
+                                EventKind::VoxLead { syl, note, velocity: vel },
                             ));
                         }
                         // gate means "a small separation", not a fraction
@@ -1811,27 +1815,31 @@ mod tests {
     }
 
     /// Vox tracks: `vox` routes notes to the voice channel, `=lyric`
-    /// suffixes emit Lyric events just before their note-ons, and the
-    /// whole path — DSL to voice box to vocoder to bus — makes sound.
+    /// suffixes emit VoxLead events ahead of their note-ons (the vowel
+    /// owns the beat), and the whole path — DSL to voice box to vocoder
+    /// to bus — makes sound.
     #[test]
     fn vox_tracks_sing() {
         use crate::vox::{Phoneme, VOX_CHANNEL};
         let song = parse_song(
             "bpm 120\n\
              track choir vox vel=0.9\n\
-             [A2 E3]:2=HH-EH R:1 A2:1=S-IH-NG-Z:200@0.8\n",
+             R:1 [A2 E3]:2=HH-EH R:1 A2:1=S-IH-NG-Z:200@0.8\n",
         )
         .unwrap();
         let lyrics: Vec<_> = song
             .events
             .iter()
             .filter_map(|e| match &e.kind {
-                EventKind::Lyric { syl, channel } => Some((e.time, &syl.phones, *channel)),
+                EventKind::VoxLead { syl, note, velocity } => {
+                    Some((e.time, &syl.phones, *note, *velocity))
+                }
                 _ => None,
             })
             .collect();
         assert_eq!(lyrics.len(), 2);
-        assert_eq!(lyrics[0].2, VOX_CHANNEL);
+        assert_eq!(lyrics[0].2, 45, "the onset approaches the chord's lowest note (A2)");
+        assert!((lyrics[0].3 - 0.9).abs() < 1e-6);
         assert_eq!(lyrics[0].1[0].ph, Phoneme::HH);
         assert_eq!(lyrics[0].1[1].ph, Phoneme::EH);
         // per-phoneme overrides survive the trip
@@ -1839,13 +1847,22 @@ mod tests {
         assert_eq!(z.ph, Phoneme::Z);
         assert_eq!(z.ms, Some(200.0));
         assert!((z.amp - 0.8).abs() < 1e-6);
-        // the lyric lands with (just before) its note-on
+        // the lyric leads its note-on by exactly the onset length
         let first_on = song
             .events
             .iter()
             .find(|e| matches!(e.kind, EventKind::NoteOn { .. }))
             .unwrap();
-        assert_eq!(lyrics[0].0, first_on.time);
+        let lead = crate::vox::onset_lead_ms(&crate::vox::parse_lyric("HH-EH").unwrap());
+        // event times are seconds; constant tempo maps the lead exactly
+        let expect = first_on.time - lead as f64 * 0.001;
+        assert!(
+            (lyrics[0].0 - expect).abs() < 1e-9 && lead > 0.0,
+            "VoxLead at {} should lead the note-on at {} by {} ms",
+            lyrics[0].0,
+            first_on.time,
+            lead
+        );
         assert!(matches!(first_on.kind, EventKind::NoteOn { channel, .. } if channel == VOX_CHANNEL));
 
         // lyric grammar errors
@@ -1870,6 +1887,55 @@ mod tests {
             .fold(0.0f32, |a, &(l, r)| a.max(l.abs()).max(r.abs()));
         assert!(peak > 0.05, "the choir should be audible, peak={peak}");
         assert!(frames.iter().all(|&(l, r)| l.is_finite() && r.is_finite()));
+    }
+
+    /// The vowel owns the beat: a lyric's onset consonants are scheduled
+    /// ahead of the note (VoxLead), so the sung nucleus opens the
+    /// vocoder AT the note-on, with the onset audible before it.
+    #[test]
+    fn vox_vowel_lands_on_the_beat() {
+        let sr = 48000.0;
+        let song = parse_song(
+            "bpm 120\n\
+             track choir vox\n\
+             R:2 [A2]:4=S-T-R-AA\n",
+        )
+        .unwrap();
+        // The lead event must sit before the beat-2 note-on
+        let lead = song
+            .events
+            .iter()
+            .find(|e| matches!(e.kind, EventKind::VoxLead { .. }))
+            .expect("a lyric compiles to a VoxLead event");
+        assert!(
+            lead.time < 1.0 && lead.time > 0.5,
+            "VoxLead fires ahead of its 1.0 s note-on: {} s",
+            lead.time
+        );
+        let frames = render_offline(&song, sr);
+        let mono: Vec<f32> = frames.iter().map(|&(l, r)| (l + r) * 0.5).collect();
+        // 120 bpm: the note-on is at 1.0 s
+        let win = |a: f32, b: f32| {
+            let s = &mono[(a * sr) as usize..(b * sr) as usize];
+            (s.iter().map(|x| x * x).sum::<f32>() / s.len() as f32).sqrt()
+        };
+        let vowel = win(1.05, 1.6);
+        assert!(
+            win(1.0, 1.06) > 0.5 * vowel,
+            "the nucleus must be open right at the beat: {} vs vowel {}",
+            win(1.0, 1.06),
+            vowel
+        );
+        assert!(
+            win(0.8, 0.99) > 0.02 * vowel,
+            "the onset consonants must speak before the beat, rms={}",
+            win(0.8, 0.99)
+        );
+        assert!(
+            win(0.2, 0.7) < 0.05 * vowel,
+            "silence before the syllable starts, rms={}",
+            win(0.2, 0.7)
+        );
     }
 
     /// Write a small PCM16 mono WAV to the temp dir for sampler tests.

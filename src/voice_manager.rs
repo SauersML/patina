@@ -997,6 +997,13 @@ impl VoiceManager {
         }
     }
 
+    /// Speak a syllable ahead of its note (the vowel-on-the-beat lead):
+    /// the onset consonants start now; the vox note-on that follows
+    /// pitches and holds the nucleus.
+    pub fn vox_speak(&mut self, syl: &Syllable, note: u8, velocity: f32) {
+        self.vox.speak(syl, note, velocity);
+    }
+
     /// Load a recorded modulator (any voice) for the vocoder.
     pub fn set_vox_wav(&mut self, samples: &[f32], source_rate: u32) {
         self.vox.set_wav(samples, source_rate);
