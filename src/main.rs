@@ -182,22 +182,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .position(|a| a == "--play")
         .and_then(|i| args.get(i + 1))
         .cloned();
-    // No --play given: always open the same song (first by name), never
-    // shuffle. Deterministic launch — pass --play <song> to choose another.
-    let song_path = song_path.or_else(|| {
-        let mut songs: Vec<String> = std::fs::read_dir("songs")
-            .ok()?
-            .filter_map(|e| e.ok())
-            .map(|e| e.path().to_string_lossy().into_owned())
-            .filter(|p| p.ends_with(".song"))
-            .collect();
-        if songs.is_empty() {
-            return None;
-        }
-        songs.sort();
-        println!("Song: {}", songs[0]);
-        Some(songs.remove(0))
-    });
+    // No --play given: open silent. Songs only play when asked for.
     let song_path = song_path.as_deref();
 
     // Offline bounce: no window, no audio device, exits when the file is

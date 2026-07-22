@@ -287,6 +287,8 @@ param_table! {
     FilterRelease:   "filter_release", Some(110), (0.01, 2.0, Log);
     ReverbDecay:     "reverb_decay",   None,      (0.0, 0.99, Lin);
     ReverbWet:       "reverb_wet",     Some(91),  (0.0, 1.0, Lin);
+    ReverbTone:      "reverb_tone",    None,      (800.0, 12000.0, Log);
+    ReverbPre:       "reverb_pre",     None,      (0.0, 0.08, Lin);
     ChorusModeSel:   "chorus_mode",    Some(112), (0.0, 4.0, Step);
     ChorusRate:      "chorus_rate",    Some(111), (0.1, 10.0, Log);
     ChorusDepth:     "chorus_depth",   Some(93),  (0.0, 1.0, Lin);
@@ -470,6 +472,8 @@ impl Param {
             Param::FilterRelease => vm.set_filter_release(value),
             Param::ReverbDecay => vm.set_reverb_decay(value),
             Param::ReverbWet => vm.set_reverb_wet(value),
+            Param::ReverbTone => vm.set_reverb_tone(value),
+            Param::ReverbPre => vm.set_reverb_pre(value),
             Param::ChorusModeSel => {
                 let mode = match value.round() as i32 {
                     i32::MIN..=0 => ChorusMode::Off,
@@ -2485,6 +2489,8 @@ mod tests {
             Param::FilterRelease => v.filter_release,
             Param::ReverbDecay => v.reverb_decay,
             Param::ReverbWet => v.reverb_wet,
+            Param::ReverbTone => v.reverb_tone,
+            Param::ReverbPre => v.reverb_pre,
             Param::ChorusRate => v.chorus_rate,
             Param::ChorusDepth => v.chorus_depth,
             Param::TapeWow => v.tape_wow,

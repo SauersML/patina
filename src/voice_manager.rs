@@ -76,6 +76,8 @@ pub struct ParamValues {
     pub filter_release: f32,
     pub reverb_decay: f32,
     pub reverb_wet: f32,
+    pub reverb_tone: f32,
+    pub reverb_pre: f32,
     pub chorus_mode: ChorusMode,
     /// Keyboard register the UI should sit at; patches set it so a bass
     /// preset arrives with the keys already down where it lives.
@@ -198,6 +200,8 @@ impl Default for ParamValues {
             filter_release: 0.3,
             reverb_decay: 0.5,
             reverb_wet: 0.5,
+            reverb_tone: 5500.0,
+            reverb_pre: 0.012,
             chorus_mode: ChorusMode::Off,
             ui_octave: 4.0,
             chorus_rate: 0.5,
@@ -1263,6 +1267,16 @@ impl VoiceManager {
     pub fn set_reverb_wet(&mut self, wet: f32) {
         self.params.reverb_wet = Param::ReverbWet.clamp(wet);
         self.reverb.set_wet(self.params.reverb_wet);
+    }
+
+    pub fn set_reverb_tone(&mut self, cutoff: f32) {
+        self.params.reverb_tone = Param::ReverbTone.clamp(cutoff);
+        self.reverb.set_tone(self.params.reverb_tone);
+    }
+
+    pub fn set_reverb_pre(&mut self, seconds: f32) {
+        self.params.reverb_pre = Param::ReverbPre.clamp(seconds);
+        self.reverb.set_pre(self.params.reverb_pre);
     }
 
     pub fn set_chorus_mix(&mut self, mix: f32) {

@@ -113,6 +113,12 @@ impl OnePoleLp {
         self.state += self.a * (x - self.state);
         self.state
     }
+
+    /// Retune without touching the state, so a knob ride mid-tail can't
+    /// zero the tank's stored energy (that would tick audibly).
+    fn set_cutoff(&mut self, cutoff: f32, sample_rate: f32) {
+        self.a = 1.0 - (-TAU * cutoff / sample_rate).exp();
+    }
 }
 
 pub struct Reverb {
@@ -146,7 +152,7 @@ impl Reverb {
         });
         let mut r = Self {
             sample_rate,
-            pre_delay: DelayLine::new((0.014 * sample_rate) as usize + 2),
+            pre_delay: DelayLine::new((0.082 * sample_rate) as usize + 2),
             pre_delay_samples: (0.012 * sample_rate) as usize,
             in_lp: OnePoleLp::new(9500.0, sample_rate),
             in_hp_tracker: OnePoleLp::new(90.0, sample_rate),
@@ -180,6 +186,25 @@ impl Reverb {
     pub fn set_wet(&mut self, wet: f32) {
         self.wet = wet.clamp(0.0, 1.0);
         self.dry = 1.0 - self.wet;
+    }
+
+    /// Pre-delay in seconds (0..80 ms). Separating the dry hit from the
+    /// tail's onset is most of what "size" and "clarity" mean in a mix:
+    /// a 40-60 ms gap keeps transients legible inside a dark room.
+    pub fn set_pre(&mut self, seconds: f32) {
+        self.pre_delay_samples =
+            ((seconds.clamp(0.0, 0.08) * self.sample_rate) as usize)
+                .min(self.pre_delay.buffer.len() - 2);
+    }
+
+    /// Tail damping cutoff, Hz. The in-loop lowpass is the tail's COLOR:
+    /// ~2.5 kHz is a dusty dark room, 5.5 kHz the unit's bright default.
+    /// State is preserved across retunes so rides don't tick.
+    pub fn set_tone(&mut self, cutoff: f32) {
+        let fc = cutoff.clamp(800.0, 12000.0);
+        for d in &mut self.damping {
+            d.set_cutoff(fc, self.sample_rate);
+        }
     }
 
     pub fn process(&mut self, input_left: f32, input_right: f32) -> (f32, f32) {
