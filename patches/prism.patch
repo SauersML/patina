@@ -1,48 +1,51 @@
-# Knotwork — the lead: an UN-instrument. Every acoustic instrument is
-# brightest at the attack and mellows; this voice is built backwards —
-# NEGATIVE filter envelope: the note lands dark and BLOOMS into bright
-# sustain over 350 ms. Nothing struck, blown, or bowed does that, so
-# the ear files it as "synthesizer", full stop. Sync at +3 (a smeared
-# non-formant color, not the +7 brass vowel), ring 0.3 for locked
-# inharmonic glint, PWM churn and a slow filter wobble so the spectrum
-# never repeats. No pluck, no horn, no string, no piano.
+# Knotwork — the lead, rebuilt from the CIRCUIT out. The failure before:
+# sync at +3 barely engages (the slave resets a sliver early, so you
+# just hear a minor-third dyad on every note) and ring at ratio 1.19
+# dumps a 0.19f subharmonic growl. All gone.
+# The voice now IS the ladder: resonance 2.2 with key_track 1.0 makes
+# the filter's own whistle a TUNED PARTIAL that follows the melody —
+# a component no acoustic instrument owns, native to this circuit.
+# Under it: saw + octave pulse (harmonic-safe reinforcement), ring at
+# +12 whose products land on f and 3f — harmonic sheen, not clang.
+# The filter env (+0.6 oct, 120 ms attack) glides the whistle up INTO
+# place after each note lands; the slow filter LFO makes it breathe.
 waveform 2
 osc2_wave 1
-osc2_pitch 3
-osc2_level 0.5
+osc2_pitch 12
+osc2_level 0.3
 osc3_wave 0
 osc3_pitch 0
 osc3_level 0
-detune 5
+detune 4
 sub 0
 circuit 0
-key_track 0.7
-osc_fm 0.08
-sync 1
-ring 0.3
+key_track 1.0
+osc_fm 0
+sync 0
+ring 0.12
 glide 0
-pulse_width 0.3
-attack 0.04
+pulse_width 0.4
+attack 0.03
 decay 0.5
-sustain 0.75
+sustain 0.8
 release 0.4
-filter_env -1.4
-filter_attack 0.005
-filter_decay 0.35
-filter_sustain 0.15
-filter_release 0.3
-cutoff 2600
-resonance 0.7
-drive 1.8
-saturation 1.05
-hpf 120
+filter_env 0.6
+filter_attack 0.12
+filter_decay 0.6
+filter_sustain 0.6
+filter_release 0.35
+cutoff 1600
+resonance 2.2
+drive 2.0
+saturation 1.0
+hpf 90
 volume 0.5
 octave 4
 noise 0
 fuzz 0
 spring 0.12
-lfo_rate 0.8
+lfo_rate 0.6
 lfo_shape 0.5
 lfo_pitch 0
-lfo_filter 0.12
-lfo_pwm 0.2
+lfo_filter 0.08
+lfo_pwm 0.12
