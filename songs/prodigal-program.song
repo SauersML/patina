@@ -272,11 +272,15 @@ track bellsHi sample=renders/prodigal/di-ring.wav root=C4 mode=oneshot release=0
 
 automate bellsHi.duck
   0.2
+automate bellsHi.duck_release
+  0.3
 automate bellsHi.reverb_send
   1
 
 automate bells.duck
   0.2
+automate bells.duck_release
+  0.3
 automate bells.reverb_send
   1
 automate bellsHi.chorus_send
@@ -329,6 +333,8 @@ automate owls.reverb_send
   0.3
 automate owls.duck
   0.2
+automate owls.duck_release
+  0.3
 
 # the ladder: once, spoken, rhythmic
 track worm sample=renders/prodigal/wormhole.wav root=C3 chop=6 mono bits=12 rate=26040 gain=1.3 len=1
@@ -338,6 +344,8 @@ track worm sample=renders/prodigal/wormhole.wav root=C3 chop=6 mono bits=12 rate
 
 automate worm.duck
   0.15
+automate worm.duck_release
+  0.3
 
 track grat sample=renders/prodigal/grateful.wav root=C3 mode=oneshot gain=1.3 len=1
   R:120 C3:8 R:24

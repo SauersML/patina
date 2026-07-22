@@ -344,6 +344,18 @@ def main(only=None):
         knots.append((out_len, min(len(audio),
                                    knots[-1][1] + out_len - knots[-1][0])))
         rhythmic = warp(audio, knots, out_len)
+        if name == "owls":
+            # nicole's inter-word breath, WSOLA-repeated across the wide
+            # gaps, reads as skipping — the gaps become TRUE silence
+            gate = np.zeros(out_len, dtype=np.float32)
+            fade = int(0.03 * RATE)
+            for _nm, onset, dur, _p in timing:
+                a = max(0, int(onset * SPB * RATE) - fade)
+                b = min(out_len, int((onset + dur) * SPB * RATE) + fade)
+                gate[a:b] = 1.0
+            k = np.hanning(2 * fade + 1)
+            gate = np.convolve(gate, k / k.sum(), "same")
+            rhythmic *= gate
         # the curve now lives on the SCORED grid — exact control
         grid_words = [(nm, int(o * SPB * RATE), int((o + d) * SPB * RATE))
                       for nm, o, d, _p in timing]
