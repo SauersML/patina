@@ -450,21 +450,26 @@ def flash_y(crop_idx):
     return np.clip((y - 0.06) / 0.88, 0.0, 1.0) ** 0.9
 
 
-# flash schedule: frame -> unique crop index. Snare cracks (909 SD at
-# force, TSS hits with real length) get 2-3 frames by velocity (42-63
-# ms — visible at 48 fps); every rung of the wormhole ladder gets 4.
+# flash schedule: frame -> unique crop index. TWO circuit crops fire
+# back-to-back (2 frames each, ~83 ms) on every bass-drum hit; beats
+# with no kick nearby fire the pair themselves, so the breath and the
+# dissolve still pulse with the machine's skeleton.
 FLASH_AT = {}
 _crop = 0
-_flashes = ([(b, v, 2 + (v >= 0.8)) for b, _, v in SNARES if v >= 0.65]
-            + [(b, v, 2 + (v >= 0.75)) for b, d, v in TSS
-               if v >= 0.55 and d >= 1.0]
-            + [(b, v, 4) for b, _, v in WORM])
-for b, v, nfr in sorted(_flashes):
-    f0 = int(round(b * SPB * FPS))
-    for k in range(nfr):
-        if f0 + k < TOTAL and (f0 + k) not in FLASH_AT:
-            FLASH_AT[f0 + k] = _crop
-            _crop += 1
+_kick_beats = np.array(sorted(b for b, _, _ in KICKS))
+_triggers = list(_kick_beats)
+for _k in range(int(DUR / SPB) + 1):
+    if (len(_kick_beats) == 0
+            or np.abs(_kick_beats - _k).min() > 0.25):
+        _triggers.append(float(_k))
+for _b in sorted(_triggers):
+    f0 = int(round(_b * SPB * FPS))
+    for _half in range(2):              # crop A then crop B
+        for _k in range(2):
+            _fr = f0 + 2 * _half + _k
+            if _fr < TOTAL and _fr not in FLASH_AT:
+                FLASH_AT[_fr] = _crop
+        _crop += 1
 
 # per-frame envelopes, precomputed straight from the score
 PUMP = np.zeros(TOTAL, np.float32)      # kicks: exposure
@@ -798,5 +803,21 @@ def main():
     print(OUT)
 
 
+def remux():
+    """Audio changed but visuals didn't: swap the wav into the
+    existing mp4 without re-rendering a single frame (~2 s)."""
+    tmp = OUT + ".remux.mp4"
+    subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error", "-i", OUT, "-i", WAV,
+         "-map", "0:v", "-map", "1:a", "-c:v", "copy",
+         "-c:a", "aac", "-b:a", "256k", "-shortest", tmp], check=True)
+    os.replace(tmp, OUT)
+    print(OUT)
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+    if "--remux" in sys.argv:
+        remux()
+    else:
+        main()
