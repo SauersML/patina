@@ -1,0 +1,214 @@
+# Wireloop — piezokey's melody construction, Flim's drum discipline.
+#
+# MELODY (piezokey's grammar, our content): register IS the melody.
+#   An 8-bar keys loop that repeats EXACTLY (piezokey varies nothing
+#   inside the loop — variation lives in the layers around it):
+#     b1-2  bass strikes (A2, then C2 a sixth below) + sparse upper
+#           16ths — one pitch class across octaves
+#     b3    the 32nd stutter on E5, answered by a low strike
+#     b4    the octave cascade: A5-A4-A3-A2 echo, reaching E6
+#     b5-6  = b1-2 verbatim
+#     b7-8  THE melodic event: ornamented stepwise descent G-F-E then
+#           D-C-B-A with written-out mordents, landing on repeated A3s.
+#   Not Flim's arpeggio clock, not piezokey's notes — its construction.
+#
+# DRUMS (the standard, taken seriously this time): every bar below is
+#   hand-placed — no repeating variant rotation. Anchors K0/K1.5, snare
+#   sparse (1-2 a bar, often beat-3 only), decorations that MOVE bar to
+#   bar, dropout bars (no downbeat kick), one bounce-decay roll, one
+#   crescendo roll, one triplet re-spelling pair, a fading triplet coda.
+#   Velocity flat 0.64 except those structured events. Hats: per-bar
+#   density edits (8/12/7/11/9/6/3 hits), all one velocity.
+#
+# 96 bpm. Passes P1-P6 of the loop + coda: texture accumulates then
+# unwinds AROUND the unchanging loop. 52 bars = 208 beats.
+
+bpm 96
+gate 0.95
+
+section P1   0..32
+section P2   32..64
+section P3   64..96
+section P4   96..128
+section P5   128..160
+section P6   160..192
+section CODA 192..208
+
+automate chorus_mode
+  0
+automate tape_flutter
+  0.06
+automate tape_age
+  0.45
+automate tape_drive
+  0.18
+automate reverb_wet
+  0.15 >CODA 0.32
+automate reverb_decay
+  0.6 >CODA 0.75
+automate tape_wow
+  0.28 >P6 0.4
+automate hpf
+  40
+
+automate bd_tune
+  0.5
+automate bd_attack
+  0.1
+automate bd_decay
+  0.4
+automate bd_sweep
+  0.45
+automate bd_drive
+  0.1
+automate sd_tune
+  0.45
+automate sd_tone
+  0.3
+automate sd_snappy
+  0.7
+automate sd_decay
+  0.28
+automate hh_level
+  0.42
+automate hh_tune
+  0.4
+automate hh_metal
+  0.12
+automate ch_decay
+  0.26
+automate bd_level
+  0.9
+automate sd_level
+  0.58
+automate dr_tone
+  0.4
+automate dr_drive
+  0.12
+
+# ---- the keys loop: identical every pass, piezokey-style -------------
+track keys patch=feltkeys gain=0.9 pan=0.05 vel=0.7 reverb_send=0.25
+  (A2:1@0.75 A3:0.25 R:0.75 A3:0.25 R:0.75 A3:0.25 R:0.75 C2:1@0.75 C3:0.25 R:0.75 A3:0.25 R:0.75 A3:0.25 R:0.25 A4:0.25 R:0.25 C3:0.5 C2:0.25 R:0.25 A4:0.25 R:0.25 E5:0.125 E5:0.125 E5:0.125 E5:0.125 E4:0.25 R:0.25 A2:0.25 R:0.25 B3:1 A5:0.25 A4:0.25 A3:0.25 A2:0.25 A5:0.25 A4:0.25 E6:0.25 A5:0.25 [E6 A5]:0.5 E6:0.5 A5:0.5 A4:0.5 A2:1@0.75 A3:0.25 R:0.75 A3:0.25 R:0.75 A3:0.25 R:0.75 C2:1@0.75 C3:0.25 R:0.75 A3:0.25 R:0.75 A3:0.25 R:0.25 A4:0.25 R:0.25 G4:0.5 F4:0.125 G4:0.125 F4:0.125 G4:0.375 G4:0.125 F4:0.125 G4:0.125 F4:1 E4:0.125 F4:0.125 E4:0.125 F4:0.5 E4:0.125 F4:0.125 E4:0.25 D4:0.5 C4:0.25 D4:0.5 C4:0.125 D4:0.125 C4:0.125 D4:0.125 C4:0.25 C4:0.5 B3:0.125 C4:0.125 B3:0.125 C4:0.125 B3:0.25 A3:0.25 A3:0.25 A3:0.25)x6
+  >CODA
+  E5:0.125 E5:0.125 E5:0.125 E5:0.125 R:1.5 A2:2@0.6 R:2 A1:6@0.5
+
+# ---- drones + the ladder, entering as layers -------------------------
+track drone patch=glassdyad gain=0.42 pan=-0.15 reverb_send=0.2
+  >P3
+  (A2:4@0.6 A2:4@0.55 G2:3@0.6 E2:5@0.6 A2:4@0.55 A2:4@0.6 G2:3@0.55 E2:5@0.6)x4
+  >CODA
+  A2:8@0.5
+
+track ladder patch=glassdyad gain=0.5 pan=0.18 reverb_send=0.25
+  >P4
+  C4:0.75@0.6 D4:0.75@0.55 C4:0.75@0.6 E4:0.75@0.65 D4:5@0.7 R:24
+  C4:0.75@0.6 D4:0.75@0.55 C4:0.75@0.6 E4:0.75@0.65 D4:5@0.7 R:24
+  C4:0.75@0.5 D4:0.75@0.45 C4:0.75@0.5 E4:0.75@0.55 D4:5@0.6
+
+# ---- kick/snare: every bar hand-placed -------------------------------
+track beat kit=909 len=0.25 vel=0.64 reverb_send=0.12
+  BD:1.5 BD:1.75 BD:0.75
+  BD:0.5 BD:0.25 BD:0.75 BD:2.5
+  BD:1.5 BD:1.25 BD:1.25
+  BD:1.5 BD:1.75 BD:0.5 BD:0.25
+  BD:0.5 BD:0.25 BD:0.75 BD:1.25 BD:1.25
+  BD:1.5 BD:2.5
+  BD:1.5 BD:1 BD:0.25 BD:1.25
+  BD:0.75 BD:0.75 BD:2.25 BD:0.25
+  >P2
+  BD:1 SD:0.5 BD:1.25 BD:0.25 SD:0.25 BD:0.75
+  BD:0.5 BD:0.25 BD:0.75 BD:1.5 SD:1
+  BD:1 SD:0.5 BD:0.75 SD:0.25 BD:0.25 BD:0.25 SD:0.25 BD:0.5 BD:0.25
+  BD:0.5 BD:0.25 BD:0.75 BD:1.5 SD:0.25 BD:0.5 BD:0.25
+  BD:1 SD:0.5 BD:1 BD:0.25 BD:0.25 SD:0.25 BD:0.75
+  BD:0.5 BD:0.25 BD:0.75 BD:0.75 SD:0.25 BD:0.25 BD:0.25 SD:1
+  BD:1 SD:0.5 BD:1.5 SD:0.25 BD:0.5 BD:0.25
+  BD:0.5 BD:0.25 BD:0.75 BD:0.25 BD:1.25 SD:1
+  >P3
+  BD:1 SD:0.5 BD:1 BD:0.25 BD:0.25 SD:0.25 BD:0.75
+  BD:0.75 BD:0.75 BD:0.75 SD:0.5 BD:0.25 SD:1
+  BD:1.25 SD:0.25 BD:1.5 SD:0.25 BD:0.75
+  BD:0.5 BD:0.25 BD:0.75 BD:0.5 BD:1 SD:1
+  BD:1 SD:0.5 BD:1.25 BD:0.25 SD:0.75 BD:0.25
+  R:0.25 BD:0.25 BD:0.25 BD:0.5 SD:0.25 BD:0.25 BD:0.5 SD:0.25 BD:0.25 BD:0.25 SD:0.25 BD:0.5 BD:0.25
+  BD:1 SD:0.5 BD:1.25 BD:0.25 SD:0.25 BD:0.75
+  BD:0.5 BD:0.25 BD:0.25 SD:0.5 BD:0.5 SD:0.0625@0.6 SD:0.0625@0.55 SD:0.0625@0.5 SD:0.0625@0.44 SD:0.0625@0.38 SD:0.0625@0.31 SD:0.0625@0.25 SD:0.0625@0.19 BD:0.25@0.1 BD:0.5 BD:0.75
+  >P4
+  BD:1 SD:0.5 BD:1.5 SD:0.25 BD:0.75
+  BD:0.5 BD:0.25 BD:0.75 BD:1.5 SD:1
+  BD:1 SD:0.5 BD:1.25 BD:0.25 SD:0.25 BD:0.75
+  BD:0.5 BD:0.25 BD:0.75 BD:0.5 BD:1 SD:1
+  BD:1 SD:0.5 BD:1.25 BD:0.25 SD:0.25 BD:0.75
+  BD:0.5 BD:0.25 BD:0.75 BD:1.5 SD:1
+  BD:1 SD:0.6667 BD:1 BD:0.3333 SD:0.3333 BD:0.6667
+  BD:0.6667 BD:0.3333 SD:0.6667 BD:0.6667 SD:1@0.35 SD:0.3333@0.5 BD:0.3333@0.5
+  >P5
+  BD:1 SD:0.5 BD:0.75 SD:0.25 BD:0.25 BD:0.25 SD:0.25 BD:0.5 BD:0.25
+  BD:0.5 BD:0.25 BD:0.75 BD:0.75 SD:0.25 BD:0.25 BD:0.25 SD:0.25 BD:0.5 BD:0.25
+  BD:1 SD:0.5 BD:1.25 BD:0.25 SD:0.25 BD:0.75
+  R:1 SD:0.5 BD:1.5 SD:0.25 BD:0.75
+  BD:1 SD:0.5 BD:1 BD:0.25 BD:0.25 SD:0.75 BD:0.25
+  BD:0.5 BD:0.25 BD:0.75 BD:1.5 SD:0.25 BD:0.5 BD:0.25
+  BD:1 SD:0.5 BD:0.75 SD:0.5 BD:0.5 SD:1
+  SD:0.25@0.06 SD:0.25@0.2 SD:0.25@0.35 SD:0.25@0.5 SD:0.5@0.64 BD:1.5 SD:1
+  >P6
+  BD:1 SD:0.5 BD:1.25 BD:0.25 SD:0.25 BD:0.75
+  BD:0.5 BD:0.25 BD:0.75 BD:1.5 SD:1
+  BD:1 SD:0.5 BD:1.5 SD:0.25 BD:0.75
+  BD:1.5 BD:1.5 SD:1
+  BD:1 SD:0.5 BD:1.5 SD:1
+  BD:1.5 BD:1.5 SD:1
+  R:0.5 BD:0.5 SD:0.5 BD:1.5 SD:1
+  BD:1.5 BD:2.5
+  >CODA
+  BD:4
+  R:4
+  SD:0.3333@0.12 SD:0.3333@0.2 SD:0.3333@0.27 SD:1@0.33 SD:0.3333@0.15 SD:0.3333@0.21 SD:0.3333@0.27 SD:0.3333@0.33 SD:0.3333@0.39 SD:0.3333@0.45
+
+# ---- hats: density edited bar by bar, one velocity -------------------
+track hats kit=909 len=0.5 vel=0.64
+  >P2
+  (CH:0.5)x8
+  (CH:0.5)x8
+  (CH:0.5 CH:0.25 CH:0.25)x4
+  (CH:0.5)x8
+  (CH:0.5)x7 R:0.5
+  (CH:0.5)x8
+  (CH:0.5)x5 (CH:0.25)x6
+  (CH:0.5)x8
+  >P3
+  (CH:0.5)x8
+  (CH:0.5 CH:0.25 CH:0.25)x4
+  (CH:0.5)x8
+  (CH:0.5)x7 (CH:0.25)x2
+  (CH:0.5)x8
+  (CH:0.5 CH:0.25 CH:0.25)x4
+  (CH:0.5)x5 (CH:0.25)x6
+  (CH:0.5)x8
+  >P4
+  (CH:0.5)x8
+  R:0.5 (CH:0.5)x7
+  (CH:0.5)x8
+  (CH:0.5)x7 (CH:0.25)x2
+  (CH:0.5)x8
+  (CH:0.5)x7 R:0.5
+  (CH:0.33333)x12
+  (CH:0.33333)x12
+  >P5
+  (CH:0.5 CH:0.25 CH:0.25)x4
+  (CH:0.5)x8
+  (CH:0.5)x5 (CH:0.25)x6
+  (CH:0.5)x8
+  (CH:0.5 CH:0.25 CH:0.25)x4
+  (CH:0.5)x7 (CH:0.25)x2
+  (CH:0.5)x8
+  (CH:0.5)x8
+  >P6
+  (CH:0.5)x8
+  (CH:0.5)x7 R:0.5
+  CH:0.5 CH:0.5 CH:1 CH:0.5 CH:0.5 CH:1
+  (CH:0.5)x8
+  CH:0.5 CH:0.5 CH:1 CH:0.5 CH:0.5 CH:1
+  CH:1 CH:1 CH:2
+  CH:1 CH:1 CH:2
+  R:4
