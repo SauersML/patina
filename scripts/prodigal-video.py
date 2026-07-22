@@ -9,10 +9,9 @@ onset: the image advances WHEN THE SONG HITS and holds when it
 breathes — the A-section air is near-stillness, the snare ratchets
 are accelerating strobes, the wormhole ladder slams six rungs.
 
-The gated 64th clock: the subdivision grid carries the strobe, the
-score gates it — while percussion strikes the clock runs; in the air
-(no percussive onset within two beats) the picture freezes, advancing
-only when a voice or chord enters. BREATHE, made visible.
+The 64th clock: the subdivision grid carries the strobe — sixteenths
+in the breath, 32nds under the groove, 64ths through the wormhole —
+every step on a metric subdivision, never stalling on one image.
 
 Score events -> light:
     kicks (BD)        sidechain pump: detail brightens, zones duck,
@@ -34,8 +33,9 @@ Mix audio -> light (band envelopes from the rendered wav):
 
 Automation -> light (the engineer's moves become grade moves):
     voxbass cutoff    the zones open at the bloom
-    tape_wow          frame wobble as the tape dies (beat 128 on)
     rets pitch dive   exposure and hue sink with the falling pitch
+
+The mix itself is muxed in at the end: the output plays sound.
 
 Each of ~600 plots (10:00/12:00/15:00 captures, identical center
 crop) spends its three times of day as three consecutive advances,
@@ -69,7 +69,8 @@ SRC_JPG = os.path.expanduser("~/Downloads/drone-lsr-images-rest")
 STATS = os.path.join(REPO, "renders", "prodigal-plotstats.json")
 OUT = os.path.join(REPO, "renders", "prodigal-base.mp4")
 
-W, H, FPS = 1920, 1080, 48
+W, H, FPS = 960, 540, 48    # compute res; ffmpeg upscales to 1080p
+OUT_W, OUT_H = 1920, 1080
 BPM = 72.0
 SPB = 60.0 / BPM
 DUR = 130.586667            # matches renders/prodigal-program.wav
@@ -112,6 +113,7 @@ T_FADE = DUR - 2.6          # everything sinks to black with the tape
 
 LUM = np.array([0.2126, 0.7152, 0.0722], np.float32)
 EQ_P = np.linspace(0.0, 1.0, 65)
+LUT_X = np.linspace(0.0, 1.0, 1024).astype(np.float32)
 
 
 def smoothstep(x):
@@ -245,14 +247,11 @@ VOICES = sorted(onsets("themeA") + onsets("themeB") + onsets("owls")
                 + onsets("grat") + onsets("rev") + onsets("notiS")
                 + onsets("rets"))
 
-# ---- the stop-motion clock: fast, 64th-aligned, and BREATHING --------
+# ---- the stop-motion clock: fast and 64th-aligned, never stalling ----
 # The subdivision grid carries the strobe (sixteenths in the breath,
 # 32nds under the groove, 64ths through the wormhole, 32nd triplets in
-# the bloom — every step lands exactly on a metric subdivision, frame-
-# quantized). The score gates it: while percussion strikes the clock
-# runs; when the song holds its air (no percussive onset within two
-# beats) the picture FREEZES, advancing only when a voice or chord
-# enters. The song's first law — BREATHE — made visible.
+# the bloom) — every step lands exactly on a metric subdivision,
+# frame-quantized, and the picture never sticks on one image.
 RATES = [(16, 4), (48, 8), (80, 8), (104, 16), (128, 12), (1e9, 4)]
 
 
@@ -266,26 +265,8 @@ def step_at(beat):
     return int(steps)
 
 
-PERC_BEATS = np.array(sorted(b for b, _, _ in
-                             (KICKS + SNARES + TSS + HATS + SHAKER)))
-MELODIC_F = {int(round(b * SPB * FPS))
-             for b in sorted(x for x, _, _ in
-                             (BREATHS + VOICES + BELLS + WORM))
-             if b * SPB < DUR}
-
-STEP_F = np.zeros(TOTAL, np.int32)
-_steps, _prev_sub = 0, 0
-for _f in range(TOTAL):
-    _b = _f / FPS / SPB
-    _sub = step_at(_b)
-    _i = np.searchsorted(PERC_BEATS, _b, side="right")
-    _gate = _i > np.searchsorted(PERC_BEATS, _b - 2.0, side="right")
-    if _gate:
-        _steps += _sub - _prev_sub
-    elif _f in MELODIC_F:
-        _steps += 1
-    _prev_sub = _sub
-    STEP_F[_f] = _steps
+STEP_F = np.array([step_at(_f / FPS / SPB) for _f in range(TOTAL)],
+                  np.int32)
 N_ADVANCE = int(STEP_F[-1]) + 1
 
 
@@ -535,8 +516,8 @@ def band_envelopes():
             out[f] = max(out[f], out[f - 1] * k)
         return np.clip(out / (np.percentile(out, 95.0) + 1e-9), 0, 1.2)
 
-    return (smooth_norm(rms, 0.25), smooth_norm(bands[0], 0.15),
-            smooth_norm(bands[1], 0.12), smooth_norm(bands[2], 0.08))
+    return (smooth_norm(rms, 0.12), smooth_norm(bands[0], 0.10),
+            smooth_norm(bands[1], 0.08), smooth_norm(bands[2], 0.05))
 
 
 RMS_N, BASS_N, MID_N, HIGH_N = band_envelopes()
@@ -566,7 +547,6 @@ BD_DRIVE = autom_frames("bd_drive", 0.85)       # kick punch per section
 SD_SNAP = autom_frames("sd_snappy", 0.4)        # flash snap per section
 SN_CUT = autom_frames("snare.smp_cutoff", 20000.0)  # flash open/dark
 VB_CUT = autom_frames("voxbass.smp_cutoff", 700.0)  # the bed opens
-TAPE_WOW = autom_frames("tape_wow", 0.5)        # the tape dying
 RETS_P = autom_frames("rets.smp_pitch", 0.0)    # the final pitch dive
 LFO_RATE = float(autom_frames("lfo_rate", 0.12)[0])
 
@@ -580,7 +560,6 @@ HUE_LEAN += (0.006 * np.sin(2 * np.pi * LFO_RATE * _t)
              + 0.10 * (RETS_P / 24.0)).astype(np.float32)
 # and the dying tape sinks the exposure with the pitch
 RETS_EXPO = (1.0 + 0.45 * (RETS_P / 24.0)).astype(np.float32)
-WOW_AMP = 22.0 * np.maximum(0.0, TAPE_WOW - 0.5)   # px, 0 until beat 128
 ZONE_OPEN = (0.9 + 0.2 * np.clip((VB_CUT - 700.0) / 700.0, 0, 1)
              ).astype(np.float32)
 
@@ -633,16 +612,17 @@ def render_frame(f):
         Image.fromarray((y * 255).astype(np.uint8))
         .resize((60, 34), Image.BILINEAR)
         .resize((W, H), Image.BILINEAR), np.float32) / 255.0
-    zone = np.empty((H, W, 3), np.float32)
+    lut = np.empty((1024, 3), np.float32)
     for c in range(3):
-        zone[..., c] = np.interp(ylow, ramp, anchors[:, c])
+        lut[:, c] = np.interp(LUT_X, ramp, anchors[:, c])
+    zone = lut[np.clip(ylow * 1023.0, 0, 1023).astype(np.int32)]
     zone *= ZONE_OPEN[f]        # the bed's filter opens at the bloom
     # the visible sidechain: on each kick the color zones DUCK while
     # the detail layer pumps, both scaled by the kick's drive lane;
     # the sub band keeps the blacks deep
     pump = PUMP[f] * (BD_DRIVE[f] / 0.85)
-    base = (0.26 - 0.12 * BASS_N[f]) * (1.0 - 0.30 * pump)
-    detail = 1.05 * (1.0 + 0.35 * pump)
+    base = (0.26 - 0.20 * BASS_N[f]) * (1.0 - 0.45 * pump)
+    detail = 1.05 * (1.0 + 0.55 * pump)
     graded = zone * (base + detail * y)[..., None]
     graded += (y ** 4)[..., None] * (anchors[-1] * 0.45)  # specular lift
     if img is not None:
@@ -651,30 +631,26 @@ def render_frame(f):
         graded *= FLASH_GAIN[f]  # flashes glow with the snare channel
     # the voice band lights the midtones
     if MID_N[f] > 0.05:
-        graded *= (1.0 + 0.14 * MID_N[f]
+        graded *= (1.0 + 0.30 * MID_N[f]
                    * np.exp(-((y - 0.55) ** 2) / 0.045))[..., None]
     # bells and the high band throw white glints off the top
-    glint = max(0.9 * GLINT[f], 0.7 * HIGH_N[f])
+    glint = max(0.9 * GLINT[f], 1.1 * HIGH_N[f])
     if glint > 0.02:
         graded += (y ** 6)[..., None] * (anchors[-1] * glint)
 
     lum = (graded @ LUM)[..., None]
     # loudness owns saturation: quiet = ashen, the full mix blazes
-    graded = lum + (graded - lum) * (0.75 + 0.60 * RMS_N[f])
+    graded = lum + (graded - lum) * min(0.55 + 0.95 * RMS_N[f], 1.6)
 
-    # the exhale chords swell the exposure; the dying tape sinks it
-    graded *= expo * RETS_EXPO[f] * (1.0 + 0.06 * BREATH_ENV[f])
+    # loudness lifts the exposure, the exhale chords swell it, the
+    # dying tape sinks it
+    graded *= (expo * RETS_EXPO[f] * (0.90 + 0.20 * RMS_N[f])
+               * (1.0 + 0.10 * BREATH_ENV[f]))
     graded *= VIG
-
-    # tape wow: the frame wobbles as the tape dies
-    if WOW_AMP[f] >= 0.5:
-        wob = int(round(WOW_AMP[f] * np.sin(2 * np.pi * 1.1 * t)))
-        if wob:
-            graded = np.roll(graded, wob, axis=0)
 
     # analog fringe: red and blue drift apart, hats and hiss knock
     # them wider
-    px = 2 + int(round(3.0 * FRINGE[f] + 2.0 * HIGH_N[f]))
+    px = 1 + int(round(1.5 * FRINGE[f] + 1.0 * HIGH_N[f]))
     graded[..., 0] = np.roll(graded[..., 0], px, axis=1)
     graded[..., 2] = np.roll(graded[..., 2], -px, axis=1)
 
@@ -730,6 +706,7 @@ def main():
             ["ffmpeg", "-y", "-loglevel", "error",
              "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}",
              "-r", str(FPS), "-i", "-",
+             "-vf", f"scale={OUT_W}:{OUT_H}:flags=lanczos",
              "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
              "-pix_fmt", "yuv420p", "-f", "mpegts", path],
             stdin=subprocess.PIPE)
@@ -760,7 +737,9 @@ def main():
     concat = "concat:" + "|".join(p for p, _ in segments)
     subprocess.run(
         ["ffmpeg", "-y", "-loglevel", "error", "-i", concat,
-         "-c", "copy", OUT], check=True)
+         "-i", WAV, "-map", "0:v", "-map", "1:a",
+         "-c:v", "copy", "-c:a", "aac", "-b:a", "256k",
+         "-shortest", OUT], check=True)
     for p, _ in segments:
         os.remove(p)
     os.rmdir(segdir)
