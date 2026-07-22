@@ -82,8 +82,8 @@ automate sd_snappy
 track hats sample=renders/prodigal/kit-grid.wav root=C3 chop=8 mono bits=12 rate=26040 gain=1.2 len=1
   R:16
   ((R:0.5 C3:1@0.4 C#3:1@0.3 C3:1@0.4 C#3:0.5@0.3)x3 R:3 E3:0.5@0.45 C3:0.5@0.35)x2
-  R:20 (C#3:1.5@0.28)x8
-  (C3:1.5@0.42 C#3:1.5@0.32)x8
+  R:20 (C#3:1.5@0.2)x8
+  (C3:1.5@0.3 C#3:1.5@0.22)x8
   R:24
   R:24
 
@@ -125,7 +125,7 @@ automate ohK.reverb_send
 # per bar (drums-for-laurie's rimshot trick) — continuity that never
 # repeats exactly. Enters mid-D, carries the bloom, gone before the
 # double-time bar.
-track shaker sample=renders/prodigal/kit-grid.wav root=C3 chop=8 mono bits=12 rate=26040 cutoff=9500 gain=1.05 len=1
+track shaker sample=renders/prodigal/kit-grid.wav root=C3 chop=8 mono bits=12 rate=26040 cutoff=8000 gain=0.35 len=1
   R:104
   R:0.25 D#3:0.25@0.36 R:0.25 D#3:0.25@0.26 R:0.25 D#3:0.25@0.26 R:0.25 R:0.25 D#3:0.25@0.36 R:0.25 D#3:0.25@0.26 R:0.25 D#3:0.25@0.26 R:0.25 D#3:0.25@0.36 R:0.25
   D#3:0.25@0.36 R:0.25 D#3:0.25@0.26 R:0.25 D#3:0.25@0.26 R:0.25 R:0.25 D#3:0.25@0.36 R:0.25 D#3:0.25@0.26 R:0.25 D#3:0.25@0.26 R:0.25 D#3:0.25@0.36 R:0.25 R:0.25
