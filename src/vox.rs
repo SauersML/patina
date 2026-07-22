@@ -23,6 +23,16 @@
 // (a vowel given an explicit length stops sustaining); `@amp` scales its
 // loudness. Note velocity scales the whole syllable.
 //
+// Sung-diction rules (after taygetea's DICTION.md, the headless
+// DiffSinger recipe — its mechanisms generalize to any sung synthesis):
+// a held diphthong keeps its nucleus and turns only at the tail (the
+// offglide is its own short segment fired at note-off); coda nasals get
+// duration floors (shorter murmurs read as a head cold); a `.`/`?`
+// phrase edge releases a final stop (voiced -> faint schwa "gold-uh",
+// unvoiced -> aspiration) so line-final consonants don't die; and a
+// syllable starting with the consonant the last one ended on gets a
+// re-articulation gap so "pale light" keeps both L's.
+//
 // The speech itself normally never reaches the output: it is the
 // MODULATOR of the channel vocoder (vocoder.rs), articulating the synth
 // voices that the same notes play as the CARRIER. `vox_dry` brings up the
@@ -45,6 +55,20 @@ const B4: f32 = 280.0;
 
 /// A vowel with no explicit length inside a multi-vowel syllable.
 const INNER_VOWEL_MS: f32 = 160.0;
+
+/// Diphthong offglide length: a singer holds the nucleus and turns in
+/// the last ~140 ms — shorter when a coda still needs the air.
+const OFFGLIDE_MS: f32 = 140.0;
+const OFFGLIDE_CODA_MS: f32 = 100.0;
+
+/// Coda nasal murmur floors. Speech-length coda nasals read hyponasal
+/// ("mine" -> "mide"); sung NG needs near-syllable weight ("-ings").
+const CODA_NASAL_MS: f32 = 110.0;
+const CODA_NG_MS: f32 = 180.0;
+
+/// Re-articulation gap when a syllable starts with the consonant the
+/// previous one ended on (geminate junctions otherwise fuse).
+const GEMINATE_GAP_MS: f32 = 45.0;
 
 // ---------------------------------------------------------------------------
 // Phonemes
@@ -345,6 +369,10 @@ pub struct VoxSource {
     coda: Vec<Seg>,
     pending: Option<Syllable>,
     held: Vec<u8>,
+    /// Final phoneme of the last syllable, for geminate re-articulation.
+    last_ph: Option<Phoneme>,
+    /// Coda-final stop (phoneme, amp) awaiting a phrase-edge release.
+    coda_release: Option<(Phoneme, f32)>,
     // Prosody: where we are in the phrase and what the pitch is doing
     // about it. All of it scales with the `intonation` knob.
     intonation: f32,
@@ -391,6 +419,8 @@ impl VoxSource {
             coda: Vec::new(),
             pending: None,
             held: Vec::new(),
+            last_ph: None,
+            coda_release: None,
             intonation: 0.12,
             syl_index: 0,
             phrase_done: true,
@@ -473,8 +503,42 @@ impl VoxSource {
                     cur.dur = self.pos; // end the old vowel now
                 }
             }
+            // Geminate junction ("pale light"): the articulator must let
+            // go and re-attack, or the two L's fuse into one
+            let first = syl.phones.first().unwrap().ph;
+            if !first.is_vowel() && self.last_ph == Some(first) {
+                let locus = first.spec();
+                self.queue.push_back(Seg {
+                    f: locus.f,
+                    bw: locus.bw,
+                    voiced: 0.0,
+                    fric: 0.0,
+                    fric_f: locus.fric_f.max(1000.0),
+                    fric_bw: locus.fric_bw,
+                    asp: 0.0,
+                    dur: (GEMINATE_GAP_MS * 0.001 * self.sample_rate) as usize,
+                    glide_to: None,
+                    slew_ms: 15.0,
+                    accent: 0.0,
+                });
+            }
             self.queue.extend(main);
             self.coda = coda;
+            // Remember the syllable's edge phonemes: the final one for
+            // geminate junctions, and a coda-final stop for the
+            // phrase-edge release
+            let last = *syl.phones.last().unwrap();
+            self.last_ph = Some(last.ph);
+            let coda_exists = syl
+                .phones
+                .iter()
+                .rposition(|p| p.ph.is_vowel())
+                .map_or(false, |i| i + 1 < syl.phones.len());
+            self.coda_release = if coda_exists {
+                Some((last.ph, last.amp * gain))
+            } else {
+                None
+            };
         }
     }
 
@@ -485,9 +549,24 @@ impl VoxSource {
             return;
         }
         // Last key up: close the syllable — finish the vowel, speak the coda
+        let has_coda = !self.coda.is_empty();
         if let Some(cur) = &mut self.cur {
             if cur.dur == SUSTAIN {
                 cur.dur = self.pos + (0.02 * self.sample_rate) as usize;
+                // Diphthong tail: the nucleus was held the whole note;
+                // the offglide speaks now, as its own short segment
+                if let Some(g) = cur.glide_to.take() {
+                    let ms = if has_coda { OFFGLIDE_CODA_MS } else { OFFGLIDE_MS };
+                    let off = Seg {
+                        f: g,
+                        glide_to: None,
+                        slew_ms: 60.0,
+                        accent: 0.0,
+                        dur: (ms * 0.001 * self.sample_rate) as usize,
+                        ..*cur
+                    };
+                    self.queue.push_front(off);
+                }
             }
         }
         let min_vowel = (0.09 * self.sample_rate) as usize;
@@ -508,15 +587,49 @@ impl VoxSource {
                         seg.dur = (seg.dur as f32 * 1.4) as usize;
                     }
                 }
+                if let Some(rel) = self.release_seg() {
+                    coda.push(rel);
+                }
             }
             Boundary::Rise => {
                 self.fall_target = 4.0 * self.intonation;
                 self.phrase_done = true;
+                if let Some(rel) = self.release_seg() {
+                    coda.push(rel);
+                }
             }
             Boundary::None => {}
         }
         self.boundary = Boundary::None;
         self.queue.extend(coda);
+    }
+
+    /// Phrase-final stops release so line-final consonants don't die in
+    /// the fall: voiced stops open into a faint schwa ("gold-uh", the
+    /// choral instruction), unvoiced stops into aspiration.
+    fn release_seg(&self) -> Option<Seg> {
+        use Phoneme::*;
+        let (ph, amp) = self.coda_release?;
+        let s = Phoneme::AH.spec();
+        let ms_to = |ms: f32| (ms * 0.001 * self.sample_rate) as usize;
+        let base = Seg {
+            f: s.f,
+            bw: s.bw,
+            voiced: 0.0,
+            fric: 0.0,
+            fric_f: 1500.0,
+            fric_bw: 1500.0,
+            asp: 0.0,
+            dur: 0,
+            glide_to: None,
+            slew_ms: 30.0,
+            accent: 0.0,
+        };
+        match ph {
+            B | D | G | JH => Some(Seg { voiced: 0.3 * amp, dur: ms_to(60.0), ..base }),
+            P | T | K | CH => Some(Seg { asp: 0.4 * amp, dur: ms_to(45.0), ..base }),
+            _ => None,
+        }
     }
 
     /// Speech pitch follows the lowest held key — the voice sits on the
@@ -644,7 +757,17 @@ impl VoxSource {
         }
         let mut coda = Vec::new();
         for lp in &scaled[split..] {
-            self.push_phone(&mut coda, lp, false);
+            // Coda nasals get sung-length floors — the speech-length
+            // murmur reads as a head cold and the "-ing" G disappears
+            let mut lp = *lp;
+            if lp.ms.is_none() {
+                lp.ms = match lp.ph {
+                    Phoneme::M | Phoneme::N => Some(CODA_NASAL_MS),
+                    Phoneme::NG => Some(CODA_NG_MS),
+                    _ => None,
+                };
+            }
+            self.push_phone(&mut coda, &lp, false);
         }
         (main, coda)
     }
@@ -688,10 +811,18 @@ impl VoxSource {
                 let mut tf = s.f;
                 let mut slew = s.slew_ms;
                 if let Some(g) = s.glide_to {
-                    // Diphthong: hold the first element, then drift
-                    if self.pos > (0.15 * self.sample_rate) as usize {
-                        tf = g;
-                        slew = 90.0;
+                    // Diphthong with a known end: hold the nucleus, turn
+                    // in the last ~140 ms. A sustaining diphthong never
+                    // glides here — note_off appends its offglide as a
+                    // segment of its own, so "I" held four beats stays
+                    // "aaa" and turns "i" only at the release.
+                    if s.dur != SUSTAIN {
+                        let off = ((OFFGLIDE_MS * 0.001 * self.sample_rate) as usize)
+                            .min(s.dur / 2);
+                        if self.pos + off >= s.dur {
+                            tf = g;
+                            slew = 60.0;
+                        }
                     }
                 }
                 (tf, s.bw, s.voiced, s.fric, s.fric_f, s.fric_bw, s.asp, slew)
@@ -1128,6 +1259,224 @@ mod tests {
 
     fn rms(samples: &[f32]) -> f32 {
         (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
+    }
+
+    // -- Instrumentation (DICTION.md: how to iterate deaf) ---------------
+
+    /// Autocorrelation pitch tracker, cents-grade at speech f0: the
+    /// integer-lag grid at 48 kHz is ~4 cents around 110 Hz.
+    fn track_f0(samples: &[f32], sr: f32, lo: f32, hi: f32) -> f32 {
+        let min_lag = (sr / hi) as usize;
+        let max_lag = ((sr / lo) as usize).min(samples.len() / 2);
+        let mut best = (f32::MIN, min_lag);
+        for lag in min_lag..=max_lag {
+            let n = samples.len() - lag;
+            let (mut num, mut d1, mut d2) = (0.0f32, 0.0f32, 0.0f32);
+            for i in 0..n {
+                num += samples[i] * samples[i + lag];
+                d1 += samples[i] * samples[i];
+                d2 += samples[i + lag] * samples[i + lag];
+            }
+            let r = num / (d1 * d2).sqrt().max(1e-12);
+            if r > best.0 {
+                best = (r, lag);
+            }
+        }
+        sr / best.1 as f32
+    }
+
+    fn cents(f: f32, reference: f32) -> f32 {
+        1200.0 * (f / reference).log2()
+    }
+
+    /// RMS in consecutive windows — the closure-dip / murmur-length probe.
+    fn rms_windows(samples: &[f32], sr: f32, win_s: f32) -> Vec<f32> {
+        let w = (win_s * sr) as usize;
+        samples.chunks(w).filter(|c| c.len() == w).map(rms).collect()
+    }
+
+    /// Goertzel energy at one frequency.
+    fn energy_at(samples: &[f32], sr: f32, freq: f32) -> f32 {
+        let (mut re, mut im) = (0.0f32, 0.0f32);
+        for (i, &s) in samples.iter().enumerate() {
+            let a = TAU * freq * i as f32 / sr;
+            re += s * a.cos();
+            im += s * a.sin();
+        }
+        (re * re + im * im).sqrt()
+    }
+
+    fn render_secs(v: &mut VoxSource, secs: f32, sr: f32) -> Vec<f32> {
+        (0..(secs * sr) as usize).map(|_| v.render()).collect()
+    }
+
+    /// Pitch: a held vowel must sit on the note within tracker error, and
+    /// the vibrato knob must widen the measured f0 spread (in cents).
+    #[test]
+    fn pitch_tracks_the_note() {
+        let sr = 48000.0;
+        let spread_of = |vib: f32| -> (f32, f32) {
+            let mut v = VoxSource::new(sr);
+            v.set_vibrato(vib);
+            v.set_intonation(0.0);
+            v.set_syllable(parse_lyric("AA").unwrap());
+            v.note_on(45, 0.9); // A2 = 110 Hz
+            let out = render_secs(&mut v, 1.0, sr);
+            let hop = (0.025 * sr) as usize;
+            let win = (0.05 * sr) as usize;
+            let mut f0s = Vec::new();
+            let mut i = (0.3 * sr) as usize;
+            while i + win < (0.9 * sr) as usize {
+                f0s.push(track_f0(&out[i..i + win], sr, 60.0, 400.0));
+                i += hop;
+            }
+            let mean = f0s.iter().sum::<f32>() / f0s.len() as f32;
+            let spread = f0s.iter().fold((f32::MAX, f32::MIN), |(lo, hi), &f| {
+                (lo.min(f), hi.max(f))
+            });
+            (mean, cents(spread.1, spread.0))
+        };
+        let (mean, flat_spread) = spread_of(0.0);
+        assert!(
+            cents(mean, 110.0).abs() < 30.0,
+            "held AA at A2 must sit on 110 Hz: got {mean} Hz ({} cents off)",
+            cents(mean, 110.0)
+        );
+        assert!(flat_spread < 25.0, "vibrato off must be steady, spread {flat_spread} cents");
+        let (_, vib_spread) = spread_of(1.0);
+        assert!(
+            vib_spread > 45.0,
+            "full vibrato (40-cent depth) must show in the tracker: spread {vib_spread} cents"
+        );
+    }
+
+    /// Closures: a stop must carve a measurable energy dip out of the
+    /// vowel stream — DICTION's lenition probe. A "closure" at -1 dB is
+    /// no closure at all, whatever the transcript claims.
+    #[test]
+    fn stop_closures_measurably_dip() {
+        let sr = 48000.0;
+        let dip_of = |lyric: &str| -> f32 {
+            let mut v = VoxSource::new(sr);
+            v.set_vibrato(0.0);
+            v.set_syllable(parse_lyric(lyric).unwrap());
+            v.note_on(45, 0.9);
+            let out = render_secs(&mut v, 0.6, sr);
+            let w = rms_windows(&out, sr, 0.01);
+            // vowel reference: deep inside the first AA (windows 6..18)
+            let vowel = w[6..18].iter().sum::<f32>() / 12.0;
+            // closure hunt: from the first vowel's end into the second
+            let dip = w[20..32].iter().cloned().fold(f32::MAX, f32::min);
+            20.0 * (dip / vowel).log10()
+        };
+        let b = dip_of("AA:220-B-AA:220");
+        let t = dip_of("AA:220-T-AA:220");
+        assert!(b < -8.0, "B needs a real closure dip, got {b:.1} dB");
+        assert!(t < -18.0, "T closure is silence, got {t:.1} dB");
+        assert!(t < b, "unvoiced T must dip deeper than B's voiced bar ({t:.1} vs {b:.1})");
+    }
+
+    /// A held diphthong keeps its nucleus for the whole note and turns
+    /// only at the release — "I" is "aaa…i", never "a-eeee…".
+    #[test]
+    fn diphthong_offglide_waits_for_the_tail() {
+        let sr = 48000.0;
+        let mut v = VoxSource::new(sr);
+        v.set_vibrato(0.0);
+        v.set_syllable(parse_lyric("AY").unwrap());
+        v.note_on(45, 0.9);
+        let held = render_secs(&mut v, 0.9, sr);
+        v.note_off(45);
+        let released = render_secs(&mut v, 0.3, sr);
+        // Deep in the hold the nucleus (AA-like, F2 ~1.1 k) must rule
+        let hold = &held[(0.55 * sr) as usize..(0.85 * sr) as usize];
+        let (hold_lo, hold_hi) = (energy_at(hold, sr, 1100.0), energy_at(hold, sr, 2200.0));
+        assert!(
+            hold_lo > 1.5 * hold_hi,
+            "held AY must stay on its nucleus: E(1.1k)={hold_lo} vs E(2.3k)={hold_hi}"
+        );
+        // After release the offglide drives F2 toward IY territory —
+        // probe the late offglide (nucleus close-out done, F2 arrived)
+        let tail = &released[(0.06 * sr) as usize..(0.17 * sr) as usize];
+        let (tail_lo, tail_hi) = (energy_at(tail, sr, 1100.0), energy_at(tail, sr, 2200.0));
+        let r_hold = hold_hi / hold_lo.max(1e-9);
+        let r_tail = tail_hi / tail_lo.max(1e-9);
+        assert!(
+            r_tail > 2.0 * r_hold,
+            "the offglide must speak at the tail: hi/lo {r_tail} after vs {r_hold} during"
+        );
+    }
+
+    /// Coda nasals hold sung length: "AA-M." must murmur past the floor
+    /// (the speech-length murmur is the "singer has a cold" percept).
+    #[test]
+    fn coda_nasals_hold_sung_length() {
+        let sr = 48000.0;
+        let mut v = VoxSource::new(sr);
+        v.set_vibrato(0.0);
+        v.set_syllable(parse_lyric("AA-M.").unwrap());
+        v.note_on(45, 0.9);
+        let held = render_secs(&mut v, 0.35, sr);
+        let vowel = rms(&held[(0.2 * sr) as usize..]);
+        v.note_off(45);
+        let tail = render_secs(&mut v, 0.6, sr);
+        let w = rms_windows(&tail, sr, 0.01);
+        let last = w.iter().rposition(|&r| r > 0.03 * vowel).unwrap_or(0);
+        let sounding = last as f32 * 0.01;
+        assert!(
+            sounding >= 0.16,
+            "coda M must murmur >=110 ms (x1.4 phrase-final): sounded {sounding:.3} s"
+        );
+    }
+
+    /// A `.` boundary releases a final voiced stop into a faint schwa —
+    /// "gold-uh" — where the unmarked coda just stops.
+    #[test]
+    fn final_voiced_stop_releases_at_the_boundary() {
+        let sr = 48000.0;
+        let tail_of = |lyric: &str| -> Vec<f32> {
+            let mut v = VoxSource::new(sr);
+            v.set_vibrato(0.0);
+            v.set_syllable(parse_lyric(lyric).unwrap());
+            v.note_on(45, 0.9);
+            render_secs(&mut v, 0.35, sr);
+            v.note_off(45);
+            render_secs(&mut v, 0.4, sr)
+        };
+        let marked = tail_of("AA-D.");
+        let plain = tail_of("AA-D");
+        // 110-160 ms after release: the schwa window (closure+burst done)
+        let win = |t: &Vec<f32>| rms(&t[(0.11 * sr) as usize..(0.16 * sr) as usize]);
+        let (m, p) = (win(&marked), win(&plain));
+        assert!(m > 1e-3, "the released schwa must actually sound, rms={m}");
+        assert!(m > 4.0 * p, "release only at the phrase edge: marked {m} vs plain {p}");
+    }
+
+    /// "pale light": a syllable opening on the consonant the last one
+    /// closed on must re-articulate across a silent gap, not fuse.
+    #[test]
+    fn geminate_junction_rearticulates() {
+        let sr = 48000.0;
+        let mut v = VoxSource::new(sr);
+        v.set_vibrato(0.0);
+        v.set_syllable(parse_lyric("AA-L").unwrap());
+        v.note_on(45, 0.9);
+        render_secs(&mut v, 0.3, sr);
+        v.note_off(45);
+        v.set_syllable(parse_lyric("L-AA").unwrap());
+        v.note_on(47, 0.9);
+        let out = render_secs(&mut v, 0.6, sr);
+        let vowel = rms(&out[(0.2 * sr) as usize..(0.4 * sr) as usize]);
+        let head = &out[..(0.1 * sr) as usize];
+        let min_win = head
+            .windows((0.015 * sr) as usize)
+            .step_by((0.005 * sr) as usize)
+            .map(rms)
+            .fold(f32::MAX, f32::min);
+        assert!(
+            min_win < 0.1 * vowel,
+            "L|L junction needs a re-articulation gap: min {min_win} vs vowel {vowel}"
+        );
     }
 
     /// "S-AA": the fricative onset must be hissy (high zero-crossing
