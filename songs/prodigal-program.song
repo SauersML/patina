@@ -179,7 +179,7 @@ track sub patch=deepsine vel=1 len=8
   D2:8 R:8 C2:8 R:8
   R:4 B1:8 R:4 G2:8 R:8
   D2:8 R:4 A#1:8 R:4
-  G2:6 F#2:2 A2:6 B2:2 D2:8
+  G2:8 A2:8 D2:8
   D2:8 C2:4 D2:4 R:8
 
 automate sub.attack
@@ -216,7 +216,7 @@ track voxbass sample=renders/prodigal/mmm.wav root=G#2 psola beats=8 mode=onesho
   (D2:8 C2:8)x2
   (B2:8 G2:8)x2
   D2:8 C2:8 A#2:8
-  G2:6 F#2:2 A2:6 B2:2 D2:8
+  G2:8 A2:8 D2:8
   D2:8 D2:8 D2:8
 
 automate voxbass.smp_pitch
@@ -270,9 +270,13 @@ track bellsHi sample=renders/prodigal/di-ring.wav root=C4 mode=oneshot release=0
   R:2 D6:0.25@0.6 A5:0.25@0.5 F#6:0.25@0.55 E6:0.25@0.5 D6:0.25@0.6 E6:0.25@0.45 A6:0.5@0.6 R:6 D6:0.25@0.6 A5:0.25@0.5 F#6:0.25@0.55 E6:0.25@0.5 D6:0.25@0.6 E6:0.25@0.45 A6:0.5@0.6 R:6 D6:0.25@0.65 E6:0.25@0.55 F#6:0.25@0.6 A6:0.25@0.6 D6:0.25@0.55 F#6:0.25@0.5 A6:0.5@0.65 R:4
   R:24
 
+automate bellsHi.duck
+  0.2
 automate bellsHi.reverb_send
   1
 
+automate bells.duck
+  0.2
 automate bells.reverb_send
   1
 automate bellsHi.chorus_send
@@ -323,12 +327,17 @@ track owls sample=renders/prodigal/owls.wav root=C3 mode=oneshot gain=1.15 len=1
 
 automate owls.reverb_send
   0.3
+automate owls.duck
+  0.2
 
-# the ladder, sung: a slow modal descent through the transformation
-track wormS sample=renders/prodigal/wormS.wav root=C3 mode=oneshot gain=1.3 len=1
+# the ladder: once, spoken, rhythmic
+track worm sample=renders/prodigal/wormhole.wav root=C3 chop=6 mono bits=12 rate=26040 gain=1.3 len=1
   R:80
-  C3:12
+  C3:2 C#3:2 D3:2 D#3:2 E3:2 F3:2
   R:60
+
+automate worm.duck
+  0.15
 
 track grat sample=renders/prodigal/grateful.wav root=C3 mode=oneshot gain=1.3 len=1
   R:120 C3:8 R:24
