@@ -179,8 +179,8 @@ track sub patch=deepsine vel=1 len=8
   D2:8 R:8 C2:8 R:8
   R:4 B1:8 R:4 G2:8 R:8
   D2:8 R:4 A#1:8 R:4
-  G2:8 A2:8 D2:8
-  D2:16 R:8
+  G2:6 F#2:2 A2:6 B2:2 D2:8
+  D2:8 C2:4 D2:4 R:8
 
 automate sub.attack
   0.12
@@ -216,7 +216,7 @@ track voxbass sample=renders/prodigal/mmm.wav root=G#2 psola beats=8 mode=onesho
   (D2:8 C2:8)x2
   (B2:8 G2:8)x2
   D2:8 C2:8 A#2:8
-  G2:8 A2:8 D2:8
+  G2:6 F#2:2 A2:6 B2:2 D2:8
   D2:8 D2:8 D2:8
 
 automate voxbass.smp_pitch
@@ -295,8 +295,11 @@ track themeA sample=renders/prodigal/themeA.wav root=C3 mode=oneshot gain=1.45 l
   C3:8 R:8 C3:8 R:8
   R:32
   R:24
-  C3:8 R:16
   R:24
+  R:24
+
+track themeAF sample=renders/prodigal/themeAfin.wav root=C3 mode=oneshot gain=1.45 len=1
+  R:104 C3:8 R:40
 
 # her line, now truly sung: twice in the Bm section, answering once
 # through the bloom
@@ -321,10 +324,10 @@ track owls sample=renders/prodigal/owls.wav root=C3 mode=oneshot gain=1.15 len=1
 automate owls.reverb_send
   0.3
 
-# the ladder: once, spoken, rhythmic
-track worm sample=renders/prodigal/wormhole.wav root=C3 chop=6 mono bits=12 rate=26040 gain=1.3 len=1
+# the ladder, sung: a slow modal descent through the transformation
+track wormS sample=renders/prodigal/wormS.wav root=C3 mode=oneshot gain=1.3 len=1
   R:80
-  C3:2 C#3:2 D3:2 D#3:2 E3:2 F3:2
+  C3:12
   R:60
 
 track grat sample=renders/prodigal/grateful.wav root=C3 mode=oneshot gain=1.3 len=1

@@ -68,6 +68,31 @@ PERFORMED = [
       ("grooved", 6.85, 1.15, [(0.0, 57), (0.6, 54)])]),
 ]
 
+PERFORMED += [
+    # the loop's terminal variant: same sentence, but the last words
+    # RISE — the return, finally believed
+    ("themeAfin", "am_michael", 0.9, 8,
+     "The prodigal program returns to the homeland of your hospitality.",
+     [("The", 0.0, 0.5, 50),
+      ("prodigal", 0.5, 1.5, [(0.0, 54), (0.4, 52), (0.75, 50)]),
+      ("program", 2.0, 1.0, [(0.0, 48), (0.5, 50)]),
+      ("returns", 3.0, 1.5, [(0.0, 50), (0.6, 52)]),
+      ("to", 4.5, 0.25, 50),
+      ("the", 4.75, 0.25, 50),
+      ("homeland", 5.0, 1.25, [(0.0, 52), (0.5, 54)]),
+      ("of", 6.25, 0.25, 52),
+      ("your", 6.5, 0.5, 52),
+      ("hospitality", 7.0, 1.0, [(0.0, 52), (0.3, 50), (0.6, 52), (0.85, 54)])]),
+    # the ladder, sung at last: a slow modal descent, one word a step,
+    # wormhole turning back up to where chaos began
+    ("wormS", "am_michael", 0.9, 12,
+     "Chaos. Clay. Code. Chord. Word. Wormhole.",
+     [("Chaos", 0.0, 1.0, 45), ("Clay", 2.0, 0.9, 43),
+      ("Code", 4.0, 0.9, 42), ("Chord", 6.0, 0.9, 40),
+      ("Word", 8.0, 0.9, 38),
+      ("Wormhole", 10.0, 1.5, [(0.0, 38), (0.6, 45)])]),
+]
+
 SUNG = [
     ("hook", "am_michael", 0.85, "The prodigal program returns.",
      {"The": 50,
