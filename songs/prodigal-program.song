@@ -86,6 +86,39 @@ track hats sample=renders/prodigal/percgrid.wav root=C3 chop=4 mono bits=12 rate
   (R:0.53 C#3:0.97@0.4 C#3:1.03@0.3 C#3:0.97@0.4 C#3:0.5@0.3)x5 R:3 D#3:0.5@0.45 C#3:0.5@0.35
   R:24
 
+# ---- the borrowed kit: sampled drums enter AFTER the first section --
+# The kobosil kick (a pure kick, sampled from the mix's opening)
+# takes the bar downbeats from C on — the kit's character shifts as
+# the piece deepens. The brut kick owns the bloom's phrase downbeats;
+# the intense snare rides backbeats from D; the open hat plays the
+# off-beat pattern borrowed from the record's last quarter, in E.
+track kickK sample=renders/prodigal/kick-kobosil.wav root=C3 fixed mode=oneshot gain=1.5 len=1
+  R:48
+  (C3:4@0.55)x8
+  (C3:4@0.7)x6
+  R:48
+
+track kickB sample=renders/prodigal/kick-brut.wav root=C3 fixed mode=oneshot gain=1.6 len=1
+  R:104
+  (C3:8@0.85)x3
+  R:24
+
+track snareI sample=renders/prodigal/snare-intense.wav root=C3 fixed mode=oneshot gain=1.25 len=1
+  R:80
+  (R:1 C3:3@0.5)x6
+  (R:1 C3:3@0.75)x6
+  R:24
+
+track ohK sample=renders/prodigal/oh-kobosil.wav root=C3 fixed mono gain=1.0 len=1
+  R:104
+  (R:0.5 C3:0.5@0.5 R:1.5 C3:0.5@0.42 R:1)x6
+  R:24
+
+automate snareI.reverb_send
+  0.25
+automate ohK.reverb_send
+  0.15
+
 # the TSS air layered over the 909 snare body — two spectra, one hit
 track snare sample=renders/prodigal/percgrid.wav root=C3 chop=4 bits=12 rate=26040 gain=1.7 len=1
   R:16
