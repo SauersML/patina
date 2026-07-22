@@ -238,7 +238,7 @@ automate voxbass.smp_cutoff
 track breath sample=renders/prodigal/oooh.wav root=G#3 psola beats=5 mode=oneshot attack=0.6 release=1.4 gain=1.15 len=8
   R:8 [D3 A3 E4]:8
   ([D3 F#3 A3 E4]:8 [C3 E3 G3 D4]:8)x2
-  ([B2 D3 F#3 A3]:8 [G2 B2 D3 F#3]:8)x2
+  R:8 [G2 B2 D3 F#3]:8 [B2 D3 F#3 A3]:8 [G2 B2 D3 F#3]:8
   [D3 F3 A3 C4]:8 [A#2 D3 F3 G3]:8 [C3 E3 G3 A#3]:8
   [G2 B2 D3 G3]:8 [A2 C#3 E3 G3]:8 [D3 F#3 A3 E4]:8
   [D3 F#3 A3]:8 R:16
