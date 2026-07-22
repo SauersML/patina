@@ -50,10 +50,10 @@ PERFORMED = [
     # groups, no melody — a transmission, not a tune
     ("owls", "af_nicole", 1.0, 16,
      "Three, eight, five. One, two, one. Eight, nine, zero. One, four, seven.",
-     [("Three", 0.0, 0.9, 55), ("eight", 1.25, 0.9, 55), ("five", 2.5, 1.0, 55),
-      ("One", 4.0, 0.9, 55), ("two", 5.25, 0.9, 55), ("one", 6.5, 1.0, 55),
-      ("Eight", 8.0, 0.9, 55), ("nine", 9.25, 0.9, 55), ("zero", 10.5, 1.0, 55),
-      ("One", 12.0, 0.9, 55), ("four", 13.25, 0.9, 55), ("seven", 14.5, 1.2, 54)]),
+     [("Three", 0.0, 0.5, 55), ("eight", 1.25, 0.5, 55), ("five", 2.5, 0.55, 55),
+      ("One", 4.0, 0.5, 55), ("two", 5.25, 0.5, 55), ("one", 6.5, 0.55, 55),
+      ("Eight", 8.0, 0.5, 55), ("nine", 9.25, 0.5, 55), ("zero", 10.5, 0.55, 55),
+      ("One", 12.0, 0.5, 55), ("four", 13.25, 0.5, 55), ("seven", 14.5, 0.6, 54)]),
     ("themeB", "af_heart", 0.85, 8,
      "I am being danced. Being entranced. Being moved, and grooved.",
      [("I", 0.0, 0.5, 57),
@@ -273,24 +273,39 @@ def melodize(x, curve):
     return y * (0.9 / pk) if pk > 0 else y
 
 
-def main():
+def main(only=None):
     from mlx_audio.tts.utils import load_model
     from mlx_audio.tts.models.kokoro import KokoroPipeline
+    import mlx.core as mx
+    # An 8 GB machine: cap the Metal buffer cache and clear it between
+    # phrases, or the TTS calls swap-storm the whole system
+    try:
+        mx.set_cache_limit(1 << 30)
+    except AttributeError:
+        pass
     os.environ.setdefault("VIRTUAL_ENV", os.path.join(REPO, ".venv-voice"))
     model = load_model("mlx-community/Kokoro-82M-bf16")
     pipe = KokoroPipeline(lang_code="a", model=model,
                           repo_id="mlx-community/Kokoro-82M-bf16")
     os.makedirs(OUT, exist_ok=True)
     for name, voice, speed, text, score in SUNG:
+        if only and name != only:
+            continue
         audio, words = synth_with_words(pipe, voice, text, speed)
         assert all(w in score for w, _, _ in words), [w for w, _, _ in words]
         curve = build_curve(len(audio), words, score)
         y = melodize(audio, curve)
         path = os.path.join(OUT, f"{name}-sung.wav")
         sf.write(path, y, RATE)
+        try:
+            mx.clear_cache()
+        except AttributeError:
+            pass
         print(f"{name}-sung.wav  {len(y)/RATE:.2f}s  {text!r} -> melody")
 
     for name, voice, speed, beats, text, timing in PERFORMED:
+        if only and name != only:
+            continue
         audio, words = synth_with_words(pipe, voice, text, speed)
         assert len(words) == len(timing), (
             [w for w, _, _ in words], [w for w, *_ in timing])
@@ -311,8 +326,14 @@ def main():
         curve = build_curve(out_len, grid_words, score)
         y = melodize(rhythmic, curve)
         sf.write(os.path.join(OUT, f"{name}.wav"), y, RATE)
+        try:
+            mx.clear_cache()
+        except AttributeError:
+            pass
         print(f"{name}.wav  {len(y)/RATE:.2f}s ({beats} beats)  performed: {text!r}")
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    only = sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None
+    main(only)

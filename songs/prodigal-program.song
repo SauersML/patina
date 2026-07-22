@@ -33,7 +33,7 @@ automate tape_drive
 automate reverb_wet
   0.25
 automate reverb_decay
-  0.65
+  0.72
 
 # ---- the groove ------------------------------------------------------
 track beat kit=909 len=1
@@ -42,7 +42,8 @@ track beat kit=909 len=1
   BD:1@0.88 SD:0.75@0.7 BD:0.5@0.45 BD:0.75@0.62 SD:1@0.78 BD:1@0.86 SD:1.5@0.7 BD:0.5@0.5 SD:0.75@0.8 R:0.25
   BD:1@0.9 SD:0.75@0.72 BD:0.5@0.5 BD:0.75@0.65 SD:1@0.8 BD:1@0.88 SD:1.5@0.72 BD:0.5@0.55 SD:0.75@0.82 BD:0.25@0.4
   BD:1@0.9 SD:0.75@0.72 BD:0.5@0.5 BD:0.75@0.65 SD:1@0.8 BD:1@0.88 SD:1@0.82 R:2
-  (BD:1@0.7 SD:0.75@0.55 BD:0.5@0.35 BD:0.75@0.5 SD:1@0.62 BD:1@0.7 SD:1.5@0.55 BD:0.5@0.4 SD:0.75@0.64 BD:0.25@0.28)x3
+  R:8
+  (BD:1@0.7 SD:0.75@0.55 BD:0.5@0.35 BD:0.75@0.5 SD:1@0.62 BD:1@0.7 SD:1.5@0.55 BD:0.5@0.4 SD:0.75@0.64 BD:0.25@0.28)x2
   BD:1@0.7 SD:0.75@0.55 BD:0.5@0.35 BD:0.75@0.5 SD:1@0.62 BD:1@0.72 SD:1@0.64 R:2
   (BD:1@0.78 SD:0.75@0.65 BD:0.5@0.45 BD:0.75@0.6 SD:1@0.72 BD:1@0.82 SD:1.5@0.68 BD:0.5@0.5 SD:0.75@0.75 BD:0.25@0.45)x2
   BD:1@0.95 SD:3@0.85 R:4
@@ -93,8 +94,8 @@ track hats sample=renders/prodigal/percgrid.wav root=C3 chop=4 mono bits=12 rate
 # the intense snare rides backbeats from D; the open hat plays the
 # off-beat pattern borrowed from the record's last quarter, in E.
 track kickK sample=renders/prodigal/kick-kobosil.wav root=C3 fixed mode=oneshot gain=1.5 len=1
-  R:48
-  (C3:4@0.55)x8
+  R:56
+  (C3:4@0.55)x6
   (C3:4@0.7)x6
   R:48
 
@@ -119,12 +120,34 @@ automate snareI.reverb_send
 automate ohK.reverb_send
   0.15
 
+
+# the LOOM clock: E(7,16) shaker on swung 16ths, rotating one step
+# per bar (drums-for-laurie's rimshot trick) — continuity that never
+# repeats exactly. Enters mid-D, carries the bloom, gone before the
+# double-time bar.
+track shaker sample=renders/prodigal/percgrid.wav root=C3 chop=4 mono bits=12 rate=26040 cutoff=9500 gain=1.05 len=1
+  R:92
+  D3:0.29@0.4 R:0.21 R:0.29 D3:0.21@0.3 R:0.29 D3:0.21@0.3 R:0.29 D3:0.21@0.4 R:0.29 R:0.21 D3:0.29@0.3 R:0.21 D3:0.29@0.3 R:0.21 D3:0.29@0.4 R:0.21
+  R:0.29 R:0.21 D3:0.29@0.4 R:0.21 D3:0.29@0.3 R:0.21 D3:0.29@0.3 R:0.21 R:0.29 D3:0.21@0.4 R:0.29 D3:0.21@0.3 R:0.29 D3:0.21@0.3 R:0.29 D3:0.21@0.4
+  R:4
+  R:0.29 D3:0.21@0.36 R:0.29 D3:0.21@0.26 R:0.29 D3:0.21@0.26 R:0.29 R:0.21 D3:0.29@0.36 R:0.21 D3:0.29@0.26 R:0.21 D3:0.29@0.26 R:0.21 D3:0.29@0.36 R:0.21
+  D3:0.29@0.36 R:0.21 D3:0.29@0.26 R:0.21 D3:0.29@0.26 R:0.21 R:0.29 D3:0.21@0.36 R:0.29 D3:0.21@0.26 R:0.29 D3:0.21@0.26 R:0.29 D3:0.21@0.36 R:0.29 R:0.21
+  R:0.29 D3:0.21@0.36 R:0.29 D3:0.21@0.26 R:0.29 R:0.21 D3:0.29@0.26 R:0.21 D3:0.29@0.36 R:0.21 D3:0.29@0.26 R:0.21 D3:0.29@0.26 R:0.21 R:0.29 D3:0.21@0.36
+  D3:0.29@0.36 R:0.21 D3:0.29@0.26 R:0.21 R:0.29 D3:0.21@0.26 R:0.29 D3:0.21@0.36 R:0.29 D3:0.21@0.26 R:0.29 D3:0.21@0.26 R:0.29 R:0.21 D3:0.29@0.36 R:0.21
+  R:0.29 D3:0.21@0.36 R:0.29 R:0.21 D3:0.29@0.26 R:0.21 D3:0.29@0.26 R:0.21 D3:0.29@0.36 R:0.21 D3:0.29@0.26 R:0.21 R:0.29 D3:0.21@0.26 R:0.29 D3:0.21@0.36
+  D3:0.29@0.36 R:0.21 R:0.29 D3:0.21@0.26 R:0.29 D3:0.21@0.26 R:0.29 D3:0.21@0.36
+  R:26
+
+automate shaker.reverb_send
+  0.1
+
 # the TSS air layered over the 909 snare body — two spectra, one hit
 track snare sample=renders/prodigal/percgrid.wav root=C3 chop=4 bits=12 rate=26040 gain=1.7 len=1
   R:16
   (R:0.75 D3:0.25@0.28 D3:2@0.88 D3:1@0.82 R:1 D3:2@0.88 D3:0.5@0.82 C3:0.25@0.48 C#3:0.25@0.42)x3
   R:0.75 D3:0.25@0.28 D3:2@0.88 D3:1@0.82 R:1 D3:1@0.88 R:1 D3:0.125@0.35 D3:0.125@0.45 C#3:0.125@0.5 D3:0.125@0.6 D3:0.125@0.7 D3:0.125@0.8 D3:0.125@0.88 C3:0.125@0.6
-  (R:0.75 D3:0.25@0.2 D3:2@0.62 D3:1@0.58 R:1 D3:2@0.62 D3:0.5@0.58 C3:0.25@0.34 C#3:0.25@0.3)x3
+  R:8
+  (R:0.75 D3:0.25@0.2 D3:2@0.62 D3:1@0.58 R:1 D3:2@0.62 D3:0.5@0.58 C3:0.25@0.34 C#3:0.25@0.3)x2
   R:0.75 D3:0.25@0.2 D3:2@0.62 D3:1@0.58 R:1 D3:1@0.62 R:1.5 C#3:0.125@0.35 C#3:0.125@0.45 C#3:0.125@0.6 D#3:0.125@0.7
   (R:0.75 D3:0.25@0.26 D3:2@0.76 D3:1@0.7 R:1 D3:2@0.76 D3:0.5@0.72 C3:0.25@0.42 C#3:0.25@0.38)x2
   R:1 D3:0.5@0.4 R:2.5 D3:0.25@0.3 D3:0.25@0.4 R:2 D3:0.0833@0.3 D3:0.0833@0.35 D3:0.0833@0.42 D3:0.0833@0.5 C#3:0.0833@0.55 D3:0.0833@0.62 D3:0.0833@0.7 D3:0.0833@0.76 C#3:0.0833@0.82 D3:0.0833@0.88 D3:0.0833@0.93 C3:0.0834@0.97 R:0.5
@@ -212,7 +235,7 @@ automate breath.duck_release
 
 # high garlands: 'Dee' varispeeded +14 st is no longer a voice, it is
 # a bell. Two-beat 16th figures at the phrase ends, never constant
-track bells sample=renders/prodigal/di-flat.wav root=C4 mode=oneshot release=0.3 gain=0.95 len=0.25
+track bells sample=renders/prodigal/di-drive.wav root=C4 mode=oneshot release=0.3 gain=0.95 len=0.25
   R:16
   R:32
   R:14 D5:0.25@0.55 A4:0.25@0.45 F#5:0.25@0.5 E5:0.25@0.45 D5:0.25@0.55 E5:0.25@0.4 A5:0.5@0.55 R:16
@@ -220,7 +243,7 @@ track bells sample=renders/prodigal/di-flat.wav root=C4 mode=oneshot release=0.3
   R:2 D5:0.25@0.6 A4:0.25@0.5 F#5:0.25@0.55 E5:0.25@0.5 D5:0.25@0.6 E5:0.25@0.45 A5:0.5@0.6 R:6 D5:0.25@0.6 A4:0.25@0.5 F#5:0.25@0.55 E5:0.25@0.5 D5:0.25@0.6 E5:0.25@0.45 A5:0.5@0.6 R:6 D5:0.25@0.65 E5:0.25@0.55 F#5:0.25@0.6 A5:0.25@0.6 D5:0.25@0.55 F#5:0.25@0.5 A5:0.5@0.65 R:4
   R:24
 
-track bellsHi sample=renders/prodigal/di-flat.wav root=C4 mode=oneshot release=0.25 gain=0.6 len=0.25
+track bellsHi sample=renders/prodigal/di-drive.wav root=C4 mode=oneshot release=0.25 gain=0.6 len=0.25
   R:16
   R:32
   R:14 D6:0.25@0.55 A5:0.25@0.45 F#6:0.25@0.5 E6:0.25@0.45 D6:0.25@0.55 E6:0.25@0.4 A6:0.5@0.55 R:16
@@ -229,12 +252,14 @@ track bellsHi sample=renders/prodigal/di-flat.wav root=C4 mode=oneshot release=0
   R:24
 
 automate bellsHi.reverb_send
-  0.85
+  1
 
 automate bells.reverb_send
-  0.7
+  1
+automate bellsHi.chorus_send
+  0.6
 automate bells.chorus_send
-  0.45
+  0.7
 automate chorus_mode
   1
 automate chorus_mix
