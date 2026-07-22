@@ -322,7 +322,7 @@ automate themeB.reverb_send
   0.25
 
 # the numbers station: the owl sequences, chanted flat in the gaps
-track owls sample=renders/prodigal/owls.wav root=C3 mode=oneshot gain=1.15 len=1
+track owls sample=renders/prodigal/owls.wav root=C3 mode=oneshot gain=0.45 len=1
   R:48
   R:8 C3:16
   R:16 C3:16
@@ -330,7 +330,7 @@ track owls sample=renders/prodigal/owls.wav root=C3 mode=oneshot gain=1.15 len=1
   R:24
 
 automate owls.reverb_send
-  0.3
+  0.4
 automate owls.duck
   0.2
 automate owls.duck_release
