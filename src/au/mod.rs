@@ -431,7 +431,7 @@ fn property_info(
         },
         kMusicDeviceProperty_InstrumentCount => global_only(4, false),
         kAudioUnitProperty_CocoaUI => global_only(size_of::<AudioUnitCocoaViewInfo>(), false),
-        cocoa::PROP_PATINA_UNIT => global_only(size_of::<usize>(), false),
+        cocoa::PROP_PATINA_UNIT => global_only(size_of::<[u64; 2]>(), false),
         _ => Err(kAudioUnitErr_InvalidProperty),
     }
 }
@@ -660,9 +660,12 @@ unsafe extern "C" fn au_get_property(
             // No resolvable bundle -> the host uses its generic view
             None => kAudioUnitErr_InvalidProperty,
         },
-        // The in-process handshake with our own Cocoa view (see au/cocoa.rs)
+        // The in-process handshake with our own Cocoa view (see au/cocoa.rs):
+        // the pointer is only meaningful inside this process, so it travels
+        // with the pid for the view to verify.
         cocoa::PROP_PATINA_UNIT => {
-            write_out(unit as *const AuUnit as usize, out_data, io_size)
+            let handshake = [unit as *const AuUnit as u64, std::process::id() as u64];
+            write_out(handshake, out_data, io_size)
         }
         // In/out queries: the host passes the struct in outData with its
         // input fields filled and we complete the out field in place.

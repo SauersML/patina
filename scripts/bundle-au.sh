@@ -63,8 +63,12 @@ cat > "$bundle/Contents/Info.plist" <<PLIST
 			<string>$AU_MANU</string>
 			<key>name</key>
 			<string>Sauers: Patina</string>
+			<!-- Deliberately NOT sandbox-safe: the custom view renders with
+			     OpenGL, which cannot remote out of AUHostingService. This
+			     makes Logic host the plugin in-process, where the editor
+			     draws directly (the norm for custom-view AUv2 plugins). -->
 			<key>sandboxSafe</key>
-			<true/>
+			<false/>
 			<key>subtype</key>
 			<string>$AU_SUBTYPE</string>
 			<key>tags</key>

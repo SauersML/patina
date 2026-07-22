@@ -328,19 +328,23 @@ unsafe extern "C" fn ui_view_for_audio_unit(
     audio_unit: *mut c_void,
     _size: CGSize,
 ) -> Id {
-    // Find our AuUnit through the private property — same process, so the
-    // pointer round-trips intact.
-    let mut unit_addr: usize = 0;
-    let mut io_size = size_of::<usize>() as u32;
+    // Find our AuUnit through the private property. The [pointer, pid]
+    // pair only dereferences when the unit lives in THIS process — if a
+    // host ever creates the view in a different process than the unit,
+    // returning nil here makes it fall back to its generic view instead
+    // of us touching a foreign address.
+    let mut handshake: [u64; 2] = [0, 0];
+    let mut io_size = size_of::<[u64; 2]>() as u32;
     let status = AudioUnitGetProperty(
         audio_unit,
         PROP_PATINA_UNIT,
         0, // global scope
         0,
-        &mut unit_addr as *mut usize as *mut c_void,
+        handshake.as_mut_ptr() as *mut c_void,
         &mut io_size,
     );
-    if status != 0 || unit_addr == 0 {
+    let unit_addr = handshake[0] as usize;
+    if status != 0 || unit_addr == 0 || handshake[1] != std::process::id() as u64 {
         return null_mut();
     }
 
