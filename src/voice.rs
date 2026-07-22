@@ -87,6 +87,9 @@ pub struct Voice {
     /// frequency through the exponential converter (audio-rate, in CV
     /// space — the source of the growl).
     fm_amount: f32,
+    /// Slow mean of the exponential FM multiplier, divided back out so
+    /// FM is pitch-neutral (see render's FM block).
+    fm_mean: f32,
     prev_osc2: f32,
     /// Hard sync, 2600-style: VCO1 masters VCO2's ramp reset.
     sync_on: bool,
@@ -190,6 +193,7 @@ impl Voice {
             detune_cents: 7.0,
             key_track: 0.4,
             fm_amount: 0.0,
+            fm_mean: 1.0,
             prev_osc2: 0.0,
             sync_on: false,
             ring_amount: 0.0,
@@ -482,8 +486,17 @@ impl Voice {
         // sample — the one-sample transport of the sync/FM pair, chosen so
         // the sync reset lands at its exact sub-sample position.
         let fm_mult = if self.fm_amount > 1e-4 {
-            (self.fm_amount * self.prev_osc2 * 2.0).exp2()
+            let raw = (self.fm_amount * self.prev_osc2 * 2.0).exp2();
+            // Exponential FM is not pitch-neutral: any DC in the modulator
+            // (a non-50% pulse) shifts the note wholesale, and even a
+            // zero-mean modulator reads sharp on average (E[2^x] > 1).
+            // Track the multiplier's slow mean (tau ~ 80 ms) and divide it
+            // out: the audio-rate sidebands — the TIMBRE — pass through,
+            // the tuning stays put.
+            self.fm_mean += (raw - self.fm_mean) * 2.5e-4;
+            raw / self.fm_mean.max(1e-3)
         } else {
+            self.fm_mean = 1.0;
             1.0
         };
         let o1 = self.oscs[0].next_sample(self.common_drift, pitch_mult * fm_mult, pulse_width, None);
@@ -553,5 +566,70 @@ impl Voice {
 
     pub fn set_filter_resonance(&mut self, resonance: f32) {
         self.filter.set_resonance(resonance);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::oscillator::Waveform;
+
+    /// Autocorrelation f0 tracker (same approach as vox.rs tests).
+    fn track_f0(samples: &[f32], sr: f32, lo: f32, hi: f32) -> f32 {
+        let min_lag = (sr / hi) as usize;
+        let max_lag = ((sr / lo) as usize).min(samples.len() / 2);
+        let mut best = (f32::MIN, min_lag);
+        for lag in min_lag..=max_lag {
+            let n = samples.len() - lag;
+            let (mut num, mut d1, mut d2) = (0.0f32, 0.0f32, 0.0f32);
+            for i in 0..n {
+                num += samples[i] * samples[i + lag];
+                d1 += samples[i] * samples[i];
+                d2 += samples[i + lag] * samples[i + lag];
+            }
+            let r = num / (d1 * d2).sqrt().max(1e-12);
+            if r > best.0 {
+                best = (r, lag);
+            }
+        }
+        sr / best.1 as f32
+    }
+
+    fn held_voice_f0(fm: f32, osc2_wave: Waveform, osc2_semis: f32, pw: f32) -> f32 {
+        let sr = 48000.0;
+        let mut v = Voice::new(sr, 0, 1);
+        v.set_waveform(Waveform::Sine);
+        v.set_osc_waveform(1, osc2_wave);
+        v.set_osc_pitch(1, osc2_semis);
+        v.set_osc_level(1, 0.0); // modulator inaudible: FM path only
+        v.set_pulse_width(pw);
+        v.set_fm_amount(fm);
+        v.set_filter_cutoff(20000.0);
+        v.trigger(69, 1.0, 0, None); // A4
+        let neutral = SubstrateState { pitch_mult: 1.0, cutoff_oct: 0.0 };
+        // settle past the fm_mean tracker's time constant
+        for _ in 0..(sr as usize) {
+            v.render_next(0.0, 1.0, 0.0, 0.0, neutral, 0.0);
+        }
+        let samples: Vec<f32> = (0..(sr / 2.0) as usize)
+            .map(|_| v.render_next(0.0, 1.0, 0.0, 0.0, neutral, 0.0).0)
+            .collect();
+        track_f0(&samples, sr, 200.0, 900.0)
+    }
+
+    /// FM must change timbre, not tuning. Modulator an OCTAVE up so the
+    /// composite stays periodic at f0 (an autocorrelation tracker can't
+    /// name the pitch of a +7-semitone FM tone), with a DC-heavy 30%
+    /// pulse — the recipe class that shipped a flat lead. The note must
+    /// stay within a few cents of the FM-off pitch.
+    #[test]
+    fn fm_is_pitch_neutral() {
+        let dry = held_voice_f0(0.0, Waveform::Square, 12.0, 0.3);
+        let fm = held_voice_f0(0.3, Waveform::Square, 12.0, 0.3);
+        let cents = 1200.0 * (fm / dry).log2();
+        assert!(
+            cents.abs() < 8.0,
+            "FM shifted pitch by {cents:.1} cents (dry {dry:.2} Hz, fm {fm:.2} Hz)"
+        );
     }
 }
