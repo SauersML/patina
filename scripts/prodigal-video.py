@@ -8,12 +8,12 @@ the shadows crawling morning to afternoon — and then it is gone for
 good: no image ever appears twice. The step clock is a musical
 subdivision that rides the form:
 
-    A breath     0-16    eighths     calm plots     violet
-    B groove    16-48    sixteenths  working rows   electric purple
-    C themeB    48-80    sixteenths  roads, fences  bright cobalt
-    D wormhole  80-104   32nd strobe loudest plots  hot crimson
-    E bloom    104-128   triplets    high texture   vivid magenta
-    F dissolve 128-       eighths     calmest land   fading violet
+    A breath     0-16    sixteenths   calm plots     violet
+    B groove    16-48    32nds        working rows   electric purple
+    C themeB    48-80    32nds        roads, fences  bright cobalt
+    D wormhole  80-104   64th strobe  loudest plots  hot crimson
+    E bloom    104-128   32nd trips   high texture   vivid magenta
+    F dissolve 128-       sixteenths   calmest land   fading violet
 
 Plots are ranked by a texture-drama score (luminance spread + edge
 energy, cached in renders/prodigal-plotstats.json) so the wormhole
@@ -51,7 +51,7 @@ TOTAL = int(round(DUR * FPS))
 TODS = ["1000", "1200", "1500"]
 
 # (end_beat, steps_per_beat) — the stop-motion clock per section
-RATES = [(16, 2), (48, 4), (80, 4), (104, 8), (128, 6), (1e9, 2)]
+RATES = [(16, 4), (48, 8), (80, 8), (104, 16), (128, 12), (1e9, 4)]
 
 # (beat, (shadow, mid, highlight), exposure) — lerped in beat space
 GRADE = [
@@ -68,7 +68,11 @@ GRADE = [
     (139, ((12, 8, 26),  (96, 70, 150),  (176, 160, 210)), 0.95),
     (160, ((12, 8, 26),  (96, 70, 150),  (176, 160, 210)), 0.78),
 ]
-SAT = 1.18                  # post-map saturation push
+SAT = 1.22                  # post-map saturation push
+TONE_S = 3.0                # S-curve strength: mid slope = S/(2*tanh(S/2))
+TONE_GAMMA = 0.92           # pre-curve gamma, opens the mids a touch
+Q_SHADOW = 0.82             # quarter-tone pull-down: rich dark, not gray
+Q_HIGH = 1.10               # three-quarter push-up: the glow
 T_STOP = DUR - 3.2          # tape-stop: steps decelerate into freeze
 T_FADE = DUR - 2.6          # and everything sinks to black
 
@@ -78,6 +82,13 @@ LUM = np.array([0.2126, 0.7152, 0.0722], np.float32)
 def smoothstep(x):
     x = np.clip(x, 0.0, 1.0)
     return x * x * (3.0 - 2.0 * x)
+
+
+def tone_curve(y):
+    """Levels + curves: gamma opens the mids, then a tanh S-curve with
+    a steep mid slope crushes the toe and rolls the shoulder."""
+    y = np.clip(y, 0.0, 1.0) ** TONE_GAMMA
+    return 0.5 + np.tanh(TONE_S * (y - 0.5)) / (2.0 * np.tanh(TONE_S / 2.0))
 
 
 # ---- the catalog: every plot, its drama, and the running order -------
@@ -138,12 +149,12 @@ def running_order():
         return sel
 
     seq = []
-    seq += pick(0.05, 0.25, 11, order="asc")     # A: waking up
-    seq += pick(0.35, 0.60, 43)                  # B: the groove works
-    seq += pick(0.50, 0.75, 42)                  # C: roads and fences
-    seq += pick(0.85, 1.00, 64)                  # D: the loudest land
-    seq += pick(0.65, 0.88, 48)                  # E: bloom
-    seq += pick(0.00, 0.30, 52, order="desc")    # F: emptying out
+    seq += pick(0.05, 0.30, 22, order="asc")     # A: waking up
+    seq += pick(0.30, 0.60, 86)                  # B: the groove works
+    seq += pick(0.45, 0.78, 86)                  # C: roads and fences
+    seq += pick(0.78, 1.00, 128)                 # D: the loudest land
+    seq += pick(0.60, 0.88, 96)                  # E: bloom
+    seq += pick(0.00, 0.35, 60, order="desc")    # F: emptying out
     return seq
 
 
@@ -185,8 +196,8 @@ class PlotCache:
                 imgs.append(a)
                 ys.append(y)
             for i in range(3):
-                ys[i] = smoothstep(np.clip(
-                    (ys[i] - lo) / max(hi - lo, 1e-6), 0.0, 1.0))
+                ys[i] = tone_curve(
+                    (ys[i] - lo) / max(hi - lo, 1e-6)).astype(np.float32)
             self.d[name] = (imgs, ys)
             self.order.append(name)
             if len(self.order) > self.cap:
@@ -224,12 +235,16 @@ def render_frame(f):
     img, y = imgs[step % 3], ys[step % 3]
 
     pal, expo = grade_at(t / SPB)
-    (s, m, hgh) = pal
-    ramp = np.float32([0.0, 0.5, 1.0])
+    s, m, hgh = (np.float32(p) / 255.0 for p in pal)
+    # five-point per-channel curves: quarter shadows pulled down and
+    # saturated, three-quarter tones pushed up into a glow
+    q1 = 0.5 * (s + m) * Q_SHADOW
+    q3 = np.minimum(1.0, 0.5 * (m + hgh) * Q_HIGH)
+    ramp = np.float32([0.0, 0.28, 0.5, 0.72, 1.0])
     graded = np.empty((H, W, 3), np.float32)
     for c in range(3):
         graded[..., c] = np.interp(
-            y, ramp, [s[c] / 255.0, m[c] / 255.0, hgh[c] / 255.0])
+            y, ramp, [s[c], q1[c], m[c], q3[c], hgh[c]])
     graded = graded * 0.93 + img * 0.07     # a breath of the real field
 
     lum = (graded @ LUM)[..., None]
