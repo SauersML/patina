@@ -41,11 +41,17 @@ PERFORMED = [
       ("of", 6.25, 0.25, 52),
       ("your", 6.5, 0.5, 54),
       ("hospitality", 7.0, 1.0, [(0.0, 52), (0.3, 50), (0.6, 48), (0.85, 50)])]),
-    ("rebootS", "am_michael", 0.95, 6,
-     "Rebooting. Rerooting. Rerouting.",
-     [("Rebooting", 0.0, 2.0, [(0.0, 50), (0.6, 52)]),
-      ("Rerooting", 2.0, 2.0, [(0.0, 52), (0.6, 54)]),
-      ("Rerouting", 4.0, 2.0, [(0.0, 54), (0.4, 55), (0.75, 57)])]),
+    # The owl numbers: the teacher's most common sequences (Table 1 of
+    # the subliminal-learning paper), chanted numbers-station flat —
+    # 123, 789, 456, then 321, the palindrome closing the loop. Near-
+    # monotone on A2/G2 with a terminal fall: deeply hypnotic, and the
+    # trait rides on digits that never mention what they carry.
+    ("owls", "am_michael", 1.0, 8,
+     "One, two, three. Seven, eight, nine. Four, five, six. Three, two, one.",
+     [("One", 0.0, 0.5, 45), ("two", 0.5, 0.5, 45), ("three", 1.0, 0.75, 43),
+      ("Seven", 2.0, 0.5, 45), ("eight", 2.5, 0.5, 45), ("nine", 3.0, 0.75, 43),
+      ("Four", 4.0, 0.5, 45), ("five", 4.5, 0.5, 45), ("six", 5.0, 0.75, 43),
+      ("Three", 6.0, 0.5, 43), ("two", 6.5, 0.5, 42), ("one", 7.0, 1.0, 40)]),
     ("themeB", "af_heart", 0.85, 8,
      "I am being danced. Being entranced. Being moved, and grooved.",
      [("I", 0.0, 0.5, 57),
