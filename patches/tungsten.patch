@@ -1,0 +1,45 @@
+# Filament — the bed voice: electric warmth for drones and dyads.
+# A wideish pulse with a low saw component through a slightly resonant
+# ladder at 1.1k — it glows instead of shining. Slow attack keeps it a
+# bed; the 1.6 drive keeps a filament's heat in the tone. Enough LFO
+# width movement that long drones never sit still.
+waveform 1
+pulse_width 0.32
+osc2_wave 2
+osc2_pitch 0
+osc2_level 0.22
+osc3_wave 0
+osc3_pitch 12
+osc3_level 0.12
+detune 4
+sub 0.15
+circuit 1
+key_track 0.5
+osc_fm 0
+sync 0
+ring 0
+glide 0
+attack 0.5
+decay 0.8
+sustain 0.7
+release 0.9
+filter_env 0.35
+filter_attack 0.4
+filter_decay 0.7
+filter_sustain 0.55
+filter_release 0.8
+cutoff 1100
+resonance 0.7
+drive 1.6
+saturation 1.1
+hpf 70
+volume 0.5
+octave 4
+noise 0
+fuzz 0
+spring 0.1
+lfo_rate 0.6
+lfo_shape 0.5
+lfo_pitch 2
+lfo_filter 0
+lfo_pwm 0.18
