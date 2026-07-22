@@ -1,0 +1,173 @@
+# The Long Way Home — wistful but forward-moving.
+#
+# The feeling is carried by craft, not gimmicks: Fmaj9 -> Em7 -> Dm9 ->
+# Cmaj7, the bass walking down F E D C under major-7 color — longing
+# that keeps walking. Swung boom-bap with ghost snares, the bass locked
+# to the kick's steps, chords leaning an 8th ahead of every barline
+# (the push track), everything ducking gently off the kick. 88 BPM.
+#
+# Form (beats): INTRO 16 | GROOVE 32 | VERSE (melody A) 32 | SPOT
+#   (the kit talks) 16 | PEAK (melody B + pad) 32 | BREAK 16 |
+#   RETURN (melody A, home now) 32 | OUT (Cmaj7 resolves) 16  = 192
+
+bpm 88
+gate 0.92
+
+section INTRO   0..16
+section GROOVE  16..48
+section VERSE   48..80
+section SPOT    80..96
+section PEAK    96..128
+section BREAK   128..144
+section RETURN  144..176
+section OUT     176..192
+
+# ---- the deck and the room ------------------------------------------
+automate tape_wow
+  0.35
+automate tape_flutter
+  0.1
+automate tape_age
+  0.45
+automate tape_drive
+  0.22
+automate reverb_wet
+  0.28
+automate reverb_decay
+  0.7
+automate chorus_mode
+  1
+automate chorus_depth
+  0.3
+
+# ---- drums -----------------------------------------------------------
+automate bd_tune
+  0.42
+automate bd_decay
+  0.55
+automate bd_sweep
+  0.5
+automate bd_drive
+  0.3
+automate sd_tune
+  0.35
+automate sd_tone
+  0.5
+automate sd_snappy
+  0.55
+automate sd_decay
+  0.45
+automate hh_level
+  0.5 >BREAK 0.36 >RETURN 0.5
+automate oh_decay
+  0.45
+automate dr_drive
+  0.2
+
+track beat kit=909 len=0.25 vel=0.9 swing=0.6
+  >GROOVE
+  (BD:0.75 R:0.25 SD:0.75 BD:0.75@0.8 BD:0.25@0.95 SD:0.25@0.3 SD:1 BD:0.75 R:0.25 SD:0.75 BD:0.75@0.8 BD:0.25@0.95 SD:0.25@0.3 SD:0.25 BD:0.25@0.7 R:0.5)x3
+  BD:0.75 R:0.25 SD:0.75 BD:0.75@0.8 BD:0.25@0.95 SD:0.25@0.3 SD:1
+  BD:0.75 R:0.25 SD:0.75 BD:0.75@0.8 BD:0.25@0.95 R:0.25 SD:0.25@0.5 SD:0.25@0.65 SD:0.25@0.8 SD:0.25@0.95
+  >VERSE
+  (BD:0.75 R:0.25 SD:0.75 BD:0.75@0.8 BD:0.25@0.95 SD:0.25@0.3 SD:1 BD:0.75 R:0.25 SD:0.75 BD:0.75@0.8 BD:0.25@0.95 SD:0.25@0.3 SD:0.25 BD:0.25@0.7 R:0.5)x3
+  BD:0.75 R:0.25 SD:0.75 BD:0.75@0.8 BD:0.25@0.95 SD:0.25@0.3 SD:1
+  BD:0.75 R:0.25 SD:0.75 BD:0.75@0.8 BD:0.25@0.95 R:0.25 SD:0.25@0.5 SD:0.25@0.65 SD:0.25@0.8 SD:0.25@0.95
+  >SPOT
+  (BD:0.5 RS:0.25@0.5 R:0.25 SD:0.75 BD:0.5@0.8 RS:0.25@0.6 BD:0.25@0.95 SD:0.25@0.3 SD:0.75 RS:0.25@0.55 BD:0.75 R:0.25 SD:0.75 BD:0.75@0.8 BD:0.25@0.95 SD:0.25@0.3 SD:0.25 BD:0.25@0.7 SD:0.25@0.35 RS:0.25@0.5)x2
+  >PEAK
+  (BD:0.75 R:0.25 SD:0.75 BD:0.75@0.8 BD:0.25@0.95 SD:0.25@0.3 SD:1 BD:0.75 R:0.25 SD:0.75 BD:0.75@0.8 BD:0.25@0.95 SD:0.25@0.3 SD:0.25 BD:0.25@0.7 R:0.5)x3
+  BD:0.75 R:0.25 SD:0.75 BD:0.75@0.8 BD:0.25@0.95 SD:0.25@0.3 SD:1
+  BD:0.75 R:0.25 SD:0.75 BD:0.75@0.8 BD:0.25@0.95 R:0.25 SD:0.25@0.5 SD:0.25@0.65 SD:0.25@0.8 SD:0.25@0.95
+  >RETURN
+  (BD:0.75 R:0.25 SD:0.75 BD:0.75@0.8 BD:0.25@0.95 SD:0.25@0.3 SD:1 BD:0.75 R:0.25 SD:0.75 BD:0.75@0.8 BD:0.25@0.95 SD:0.25@0.3 SD:0.25 BD:0.25@0.7 R:0.5)x3
+  BD:0.75 R:0.25 SD:0.75 BD:0.75@0.8 BD:0.25@0.95 SD:0.25@0.3 SD:1
+  BD:0.75@0.7 R:0.25 SD:0.75@0.6 BD:0.75@0.5 R:2
+
+track hats kit=909 len=0.25 vel=0.8 swing=0.62
+  >GROOVE
+  ((CH@0.75 CH@0.35 CH@0.55 CH@0.4)x7 CH@0.7 CH@0.35 OH:0.5@0.6)
+  (CH@0.75 CH@0.35 CH@0.55 CH@0.4)x7 CH@0.7 CH@0.35 OH:0.5@0.6
+  (CH@0.75 CH@0.35 CH@0.55 CH@0.4)x7 CH@0.7 CH@0.35 OH:0.5@0.6
+  (CH@0.75 CH@0.35 CH@0.55 CH@0.4)x7 CH@0.7 CH@0.35 OH:0.5@0.6
+  (CH@0.75 CH@0.35 CH@0.55 CH@0.4)x7 CH@0.7 CH@0.35 OH:0.5@0.6
+  (CH@0.75 CH@0.35 CH@0.55 CH@0.4)x7 CH@0.7 CH@0.35 OH:0.5@0.6
+  (CH@0.75 CH@0.35 CH@0.55 CH@0.4)x7 CH@0.7 CH@0.35 OH:0.5@0.6
+  (CH@0.75 CH@0.35 CH@0.55 CH@0.4)x7 CH@0.7 CH@0.35 OH:0.5@0.6
+  (CH@0.75 CH@0.35 CH@0.55 CH@0.4)x7 CH@0.7 CH@0.35 OH:0.5@0.6
+  (CH@0.75 CH@0.35 CH@0.55 CH@0.4)x7 CH@0.7 CH@0.35 OH:0.5@0.6
+  (CH@0.75 CH@0.35 CH@0.55 CH@0.4)x7 CH@0.7 CH@0.35 OH:0.5@0.6
+  (CH@0.75 CH@0.35 CH@0.55 CH@0.4)x7 CH@0.7 CH@0.35 OH:0.5@0.6
+  (CH@0.75 CH@0.35 CH@0.55 CH@0.4)x7 CH@0.7 CH@0.35 OH:0.5@0.6
+  (CH@0.75 CH@0.35 CH@0.55 CH@0.4)x7 CH@0.7 CH@0.35 OH:0.5@0.6
+  (CH@0.75 CH@0.35 CH@0.55 CH@0.4)x3 CH@0.7 CH@0.35 OH:0.5@0.7
+
+# ---- bass: locked to the kick, walking down --------------------------
+track bass patch=heartbass gain=0.95 duck=0.15 duck_release=0.25
+  >GROOVE
+  (F2:1.25 R:0.5 C3:0.5@0.7 R:0.25 F2:0.75 R:0.25 E2:0.5@0.55 E2:1.25 R:0.5 B2:0.5@0.7 R:0.25 E2:0.75 R:0.25 D2:0.5@0.55 D2:1.25 R:0.5 A2:0.5@0.7 R:0.25 D2:0.75 R:0.25 C2:0.5@0.55 C2:1.25 R:0.5 G2:0.5@0.7 R:0.25 C2:0.75 R:0.25 G2:0.5@0.55)x2
+  >VERSE
+  (F2:1.25 R:0.5 C3:0.5@0.7 R:0.25 F2:0.75 R:0.25 E2:0.5@0.55 E2:1.25 R:0.5 B2:0.5@0.7 R:0.25 E2:0.75 R:0.25 D2:0.5@0.55 D2:1.25 R:0.5 A2:0.5@0.7 R:0.25 D2:0.75 R:0.25 C2:0.5@0.55 C2:1.25 R:0.5 G2:0.5@0.7 R:0.25 C2:0.75 R:0.25 G2:0.5@0.55)x2
+  >SPOT
+  F2:1.25 R:0.5 C3:0.5@0.7 R:0.25 F2:0.75 R:0.25 E2:0.5@0.55
+  E2:1.25 R:0.5 B2:0.5@0.7 R:0.25 E2:0.75 R:0.25 D2:0.5@0.55
+  D2:1.25 R:0.5 A2:0.5@0.7 R:0.25 D2:0.75 R:0.25 C2:0.5@0.55
+  C2:1.25 R:0.5 G2:0.5@0.7 R:0.25 C2:0.75 R:0.25 G2:0.5@0.55
+  >PEAK
+  (F2:1.25 R:0.5 C3:0.5@0.7 R:0.25 F2:0.75 R:0.25 E2:0.5@0.55 E2:1.25 R:0.5 B2:0.5@0.7 R:0.25 E2:0.75 R:0.25 D2:0.5@0.55 D2:1.25 R:0.5 A2:0.5@0.7 R:0.25 D2:0.75 R:0.25 C2:0.5@0.55 C2:1.25 R:0.5 G2:0.5@0.7 R:0.25 C2:0.75 R:0.25 G2:0.5@0.55)x2
+  >RETURN
+  (F2:1.25 R:0.5 C3:0.5@0.7 R:0.25 F2:0.75 R:0.25 E2:0.5@0.55 E2:1.25 R:0.5 B2:0.5@0.7 R:0.25 E2:0.75 R:0.25 D2:0.5@0.55 D2:1.25 R:0.5 A2:0.5@0.7 R:0.25 D2:0.75 R:0.25 C2:0.5@0.55 C2:1.25 R:0.5 G2:0.5@0.7 R:0.25 C2:0.75 R:0.25 G2:0.5@0.55)x2
+  >OUT
+  C2:8@0.6
+
+# ---- chords: on-beat comp + the leaning push -------------------------
+track comp patch=pulsechord gain=0.55 duck=0.3 duck_release=0.3 chorus_send=0.35 reverb_send=0.25
+  [F2 A3 C4 E4 G4]:4@0.55 [E2 G3 B3 D4 G4]:4@0.55 [D2 F3 A3 C4 E4]:4@0.55 [C2 E3 G3 B3 D4]:4@0.55
+  >GROOVE
+  (R:1.5 [A3 C4 E4 G4]:0.75@0.5 R:0.25 [A3 C4 E4 G4]:1@0.65 R:0.5 R:1.5 [G3 B3 D4 G4]:0.75@0.5 R:0.25 [G3 B3 D4 G4]:1@0.65 R:0.5 R:1.5 [F3 A3 C4 E4]:0.75@0.5 R:0.25 [F3 A3 C4 E4]:1@0.65 R:0.5 R:1.5 [E3 G3 B3 D4]:0.75@0.5 R:0.25 [E3 G3 B3 D4]:1@0.65 R:0.5)x8
+  >BREAK
+  [A3 C4 E4 G4]:4@0.45 [G3 B3 D4 G4]:4@0.45 [F3 A3 C4 E4]:4@0.45 [E3 G3 B3 D4]:4@0.45
+  >RETURN
+  (R:1.5 [A3 C4 E4 G4]:0.75@0.5 R:0.25 [A3 C4 E4 G4]:1@0.65 R:0.5 R:1.5 [G3 B3 D4 G4]:0.75@0.5 R:0.25 [G3 B3 D4 G4]:1@0.65 R:0.5 R:1.5 [F3 A3 C4 E4]:0.75@0.5 R:0.25 [F3 A3 C4 E4]:1@0.65 R:0.5 R:1.5 [E3 G3 B3 D4]:0.75@0.5 R:0.25 [E3 G3 B3 D4]:1@0.65 R:0.5)x2
+  >OUT
+  [E3 G3 B3 D4]:4@0.5 [C2 E3 G3 B3 D4]:12@0.7
+
+track push patch=pulsechord gain=0.5 duck=0.3 duck_release=0.3 chorus_send=0.35 reverb_send=0.25
+  >GROOVE
+  R:3.5
+  ([G3 B3 D4 G4]:1.5@0.75 R:2.5 [F3 A3 C4 E4]:1.5@0.75 R:2.5 [E3 G3 B3 D4]:1.5@0.75 R:2.5 [A3 C4 E4 G4]:1.5@0.75 R:2.5)x7
+  >RETURN
+  R:3.5
+  [G3 B3 D4 G4]:1.5@0.75 R:2.5 [F3 A3 C4 E4]:1.5@0.75 R:2.5
+  [E3 G3 B3 D4]:1.5@0.75 R:2.5 [A3 C4 E4 G4]:1.5@0.75 R:2.5
+  [G3 B3 D4 G4]:1.5@0.75 R:2.5 [F3 A3 C4 E4]:1.5@0.75 R:2.5
+  [E3 G3 B3 D4]:1.5@0.75 R:2.5 [C3 E3 G3 B3]:1.5@0.8
+
+# ---- pad: only where the piece opens up ------------------------------
+track pad patch=dreampad gain=0.5 duck=0.4 duck_release=0.35 reverb_send=0.4
+  >PEAK
+  ([A3 C4 E4 G4]:4@0.55 [G3 B3 D4 G4]:4@0.55 [F3 A3 C4 E4]:4@0.55 [E3 G3 B3 D4]:4@0.55)x2
+  >OUT
+  [E4 G4 B4 D5]:14@0.45
+
+# ---- melody: sparse and yearning, enters late ------------------------
+track lead patch=nostalgia-lead gain=0.9 reverb_send=0.4 spring_send=0.15
+  >VERSE
+  R:1 A4:1.5@0.9 R:0.5 G4:0.75@0.7 R:0.75 E4:2@0.85
+  R:2.5 F4:1@0.8 R:0.5 E4:1@0.7 R:1 D4:2.5@0.85
+  R:1.5 A4:1@0.85 R:0.5 C5:1@0.9 R:1 B4:1.5@0.85
+  R:3 A4:1.5@0.8 R:2.5 G4:1@0.7 R:0.5 E4:1.25@0.75
+  >PEAK
+  R:1 C5:1.5@0.95 R:0.5 D5:0.75@0.85 R:0.75 E5:2.25@1
+  R:2.25 D5:1@0.9 R:0.5 C5:1@0.85 R:1 A4:2.5@0.9
+  R:2 C5:1@0.9 R:0.5 B4:1@0.85 R:1 G4:2@0.85
+  R:2.5 F4:1@0.8 R:0.5 E4:1@0.8 R:1 D4:2.75@0.9
+  >BREAK
+  R:5 E4:3@0.6 R:5 D4:3@0.55
+  >RETURN
+  R:1 A4:1.5@0.9 R:0.5 G4:0.75@0.7 R:0.75 E4:2@0.85
+  R:2.5 F4:1@0.8 R:0.5 E4:1@0.7 R:1 D4:2.5@0.85
+  R:1.5 A4:1@0.85 R:0.5 C5:1@0.9 R:1 B4:1.5@0.85
+  R:3 A4:1.5@0.8 R:2.5 E4:2@0.75
+  >OUT
+  R:5 E4:6@0.7
