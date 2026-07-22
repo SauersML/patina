@@ -1,0 +1,48 @@
+# Knotwork — the lead: an UN-instrument. Every acoustic instrument is
+# brightest at the attack and mellows; this voice is built backwards —
+# NEGATIVE filter envelope: the note lands dark and BLOOMS into bright
+# sustain over 350 ms. Nothing struck, blown, or bowed does that, so
+# the ear files it as "synthesizer", full stop. Sync at +3 (a smeared
+# non-formant color, not the +7 brass vowel), ring 0.3 for locked
+# inharmonic glint, PWM churn and a slow filter wobble so the spectrum
+# never repeats. No pluck, no horn, no string, no piano.
+waveform 2
+osc2_wave 1
+osc2_pitch 3
+osc2_level 0.5
+osc3_wave 0
+osc3_pitch 0
+osc3_level 0
+detune 5
+sub 0
+circuit 0
+key_track 0.7
+osc_fm 0.08
+sync 1
+ring 0.3
+glide 0
+pulse_width 0.3
+attack 0.04
+decay 0.5
+sustain 0.75
+release 0.4
+filter_env -1.4
+filter_attack 0.005
+filter_decay 0.35
+filter_sustain 0.15
+filter_release 0.3
+cutoff 2600
+resonance 0.7
+drive 1.8
+saturation 1.05
+hpf 120
+volume 0.5
+octave 4
+noise 0
+fuzz 0
+spring 0.12
+lfo_rate 0.8
+lfo_shape 0.5
+lfo_pitch 0
+lfo_filter 0.12
+lfo_pwm 0.2
