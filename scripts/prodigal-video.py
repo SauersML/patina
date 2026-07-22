@@ -53,26 +53,38 @@ TODS = ["1000", "1200", "1500"]
 # (end_beat, steps_per_beat) — the stop-motion clock per section
 RATES = [(16, 4), (48, 8), (80, 8), (104, 16), (128, 12), (1e9, 4)]
 
-# (beat, (shadow, mid, highlight), exposure) — lerped in beat space
+# (beat, 5 colors at y = 0 / .28 / .5 / .72 / 1, exposure) — lerped in
+# beat space. Hue rotates WITH lightness inside every frame: shadows,
+# mids and highlights each get their own color, not shades of one hue.
 GRADE = [
-    (0,   ((10, 4, 28),  (96, 52, 190),  (198, 160, 255)), 0.82),
-    (15,  ((10, 4, 28),  (96, 52, 190),  (198, 160, 255)), 0.88),
-    (23,  ((18, 8, 52),  (88, 72, 230),  (200, 210, 255)), 1.00),
-    (46,  ((18, 8, 52),  (88, 72, 230),  (200, 210, 255)), 1.00),
-    (55,  ((4, 14, 40),  (36, 120, 225), (170, 240, 250)), 1.05),
-    (79,  ((4, 14, 40),  (36, 120, 225), (170, 240, 250)), 1.05),
-    (83,  ((24, 4, 14),  (200, 26, 60),  (255, 140, 90)),  1.10),
-    (101, ((24, 4, 14),  (200, 26, 60),  (255, 140, 90)),  1.10),
-    (110, ((36, 8, 46),  (232, 56, 160), (255, 196, 220)), 1.20),
-    (125, ((36, 8, 46),  (232, 56, 160), (255, 196, 220)), 1.16),
-    (139, ((12, 8, 26),  (96, 70, 150),  (176, 160, 210)), 0.95),
-    (160, ((12, 8, 26),  (96, 70, 150),  (176, 160, 210)), 0.78),
+    (0,   ((6, 4, 22),   (52, 34, 130),  (120, 60, 200),
+           (200, 140, 230), (232, 220, 255)), 0.82),
+    (15,  ((6, 4, 22),   (52, 34, 130),  (120, 60, 200),
+           (200, 140, 230), (232, 220, 255)), 0.88),
+    (23,  ((10, 6, 40),  (90, 30, 170),  (210, 50, 180),
+           (110, 150, 250), (210, 240, 255)), 1.00),
+    (46,  ((10, 6, 40),  (90, 30, 170),  (210, 50, 180),
+           (110, 150, 250), (210, 240, 255)), 1.00),
+    (55,  ((2, 10, 34),  (60, 50, 180),  (20, 130, 210),
+           (90, 220, 190),  (225, 250, 255)), 1.05),
+    (79,  ((2, 10, 34),  (60, 50, 180),  (20, 130, 210),
+           (90, 220, 190),  (225, 250, 255)), 1.05),
+    (83,  ((20, 2, 10),  (120, 8, 60),   (220, 30, 40),
+           (255, 120, 40),  (255, 230, 180)), 1.10),
+    (101, ((20, 2, 10),  (120, 8, 60),   (220, 30, 40),
+           (255, 120, 40),  (255, 230, 180)), 1.10),
+    (110, ((30, 6, 40),  (170, 30, 90),  (240, 60, 180),
+           (150, 120, 255), (255, 220, 240)), 1.20),
+    (125, ((30, 6, 40),  (170, 30, 90),  (240, 60, 180),
+           (150, 120, 255), (255, 220, 240)), 1.16),
+    (139, ((8, 6, 18),   (60, 40, 100),  (110, 90, 140),
+           (150, 150, 190), (200, 190, 210)), 0.95),
+    (160, ((8, 6, 18),   (60, 40, 100),  (110, 90, 140),
+           (150, 150, 190), (200, 190, 210)), 0.78),
 ]
 SAT = 1.22                  # post-map saturation push
 TONE_S = 3.0                # S-curve strength: mid slope = S/(2*tanh(S/2))
 TONE_GAMMA = 0.92           # pre-curve gamma, opens the mids a touch
-Q_SHADOW = 0.82             # quarter-tone pull-down: rich dark, not gray
-Q_HIGH = 1.10               # three-quarter push-up: the glow
 T_STOP = DUR - 3.2          # tape-stop: steps decelerate into freeze
 T_FADE = DUR - 2.6          # and everything sinks to black
 
@@ -235,16 +247,11 @@ def render_frame(f):
     img, y = imgs[step % 3], ys[step % 3]
 
     pal, expo = grade_at(t / SPB)
-    s, m, hgh = (np.float32(p) / 255.0 for p in pal)
-    # five-point per-channel curves: quarter shadows pulled down and
-    # saturated, three-quarter tones pushed up into a glow
-    q1 = 0.5 * (s + m) * Q_SHADOW
-    q3 = np.minimum(1.0, 0.5 * (m + hgh) * Q_HIGH)
+    anchors = np.float32(pal) / 255.0           # (5, 3): hue-by-lightness
     ramp = np.float32([0.0, 0.28, 0.5, 0.72, 1.0])
     graded = np.empty((H, W, 3), np.float32)
     for c in range(3):
-        graded[..., c] = np.interp(
-            y, ramp, [s[c], q1[c], m[c], q3[c], hgh[c]])
+        graded[..., c] = np.interp(y, ramp, anchors[:, c])
     graded = graded * 0.93 + img * 0.07     # a breath of the real field
 
     lum = (graded @ LUM)[..., None]
