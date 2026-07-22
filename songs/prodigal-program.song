@@ -29,7 +29,7 @@ automate tape_flutter
 automate tape_age
   0.55
 automate tape_drive
-  0.3
+  0.34
 automate reverb_wet
   0.25
 automate reverb_decay
@@ -118,7 +118,7 @@ track ohK sample=renders/prodigal/oh-kobosil.wav root=C3 fixed mono gain=1.0 len
 automate snareI.reverb_send
   0.25
 automate ohK.reverb_send
-  0.15
+  0.18
 
 
 # the LOOM clock: E(7,16) shaker on swung 16ths, rotating one step
@@ -136,7 +136,7 @@ track shaker sample=renders/prodigal/kit-grid.wav root=C3 chop=8 mono bits=12 ra
   R:26
 
 automate shaker.reverb_send
-  0.1
+  0.13
 
 
 # the TSS air layered over the 909 snare body — two spectra, one hit
@@ -153,6 +153,12 @@ track snare sample=renders/prodigal/percgrid.wav root=C3 chop=4 bits=12 rate=260
   R:0.75 D3:0.25@0.32 D3:2@0.95 D3:1@0.88 R:1 D3:1@0.95 R:2
   R:24
 
+automate beat.reverb_send
+  0.14
+automate kickK.reverb_send
+  0.08
+automate kickB.reverb_send
+  0.06
 automate snare.smp_cutoff
   20000 R:48 6500:0.5 R:31.5 14000:0.5 R:23.5 20000:0.5
 automate snare.reverb_send
@@ -162,13 +168,13 @@ automate snare.spring_send
 automate beat.reverb_send
   0.1
 automate hats.reverb_send
-  0.12
+  0.16
 automate hats.gain
   1.35
 
 # the sub: sine-predominant synth weight an octave under the hum —
 # the one non-voice pitch, drifting slowly on the global LFO
-track sub patch=deepsine vel=0.8 len=8
+track sub patch=deepsine vel=1 len=8
   R:8 D2:8
   D2:8 R:8 C2:8 R:8
   R:4 B1:8 R:4 G2:8 R:8
@@ -178,6 +184,21 @@ track sub patch=deepsine vel=0.8 len=8
 
 automate sub.attack
   0.12
+
+# the sine's shadow: a fifth over the C dwell, thirds and fifths at
+# the bloom — slight, and only where the harmony can hold it
+track subH patch=deepsine vel=0.55 len=8
+  R:52 F#2:8
+  R:44
+  D3:8 E3:8 A2:8
+  R:24
+
+automate subH.gain
+  1.1
+automate subH.attack
+  0.4
+automate subH.duck
+  0.15
 automate sub.release
   1.5
 automate sub.gain
@@ -233,7 +254,7 @@ automate breath.duck_release
 
 # high garlands: 'Dee' varispeeded +14 st is no longer a voice, it is
 # a bell. Two-beat 16th figures at the phrase ends, never constant
-track bells sample=renders/prodigal/di-ring.wav root=C4 mode=oneshot release=0.3 gain=0.3 len=0.25
+track bells sample=renders/prodigal/di-ring.wav root=C4 mode=oneshot release=0.3 gain=0.24 len=0.25
   R:16
   R:32
   R:14 D5:0.25@0.55 A4:0.25@0.45 F#5:0.25@0.5 E5:0.25@0.45 D5:0.25@0.55 E5:0.25@0.4 A5:0.5@0.55 R:16
@@ -241,7 +262,7 @@ track bells sample=renders/prodigal/di-ring.wav root=C4 mode=oneshot release=0.3
   R:2 D5:0.25@0.6 A4:0.25@0.5 F#5:0.25@0.55 E5:0.25@0.5 D5:0.25@0.6 E5:0.25@0.45 A5:0.5@0.6 R:6 D5:0.25@0.6 A4:0.25@0.5 F#5:0.25@0.55 E5:0.25@0.5 D5:0.25@0.6 E5:0.25@0.45 A5:0.5@0.6 R:6 D5:0.25@0.65 E5:0.25@0.55 F#5:0.25@0.6 A5:0.25@0.6 D5:0.25@0.55 F#5:0.25@0.5 A5:0.5@0.65 R:4
   R:24
 
-track bellsHi sample=renders/prodigal/di-ring.wav root=C4 mode=oneshot release=0.25 gain=0.18 len=0.25
+track bellsHi sample=renders/prodigal/di-ring.wav root=C4 mode=oneshot release=0.25 gain=0.14 len=0.25
   R:16
   R:32
   R:14 D6:0.25@0.55 A5:0.25@0.45 F#6:0.25@0.5 E6:0.25@0.45 D6:0.25@0.55 E6:0.25@0.4 A6:0.5@0.55 R:16
