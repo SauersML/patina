@@ -1,0 +1,156 @@
+# Shell Game — first piece written in BOTH learned grammars at once.
+#
+# From the Aphex corpus (measured, not assumed): dead-straight grid, no
+# swing anywhere; velocity does the humanizing (crescendo roll 0.2->0.8,
+# bounce-decay roll 0.7->0.25); shell voicings with no 3rds; a pad loop
+# of 5.25-beat chords (21-beat cycle) PHASING against 4/4 like rhubarb;
+# motoric one-pitch 16th bass that switches pitch one 16th before the
+# barline with an accent (4.mid's move); hat bars that recur with exactly
+# one micro-edit (16th pair / 32nd bounce / open hat); a dotted-8th
+# ladder landing on a long note; melody with a +14 compound leap and
+# non-round holds (2.75, 4.75, 5.75, 6.75 beats) crossing barlines.
+#
+# From the BoC corpus: 86 bpm, the A-minor <-> C chromatic-mediant
+# seesaw, octave-doubled lead at the peak, boom-bap kick placement,
+# tape wow/age for the warped-cassette bed, layers entering in waves.
+#
+# Form (beats): INTRO 32 (phasing shells alone) | PULSE 32 (+motor bass,
+#   hats) | GROOVE 32 (+kick/snare, bell ladder) | SONG 48 (melody) |
+#   THIN 16 (drums duck out, motor keeps running) | PEAK 32 (melody
+#   doubled +12, rolls) | TAIL 32 (shells phase out alone)  = 224
+
+bpm 86
+gate 0.95
+
+section INTRO   0..32
+section PULSE   32..64
+section GROOVE  64..96
+section SONG    96..144
+section THIN    144..160
+section PEAK    160..192
+section TAIL    192..224
+
+automate tape_wow
+  0.4
+automate tape_flutter
+  0.08
+automate tape_age
+  0.5
+automate tape_drive
+  0.24
+automate reverb_wet
+  0.25
+automate reverb_decay
+  0.7
+automate chorus_mode
+  1
+automate chorus_depth
+  0.25
+
+automate bd_tune
+  0.45
+automate bd_decay
+  0.5
+automate bd_drive
+  0.3
+automate sd_tune
+  0.4
+automate sd_tone
+  0.55
+automate sd_snappy
+  0.6
+automate sd_decay
+  0.4
+automate hh_level
+  0.5 >THIN 0.35 >PEAK 0.5
+automate oh_decay
+  0.4
+automate dr_drive
+  0.2
+
+# ---- phasing shells: 4 chords x 5.25 beats = 21-beat loop over 4/4 ----
+# Am7 shell (no 3rd) -> Cmaj7 shell -> G/B (3rd in bass) -> Fmaj7 shell
+track pads patch=hollowpad gain=0.6 duck=0.15 duck_release=0.3 reverb_send=0.3
+  ([A2 E3 G3]:5.25@0.6 [C3 G3 B3]:5.25@0.6 [B2 D3 G3]:5.25@0.6 [F2 C3 E3]:5.25@0.6)x10
+  [A2 E3 G3 B3]:12@0.65
+
+# ---- the motor: one-pitch 16ths, pitch switches on the last 16th ------
+# of each bar with an accent — the anticipated harmony change
+track motor patch=heartbass gain=0.8 duck=0.1 duck_release=0.2
+  >PULSE
+  (A2:0.25@0.55 A2:0.25@0.45)x7 A2:0.25@0.5 C3:0.25@0.85 (C3:0.25@0.55 C3:0.25@0.45)x7 C3:0.25@0.5 A2:0.25@0.85 (A2:0.25@0.55 A2:0.25@0.45)x7 A2:0.25@0.5 C3:0.25@0.85 (C3:0.25@0.55 C3:0.25@0.45)x7 C3:0.25@0.5 A2:0.25@0.85
+  (A2:0.25@0.55 A2:0.25@0.45)x7 A2:0.25@0.5 C3:0.25@0.85 (C3:0.25@0.55 C3:0.25@0.45)x7 C3:0.25@0.5 A2:0.25@0.85 (A2:0.25@0.55 A2:0.25@0.45)x7 A2:0.25@0.5 C3:0.25@0.85 (C3:0.25@0.55 C3:0.25@0.45)x7 C3:0.25@0.5 A2:0.25@0.85
+  (A2:0.25@0.55 A2:0.25@0.45)x7 A2:0.25@0.5 C3:0.25@0.85 (C3:0.25@0.55 C3:0.25@0.45)x7 C3:0.25@0.5 A2:0.25@0.85 (A2:0.25@0.55 A2:0.25@0.45)x7 A2:0.25@0.5 C3:0.25@0.85 (C3:0.25@0.55 C3:0.25@0.45)x7 C3:0.25@0.5 A2:0.25@0.85
+  (A2:0.25@0.55 A2:0.25@0.45)x7 A2:0.25@0.5 C3:0.25@0.85 (C3:0.25@0.55 C3:0.25@0.45)x7 C3:0.25@0.5 A2:0.25@0.85 (A2:0.25@0.55 A2:0.25@0.45)x7 A2:0.25@0.5 C3:0.25@0.85 (C3:0.25@0.55 C3:0.25@0.45)x7 C3:0.25@0.5 A2:0.25@0.85
+  (A2:0.25@0.55 A2:0.25@0.45)x7 A2:0.25@0.5 C3:0.25@0.85 (C3:0.25@0.55 C3:0.25@0.45)x7 C3:0.25@0.5 A2:0.25@0.85 (A2:0.25@0.55 A2:0.25@0.45)x7 A2:0.25@0.5 C3:0.25@0.85 (C3:0.25@0.55 C3:0.25@0.45)x7 C3:0.25@0.5 A2:0.25@0.85
+  (A2:0.25@0.55 A2:0.25@0.45)x7 A2:0.25@0.5 C3:0.25@0.85 (C3:0.25@0.55 C3:0.25@0.45)x7 C3:0.25@0.5 A2:0.25@0.85 (A2:0.25@0.55 A2:0.25@0.45)x7 A2:0.25@0.5 C3:0.25@0.85 (C3:0.25@0.55 C3:0.25@0.45)x7 C3:0.25@0.5 A2:0.25@0.85
+  (A2:0.25@0.55 A2:0.25@0.45)x7 A2:0.25@0.5 C3:0.25@0.85 (C3:0.25@0.55 C3:0.25@0.45)x7 C3:0.25@0.5 A2:0.25@0.85 (A2:0.25@0.55 A2:0.25@0.45)x7 A2:0.25@0.5 C3:0.25@0.85 (C3:0.25@0.55 C3:0.25@0.45)x7 C3:0.25@0.5 A2:0.25@0.85
+  (A2:0.25@0.55 A2:0.25@0.45)x7 A2:0.25@0.5 C3:0.25@0.85 (C3:0.25@0.55 C3:0.25@0.45)x7 C3:0.25@0.5 A2:0.25@0.85 (A2:0.25@0.55 A2:0.25@0.45)x7 A2:0.25@0.5 C3:0.25@0.85 (C3:0.25@0.55 C3:0.25@0.45)x7 C3:0.25@0.5 A2:0.25@0.85
+  (A2:0.25@0.55 A2:0.25@0.45)x7 A2:0.25@0.5 C3:0.25@0.85 (C3:0.25@0.55 C3:0.25@0.45)x7 C3:0.25@0.5 A2:0.25@0.85 (A2:0.25@0.55 A2:0.25@0.45)x7 A2:0.25@0.5 C3:0.25@0.85 (C3:0.25@0.55 C3:0.25@0.45)x7 C3:0.25@0.5 A2:0.25@0.85
+  (A2:0.25@0.55 A2:0.25@0.45)x7 A2:0.25@0.5 C3:0.25@0.85 (C3:0.25@0.55 C3:0.25@0.45)x7 C3:0.25@0.5 A2:0.25@0.85 (A2:0.25@0.55 A2:0.25@0.45)x7 A2:0.25@0.5 C3:0.25@0.85 (C3:0.25@0.55 C3:0.25@0.45)x7 C3:0.25@0.5 A2:0.25@0.85
+  >TAIL
+  A2:8@0.5
+
+# ---- hats: base bar recurs with exactly one micro-edit per variant ----
+track hats kit=909 len=0.5 vel=0.8
+  >PULSE
+  (CH:0.5@0.7 CH:0.5@0.45)x4 (CH:0.5@0.7 CH:0.5@0.45)x3 CH:0.5@0.7 CH:0.25@0.5 CH:0.25@0.6
+  (CH:0.5@0.7 CH:0.5@0.45)x4 (CH:0.5@0.7 CH:0.5@0.45)x2 CH:0.125@0.6 CH:0.125@0.52 CH:0.125@0.45 CH:0.125@0.4 CH:0.5@0.45 CH:0.5@0.7 CH:0.5@0.45
+  (CH:0.5@0.7 CH:0.5@0.45)x4 (CH:0.5@0.7 CH:0.5@0.45)x3 CH:0.5@0.7 CH:0.25@0.5 CH:0.25@0.6
+  (CH:0.5@0.7 CH:0.5@0.45)x4 (CH:0.5@0.7 CH:0.5@0.45)x3 CH:0.5@0.7 OH:0.5@0.55
+  (CH:0.5@0.7 CH:0.5@0.45)x4 (CH:0.5@0.7 CH:0.5@0.45)x3 CH:0.5@0.7 CH:0.25@0.5 CH:0.25@0.6
+  (CH:0.5@0.7 CH:0.5@0.45)x4 (CH:0.5@0.7 CH:0.5@0.45)x2 CH:0.125@0.6 CH:0.125@0.52 CH:0.125@0.45 CH:0.125@0.4 CH:0.5@0.45 CH:0.5@0.7 CH:0.5@0.45
+  (CH:0.5@0.7 CH:0.5@0.45)x4 (CH:0.5@0.7 CH:0.5@0.45)x3 CH:0.5@0.7 CH:0.25@0.5 CH:0.25@0.6
+  (CH:0.5@0.7 CH:0.5@0.45)x4 (CH:0.5@0.7 CH:0.5@0.45)x3 CH:0.5@0.7 OH:0.5@0.55
+  (CH:0.5@0.7 CH:0.5@0.45)x4 (CH:0.5@0.7 CH:0.5@0.45)x3 CH:0.5@0.7 CH:0.25@0.5 CH:0.25@0.6
+  (CH:0.5@0.7 CH:0.5@0.45)x4 (CH:0.5@0.7 CH:0.5@0.45)x2 CH:0.125@0.6 CH:0.125@0.52 CH:0.125@0.45 CH:0.125@0.4 CH:0.5@0.45 CH:0.5@0.7 CH:0.5@0.45
+  (CH:0.5@0.7 CH:0.5@0.45)x4 (CH:0.5@0.7 CH:0.5@0.45)x3 CH:0.5@0.7 CH:0.25@0.5 CH:0.25@0.6
+  (CH:0.5@0.7 CH:0.5@0.45)x4 (CH:0.5@0.7 CH:0.5@0.45)x3 CH:0.5@0.7 OH:0.5@0.55
+  (CH:0.5@0.7 CH:0.5@0.45)x4 (CH:0.5@0.7 CH:0.5@0.45)x3 CH:0.5@0.7 CH:0.25@0.5 CH:0.25@0.6
+  (CH:0.5@0.7 CH:0.5@0.45)x4 (CH:0.5@0.7 CH:0.5@0.45)x2 CH:0.125@0.6 CH:0.125@0.52 CH:0.125@0.45 CH:0.125@0.4 CH:0.5@0.45 CH:0.5@0.7 CH:0.5@0.45
+  (CH:0.5@0.7 CH:0.5@0.45)x4 (CH:0.5@0.7 CH:0.5@0.45)x3 CH:0.5@0.7 CH:0.25@0.5 CH:0.25@0.6
+  (CH:0.5@0.7 CH:0.5@0.45)x4 (CH:0.5@0.7 CH:0.5@0.45)x3 CH:0.5@0.7 OH:0.5@0.55
+  (CH:0.5@0.7 CH:0.5@0.45)x4 (CH:0.5@0.7 CH:0.5@0.45)x3 CH:0.5@0.7 CH:0.25@0.5 CH:0.25@0.6
+  (CH:0.5@0.7 CH:0.5@0.45)x4 (CH:0.5@0.7 CH:0.5@0.45)x2 CH:0.125@0.6 CH:0.125@0.52 CH:0.125@0.45 CH:0.125@0.4 CH:0.5@0.45 CH:0.5@0.7 CH:0.5@0.45
+  (CH:0.5@0.7 CH:0.5@0.45)x4 (CH:0.5@0.7 CH:0.5@0.45)x3 CH:0.5@0.7 CH:0.25@0.5 CH:0.25@0.6
+  (CH:0.5@0.7 CH:0.5@0.45)x4 (CH:0.5@0.7 CH:0.5@0.45)x3 CH:0.5@0.7 OH:0.5@0.55
+
+# ---- kick/snare: boom-bap placement, structured-velocity rolls --------
+track beat kit=909 len=0.25 vel=0.9
+  >GROOVE
+  (BD:1@0.9 SD:0.75@0.75 BD:0.75@0.7 BD:0.5@0.85 SD:1@0.8)x7
+  BD:1@0.9 SD:0.75@0.75 BD:0.75@0.7 BD:0.5@0.85 SD:0.25@0.2 SD:0.25@0.35 SD:0.25@0.55 SD:0.25@0.8
+  >SONG
+  (BD:1@0.9 SD:0.75@0.75 BD:0.75@0.7 BD:0.5@0.85 SD:1@0.8)x7
+  BD:1@0.9 SD:0.75@0.75 BD:0.75@0.7 BD:0.5@0.85 SD:0.25@0.2 SD:0.25@0.35 SD:0.25@0.55 SD:0.25@0.8
+  (BD:1@0.9 SD:0.75@0.75 BD:0.75@0.7 BD:0.5@0.85 SD:1@0.8)x3
+  BD:1@0.9 SD:0.75@0.75 R:0.25 SD:0.125@0.7 SD:0.125@0.6 SD:0.125@0.5 SD:0.125@0.45 SD:0.125@0.4 SD:0.125@0.35 SD:0.125@0.3 SD:0.125@0.25 SD:1@0.9
+  >PEAK
+  (BD:1@0.9 SD:0.75@0.75 BD:0.75@0.7 BD:0.5@0.85 SD:1@0.8)x7
+  BD:1@0.9 SD:0.75@0.75 BD:0.75@0.7 BD:0.5@0.85 SD:0.25@0.2 SD:0.25@0.35 SD:0.25@0.55 SD:0.25@0.8
+
+# ---- dotted-8th ladder on the bell, landing on a long note ------------
+track bell patch=glintbell gain=0.5 reverb_send=0.4
+  >GROOVE
+  C4:0.75@0.7 B3:0.75@0.6 C4:0.75@0.65 D4:0.75@0.7 E4:3.5@0.8 R:25.5
+  C4:0.75@0.7 B3:0.75@0.6 C4:0.75@0.65 D4:0.75@0.7 E4:3.5@0.8 R:25.5
+  C4:0.75@0.7 B3:0.75@0.6 C4:0.75@0.65 D4:0.75@0.7 E4:3.5@0.8 R:9.5
+  >PEAK
+  R:8 C4:0.75@0.7 B3:0.75@0.6 C4:0.75@0.65 D4:0.75@0.7 E4:3.5@0.8
+
+# ---- melody: pentatonic cells, one +14 leap, non-round holds ----------
+track lead patch=musicbox gain=0.9 reverb_send=0.35
+  >SONG
+  R:1 E4:1@0.8 G4:0.75@0.7 A4:2.75@0.85 R:2.5 C5:1@0.85 A4:0.75@0.7 G4:1.5@0.75 R:1.75 E4:1@0.7 A4:4.75@0.9 R:5.25
+  R:1 G4:1@0.8 A4:0.75@0.75 B5:2.75@0.95 R:2.5 D5:1@0.85 C5:0.75@0.75 A4:1.5@0.8 R:1.75 G4:1@0.7 E4:5.75@0.9 R:4.25
+  >PEAK
+  R:1 E4:1@0.8 G4:0.75@0.7 A4:2.75@0.85 R:2.5 C5:1@0.85 A4:0.75@0.7 G4:1.5@0.75 R:1.75 E4:1@0.7 A4:4.75@0.9 R:5.25
+  G4:1@0.8 A4:6.75@0.95
+  >TAIL
+  R:2 A4:5.75@0.7 R:2 E4:6@0.6
+
+# ---- the octave doubler: BoC's literal 'octave doubled' track ---------
+track lead8 patch=musicbox gain=0.45 reverb_send=0.35
+  >PEAK
+  R:1 E5:1@0.8 G5:0.75@0.7 A5:2.75@0.85 R:2.5 C6:1@0.85 A5:0.75@0.7 G5:1.5@0.75 R:1.75 E5:1@0.7 A5:4.75@0.9 R:5.25
+  G5:1@0.8 A5:6.75@0.95
