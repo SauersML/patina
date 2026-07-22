@@ -83,12 +83,13 @@ GRADE = [
            (150, 150, 190), (200, 190, 210)), 0.78),
 ]
 SAT = 1.22                  # post-map saturation push
-TONE_S = 3.0                # S-curve strength: mid slope = S/(2*tanh(S/2))
-TONE_GAMMA = 0.92           # pre-curve gamma, opens the mids a touch
+TONE_S = 1.8                # gentle S on top of the equalized histogram
+TONE_GAMMA = 1.0            # equalization already owns the distribution
 T_STOP = DUR - 3.2          # tape-stop: steps decelerate into freeze
 T_FADE = DUR - 2.6          # and everything sinks to black
 
 LUM = np.array([0.2126, 0.7152, 0.0722], np.float32)
+EQ_P = np.linspace(0.0, 1.0, 65)
 
 
 def smoothstep(x):
@@ -195,21 +196,25 @@ class PlotCache:
         if name not in self.d:
             imgs, ys = [], []
             lo = hi = None
+            cdf_q = None
             for tod in TODS:
                 im = Image.open(plot_path(name, tod)).convert("RGB")
                 im = im.crop((0, 224, 1024, 800)).resize((W, H),
                                                          Image.BILINEAR)
                 a = np.asarray(im, dtype=np.float32) / 255.0
                 y = a @ LUM
-                if lo is None:
-                    # one shared normalization so the flicker keeps the
-                    # real exposure jumps between times of day
-                    lo, hi = np.percentile(y, [2.0, 98.0])
+                if cdf_q is None:
+                    # one shared histogram equalization for the triplet:
+                    # spreads pixel mass across the WHOLE ramp so every
+                    # hue zone owns real area in every frame, while the
+                    # exposure jumps between times of day stay honest
+                    cdf_q = np.maximum.accumulate(np.quantile(y, EQ_P))
+                    cdf_q = cdf_q + np.arange(len(EQ_P)) * 1e-7
                 imgs.append(a)
                 ys.append(y)
             for i in range(3):
                 ys[i] = tone_curve(
-                    (ys[i] - lo) / max(hi - lo, 1e-6)).astype(np.float32)
+                    np.interp(ys[i], cdf_q, EQ_P)).astype(np.float32)
             self.d[name] = (imgs, ys)
             self.order.append(name)
             if len(self.order) > self.cap:
@@ -218,6 +223,53 @@ class PlotCache:
 
 
 CACHE = PlotCache()
+
+# ---- the circuit flashes ---------------------------------------------
+# Prophet-5 schematic pages (rendered by scripts/prodigal-schem.sh into
+# renders/prodigal-schem/*.png, dark-on-light) flash for the first two
+# frames after every plot change: two different crops, inverted to
+# white-on-black, graded through whatever palette owns that beat.
+# Crop index = 2*plot or 2*plot+1, so like the fields, none repeats.
+SCHEM_DIR = os.path.join(REPO, "renders", "prodigal-schem")
+SCHEM_PAGES = (sorted(os.listdir(SCHEM_DIR))
+               if os.path.isdir(SCHEM_DIR) else [])
+
+
+class SchemCache:
+    def __init__(self, cap=6):
+        self.cap, self.d, self.order = cap, {}, []
+
+    def page(self, i):
+        name = SCHEM_PAGES[i % len(SCHEM_PAGES)]
+        if name not in self.d:
+            a = np.asarray(Image.open(
+                os.path.join(SCHEM_DIR, name)).convert("L"),
+                dtype=np.float32) / 255.0
+            self.d[name] = a
+            self.order.append(name)
+            if len(self.order) > self.cap:
+                del self.d[self.order.pop(0)]
+        return self.d[name]
+
+
+SCHEM = SchemCache()
+
+
+def flash_y(crop_idx):
+    """Inverted, contrast-shaped luminance plane of schematic crop
+    `crop_idx` — deterministic, unique per index."""
+    page = SCHEM.page(crop_idx)
+    ph, pw = page.shape
+    rng = np.random.default_rng(9000 + crop_idx)
+    cw = int(pw * rng.uniform(0.35, 0.85))
+    ch = min(int(cw * 9 / 16), ph)
+    x0 = rng.integers(0, max(pw - cw, 1))
+    y0 = rng.integers(0, max(ph - ch, 1))
+    crop = 1.0 - page[y0:y0 + ch, x0:x0 + cw]      # white lines on black
+    im = Image.fromarray((np.clip(crop, 0, 1) * 255).astype(np.uint8))
+    y = np.asarray(im.resize((W, H), Image.BILINEAR),
+                   dtype=np.float32) / 255.0
+    return np.clip((y - 0.06) / 0.88, 0.0, 1.0) ** 0.9
 
 
 def grade_at(beat):
@@ -233,7 +285,7 @@ def grade_at(beat):
     return pal, e0 + (e1 - e0) * t
 
 
-def render_frame(f):
+def warped_beat(f):
     t = f / FPS
     beat = t / SPB
     # tape-stop: the step clock decelerates into a freeze
@@ -241,18 +293,48 @@ def render_frame(f):
         u = (t - T_STOP) / (DUR - T_STOP)
         bs = T_STOP / SPB
         beat = bs + (beat - bs) * (1.0 - u) * (1.0 - u)
-    step = step_at(beat)
+    return beat
+
+
+def plot_at(f):
+    return min(step_at(warped_beat(f)) // 3, len(SEQ) - 1)
+
+
+def render_frame(f):
+    t = f / FPS
+    step = step_at(warped_beat(f))
     plot = min(step // 3, len(SEQ) - 1)
-    imgs, ys = CACHE.get(SEQ[plot])
-    img, y = imgs[step % 3], ys[step % 3]
+
+    # the first two frames after a plot change are circuit flashes:
+    # two different schematic crops, never the same crop twice
+    flash = None
+    if SCHEM_PAGES and f >= 2 and plot > 0:
+        if plot != plot_at(f - 1):
+            flash = flash_y(2 * plot)
+        elif plot != plot_at(f - 2):
+            flash = flash_y(2 * plot + 1)
+    if flash is None:
+        imgs, ys = CACHE.get(SEQ[plot])
+        img, y = imgs[step % 3], ys[step % 3]
+    else:
+        img, y = None, flash
 
     pal, expo = grade_at(t / SPB)
     anchors = np.float32(pal) / 255.0           # (5, 3): hue-by-lightness
     ramp = np.float32([0.0, 0.28, 0.5, 0.72, 1.0])
-    graded = np.empty((H, W, 3), np.float32)
+    # hue rides the LOW frequencies (shadow banks, bright patches form
+    # contiguous color zones), detail rides lightness inside each zone
+    ylow = np.asarray(
+        Image.fromarray((y * 255).astype(np.uint8))
+        .resize((60, 34), Image.BILINEAR)
+        .resize((W, H), Image.BILINEAR), np.float32) / 255.0
+    zone = np.empty((H, W, 3), np.float32)
     for c in range(3):
-        graded[..., c] = np.interp(y, ramp, anchors[:, c])
-    graded = graded * 0.93 + img * 0.07     # a breath of the real field
+        zone[..., c] = np.interp(ylow, ramp, anchors[:, c])
+    graded = zone * (0.22 + 1.05 * y)[..., None]
+    graded += (y ** 4)[..., None] * (anchors[-1] * 0.45)  # specular lift
+    if img is not None:
+        graded = graded * 0.93 + img * 0.07  # a breath of the real field
 
     lum = (graded @ LUM)[..., None]
     graded = lum + (graded - lum) * SAT     # the color curve push
