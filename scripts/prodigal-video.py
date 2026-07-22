@@ -73,7 +73,13 @@ W, H, FPS = 960, 540, 48    # compute res; ffmpeg upscales to 1080p
 OUT_W, OUT_H = 1920, 1080
 BPM = 72.0
 SPB = 60.0 / BPM
-DUR = 130.586667            # matches renders/prodigal-program.wav
+def _wav_duration():
+    import soundfile as sf
+    info = sf.info(os.path.join(REPO, "renders", "prodigal-program.wav"))
+    return info.frames / info.samplerate
+
+
+DUR = _wav_duration()
 TOTAL = int(round(DUR * FPS))
 TODS = ["1000", "1200", "1500"]
 SECTIONS = [0.0, 16.0, 48.0, 80.0, 104.0, 128.0, 1e9]   # A B C D E F
@@ -107,7 +113,7 @@ GRADE = [
     (160, ((8, 6, 18),   (60, 40, 100),  (110, 90, 140),
            (150, 150, 190), (200, 190, 210)), 0.78),
 ]
-TONE_S = 1.8                # gentle S on top of the equalized histogram
+TONE_S = 1.5                # gentle S on top of the equalized histogram
 TONE_GAMMA = 1.0            # equalization already owns the distribution
 T_FADE = DUR - 2.6          # everything sinks to black with the tape
 
@@ -124,6 +130,15 @@ def smoothstep(x):
 def tone_curve(y):
     y = np.clip(y, 0.0, 1.0) ** TONE_GAMMA
     return 0.5 + np.tanh(TONE_S * (y - 0.5)) / (2.0 * np.tanh(TONE_S / 2.0))
+
+
+def y_kernels(y):
+    """The fixed y-shaped response maps, computed once per image:
+    specular (y^4), glint (y^6), voice-band gaussian around y=0.55."""
+    y2 = y * y
+    y4 = y2 * y2
+    return (y4, y4 * y2,
+            np.exp(-((y - 0.55) ** 2) / 0.045).astype(np.float32))
 
 
 # ---- the score: every onset, straight from the .song file ------------
@@ -247,27 +262,30 @@ VOICES = sorted(onsets("themeA") + onsets("themeB") + onsets("owls")
                 + onsets("grat") + onsets("rev") + onsets("notiS")
                 + onsets("rets"))
 
-# ---- the stop-motion clock: fast and 64th-aligned, never stalling ----
-# The subdivision grid carries the strobe (sixteenths in the breath,
-# 32nds under the groove, 64ths through the wormhole, 32nd triplets in
-# the bloom) — every step lands exactly on a metric subdivision,
-# frame-quantized, and the picture never sticks on one image.
-RATES = [(16, 4), (48, 8), (80, 8), (104, 16), (128, 12), (1e9, 4)]
+# ---- the stop-motion clock: plot changes ON the beat grid -----------
+# A new plot lands exactly on a beat subdivision (1/beat in the
+# breath, eighths under the groove, sixteenths through the wormhole
+# and bloom) — the pronounced visual hit is beat-locked. Within each
+# plot's hold its three times of day cycle morning-noon-afternoon,
+# the fast shimmer between the hits. Never stalls, never repeats.
+PLOT_RATES = [(16, 1), (48, 2), (80, 2), (104, 4), (128, 4), (1e9, 1)]
 
-
-def step_at(beat):
-    steps, prev = 0.0, 0.0
-    for end, rate in RATES:
-        if beat <= end:
-            return int(steps + (beat - prev) * rate)
-        steps += (end - prev) * rate
-        prev = end
-    return int(steps)
-
-
-STEP_F = np.array([step_at(_f / FPS / SPB) for _f in range(TOTAL)],
-                  np.int32)
-N_ADVANCE = int(STEP_F[-1]) + 1
+PLOT_F = np.zeros(TOTAL, np.int32)
+PHASE_F = np.zeros(TOTAL, np.float32)
+_count, _prev_end = 0, 0.0
+for _f in range(TOTAL):
+    _b = _f / FPS / SPB
+    _n, _lo = 0, 0.0
+    for _end, _rate in PLOT_RATES:
+        if _b <= _end:
+            _x = (_b - _lo) * _rate
+            PLOT_F[_f] = _n + int(_x)
+            PHASE_F[_f] = _x - int(_x)
+            break
+        _n += int(round((_end - _lo) * _rate))
+        _lo = _end
+TOD_F = np.minimum((PHASE_F * 3).astype(np.int32), 2)
+N_PLOTS = int(PLOT_F[-1]) + 1
 
 
 # ---- the catalog: every plot, its drama, and the running order -------
@@ -308,12 +326,11 @@ def drama_scores():
 def running_order():
     """Unique plots, banded by drama, sized by the score itself: each
     section gets as many plots as its gated step clock demands."""
-    counts = []
+    need = []
     for lo, hi in zip(SECTIONS[:-1], SECTIONS[1:]):
         f0 = min(TOTAL - 1, int(lo * SPB * FPS))
         f1 = min(TOTAL - 1, int(hi * SPB * FPS))
-        counts.append(int(STEP_F[f1] - STEP_F[f0]))
-    need = [int(np.ceil(c / 3)) + 2 for c in counts]
+        need.append(int(PLOT_F[f1] - PLOT_F[f0]) + 2)
 
     scores = drama_scores()
     ranked = sorted(scores, key=scores.get)      # calm -> violent
@@ -373,10 +390,12 @@ class PlotCache:
                     cdf_q = cdf_q + np.arange(len(EQ_P)) * 1e-7
                 imgs.append(a)
                 ys.append(y)
+            kers = []
             for i in range(3):
                 ys[i] = tone_curve(
                     np.interp(ys[i], cdf_q, EQ_P)).astype(np.float32)
-            self.d[name] = (imgs, ys)
+                kers.append(y_kernels(ys[i]))
+            self.d[name] = (imgs, ys, kers)
             self.order.append(name)
             if len(self.order) > self.cap:
                 del self.d[self.order.pop(0)]
@@ -432,14 +451,14 @@ def flash_y(crop_idx):
 
 
 # flash schedule: frame -> unique crop index. Snare cracks (909 SD at
-# force, TSS hits with real length) get 1-2 frames by velocity; every
-# rung of the wormhole ladder gets 2.
+# force, TSS hits with real length) get 2-3 frames by velocity (42-63
+# ms — visible at 48 fps); every rung of the wormhole ladder gets 4.
 FLASH_AT = {}
 _crop = 0
-_flashes = ([(b, v, 1 + (v >= 0.85)) for b, _, v in SNARES if v >= 0.72]
-            + [(b, v, 1 + (v >= 0.8)) for b, d, v in TSS
-               if v >= 0.6 and d >= 1.5]
-            + [(b, v, 2) for b, _, v in WORM])
+_flashes = ([(b, v, 2 + (v >= 0.8)) for b, _, v in SNARES if v >= 0.65]
+            + [(b, v, 2 + (v >= 0.75)) for b, d, v in TSS
+               if v >= 0.55 and d >= 1.0]
+            + [(b, v, 4) for b, _, v in WORM])
 for b, v, nfr in sorted(_flashes):
     f0 = int(round(b * SPB * FPS))
     for k in range(nfr):
@@ -591,16 +610,19 @@ def grade_at(beat):
 
 def render_frame(f):
     t = f / FPS
-    # the gated 64th clock: hits advance the picture, air holds it
-    idx = int(STEP_F[f])
-    plot = min(idx // 3, len(SEQ) - 1)
+    # plot changes land on the beat grid; the three times of day
+    # shimmer within each hold
+    plot = min(int(PLOT_F[f]), len(SEQ) - 1)
+    tod = int(TOD_F[f])
 
     crop_idx = FLASH_AT.get(f)
     if crop_idx is None:
-        imgs, ys = CACHE.get(SEQ[plot])
-        img, y = imgs[idx % 3], ys[idx % 3]
+        imgs, ys, kers = CACHE.get(SEQ[plot])
+        img, y = imgs[tod], ys[tod]
+        y4, y6, gau = kers[tod]
     else:
         img, y = None, flash_y(crop_idx)
+        y4, y6, gau = y_kernels(y)
 
     pal, expo = grade_at(t / SPB)
     anchors = np.float32(pal) / 255.0           # (5, 3): hue-by-lightness
@@ -624,23 +646,23 @@ def render_frame(f):
     base = (0.26 - 0.20 * BASS_N[f]) * (1.0 - 0.45 * pump)
     detail = 1.05 * (1.0 + 0.55 * pump)
     graded = zone * (base + detail * y)[..., None]
-    graded += (y ** 4)[..., None] * (anchors[-1] * 0.45)  # specular lift
+    graded += y4[..., None] * (anchors[-1] * 0.35)        # specular lift
     if img is not None:
         graded = graded * 0.93 + img * 0.07  # a breath of the real field
     else:
         graded *= FLASH_GAIN[f]  # flashes glow with the snare channel
     # the voice band lights the midtones
     if MID_N[f] > 0.05:
-        graded *= (1.0 + 0.30 * MID_N[f]
-                   * np.exp(-((y - 0.55) ** 2) / 0.045))[..., None]
+        graded *= (1.0 + 0.26 * MID_N[f] * gau)[..., None]
     # bells and the high band throw white glints off the top
-    glint = max(0.9 * GLINT[f], 1.1 * HIGH_N[f])
+    glint = max(0.8 * GLINT[f], 0.9 * HIGH_N[f])
     if glint > 0.02:
-        graded += (y ** 6)[..., None] * (anchors[-1] * glint)
+        graded += y6[..., None] * (anchors[-1] * glint)
 
     lum = (graded @ LUM)[..., None]
-    # loudness owns saturation: quiet = ashen, the full mix blazes
-    graded = lum + (graded - lum) * min(0.55 + 0.95 * RMS_N[f], 1.6)
+    # loudness owns saturation: quiet = ashen, the full mix blazes —
+    # clamped so the peaks stay rich, not radioactive
+    graded = lum + (graded - lum) * min(0.65 + 0.75 * RMS_N[f], 1.35)
 
     # loudness lifts the exposure, the exhale chords swell it, the
     # dying tape sinks it
@@ -654,9 +676,9 @@ def render_frame(f):
     graded[..., 0] = np.roll(graded[..., 0], px, axis=1)
     graded[..., 2] = np.roll(graded[..., 2], -px, axis=1)
 
-    rng = np.random.default_rng(f)
     ga = 0.016 if t < T_FADE else 0.016 + 0.02 * (t - T_FADE) / (DUR - T_FADE)
-    graded += rng.normal(0.0, ga, (H, W, 1)).astype(np.float32)
+    ox, oy = (f * 131) % W, (f * 197) % H
+    graded += np.roll(NOISE, (oy, ox), (0, 1))[..., None] * ga
 
     if t > T_FADE:
         graded *= float(1.0 - smoothstep((t - T_FADE) / (DUR - T_FADE)))
@@ -669,6 +691,10 @@ yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
 rr = np.sqrt(((xx / W - 0.5) * 2) ** 2 + ((yy / H - 0.5) * 1.6) ** 2)
 VIG = (1.0 - 0.34 * np.clip(rr, 0, 1.25) ** 2.2)[..., None].astype(np.float32)
 del yy, xx, rr
+# one grain tile, rolled to a new offset every frame — same look as
+# per-frame noise at a fraction of the cost
+NOISE = np.random.default_rng(4242).normal(
+    0.0, 1.0, (H, W)).astype(np.float32)
 
 
 def seg_frames(path):
@@ -717,8 +743,16 @@ def main():
         print(f"resuming at frame {f}", flush=True)
     seg_path, ff = open_segment(len(segments))
     landed = 0
-    while f < TOTAL:
-        frame = render_frame(f)
+
+    import multiprocessing as mp
+    try:
+        mp.set_start_method("fork", force=True)
+        pool = mp.Pool(3)
+    except Exception:
+        pool = None
+
+    def emit(frame):
+        nonlocal f, landed, seg_path, ff
         try:
             ff.stdin.write(frame.tobytes())
             f += 1
@@ -728,8 +762,26 @@ def main():
             segments.append((seg_path, landed))
             seg_path, ff = open_segment(len(segments))
             landed = 0
+            ff.stdin.write(frame.tobytes())
+            f += 1
+            landed += 1
         if f % 480 == 0:
             print(f"{f}/{TOTAL} frames ({f / FPS:.1f}s)", flush=True)
+
+    while f < TOTAL:
+        if pool is not None:
+            try:
+                for frame in pool.imap(render_frame, range(f, TOTAL),
+                                       chunksize=8):
+                    emit(frame)
+            except (BrokenPipeError, KeyboardInterrupt):
+                raise
+            except Exception as e:
+                print(f"pool failed ({e}); serial fallback", flush=True)
+                pool.terminate()
+                pool = None
+        else:
+            emit(render_frame(f))
     ff.stdin.close()
     ff.wait()
     segments.append((seg_path, landed))
