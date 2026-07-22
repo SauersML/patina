@@ -182,7 +182,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .position(|a| a == "--play")
         .and_then(|i| args.get(i + 1))
         .cloned();
-    // No --play given: put the needle down somewhere new each launch
+    // No --play given: always open the same song (first by name), never
+    // shuffle. Deterministic launch — pass --play <song> to choose another.
     let song_path = song_path.or_else(|| {
         let mut songs: Vec<String> = std::fs::read_dir("songs")
             .ok()?
@@ -194,9 +195,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             return None;
         }
         songs.sort();
-        let pick = rand::random::<u32>() as usize % songs.len();
-        println!("Song: shuffling to {}", songs[pick]);
-        Some(songs.remove(pick))
+        println!("Song: {}", songs[0]);
+        Some(songs.remove(0))
     });
     let song_path = song_path.as_deref();
 

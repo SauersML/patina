@@ -1,0 +1,218 @@
+# Ironwater — committed to one idea: the Flim formula, in our own key.
+#
+# Everything below is applied measurement, not vibe:
+#   MELODY   one note per beat, flat velocity, AABC arpeggio phrase
+#            (Am7, Am7, Gm-add9 borrow, variant) — Flim's melody clock.
+#   HARMONY  DYADS only (Flim never stacks more than two voices in its
+#            pads) changing at 0 / 2 / 3.5 — the and-of-4 anticipation.
+#            No chords to muddy. New glassdyad patch: hpf 130, low res.
+#   DRUMS    the measured grammar: two alternating bars —
+#              A: K0 S1 K1.5 K2.75 S3 K3.25   (two snares)
+#              B: K0 K.5 K.75 K1.5 S3         (ONE snare, 16th kick pair)
+#            hats straight 8ths ALL at one velocity; snare rolls happen
+#            ONCE each (bounce-decay into A', crescendo into A'', triplet
+#            fade as the outro) — punctuation, not spam. One bar pair
+#            re-spells the groove in triplets (Flim b31-32).
+#   MIX      chorus OFF — Flim is dry; the tape does the gluing and the
+#            chorus was only smearing the dyads. Reverb small and mostly
+#            on the melody. dr_tone 0.42: the new drum-bus lowpass — the
+#            dusty blanket the kit needed. hh_metal 0.12: noise hats,
+#            not clangy metal bank. bd_attack 0.1: no techno click.
+#   FORM     full groove from bar one (Flim starts whole); sections swap
+#            texture, they don't accumulate: A 16 | B 8 (long held
+#            melody, sparse drums) | A' 8 | C 8 (walking 8th bass, no
+#            melody, fifth dyads) | A'' 8 (triplet turn) | OUT 4.
+#
+# 82 bpm, A minor with the Gm borrow. 52 bars = 208 beats.
+
+bpm 82
+gate 0.93
+
+section SECA   0..64
+section SECB   64..96
+section SECA2  96..128
+section SECC   128..160
+section SECA3  160..192
+section OUT    192..208
+
+# ---- the deck and the room (each value chosen, none decorative) ------
+automate chorus_mode
+  0
+automate tape_wow
+  0.3
+automate tape_flutter
+  0.07
+automate tape_age
+  0.5
+automate tape_drive
+  0.2
+automate reverb_wet
+  0.16
+automate reverb_decay
+  0.55
+automate hpf
+  45
+
+# ---- the kit: dusty, not techno --------------------------------------
+automate bd_tune
+  0.5
+automate bd_attack
+  0.1
+automate bd_decay
+  0.42
+automate bd_sweep
+  0.45
+automate bd_drive
+  0.1
+automate sd_tune
+  0.45
+automate sd_tone
+  0.3
+automate sd_snappy
+  0.7
+automate sd_decay
+  0.3
+automate hh_level
+  0.45
+automate hh_tune
+  0.4
+automate hh_metal
+  0.12
+automate ch_decay
+  0.28
+automate bd_level
+  0.9
+automate sd_level
+  0.6
+automate dr_tone
+  0.42
+automate dr_drive
+  0.12
+
+# ---- melody: one note per beat, flat, AABC ---------------------------
+track lead patch=feltkeys gain=0.85 pan=0.08 vel=0.75 reverb_send=0.3
+  (A3:1 C4:1 E4:1 G4:1 A3:1 C4:1 E4:1 D4:1 G3:1 A#3:1 D4:1 A4:1 E4:1 D4:1 A#3:1 G3:1)x4
+  >SECB
+  E5:1 C5:1 D5:1 A4:4.6875 R:0.3125 A4:0.5 G4:0.5 A4:0.5 G4:0.5 A4:1 E4:4.6875 R:0.3125
+  E5:1 C5:1 D5:1 A4:4.6875 R:0.3125 A4:0.5 G4:0.5 A4:0.5 G4:0.5 A4:1 E4:4.6875 R:0.3125
+  >SECA2
+  (A3:1 C4:1 E4:1 G4:1 A3:1 C4:1 E4:1 D4:1 G3:1 A#3:1 D4:1 A4:1 E4:1 D4:1 A#3:1 G3:1)x2
+  >SECA3
+  (A3:1 C4:1 E4:1 G4:1 A3:1 C4:1 E4:1 D4:1 G3:1 A#3:1 D4:1 A4:1 E4:1 D4:1 A#3:1 G3:1)x2
+  >OUT
+  A4:1 G4:1 E4:1 A3:4.6875
+
+# ---- dyads: two voices, changes at 0 / 2 / 3.5 -----------------------
+track dyads patch=glassdyad gain=0.5 pan=-0.12 reverb_send=0.15
+  ([C4 E4]:2@0.6 [A3 E4]:1.5@0.55 [A#3 D4]:2.5@0.65 [A3 C4]:1.5@0.55 [A#3 D4]:2.5@0.65 [G3 D4]:2@0.6 [A3 D4]:1.5@0.55 [C4 E4]:2.5@0.65)x4
+  >SECB
+  [C4 E4]:3.5@0.6 [A#3 D4]:4.5@0.6 [A#3 C4]:3.5@0.55 [G3 C4]:4.5@0.6
+  [C4 E4]:3.5@0.6 [A#3 D4]:4.5@0.6 [A#3 C4]:3.5@0.55 [G3 C4]:4.5@0.6
+  >SECA2
+  ([C4 E4]:2@0.6 [A3 E4]:1.5@0.55 [A#3 D4]:2.5@0.65 [A3 C4]:1.5@0.55 [A#3 D4]:2.5@0.65 [G3 D4]:2@0.6 [A3 D4]:1.5@0.55 [C4 E4]:2.5@0.65)x2
+  >SECC
+  [A3 E4]:8@0.5 [G3 D4]:8@0.5 [A3 E4]:8@0.5 [G3 D4]:8@0.5
+  >SECA3
+  ([C4 E4]:2@0.6 [A3 E4]:1.5@0.55 [A#3 D4]:2.5@0.65 [A3 C4]:1.5@0.55 [A#3 D4]:2.5@0.65 [G3 D4]:2@0.6 [A3 D4]:1.5@0.55 [C4 E4]:2.5@0.65)x2
+  >OUT
+  [A3 E4]:12@0.55
+
+# ---- bass: pedal under B, the walking 8ths own section C -------------
+track bass patch=heartbass gain=0.75
+  >SECB
+  A1:8@0.5 A1:8@0.5 A1:8@0.5 A1:8@0.5
+  >SECC
+  A2:0.5@0.7 E3:1@0.6 G3:1@0.6 E3:0.5@0.55 G3:0.5@0.6 E3:0.5@0.55 F2:0.5@0.7 E3:3.5@0.6
+  A2:0.5@0.7 E3:1@0.6 G3:1@0.6 E3:0.5@0.55 G3:0.5@0.6 E3:0.5@0.55 G2:0.5@0.7 D3:3.5@0.6
+  A2:0.5@0.7 E3:1@0.6 G3:1@0.6 E3:0.5@0.55 G3:0.5@0.6 E3:0.5@0.55 F2:0.5@0.7 E3:3.5@0.6
+  A2:0.5@0.7 E3:1@0.6 G3:1@0.6 E3:0.5@0.55 G3:0.5@0.6 E3:0.5@0.55 G2:0.5@0.7 D3:3.5@0.6
+
+# ---- kick/snare: the measured A/B grammar, flat velocity -------------
+track beat kit=909 len=0.25 vel=0.64
+  BD:1 SD:0.5 BD:1.25 BD:0.25 SD:0.25 BD:0.75
+  BD:0.5 BD:0.25 BD:0.75 BD:1.5 SD:1
+  BD:1 SD:0.5 BD:0.75 SD:0.25 BD:0.25 BD:0.25 SD:0.25 BD:0.5 BD:0.25
+  BD:0.5 BD:0.25 BD:0.75 BD:1.5 SD:1
+  (BD:1 SD:0.5 BD:0.75 SD:0.25 BD:0.25 BD:0.25 SD:0.25 BD:0.5 BD:0.25 BD:0.5 BD:0.25 BD:0.75 BD:1.5 SD:1 BD:0.5 BD:0.5 SD:0.5 BD:1.5 SD:0.25 BD:0.5 BD:0.25 BD:0.5 BD:0.25 BD:0.75 BD:1.5 SD:1 BD:1 SD:0.5 BD:1.25 BD:0.25 SD:0.25 BD:0.75 BD:0.5 BD:0.25 BD:0.75 BD:1.5 SD:1)x2
+  >SECB
+  BD:0.5 BD:0.25 BD:0.75 BD:1.5 SD:1
+  BD:0.5 BD:0.25 BD:0.75 BD:1.5 SD:1
+  BD:1 SD:0.5 BD:1.25 BD:0.25 SD:0.25 BD:0.75
+  BD:0.5 BD:0.25 BD:0.75 BD:1.5 SD:1
+  BD:0.5 BD:0.25 BD:0.75 BD:1.5 SD:1
+  BD:0.5 BD:0.25 BD:0.75 BD:1.5 SD:1
+  BD:0.5 BD:0.25 BD:0.75 BD:1.5 SD:1
+  BD:0.5 BD:0.25 BD:0.25 SD:0.5 BD:0.5 SD:0.0625@0.6 SD:0.0625@0.55 SD:0.0625@0.5 SD:0.0625@0.44 SD:0.0625@0.38 SD:0.0625@0.31 SD:0.0625@0.25 SD:0.0625@0.19 BD:0.25@0.1 BD:0.5 BD:0.75
+  >SECA2
+  (BD:1 SD:0.5 BD:1.25 BD:0.25 SD:0.25 BD:0.75 BD:0.5 BD:0.25 BD:0.75 BD:1.5 SD:1 BD:0.5 BD:0.5 SD:0.5 BD:1.5 SD:0.25 BD:0.5 BD:0.25 BD:0.5 BD:0.25 BD:0.75 BD:1.5 SD:1)x2
+  >SECC
+  (BD:1 SD:0.5 BD:1.25 BD:0.25 SD:0.25 BD:0.75 BD:0.5 BD:0.25 BD:0.75 BD:1.5 SD:1 BD:0.5 BD:0.5 SD:0.5 BD:1.5 SD:0.25 BD:0.5 BD:0.25 BD:0.5 BD:0.25 BD:0.75 BD:1.5 SD:1)x1
+  BD:1 SD:0.5 BD:1.25 BD:0.25 SD:0.25 BD:0.75
+  BD:0.5 BD:0.25 BD:0.75 BD:1.5 SD:1
+  BD:1 SD:0.5 BD:1.25 BD:0.25 SD:0.25 BD:0.75
+  SD:0.25@0.06 SD:0.25@0.2 SD:0.25@0.35 SD:0.25@0.5 SD:0.5@0.64 BD:1.5 SD:1
+  >SECA3
+  (BD:1 SD:0.5 BD:1.25 BD:0.25 SD:0.25 BD:0.75 BD:0.5 BD:0.25 BD:0.75 BD:1.5 SD:1 BD:0.5 BD:0.5 SD:0.5 BD:1.5 SD:0.25 BD:0.5 BD:0.25 BD:0.5 BD:0.25 BD:0.75 BD:1.5 SD:1)x1
+  BD:1 SD:0.5 BD:1.25 BD:0.25 SD:0.25 BD:0.75
+  BD:0.5 BD:0.25 BD:0.75 BD:1.5 SD:1
+  BD:1 SD:0.6667 BD:1 BD:0.3333 SD:0.3333 BD:0.6667
+  BD:0.6667 BD:0.3333 SD:0.6667 BD:0.6667 SD:1@0.35 SD:0.3333@0.5 BD:0.3333@0.5
+  >OUT
+  BD:0.5 BD:0.25 BD:0.75 BD:1.5 SD:1
+  R:4
+  SD:0.3333@0.12 SD:0.3333@0.2 SD:0.3333@0.27 SD:1@0.33 SD:0.3333@0.15 SD:0.3333@0.21 SD:0.3333@0.27 SD:0.3333@0.33 SD:0.3333@0.39 SD:0.3333@0.45
+
+# ---- hats: straight 8ths, ONE velocity, a 16th-insert bar each 4th ---
+track hats kit=909 len=0.5 vel=0.64
+  (CH:0.5)x8
+  (CH:0.5)x8
+  (CH:0.5)x8
+  (CH:0.5 CH:0.25 CH:0.25)x4
+  (CH:0.5)x8
+  (CH:0.5)x8
+  (CH:0.5)x8
+  (CH:0.5 CH:0.25 CH:0.25)x4
+  (CH:0.5)x8
+  (CH:0.5)x8
+  (CH:0.5)x8
+  (CH:0.5 CH:0.25 CH:0.25)x4
+  (CH:0.5)x8
+  (CH:0.5)x8
+  (CH:0.5)x8
+  (CH:0.5 CH:0.25 CH:0.25)x4
+  >SECB
+  (CH:0.5)x8
+  (CH:0.5)x8
+  (CH:0.5)x8
+  (CH:0.5)x8
+  (CH:0.5)x8
+  (CH:0.5)x8
+  (CH:0.5)x8
+  R:4
+  >SECA2
+  (CH:0.5)x8
+  (CH:0.5)x8
+  (CH:0.5)x8
+  (CH:0.5 CH:0.25 CH:0.25)x4
+  (CH:0.5)x8
+  (CH:0.5)x8
+  (CH:0.5)x8
+  (CH:0.5 CH:0.25 CH:0.25)x4
+  >SECC
+  (CH:0.5)x8
+  (CH:0.5)x8
+  (CH:0.5)x8
+  (CH:0.5)x8
+  (CH:0.5)x8
+  (CH:0.5)x8
+  (CH:0.5)x8
+  (CH:0.5)x8
+  >SECA3
+  (CH:0.5)x8
+  (CH:0.5)x8
+  (CH:0.5)x8
+  (CH:0.5 CH:0.25 CH:0.25)x4
+  (CH:0.5)x8
+  (CH:0.5)x8
+  (CH:0.33333)x12
+  (CH:0.33333)x12

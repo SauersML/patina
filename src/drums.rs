@@ -647,6 +647,7 @@ impl Hats {
 // ---------------------------------------------------------------------------
 
 pub struct DrumMachine {
+    sample_rate: f32,
     kick: Kick,
     snare: Snare,
     rim: Rim,
@@ -664,11 +665,20 @@ pub struct DrumMachine {
     drive_target: f32,
     bus_shaper_l: AdaaTanh,
     bus_shaper_r: AdaaTanh,
+    /// Bus tone: a one-pole lowpass over the whole board — the "blanket
+    /// over the kit" a dusty mix needs, which no per-voice knob can do
+    /// (they shape sources; this darkens the summed kit like a desk EQ
+    /// or a worn cassette). 1.0 = wire (~18 kHz), 0.0 = ~900 Hz felt.
+    tone: f32,
+    tone_target: f32,
+    tone_lp_l: f32,
+    tone_lp_r: f32,
 }
 
 impl DrumMachine {
     pub fn new(sample_rate: f32) -> Self {
         Self {
+            sample_rate,
             kick: Kick::new(sample_rate),
             snare: Snare::new(sample_rate),
             rim: Rim::new(sample_rate),
@@ -679,6 +689,10 @@ impl DrumMachine {
             drive_target: 0.0,
             bus_shaper_l: AdaaTanh::new(),
             bus_shaper_r: AdaaTanh::new(),
+            tone: 1.0,
+            tone_target: 1.0,
+            tone_lp_l: 0.0,
+            tone_lp_r: 0.0,
         }
     }
 
@@ -750,6 +764,19 @@ impl DrumMachine {
             l = l * (1.0 - mix) + wet_l * mix;
             r = r * (1.0 - mix) + wet_r * mix;
         }
+
+        // Bus tone: one pole over the summed kit, after the drive so a
+        // driven kit still darkens like a desk EQ post-insert. At 1.0 the
+        // corner sits near 18 kHz — audibly a wire.
+        self.tone += (self.tone_target - self.tone) * 0.0008;
+        if self.tone < 0.999 {
+            let fc = 900.0 * (18000.0f32 / 900.0).powf(self.tone);
+            let k = 1.0 - (-std::f32::consts::TAU * fc / self.sample_rate).exp();
+            self.tone_lp_l += k * (l - self.tone_lp_l);
+            self.tone_lp_r += k * (r - self.tone_lp_r);
+            l = self.tone_lp_l;
+            r = self.tone_lp_r;
+        }
         (l, r)
     }
 
@@ -817,6 +844,9 @@ impl DrumMachine {
     }
     pub fn set_drive(&mut self, v: f32) {
         self.drive_target = v.clamp(0.0, 1.0);
+    }
+    pub fn set_tone(&mut self, v: f32) {
+        self.tone_target = v.clamp(0.0, 1.0);
     }
 }
 

@@ -147,7 +147,8 @@
 // Rhythm section (the 909 board; all 0..1 panel knobs): bd_level, bd_tune,
 // bd_attack, bd_decay, bd_sweep, bd_drive, sd_level, sd_tune, sd_tone,
 // sd_snappy, sd_decay, rs_level, rs_tune, cp_level, cp_decay, hh_level,
-// hh_tune, hh_metal, ch_decay, oh_decay, dr_drive.
+// hh_tune, hh_metal, ch_decay, oh_decay, dr_drive, dr_tone (bus lowpass:
+// 1 = wire, 0 = felt blanket — the dusty-kit knob).
 //
 // The tape deck (per sampler track via `automate <track>.<param>`, or
 // global to all slots): smp_pitch (semitones, -24..24), smp_start (0..1
@@ -317,6 +318,7 @@ param_table! {
     ChDecay:         "ch_decay",       Some(58),  (0.0, 1.0, Lin);
     OhDecay:         "oh_decay",       Some(59),  (0.0, 1.0, Lin);
     DrumDrive:       "dr_drive",       Some(60),  (0.0, 1.0, Lin);
+    DrumTone:        "dr_tone",        Some(61),  (0.0, 1.0, Lin);
     // The voice box (vox.rs). vox_level reaches 2: the band vocoder's
     // per-band tanh caps its own output (see vocoder.rs's gain-staging
     // contract), so headroom above unity is the only push a song can
@@ -505,6 +507,7 @@ impl Param {
             Param::ChDecay => vm.set_ch_decay(value),
             Param::OhDecay => vm.set_oh_decay(value),
             Param::DrumDrive => vm.set_drum_drive(value),
+            Param::DrumTone => vm.set_drum_tone(value),
             Param::VoxLevel => vm.set_vox_level(value),
             Param::VoxDry => vm.set_vox_dry(value),
             Param::VoxBreath => vm.set_vox_breath(value),
@@ -733,7 +736,12 @@ pub fn render_offline_solo(
     sample_rate: f32,
     solo: Option<u16>,
 ) -> Vec<(f32, f32)> {
-    let mut vm = VoiceManager::new(sample_rate, 10);
+    // Offline bounces get a bigger card cage than the live instrument:
+    // 24 voice boards, each its own circuit (per-index component
+    // tolerances, ladder mismatch, drift walk) — an ensemble of unique
+    // instantiations, not copies. Live paths keep their realtime-safe
+    // counts; a bounce has no such budget and voice-stealing is audible.
+    let mut vm = VoiceManager::new(sample_rate, 24);
     vm.set_solo(solo);
     // A bounce records a warmed-up instrument, not a cold power-on
     vm.warm_up();
@@ -2504,6 +2512,7 @@ mod tests {
             Param::ChDecay => v.ch_decay,
             Param::OhDecay => v.oh_decay,
             Param::DrumDrive => v.dr_drive,
+            Param::DrumTone => v.dr_tone,
             Param::VoxLevel => v.vox_level,
             Param::VoxDry => v.vox_dry,
             Param::VoxBreath => v.vox_breath,

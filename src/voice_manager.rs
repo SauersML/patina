@@ -108,6 +108,7 @@ pub struct ParamValues {
     pub ch_decay: f32,
     pub oh_decay: f32,
     pub dr_drive: f32,
+    pub dr_tone: f32,
     // The voice box's panel (bus-level, like the effects)
     pub vox_level: f32,
     pub vox_dry: f32,
@@ -228,6 +229,7 @@ impl Default for ParamValues {
             ch_decay: 0.35,
             oh_decay: 0.5,
             dr_drive: 0.0,
+            dr_tone: 1.0,
             vox_level: 0.8,
             vox_dry: 0.0,
             vox_breath: 0.12,
@@ -1407,6 +1409,11 @@ impl VoiceManager {
     pub fn set_drum_drive(&mut self, v: f32) {
         self.params.dr_drive = Param::DrumDrive.clamp(v);
         self.drums.set_drive(self.params.dr_drive);
+    }
+
+    pub fn set_drum_tone(&mut self, v: f32) {
+        self.params.dr_tone = Param::DrumTone.clamp(v);
+        self.drums.set_tone(self.params.dr_tone);
     }
 }
 
