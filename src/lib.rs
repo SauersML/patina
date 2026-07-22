@@ -6,6 +6,9 @@
 //     hardware MIDI input, song player
 //   - the CLAP/VST3 plugin (src/plugin.rs, feature "plugin"): the host owns
 //     audio, MIDI, and parameter automation
+//   - the Audio Unit (src/au/, feature "au"): native AUv2 MusicDevice for
+//     Logic Pro, GarageBand, and other AU hosts
+// The plugin front ends share one parameter table (src/host_params.rs).
 
 pub mod adaa;
 pub mod chorus;
@@ -41,5 +44,11 @@ pub mod panel_render;
 #[cfg(feature = "app")]
 pub mod ui;
 
+#[cfg(any(feature = "plugin", feature = "au"))]
+pub mod host_params;
+
 #[cfg(feature = "plugin")]
 mod plugin;
+
+#[cfg(all(feature = "au", target_os = "macos"))]
+pub mod au;

@@ -29,6 +29,10 @@ app = [
 # The CLAP/VST3 plugin (host provides audio, MIDI, and parameter UI):
 #   cargo xtask bundle patina --release --no-default-features --features plugin
 plugin = ["dep:nice-plug"]
+# The native AUv2 Audio Unit for Logic Pro / GarageBand (macOS only, no
+# extra dependencies — talks straight to the AudioComponent ABI):
+#   scripts/bundle-au.sh
+au = []
 
 [dependencies]
 parking_lot = "0.12.1"

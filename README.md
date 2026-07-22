@@ -48,6 +48,23 @@ format for programmatic playback and parameter automation.
    cargo run --release -- --play songs/ferris-wheel.song
    ```
 
+## 🔌 Plugins
+
+The same engine ships as a plugin for every major host, all three front ends
+driven by one shared parameter table (`src/host_params.rs`):
+
+- **CLAP / VST3** — `cargo xtask bundle patina --release --no-default-features --features plugin`
+- **Audio Unit (Logic Pro, GarageBand)** — a native AUv2 MusicDevice written
+  directly against the AudioComponent ABI, no wrapper frameworks:
+  `scripts/bundle-au.sh --validate` builds `Patina.component`, installs it to
+  `~/Library/Audio/Plug-Ins/Components`, and runs Apple's `auval` suite
+  against it. In Logic, it appears as an instrument under
+  **Sauers → Patina**; keyboard voices on any MIDI channel, the 909 board on
+  channel 10, and every knob automatable with Logic's parameter curves.
+
+On macOS the git hooks install all three automatically after every commit
+(`scripts/install-plugins.sh`).
+
 ## 🎚️ Patches
 
 The strip at the top of the panel holds the factory bank (US 3,981,218 style — one click retunes every block at once, live, even under held notes): **Init · Glasswing · Rust Engine · Peppermint · Sea of Dials · Fathom · Tears · Moths · Anemone · Thunder · Choir** — each with its own keyboard register (a bass patch arrives at octave 2). `SAVE` snapshots your current knobs to `patches/user-N.patch` — plain text, same parameter names as song automation, edit at will.

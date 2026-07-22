@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rebuild the CLAP/VST3 bundles and install them where DAWs scan, so the
+# Rebuild the CLAP/VST3/AU bundles and install them where DAWs scan, so the
 # plugins always match the code. Wired to the post-commit/post-merge hooks
 # (see .githooks/) — normally you never run this by hand.
 set -euo pipefail
@@ -30,3 +30,6 @@ cp -R target/bundled/Patina.clap "$clap_dir/"
 cp -R target/bundled/Patina.vst3 "$vst3_dir/"
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] installed Patina.clap -> $clap_dir, Patina.vst3 -> $vst3_dir"
+
+# The native Audio Unit (Logic Pro / GarageBand); macOS only, no-op elsewhere
+scripts/bundle-au.sh

@@ -2,13 +2,14 @@
 // parameter automation; everything else is the same VoiceManager the
 // standalone app drives.
 //
-// SINGLE SOURCE OF TRUTH: every float parameter the plugin exposes is one
-// line in `float_specs()` — id, display name, range, default, formatting,
-// and the VoiceManager setter it drives. The host parameter list, default
-// values, state save/restore, and per-block application are all derived
-// from that table. Adding an engine knob = one engine setter + one line
-// here. (The two selector params, waveform and chorus mode, are typed
-// enums and live alongside the table.)
+// SINGLE SOURCE OF TRUTH: every parameter this front end exposes comes from
+// the shared table in src/host_params.rs — id, display name, range,
+// default, formatting, and the VoiceManager setter it drives. The host
+// parameter list, default values, state save/restore, and per-block
+// application are all derived from that table, and the Audio Unit front end
+// (src/au/) derives from the very same table. The two selector params,
+// waveform and chorus mode, stay typed enums here so CLAP/VST3 hosts render
+// them as dropdowns; a test pins them to the table.
 //
 // Bundle with:
 //   cargo xtask bundle patina --release --no-default-features --features plugin
@@ -17,157 +18,51 @@ use nice_plug::prelude::*;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-use crate::chorus::ChorusMode;
-use crate::oscillator::Waveform;
+use crate::host_params::{
+    self, ChoiceDef, Display, FloatDef, ParamDef, NUM_VOICES, PITCH_BEND_SEMITONES,
+};
 use crate::voice_manager::VoiceManager;
 
-const NUM_VOICES: usize = 8;
-/// Standard pitch-wheel range, in semitones each direction.
-const PITCH_BEND_SEMITONES: f32 = 2.0;
-
 // ---------------------------------------------------------------------------
-// The parameter table
+// nice-plug params derived from the shared table
 // ---------------------------------------------------------------------------
 
-/// One host-facing float parameter: its identity, its control, and the
-/// engine setter it drives.
-struct FloatSpec {
-    id: &'static str,
+/// One host-facing float parameter: the shared definition plus the
+/// nice-plug control built from it.
+struct FloatSlot {
+    def: FloatDef,
     param: FloatParam,
-    apply: fn(&mut VoiceManager, f32),
-    /// Guarded setters are only called when the value changes — they swap
-    /// voice banks, re-randomize offsets, or re-run self-calibration.
-    guarded: bool,
 }
 
-fn spec(
-    id: &'static str,
-    param: FloatParam,
-    apply: fn(&mut VoiceManager, f32),
-) -> FloatSpec {
-    FloatSpec { id, param, apply, guarded: false }
+fn build_float_param(def: &FloatDef) -> FloatParam {
+    let range = match def.display {
+        Display::Seconds | Display::Hertz => FloatRange::Skewed {
+            min: def.min,
+            max: def.max,
+            factor: FloatRange::skew_factor(-2.0),
+        },
+        _ => FloatRange::Linear { min: def.min, max: def.max },
+    };
+    let param = FloatParam::new(def.name, def.default, range);
+    match def.display {
+        Display::Percent => param
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage())
+            .with_unit(" %"),
+        Display::Fraction => param
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
+        Display::Seconds => param
+            .with_unit(" s")
+            .with_value_to_string(formatters::v2s_f32_rounded(3)),
+        Display::Hertz => param
+            .with_value_to_string(formatters::v2s_f32_hz_then_khz(1))
+            .with_string_to_value(formatters::s2v_f32_hz_then_khz()),
+        Display::Plain(unit) => param
+            .with_unit(unit)
+            .with_value_to_string(formatters::v2s_f32_rounded(2)),
+    }
 }
-
-fn guarded(
-    id: &'static str,
-    param: FloatParam,
-    apply: fn(&mut VoiceManager, f32),
-) -> FloatSpec {
-    FloatSpec { id, param, apply, guarded: true }
-}
-
-fn pct(name: &'static str, default: f32) -> FloatParam {
-    FloatParam::new(name, default, FloatRange::Linear { min: 0.0, max: 1.0 })
-        .with_value_to_string(formatters::v2s_f32_percentage(0))
-        .with_string_to_value(formatters::s2v_f32_percentage())
-        .with_unit(" %")
-}
-
-fn seconds(name: &'static str, default: f32, min: f32, max: f32) -> FloatParam {
-    FloatParam::new(
-        name,
-        default,
-        FloatRange::Skewed { min, max, factor: FloatRange::skew_factor(-2.0) },
-    )
-    .with_unit(" s")
-    .with_value_to_string(formatters::v2s_f32_rounded(3))
-}
-
-fn hz(name: &'static str, default: f32, min: f32, max: f32) -> FloatParam {
-    FloatParam::new(
-        name,
-        default,
-        FloatRange::Skewed { min, max, factor: FloatRange::skew_factor(-2.0) },
-    )
-    .with_value_to_string(formatters::v2s_f32_hz_then_khz(1))
-    .with_string_to_value(formatters::s2v_f32_hz_then_khz())
-}
-
-fn plain(name: &'static str, default: f32, min: f32, max: f32, unit: &'static str) -> FloatParam {
-    FloatParam::new(name, default, FloatRange::Linear { min, max })
-        .with_unit(unit)
-        .with_value_to_string(formatters::v2s_f32_rounded(2))
-}
-
-/// THE table. Order here is the order hosts display parameters in.
-/// Ranges and defaults mirror the engine's own clamps and ParamValues.
-#[rustfmt::skip]
-fn float_specs() -> Vec<FloatSpec> {
-    vec![
-        // Oscillator
-        spec("volume",   pct("Volume", 0.5),                                    |vm, v| vm.set_volume(v)),
-        spec("detune",   plain("Detune", 7.0, 0.0, 30.0, " ct"),                |vm, v| vm.set_detune(v)),
-        spec("pw",       pct("Pulse Width", 0.5).with_unit(""),                 |vm, v| vm.set_pulse_width(v)),
-        spec("noise",    pct("Noise", 0.0),                                     |vm, v| vm.set_noise(v)),
-
-        // LFO
-        spec("lforate",  hz("LFO Rate", 1.0, 0.1, 30.0),                        |vm, v| vm.set_lfo_rate(v)),
-        spec("lfoshape", pct("LFO Shape", 0.5),                                 |vm, v| vm.set_lfo_shape(v)),
-        spec("lfopitch", plain("LFO > Pitch", 0.0, 0.0, 200.0, " ct"),          |vm, v| vm.set_lfo_pitch(v)),
-        spec("lfofilt",  plain("LFO > Filter", 0.0, 0.0, 4.0, " oct"),          |vm, v| vm.set_lfo_filter(v)),
-        spec("lfopwm",   plain("LFO > PWM", 0.0, 0.0, 0.45, ""),                |vm, v| vm.set_lfo_pwm(v)),
-
-        // Amplitude envelope
-        spec("attack",   seconds("Attack", 0.1, 0.01, 2.0),                     |vm, v| vm.set_attack(v)),
-        spec("decay",    seconds("Decay", 0.1, 0.01, 2.0),                      |vm, v| vm.set_decay(v)),
-        spec("sustain",  pct("Sustain", 0.7),                                   |vm, v| vm.set_sustain(v)),
-        spec("release",  seconds("Release", 0.2, 0.01, 2.0),                    |vm, v| vm.set_release(v)),
-
-        // Filter
-        spec("cutoff",   hz("Cutoff", 15000.0, 20.0, 20000.0),                  |vm, v| vm.set_filter_cutoff(v)),
-        spec("reso",     plain("Resonance", 0.0, 0.0, 4.0, ""),                 |vm, v| vm.set_filter_resonance(v)),
-        spec("drive",    plain("Drive", 1.0, 0.1, 5.0, ""),                     |vm, v| vm.set_filter_drive(v)),
-        spec("sat",      plain("Saturation", 1.0, 0.0, 2.0, ""),                |vm, v| vm.set_filter_saturation(v)),
-        spec("hpf",      hz("High-Pass", 16.0, 16.0, 8000.0),                   |vm, v| vm.set_hpf_cutoff(v)),
-
-        // Filter envelope
-        spec("fenvamt",  plain("Filter Env", 0.0, -5.0, 5.0, " oct"),           |vm, v| vm.set_filter_env_amount(v)),
-        spec("fenvatk",  seconds("Filter Attack", 0.005, 0.001, 2.0),           |vm, v| vm.set_filter_attack(v)),
-        spec("fenvdec",  seconds("Filter Decay", 0.3, 0.01, 2.0),               |vm, v| vm.set_filter_decay(v)),
-        spec("fenvsus",  pct("Filter Sustain", 0.0),                            |vm, v| vm.set_filter_sustain(v)),
-        spec("fenvrel",  seconds("Filter Release", 0.3, 0.01, 2.0),             |vm, v| vm.set_filter_release(v)),
-
-        // Effects
-        spec("fuzz",     pct("Fuzz", 0.0),                                      |vm, v| vm.set_fuzz(v)),
-        spec("spring",   pct("Spring Reverb", 0.0),                             |vm, v| vm.set_spring(v)),
-        spec("rvbdecay", pct("Reverb Decay", 0.5).with_unit(""),                |vm, v| vm.set_reverb_decay(v)),
-        spec("rvbwet",   pct("Reverb Mix", 0.5),                                |vm, v| vm.set_reverb_wet(v)),
-        guarded("chrate",  hz("Chorus Rate", 0.5, 0.1, 10.0),                   |vm, v| vm.set_chorus_rate(v)),
-        guarded("chdepth", pct("Chorus Depth", 0.3),                            |vm, v| vm.set_chorus_depth(v)),
-        spec("tpwow",    pct("Tape Wow", 0.0),                                  |vm, v| vm.set_tape_wow(v)),
-        spec("tpflut",   pct("Tape Flutter", 0.0),                              |vm, v| vm.set_tape_flutter(v)),
-        guarded("tpdrive", pct("Tape Drive", 0.0),                              |vm, v| vm.set_tape_drive(v)),
-        guarded("tpage",   pct("Tape Age", 0.0),                                |vm, v| vm.set_tape_age(v)),
-
-        // Rhythm section (the 909 board; triggered on MIDI channel 10).
-        // Panel knobs are unitless rotations, exactly like the hardware.
-        spec("bdlevel",  pct("BD Level", 0.8),                                  |vm, v| vm.set_bd_level(v)),
-        spec("bdtune",   pct("BD Tune", 0.35).with_unit(""),                    |vm, v| vm.set_bd_tune(v)),
-        spec("bdattack", pct("BD Attack", 0.5).with_unit(""),                   |vm, v| vm.set_bd_attack(v)),
-        spec("bddecay",  pct("BD Decay", 0.45).with_unit(""),                   |vm, v| vm.set_bd_decay(v)),
-        spec("bdsweep",  pct("BD Sweep", 0.5).with_unit(""),                    |vm, v| vm.set_bd_sweep(v)),
-        spec("bddrive",  pct("BD Drive", 0.25).with_unit(""),                   |vm, v| vm.set_bd_drive(v)),
-        spec("sdlevel",  pct("SD Level", 0.75),                                 |vm, v| vm.set_sd_level(v)),
-        spec("sdtune",   pct("SD Tune", 0.4).with_unit(""),                     |vm, v| vm.set_sd_tune(v)),
-        spec("sdtone",   pct("SD Tone", 0.5).with_unit(""),                     |vm, v| vm.set_sd_tone(v)),
-        spec("sdsnappy", pct("SD Snappy", 0.6).with_unit(""),                   |vm, v| vm.set_sd_snappy(v)),
-        spec("sddecay",  pct("SD Decay", 0.5).with_unit(""),                    |vm, v| vm.set_sd_decay(v)),
-        spec("rslevel",  pct("RS Level", 0.7),                                  |vm, v| vm.set_rs_level(v)),
-        spec("rstune",   pct("RS Tune", 0.5).with_unit(""),                     |vm, v| vm.set_rs_tune(v)),
-        spec("cplevel",  pct("CP Level", 0.75),                                 |vm, v| vm.set_cp_level(v)),
-        spec("cpdecay",  pct("CP Decay", 0.5).with_unit(""),                    |vm, v| vm.set_cp_decay(v)),
-        spec("hhlevel",  pct("HH Level", 0.7),                                  |vm, v| vm.set_hh_level(v)),
-        spec("hhtune",   pct("HH Tune", 0.5).with_unit(""),                     |vm, v| vm.set_hh_tune(v)),
-        spec("hhmetal",  pct("HH Metal", 0.65).with_unit(""),                   |vm, v| vm.set_hh_metal(v)),
-        spec("chdecay",  pct("CH Decay", 0.35).with_unit(""),                   |vm, v| vm.set_ch_decay(v)),
-        spec("ohdecay",  pct("OH Decay", 0.5).with_unit(""),                    |vm, v| vm.set_oh_decay(v)),
-        spec("drdrive",  pct("Drum Drive", 0.0),                                |vm, v| vm.set_drum_drive(v)),
-    ]
-}
-
-// ---------------------------------------------------------------------------
-// Selector (enum) parameters
-// ---------------------------------------------------------------------------
 
 #[derive(Enum, PartialEq, Clone, Copy)]
 enum WaveformParam {
@@ -175,17 +70,6 @@ enum WaveformParam {
     Triangle,
     Sawtooth,
     Square,
-}
-
-impl WaveformParam {
-    fn to_engine(self) -> Waveform {
-        match self {
-            WaveformParam::Sine => Waveform::Sine,
-            WaveformParam::Triangle => Waveform::Triangle,
-            WaveformParam::Sawtooth => Waveform::Sawtooth,
-            WaveformParam::Square => Waveform::Square,
-        }
-    }
 }
 
 #[derive(Enum, PartialEq, Clone, Copy)]
@@ -197,34 +81,35 @@ enum ChorusModeParam {
     IV,
 }
 
-impl ChorusModeParam {
-    fn to_engine(self) -> ChorusMode {
-        match self {
-            ChorusModeParam::Off => ChorusMode::Off,
-            ChorusModeParam::I => ChorusMode::I,
-            ChorusModeParam::II => ChorusMode::II,
-            ChorusModeParam::III => ChorusMode::III,
-            ChorusModeParam::IV => ChorusMode::IV,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Params object built from the table
-// ---------------------------------------------------------------------------
-
 struct PatinaParams {
     waveform: EnumParam<WaveformParam>,
     chorus_mode: EnumParam<ChorusModeParam>,
-    floats: Vec<FloatSpec>,
+    /// The table's selector entries; their `apply` drives the engine.
+    waveform_def: ChoiceDef,
+    chorus_def: ChoiceDef,
+    floats: Vec<FloatSlot>,
 }
 
 impl Default for PatinaParams {
     fn default() -> Self {
+        let mut waveform_def = None;
+        let mut chorus_def = None;
+        let mut floats = Vec::new();
+        for def in host_params::param_defs() {
+            match def {
+                ParamDef::Float(fd) => {
+                    floats.push(FloatSlot { param: build_float_param(&fd), def: fd })
+                }
+                ParamDef::Choice(cd) if cd.id == "waveform" => waveform_def = Some(cd),
+                ParamDef::Choice(cd) => chorus_def = Some(cd),
+            }
+        }
         Self {
             waveform: EnumParam::new("Waveform", WaveformParam::Sawtooth),
             chorus_mode: EnumParam::new("Chorus Mode", ChorusModeParam::Off),
-            floats: float_specs(),
+            waveform_def: waveform_def.expect("table has a waveform selector"),
+            chorus_def: chorus_def.expect("table has a chorus mode selector"),
+            floats,
         }
     }
 }
@@ -234,15 +119,21 @@ impl Default for PatinaParams {
 // same Arc the plugin returns from `params()`.
 unsafe impl Params for PatinaParams {
     fn param_map(&self) -> Vec<(String, ParamPtr, String)> {
-        let mut map = vec![("waveform".to_string(), self.waveform.as_ptr(), String::new())];
-        for float_spec in &self.floats {
-            // The chorus selector belongs right before the chorus knobs
-            if float_spec.id == "chrate" {
-                map.push(("chmode".to_string(), self.chorus_mode.as_ptr(), String::new()));
-            }
-            map.push((float_spec.id.to_string(), float_spec.param.as_ptr(), String::new()));
-        }
-        map
+        // Emit in the table's canonical order so every format agrees.
+        let mut floats = self.floats.iter();
+        host_params::param_defs()
+            .iter()
+            .map(|def| {
+                let ptr = match def {
+                    ParamDef::Choice(c) if c.id == "waveform" => self.waveform.as_ptr(),
+                    ParamDef::Choice(_) => self.chorus_mode.as_ptr(),
+                    ParamDef::Float(_) => {
+                        floats.next().expect("one FloatSlot per float def").param.as_ptr()
+                    }
+                };
+                (def.id().to_string(), ptr, String::new())
+            })
+            .collect()
     }
 }
 
@@ -257,8 +148,8 @@ pub struct PatinaPlugin {
     /// Last value pushed through each guarded setter (indexed like
     /// `params.floats`); NaN forces the first application.
     applied_floats: Vec<f32>,
-    applied_waveform: Option<Waveform>,
-    applied_chorus_mode: Option<ChorusMode>,
+    applied_waveform: Option<usize>,
+    applied_chorus_mode: Option<usize>,
 }
 
 impl Default for PatinaPlugin {
@@ -289,24 +180,24 @@ impl PatinaPlugin {
     fn apply_params(&mut self) {
         let params = Arc::clone(&self.params);
 
-        for (float_spec, last) in params.floats.iter().zip(self.applied_floats.iter_mut()) {
-            let value = float_spec.param.value();
-            if !float_spec.guarded || value != *last {
-                (float_spec.apply)(&mut self.vm, value);
+        for (slot, last) in params.floats.iter().zip(self.applied_floats.iter_mut()) {
+            let value = slot.param.value();
+            if !slot.def.guarded || value != *last {
+                (slot.def.apply)(&mut self.vm, value);
                 *last = value;
             }
         }
 
-        let waveform = params.waveform.value().to_engine();
+        // The selectors swap voice banks — strictly change-only
+        let waveform = params.waveform.value() as usize;
         if self.applied_waveform != Some(waveform) {
-            self.vm.set_waveform(waveform);
+            (params.waveform_def.apply)(&mut self.vm, waveform);
             self.applied_waveform = Some(waveform);
         }
 
-        // Swaps the chorus voice bank — strictly change-only
-        let chorus_mode = params.chorus_mode.value().to_engine();
+        let chorus_mode = params.chorus_mode.value() as usize;
         if self.applied_chorus_mode != Some(chorus_mode) {
-            self.vm.set_chorus_mode(chorus_mode);
+            (params.chorus_def.apply)(&mut self.vm, chorus_mode);
             self.applied_chorus_mode = Some(chorus_mode);
         }
     }
@@ -369,24 +260,12 @@ impl Plugin for PatinaPlugin {
                     break;
                 }
                 match event {
-                    // GM convention: channel 10 (0-indexed 9) triggers the
-                    // 909 board instead of the keyboard voices
                     NoteEvent::NoteOn { note, velocity, channel, .. } => {
-                        if channel == 9 {
-                            self.vm.note_on_channel(
-                                note,
-                                velocity,
-                                crate::drums::DRUM_CHANNEL,
-                            );
-                        } else {
-                            self.vm.note_on(note, velocity);
-                        }
+                        host_params::note_on(&mut self.vm, channel, note, velocity);
                     }
                     NoteEvent::NoteOff { note, channel, .. }
                     | NoteEvent::Choke { note, channel, .. } => {
-                        if channel != 9 {
-                            self.vm.note_off(note);
-                        }
+                        host_params::note_off(&mut self.vm, channel, note);
                     }
                     // 0.5 is center; a standard wheel spans +/-2 semitones
                     NoteEvent::MidiPitchBend { value, .. } => {
@@ -440,3 +319,37 @@ impl Vst3Plugin for PatinaPlugin {
 
 nice_export_clap!(PatinaPlugin);
 nice_export_vst3!(PatinaPlugin);
+
+// ---------------------------------------------------------------------------
+// Drift pins: the typed enums above must mirror the shared table
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selector_enums_mirror_the_table() {
+        let params = PatinaParams::default();
+        assert_eq!(WaveformParam::variants(), params.waveform_def.variants);
+        assert_eq!(ChorusModeParam::variants(), params.chorus_def.variants);
+        assert_eq!(
+            params.waveform.default_plain_value() as usize,
+            params.waveform_def.default
+        );
+        assert_eq!(
+            params.chorus_mode.default_plain_value() as usize,
+            params.chorus_def.default
+        );
+    }
+
+    #[test]
+    fn param_map_follows_table_order() {
+        let params = PatinaParams::default();
+        let ids: Vec<String> =
+            params.param_map().into_iter().map(|(id, _, _)| id).collect();
+        let table_ids: Vec<String> =
+            host_params::param_defs().iter().map(|d| d.id().to_string()).collect();
+        assert_eq!(ids, table_ids);
+    }
+}
