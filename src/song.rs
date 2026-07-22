@@ -745,7 +745,7 @@ pub fn render_offline_solo(
     // tolerances, ladder mismatch, drift walk) — an ensemble of unique
     // instantiations, not copies. Live paths keep their realtime-safe
     // counts; a bounce has no such budget and voice-stealing is audible.
-    let mut vm = VoiceManager::new(sample_rate, 24);
+    let mut vm = VoiceManager::new(sample_rate, 32);
     vm.set_solo(solo);
     // A bounce records a warmed-up instrument, not a cold power-on
     vm.warm_up();

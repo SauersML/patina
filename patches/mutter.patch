@@ -1,0 +1,49 @@
+# Filament v5 — the bass: dark, fast, RUBBERY. The opposite pole from
+# the heliograph lead (4bit-9d's law: bass = the fast dark layer).
+# Character comes from interaction, not a preset shape: a resonant
+# ladder nearly closed (480 Hz, res 1.2) with a fast modest filter
+# kick gives every note a dark "wub" articulation; an octave-down saw
+# under the pulse plus a breath of FM keeps the low end grainy and
+# animal; the ARP circuit for snap; a whisper of shared noise so fast
+# runs spit slightly. key_track 0.25 so it stays in the dark even
+# when the line climbs. Releases in 90 ms so 32nd skitters speak.
+waveform 1
+pulse_width 0.24
+osc2_wave 2
+osc2_pitch -12
+osc2_level 0.4
+osc3_wave 0
+osc3_pitch 0
+osc3_level 0
+detune 2
+sub 0.25
+circuit 1
+key_track 0.25
+osc_fm 0.1
+sync 0
+ring 0
+glide 0
+attack 0.004
+decay 0.45
+sustain 0.6
+release 0.09
+filter_env 0.9
+filter_attack 0.002
+filter_decay 0.12
+filter_sustain 0.35
+filter_release 0.1
+cutoff 480
+resonance 1.2
+drive 2.4
+saturation 1.1
+hpf 28
+volume 0.5
+octave 4
+noise 0.05
+fuzz 0
+spring 0
+lfo_rate 0.5
+lfo_shape 0.5
+lfo_pitch 0
+lfo_filter 0
+lfo_pwm 0
