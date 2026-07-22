@@ -15,6 +15,7 @@
 // be grepped against the SDK headers.
 #![allow(non_upper_case_globals)]
 
+mod cocoa;
 mod ffi;
 
 use ffi::*;
@@ -429,6 +430,8 @@ fn property_info(
             err => Err(err),
         },
         kMusicDeviceProperty_InstrumentCount => global_only(4, false),
+        kAudioUnitProperty_CocoaUI => global_only(size_of::<AudioUnitCocoaViewInfo>(), false),
+        cocoa::PROP_PATINA_UNIT => global_only(size_of::<usize>(), false),
         _ => Err(kAudioUnitErr_InvalidProperty),
     }
 }
@@ -645,6 +648,22 @@ unsafe extern "C" fn au_get_property(
             write_out(unit.state.lock().should_allocate, out_data, io_size)
         }
         kMusicDeviceProperty_InstrumentCount => write_out(0u32, out_data, io_size),
+        kAudioUnitProperty_CocoaUI => match cocoa::cocoa_view_info() {
+            Some((bundle_url, class_name)) => write_out(
+                AudioUnitCocoaViewInfo {
+                    mCocoaAUViewBundleLocation: bundle_url,
+                    mCocoaAUViewClass: [class_name],
+                },
+                out_data,
+                io_size,
+            ),
+            // No resolvable bundle -> the host uses its generic view
+            None => kAudioUnitErr_InvalidProperty,
+        },
+        // The in-process handshake with our own Cocoa view (see au/cocoa.rs)
+        cocoa::PROP_PATINA_UNIT => {
+            write_out(unit as *const AuUnit as usize, out_data, io_size)
+        }
         // In/out queries: the host passes the struct in outData with its
         // input fields filled and we complete the out field in place.
         kAudioUnitProperty_ParameterStringFromValue => {

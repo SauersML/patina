@@ -5,7 +5,7 @@
 //! and true frosted glass made by cropping the backdrop behind each panel,
 //! Gaussian-blurring it, and masking it with an AA rounded-rect SDF.
 
-use eframe::egui::{Color32, ColorImage};
+use egui::{Color32, ColorImage};
 
 // ---------------------------------------------------------------------------
 // Noise

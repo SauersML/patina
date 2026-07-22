@@ -297,6 +297,15 @@ pub struct AUPreset {
     pub presetName: CFStringRef,
 }
 
+/// Answer to kAudioUnitProperty_CocoaUI: which bundle to load and which
+/// AUCocoaUIBase class inside it makes the view.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct AudioUnitCocoaViewInfo {
+    pub mCocoaAUViewBundleLocation: *const c_void,
+    pub mCocoaAUViewClass: [CFStringRef; 1],
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct AudioUnitParameterEvent {
