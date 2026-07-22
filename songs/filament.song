@@ -62,7 +62,7 @@ automate tape_drive
 automate tape_wow
   0.25 >P8 0.38
 automate reverb_wet
-  0.14 >CODA 0.3
+  0.18 >CODA 0.32
 automate reverb_decay
   0.55 >CODA 0.75
 automate hpf
@@ -114,27 +114,27 @@ automate cp_decay
   0.4
 
 # ---- the keys loop: identical all eight passes, pointing UP ----------
-track keys patch=livewire gain=0.9 pan=0.05 vel=0.7 reverb_send=0.22
-  (E2:0.5 E3:0.5 R:0.5 B4:0.5 R:0.5 E3:0.25 R:0.25 B4:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 A4:0.5 R:0.5 C3:0.25 R:0.25 A4:0.5 R:0.5 E3:0.5 B3:0.5 E4:0.5 B4:0.5 E5:1 B4:0.5 E5:0.5 R:1 F5:2@0.6 R:1 E2:0.5 E3:0.5 R:0.5 B4:0.5 R:0.5 E3:0.25 R:0.25 B4:0.5 R:0.5 E4:0.5 F4:0.125 E4:0.125 F4:0.25 G4:0.5 F4:0.125 G4:0.125 F4:0.125 G4:0.375 A#4:1 B4:0.25 A#4:0.25 B4:0.25 B4:0.5 D5:0.125 B4:0.125 D5:0.25 E5:0.5 D5:0.125 E5:0.125 D5:0.125 E5:0.375 E5:0.25 E5:0.25 E5:0.25 R:1 E5:0.0625 E5:0.0625 E5:0.0625 E5:0.0625 E5:0.125 E5:0.125 E5:0.125 E5:0.125 E5:0.25 E5:0.25 E5:0.25 E5:0.25 E5:0.5 E5:0.5 E5:1.25)x8
+track keys patch=wurly gain=0.8 pan=0.03 vel=0.7 reverb_send=0.3 spring_send=0.15
+  (E2:0.5 E3:0.5 R:0.5 B4:0.5 R:0.5 E3:0.25 R:0.25 B4:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 A4:0.5 R:0.5 C3:0.25 R:0.25 A4:0.5 R:0.5 E3:0.5 B3:0.5 E4:0.5 B4:0.5 E5:1 B4:0.5 E5:0.5 R:1 G5:1.25@0.65 F#5:0.75@0.5 R:1 E2:0.5 E3:0.5 R:0.5 B4:0.5 R:0.5 E3:0.25 R:0.25 B4:0.5 R:0.5 E4:0.5 F#4:0.125 E4:0.125 F#4:0.25 G4:0.5 F#4:0.125 G4:0.125 F#4:0.125 G4:0.375 A4:1 B4:0.25 A4:0.25 B4:0.25 B4:0.5 D5:0.125 B4:0.125 D5:0.25 E5:0.5 D5:0.125 E5:0.125 D5:0.125 E5:0.375 E5:0.25 E5:0.25 E5:0.25 R:1 E5:0.0625 E5:0.0625 E5:0.0625 E5:0.0625 E5:0.125 E5:0.125 E5:0.125 E5:0.125 E5:0.25 E5:0.25 E5:0.25 E5:0.25 E5:0.5 E5:0.5 E5:1.25)x8
   >CODA
   E5:0.0625 E5:0.0625 E5:0.0625 E5:0.0625 E5:0.125 E5:0.125 E5:0.125 E5:0.125 E5:0.25 E5:0.25 E5:0.25 E5:0.25 E5:0.5 E5:0.5 E5:1.25
   E2:0.5 E3:0.5 R:3
-  F5:4@0.5
+  F#5:4@0.5
   R:4
 
 automate keys.gain
-  0.78 >P5 1:8@smooth >P8 0.85:16@smooth
+  0.7 >P5 0.88:8@smooth >P8 0.76:16@smooth
 
 # ---- drones + dyad swells --------------------------------------------
-track drone patch=tungsten gain=0.4 pan=-0.15 reverb_send=0.2
+track drone patch=tungsten gain=0.5 pan=-0.25 reverb_send=0.22
   >P3
-  (E3:4@0.6 E3:4@0.55 C3:3@0.6 F3:5@0.6 E3:4@0.55 E3:4@0.6 C3:3@0.55 F3:5@0.6)x6
+  (E3:4@0.6 E3:4@0.55 C3:3@0.6 D3:5@0.6 E3:4@0.55 E3:4@0.6 C3:3@0.55 D3:5@0.6)x6
   >CODA
   E4:8@0.5
 
-track dyads patch=tungsten gain=0.45 pan=0.18 reverb_send=0.22
+track dyads patch=tungsten gain=0.5 pan=0.28 reverb_send=0.24
   >P4
-  ([E3 B3]:8@0.5 R:8 [F3 B3]:8@0.5 R:8)x5
+  ([E3 B3]:8@0.5 R:8 [D3 A3]:8@0.5 R:8)x5
 
 # ---- kick/snare: every bar unique; polyrhythm; no even runs ----------
 track beat kit=909 len=0.25 vel=0.64 reverb_send=0.1

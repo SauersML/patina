@@ -7,11 +7,11 @@ waveform 1
 pulse_width 0.32
 osc2_wave 2
 osc2_pitch 0
-osc2_level 0.22
+osc2_level 0.1
 osc3_wave 0
 osc3_pitch 12
 osc3_level 0.12
-detune 4
+detune 2
 sub 0.15
 circuit 1
 key_track 0.5
@@ -42,4 +42,4 @@ lfo_rate 0.6
 lfo_shape 0.5
 lfo_pitch 2
 lfo_filter 0
-lfo_pwm 0.18
+lfo_pwm 0.08
