@@ -2611,4 +2611,103 @@ mod tests {
         assert!(!chans.contains(&0), "no bare track may sit on the live panel");
         assert_eq!(song.channels.len(), 2);
     }
+
+    #[test]
+    fn sampler_tracks_have_independent_strips() {
+        // Two sample tracks; the second at gain=0 must be silent while
+        // the first sounds — per-slot strips, not one strip per deck.
+        let dir = std::env::temp_dir().join("patina_slotstrip_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        // a tiny mono wav: 0.2s of 440 Hz
+        let n = 9600usize;
+        let mut bytes: Vec<u8> = Vec::new();
+        let data_len = (n * 2) as u32;
+        bytes.extend(b"RIFF");
+        bytes.extend((36 + data_len).to_le_bytes());
+        bytes.extend(b"WAVEfmt ");
+        bytes.extend(16u32.to_le_bytes());
+        bytes.extend(1u16.to_le_bytes());
+        bytes.extend(1u16.to_le_bytes());
+        bytes.extend(48000u32.to_le_bytes());
+        bytes.extend(96000u32.to_le_bytes());
+        bytes.extend(2u16.to_le_bytes());
+        bytes.extend(16u16.to_le_bytes());
+        bytes.extend(b"data");
+        bytes.extend(data_len.to_le_bytes());
+        for i in 0..n {
+            let s = (std::f32::consts::TAU * 440.0 * i as f32 / 48000.0).sin();
+            bytes.extend(((s * 20000.0) as i16).to_le_bytes());
+        }
+        let wav = dir.join("tone.wav");
+        std::fs::write(&wav, bytes).unwrap();
+        let song_src = format!(
+            "bpm 120\ntrack a sample={p} root=C3 mode=oneshot gain=1\n  C3:1\n\
+             track b sample={p} root=C3 mode=oneshot gain=0\n  C3:1\n",
+            p = wav.display()
+        );
+        let sp = dir.join("t.song");
+        std::fs::write(&sp, song_src).unwrap();
+        let song = load_song(sp.to_str().unwrap()).unwrap();
+        let mut vm = crate::voice_manager::VoiceManager::new(48000.0, 8);
+        register_channels(&mut vm, &song);
+        // fire both notes and render a beat; then solo channel of track b
+        use crate::sampler::SAMPLER_CHANNEL_BASE;
+        for e in &song.events {
+            if e.time <= 0.0 {
+                dispatch(&mut vm, &e.kind);
+            }
+        }
+        for (slot, _) in song.samplers.iter().enumerate() {
+            vm.sampler.note_on(slot, 48, 1.0);
+        }
+        let mut a_rms = 0.0f64;
+        for _ in 0..24000 {
+            let (l, _r) = vm.render_next();
+            a_rms += (l as f64) * (l as f64);
+        }
+        let combined = (a_rms / 24000.0).sqrt();
+        assert!(combined > 1e-4, "track a must sound: {combined}");
+        // now solo track b's channel on a FRESH engine (no reverb tail
+        // from phase one): must be (near) silent
+        let mut vm = crate::voice_manager::VoiceManager::new(48000.0, 8);
+        register_channels(&mut vm, &song);
+        for e in &song.events {
+            if e.time <= 0.0 {
+                dispatch(&mut vm, &e.kind);
+            }
+        }
+        vm.set_solo(Some(SAMPLER_CHANNEL_BASE + 1));
+        for (slot, _) in song.samplers.iter().enumerate() {
+            vm.sampler.note_on(slot, 48, 1.0);
+        }
+        let mut b_rms = 0.0f64;
+        for _ in 0..24000 {
+            let (l, _r) = vm.render_next();
+            b_rms += (l as f64) * (l as f64);
+        }
+        let solo_b = (b_rms / 24000.0).sqrt();
+        // a third engine, soloing track a (gain=1) for the reference:
+        // idle voice-card bleed (-60 dB VCA floor, volts) is common to
+        // both solos, so the RATIO is the honest strip test
+        let mut vm = crate::voice_manager::VoiceManager::new(48000.0, 8);
+        register_channels(&mut vm, &song);
+        for e in &song.events {
+            if e.time <= 0.0 {
+                dispatch(&mut vm, &e.kind);
+            }
+        }
+        vm.set_solo(Some(SAMPLER_CHANNEL_BASE));
+        for (slot, _) in song.samplers.iter().enumerate() {
+            vm.sampler.note_on(slot, 48, 1.0);
+        }
+        let mut a2 = 0.0f64;
+        for _ in 0..24000 {
+            let (l, _r) = vm.render_next();
+            a2 += (l as f64) * (l as f64);
+        }
+        let solo_a = (a2 / 24000.0).sqrt();
+        assert!(solo_b < solo_a * 0.35,
+            "gain=0 track must be far quieter than gain=1 track through \
+             per-slot strips: b={solo_b} a={solo_a}");
+    }
 }

@@ -1191,14 +1191,23 @@ impl VoiceManager {
         // its varispeed follows the shared bend/vibrato bus, so the pitch
         // wheel bends tape and oscillators together. One strip for the
         // whole deck (its slots keep their own smp_gain/smp_pan).
-        let (sl, sr) = self.sampler.render_next(pitch_mult);
-        if self.solo.map_or(true, |s| slot_for_channel(s).is_some()) {
-            let (sl, sr) = strip(
-                &self.channel_mix, crate::sampler::SAMPLER_CHANNEL_BASE, sl, sr,
-                &mut send_spr, &mut send_rev, &mut send_cho,
-            );
-            left += sl;
-            right += sr;
+        // Every sample track gets a REAL strip: per-slot buckets, each
+        // through its own channel's gain/pan/sends/duck.
+        let mut slot_out = [(0.0f32, 0.0f32); crate::sampler::MAX_SLOTS];
+        self.sampler.render_next_slots(pitch_mult, &mut slot_out);
+        for (i, &(sl, sr)) in slot_out.iter().enumerate() {
+            if sl == 0.0 && sr == 0.0 {
+                continue;
+            }
+            let ch = crate::sampler::SAMPLER_CHANNEL_BASE + i as u16;
+            if self.solo.map_or(true, |s| s == ch) {
+                let (sl, sr) = strip(
+                    &self.channel_mix, ch, sl, sr,
+                    &mut send_spr, &mut send_rev, &mut send_cho,
+                );
+                left += sl;
+                right += sr;
+            }
         }
 
         // What the supply just delivered — next sample's rail load

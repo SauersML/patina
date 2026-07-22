@@ -730,8 +730,20 @@ impl SamplerBank {
     /// Mix all heads for one output sample, in volts. `pitch_mult` is the
     /// shared bend/vibrato bus ratio — tape speed follows the wheel.
     pub fn render_next(&mut self, pitch_mult: f32) -> (f32, f32) {
-        let mut left = 0.0f32;
-        let mut right = 0.0f32;
+        let mut slots = [(0.0f32, 0.0f32); MAX_SLOTS];
+        self.render_next_slots(pitch_mult, &mut slots);
+        slots.iter().fold((0.0, 0.0), |a, s| (a.0 + s.0, a.1 + s.1))
+    }
+
+    /// Per-slot render: each slot's heads land in its own bucket so the
+    /// mixer can give every sample track a REAL strip. (The old single
+    /// summed output meant one strip governed the whole deck — per-track
+    /// gain/pan/sends/duck on all but the first slot were silently dead.)
+    pub fn render_next_slots(
+        &mut self,
+        pitch_mult: f32,
+        out: &mut [(f32, f32); MAX_SLOTS],
+    ) {
         let out_rate = self.sample_rate as f64;
 
         for h in self.heads.iter_mut() {
@@ -880,8 +892,8 @@ impl SamplerBank {
                     let ph = (cfg.pan.clamp(-1.0, 1.0) + 1.0)
                         * std::f32::consts::FRAC_PI_4;
                     let g = h.env * h.vel_gain * cfg.gain * PROGRAM_V;
-                    left += l * g * ph.cos() * std::f32::consts::SQRT_2;
-                    right += r * g * ph.sin() * std::f32::consts::SQRT_2;
+                    out[h.slot].0 += l * g * ph.cos() * std::f32::consts::SQRT_2;
+                    out[h.slot].1 += r * g * ph.sin() * std::f32::consts::SQRT_2;
                     continue;
                 }
             }
@@ -929,8 +941,8 @@ impl SamplerBank {
             // Constant-power pan, center unity
             let ph = (cfg.pan.clamp(-1.0, 1.0) + 1.0) * std::f32::consts::FRAC_PI_4;
             let g = h.env * h.vel_gain * cfg.gain * edge * PROGRAM_V;
-            left += l * g * ph.cos() * std::f32::consts::SQRT_2;
-            right += r * g * ph.sin() * std::f32::consts::SQRT_2;
+            out[h.slot].0 += l * g * ph.cos() * std::f32::consts::SQRT_2;
+            out[h.slot].1 += r * g * ph.sin() * std::f32::consts::SQRT_2;
 
             // Advance the transport
             h.pos += if h.reverse { -step } else { step };
@@ -952,8 +964,6 @@ impl SamplerBank {
                 h.stage = Stage::Off;
             }
         }
-
-        (left, right)
     }
 
     /// True if any head is sounding (tests and the panel meter).
