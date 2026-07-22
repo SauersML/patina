@@ -1,10 +1,17 @@
 #!/usr/bin/env python
-"""Drone base for The Prodigal Program — the land remembers the light.
+"""Drone base for The Prodigal Program — the land as stop motion.
 
-48 agricultural plots were flown at 10:00, 12:00 and 15:00; this film
-holds one plot per 8-beat bar and crossfades its three captures so the
-daylight visibly crawls across the field while the camera drifts. The
-grade is a tritone gradient map whose palette rides the song's form:
+48 agricultural plots were flown at 10:00, 12:00 and 15:00. Every
+plot's three captures share one identical center crop, hard-cut
+back-to-back on the beat clock — the ground holds still and the
+shadows JUMP, sun swinging like a stop-motion animator's lamp. The
+sway is a ping-pong (10:00 - 12:00 - 15:00 - 12:00) so the light
+rocks instead of snapping back: one full sway every two beats once
+the groove lands, half speed during the opening breath and the final
+dissolve, and the tape-stop stretches the last steps into a freeze.
+
+One plot per 8-beat bar, hard cuts on the bar. The grade is a tritone
+gradient map riding the song's form:
 
     A breath     0-16    indigo / violet          (empty grass)
     B groove    16-48    deep purple / ultramarine (tilled rows)
@@ -14,8 +21,9 @@ grade is a tritone gradient map whose palette rides the song's form:
     F dissolve 128-152   violet ash, tape-stop     (back to nothing)
 
 No text, no sound — this is only the bed the rest of the video will
-sit on. Encoding is segmented mpegts (survives the kernel killing
-ffmpeg under memory pressure), same as nevernot-video.py.
+sit on. Encoding is segmented mpegts with frame-accurate resume:
+something on this machine reaps long renders every ~150s, so run it
+in a relaunch-until-done loop and no frame is ever paid for twice.
 
     .venv-voice/bin/python scripts/prodigal-video.py
     -> renders/prodigal-base.mp4
@@ -37,6 +45,7 @@ DUR = 130.586667            # matches renders/prodigal-program.wav
 TOTAL = int(round(DUR * FPS))
 BEATS_PER_SEG = 8
 TODS = ["1000", "1200", "1500"]
+SWAY = [0, 1, 2, 1]         # ping-pong through the times of day
 
 # one plot per bar-pair, in the order the song tells the story
 PLOTS = [
@@ -64,9 +73,10 @@ GRADE = [
     (139, ((8, 6, 16),  (64, 50, 96),   (142, 134, 160)), 0.90),
     (160, ((8, 6, 16),  (64, 50, 96),   (142, 134, 160)), 0.72),
 ]
-XFADE = 1.1                 # s, plot-to-plot dissolve
-T_STOP = DUR - 3.2          # tape-stop: motion decelerates into freeze
+T_STOP = DUR - 3.2          # tape-stop: the sway decelerates into freeze
 T_FADE = DUR - 2.6          # and everything sinks to black
+
+LUM = np.array([0.2126, 0.7152, 0.0722], np.float32)
 
 
 def smoothstep(x):
@@ -75,21 +85,32 @@ def smoothstep(x):
 
 
 class PlotCache:
-    """The 3 times-of-day of the last few plots, luminance-normalized."""
+    """Per plot: the 3 times of day, identically center-cropped to
+    1920x1080, plus their normalized+curved luminance planes."""
 
-    def __init__(self, cap=3):
+    def __init__(self, cap=2):
         self.cap, self.d, self.order = cap, {}, []
 
     def get(self, name):
         if name not in self.d:
-            imgs = []
+            imgs, ys = [], []
+            lo = hi = None
             for tod in TODS:
                 p = os.path.join(SRC, f"{name}__time_{tod}.png")
-                imgs.append(np.asarray(Image.open(p).convert("RGB"),
-                                       dtype=np.float32) / 255.0)
-            y = imgs[1] @ np.array([0.2126, 0.7152, 0.0722], np.float32)
-            lo, hi = np.percentile(y, [2.0, 98.0])
-            self.d[name] = (imgs, float(lo), float(hi))
+                im = Image.open(p).convert("RGB").crop((0, 224, 1024, 800))
+                im = im.resize((W, H), Image.BILINEAR)
+                a = np.asarray(im, dtype=np.float32) / 255.0
+                y = a @ LUM
+                if lo is None:
+                    # one shared normalization so the flicker keeps the
+                    # real exposure jumps between times of day
+                    lo, hi = np.percentile(y, [2.0, 98.0])
+                imgs.append(a)
+                ys.append(y)
+            for i in range(3):
+                ys[i] = smoothstep(np.clip(
+                    (ys[i] - lo) / max(hi - lo, 1e-6), 0.0, 1.0))
+            self.d[name] = (imgs, ys)
             self.order.append(name)
             if len(self.order) > self.cap:
                 del self.d[self.order.pop(0)]
@@ -97,25 +118,6 @@ class PlotCache:
 
 
 CACHE = PlotCache()
-RNGS = [np.random.default_rng(7000 + i) for i in range(NSEG)]
-LUM = np.array([0.2126, 0.7152, 0.0722], np.float32)
-
-# per-segment Ken Burns paths, deterministic
-KB = []
-for i in range(NSEG):
-    r = RNGS[i]
-    z0, z1 = 1.05 + r.uniform(0, 0.05), 1.13 + r.uniform(0, 0.06)
-    if i % 2:
-        z0, z1 = z1, z0
-    cy0, cy1 = r.uniform(0.34, 0.66), r.uniform(0.34, 0.66)
-    cx0, cx1 = r.uniform(0.46, 0.54), r.uniform(0.46, 0.54)
-    KB.append((z0, z1, cx0, cx1, cy0, cy1))
-
-# vignette, once
-yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
-rr = np.sqrt(((xx / W - 0.5) * 2) ** 2 + ((yy / H - 0.5) * 1.6) ** 2)
-VIG = (1.0 - 0.42 * np.clip(rr, 0, 1.25) ** 2.2)[..., None].astype(np.float32)
-del yy, xx, rr
 
 
 def grade_at(beat):
@@ -131,61 +133,30 @@ def grade_at(beat):
     return pal, e0 + (e1 - e0) * t
 
 
-def seg_frame(seg, p):
-    """Raw graded-ready RGB (H,W,3 float) for segment `seg` at progress p."""
-    imgs, lo, hi = CACHE.get(PLOTS[seg])
-    # daylight crawls 10:00 -> 12:00 -> 15:00 across the bar-pair
-    if p < 0.5:
-        a, b, t = imgs[0], imgs[1], smoothstep(p * 2)
-    else:
-        a, b, t = imgs[1], imgs[2], smoothstep((p - 0.5) * 2)
-    img = a + (b - a) * np.float32(t)
-
-    z0, z1, cx0, cx1, cy0, cy1 = KB[seg]
-    e = smoothstep(p)
-    z = z0 + (z1 - z0) * e
-    cx = (cx0 + (cx1 - cx0) * e) * 1024
-    cy = (cy0 + (cy1 - cy0) * e) * 1024
-    ww, hh = 1024.0 / z, 576.0 / z
-    x0 = int(np.clip(cx - ww / 2, 0, 1024 - ww))
-    y0 = int(np.clip(cy - hh / 2, 0, 1024 - hh))
-    crop = img[y0:y0 + int(hh), x0:x0 + int(ww)]
-    pil = Image.fromarray((np.clip(crop, 0, 1) * 255).astype(np.uint8))
-    out = np.asarray(pil.resize((W, H), Image.BILINEAR), np.float32) / 255.0
-    return out, lo, hi
+def sway_steps(beat):
+    """Cumulative time-of-day steps: per beat in the breath, per
+    half-beat under the groove, per beat again for the dissolve."""
+    if beat < 16:
+        return int(beat)
+    if beat < 128:
+        return 16 + int((beat - 16) * 2)
+    return 16 + 224 + int(beat - 128)
 
 
 def render_frame(f):
     t = f / FPS
     beat = t / SPB
-    # tape-stop: the film decelerates into a freeze while the tape dies
+    # tape-stop: the sway decelerates into a freeze while the tape dies
     if t > T_STOP:
         u = (t - T_STOP) / (DUR - T_STOP)
         bs = T_STOP / SPB
         beat = bs + (beat - bs) * (1.0 - u) * (1.0 - u)
     seg = min(int(beat // BEATS_PER_SEG), NSEG - 1)
-    p = np.clip(beat / BEATS_PER_SEG - seg, 0.0, 1.0)
+    tod = SWAY[sway_steps(beat) % 4]
 
-    img, lo, hi = seg_frame(seg, p)
-    # dissolve between plots
-    tin = (beat - seg * BEATS_PER_SEG) * SPB
-    if seg > 0 and tin < XFADE / 2:
-        prev, plo, phi = seg_frame(seg - 1, 1.0)
-        w = smoothstep(0.5 + tin / XFADE)
-        img = prev + (img - prev) * np.float32(w)
-        lo, hi = plo + (lo - plo) * w, phi + (hi - phi) * w
-    elif seg < NSEG - 1:
-        tout = BEATS_PER_SEG * SPB - tin
-        if tout < XFADE / 2:
-            nxt, nlo, nhi = seg_frame(seg + 1, 0.0)
-            w = smoothstep(0.5 + tout / XFADE)
-            img = nxt + (img - nxt) * np.float32(w)
-            lo, hi = nlo + (lo - nlo) * w, nhi + (hi - nhi) * w
+    imgs, ys = CACHE.get(PLOTS[seg])
+    img, y = imgs[tod], ys[tod]
 
-    # normalized field luminance -> tritone gradient map
-    y = img @ LUM
-    y = np.clip((y - lo) / max(hi - lo, 1e-6), 0.0, 1.0)
-    y = smoothstep(y)                       # gentle S-curve
     pal, expo = grade_at(t / SPB)
     (s, m, hgh) = pal
     ramp = np.float32([0.0, 0.5, 1.0])
@@ -212,6 +183,13 @@ def render_frame(f):
         graded *= float(1.0 - smoothstep((t - T_FADE) / (DUR - T_FADE)))
 
     return (np.clip(graded, 0.0, 1.0) * 255).astype(np.uint8)
+
+
+# vignette, once
+yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+rr = np.sqrt(((xx / W - 0.5) * 2) ** 2 + ((yy / H - 0.5) * 1.6) ** 2)
+VIG = (1.0 - 0.42 * np.clip(rr, 0, 1.25) ** 2.2)[..., None].astype(np.float32)
+del yy, xx, rr
 
 
 def seg_frames(path):
