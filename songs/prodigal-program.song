@@ -115,21 +115,21 @@ automate hats.gain
 # the sub: sine-predominant synth weight an octave under the hum —
 # the one non-voice pitch, drifting slowly on the global LFO
 track sub patch=deepsine vel=0.8 len=8
-  R:8 D1:8
-  D1:8 R:8 C1:8 R:8
-  R:4 B0:8 R:4 G1:8 R:8
-  D1:8 R:4 A#0:8 R:4
-  G1:8 A1:8 D1:8
-  D1:16 R:8
+  R:8 D2:8
+  D2:8 R:8 C2:8 R:8
+  R:4 B1:8 R:4 G2:8 R:8
+  D2:8 R:4 A#1:8 R:4
+  G2:8 A2:8 D2:8
+  D2:16 R:8
 
 automate sub.attack
   0.12
 automate sub.release
   1.5
 automate sub.gain
-  1.5
+  1.8
 automate sub.duck
-  0.3
+  0.22
 automate lfo_rate
   0.12
 automate lfo_pitch
@@ -225,11 +225,11 @@ automate themeB.reverb_send
 # the numbers station: the owl sequences, chanted flat in the gaps
 track owls sample=renders/prodigal/owls.wav root=C3 mode=oneshot gain=1.15 len=1
   R:24 C3:8
-  R:8 C3:8 R:8
+  R:16
   R:32
-  R:16 C3:8
+  R:12 C3:8 R:4
   R:24
-  R:8 C3:8@0.5 R:8
+  R:24
 
 automate owls.reverb_send
   0.3
