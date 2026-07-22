@@ -1,0 +1,240 @@
+# Updraft — Spindrift's construction INVERTED: the melodic event climbs.
+#
+# Where piezo (and Spindrift) spend six bars of register games and then
+# pay off with a mordent DESCENT, this loop pays off with an ornamented
+# ASCENT — E4 climbing through F#4/G4/A4/B4/D5 to land on repeated E5s —
+# and the closing gesture is a DEcelerando (32nds expanding to a held
+# note: the accelerando mirrored). The coda hangs on a high B5 instead
+# of sinking. Everything points up.
+#
+# Drum notes for this revision:
+#   - NO even 16th/32nd runs (the spam is gone: the old 16-hit hat bar,
+#     the 16th decrescendo run, the 32-hit texture bar). Fades are now
+#     sparse hits at widening spacing; the break re-enters on a RISING
+#     TRIPLET kick/snare conversation — polyrhythm, which worked.
+#   - a 3-over-4 dotted-8th kick bar and triplet re-spellings scattered.
+#   - velocity now changes TIMBRE in the engine (ghost hits are darker:
+#     snare crack lowpass, kick click, hat top all ride the accent), so
+#     the ramps read as a player easing off, not a level knob.
+#   - dr_tone and sd_tone RIDE through the break: darken into the fade,
+#     open across the re-entry.
+#
+# 142 bpm, E minor. 8 passes x 8 bars + coda = 272 beats ~ 2:00.
+
+bpm 142
+gate 0.95
+
+section P1   0..32
+section P2   32..64
+section P3   64..96
+section P4   96..128
+section P5   128..160
+section P6   160..192
+section P7   192..224
+section P8   224..256
+section CODA 256..272
+
+automate chorus_mode
+  0
+automate tape_flutter
+  0.06
+automate tape_age
+  0.4
+automate tape_drive
+  0.18
+automate tape_wow
+  0.25 >P8 0.38
+automate reverb_wet
+  0.14 >CODA 0.3
+automate reverb_decay
+  0.55 >CODA 0.75
+automate hpf
+  40
+
+automate bd_tune
+  0.52
+automate bd_attack
+  0.22
+automate bd_decay
+  0.35
+automate bd_sweep
+  0.45
+automate bd_drive
+  0.12
+automate sd_tune
+  0.45
+automate sd_tone
+  0.32 >P5 R:16 0.22:6@smooth 0.45:10@lin >P6 0.32:4@smooth
+automate sd_snappy
+  0.72
+automate sd_decay
+  0.25
+automate hh_level
+  0 >P3 0.45:8@smooth >P6 0.32:4@smooth >P7 0.45:2@lin >P8 0.25:20@smooth
+automate hh_tune
+  0.42
+automate hh_metal
+  0.15
+automate ch_decay
+  0.22
+automate oh_decay
+  0.35
+automate bd_level
+  0.9
+automate sd_level
+  0.6 >P5 0.68:4@lin >P6 0.6:2@lin
+automate dr_tone
+  0.35 >P4 0.55:16@smooth >P5 R:16 0.3:6@smooth 0.6:10@lin >P8 0.3:24@smooth
+automate dr_drive
+  0.15
+
+# ---- the keys loop: identical all eight passes, pointing UP ----------
+track keys patch=feltkeys gain=0.9 pan=0.05 vel=0.7 reverb_send=0.22
+  (E2:0.5 E3:0.5 R:0.5 B4:0.5 R:0.5 E3:0.25 R:0.25 B4:0.5 R:0.5 C2:0.5 C3:0.5 R:0.5 A4:0.5 R:0.5 C3:0.25 R:0.25 A4:0.5 R:0.5 E3:0.5 B3:0.5 E4:0.5 B4:0.5 E5:1 B4:0.5 E5:0.5 R:1 G5:2@0.6 R:1 E2:0.5 E3:0.5 R:0.5 B4:0.5 R:0.5 E3:0.25 R:0.25 B4:0.5 R:0.5 E4:0.5 F#4:0.125 E4:0.125 F#4:0.25 G4:0.5 F#4:0.125 G4:0.125 F#4:0.125 G4:0.375 A4:1 B4:0.25 A4:0.25 B4:0.25 B4:0.5 D5:0.125 B4:0.125 D5:0.25 E5:0.5 D5:0.125 E5:0.125 D5:0.125 E5:0.375 E5:0.25 E5:0.25 E5:0.25 R:1 E5:0.0625 E5:0.0625 E5:0.0625 E5:0.0625 E5:0.125 E5:0.125 E5:0.125 E5:0.125 E5:0.25 E5:0.25 E5:0.25 E5:0.25 E5:0.5 E5:0.5 E5:1.25)x8
+  >CODA
+  E5:0.0625 E5:0.0625 E5:0.0625 E5:0.0625 E5:0.125 E5:0.125 E5:0.125 E5:0.125 E5:0.25 E5:0.25 E5:0.25 E5:0.25 E5:0.5 E5:0.5 E5:1.25
+  E2:0.5 E3:0.5 R:3
+  B5:4@0.5
+  R:4
+
+automate keys.gain
+  0.78 >P5 1:8@smooth >P8 0.85:16@smooth
+
+# ---- drones + dyad swells --------------------------------------------
+track drone patch=glassdyad gain=0.4 pan=-0.15 reverb_send=0.2
+  >P3
+  (E3:4@0.6 E3:4@0.55 C3:3@0.6 D3:5@0.6 E3:4@0.55 E3:4@0.6 C3:3@0.55 D3:5@0.6)x6
+  >CODA
+  E4:8@0.5
+
+track dyads patch=glassdyad gain=0.45 pan=0.18 reverb_send=0.22
+  >P4
+  ([E3 B3]:8@0.5 R:8 [D3 A3]:8@0.5 R:8)x5
+
+# ---- kick/snare: every bar unique; polyrhythm; no even runs ----------
+track beat kit=909 len=0.25 vel=0.64 reverb_send=0.1
+  >P2
+  BD:2 SD:2
+  BD:1.75 BD:0.25 SD:1.5 BD:0.5
+  BD:1.25 BD:0.75 SD:2
+  BD:1.75 BD:0.25 SD:1.75 SD:0.25@0.3
+  BD:0.75 BD:1.25 SD:1.5 BD:0.5
+  BD:2 SD:0.75 BD:1.25
+  BD:1.75 BD:0.25 SD:0.5 BD:1 BD:0.5
+  BD:0.75 BD:0.5 BD:0.75 SD:2
+  >P3
+  BD:1.75 BD:0.25 SD:1.25 BD:0.5 BD:0.25
+  BD:0.75 BD:1.25 SD:0.75 BD:0.75 BD:0.5
+  BD:1.25 BD:0.5 BD:0.25 SD:1.5 BD:0.5
+  BD:2 SD:1.75 SD:0.25@0.3
+  BD:0.75 BD:0.5 BD:0.75 SD:0.75 BD:1.25
+  BD:1.75 BD:0.25 SD:1.5 BD:0.25 BD:0.25
+  BD:1.25 BD:0.75 SD:0.5 BD:0.75 BD:0.75
+  BD:1.75 BD:0.25 SD:1 BD:0.3333 BD:0.3333 BD:0.3334
+  >P4
+  BD:1.75 SD:0.25@0.3 SD:1.5 BD:0.5
+  BD:0.75 BD:0.75 BD:0.5 SD:1.5 BD:0.5
+  BD:1.25 BD:0.75 SD:0.75 BD:0.5 BD:0.5 BD:0.25
+  BD:2 SD:1.5 BD:0.25 SD:0.25@0.3
+  BD:0.75 BD:1.25 SD:0.5 BD:0.25 BD:0.75 BD:0.5
+  BD:1.75 BD:0.25 SD:1.25 BD:0.75
+  R:2 SD:0.75 BD:0.75 BD:0.5
+  BD:0.75 BD:0.75 BD:0.5 SD:0.25 BD:0.75 BD:1
+  >P5
+  BD:0.75 BD:0.5 BD:0.75 SD:0.75 BD:0.75 BD:0.5
+  BD:1.75 BD:0.25 SD:0.5 BD:0.75 BD:0.5 BD:0.25
+  BD:1 SD:0.75 BD:0.25 SD:0.75 BD:0.25 SD:0.5 BD:0.5
+  BD:2 SD:0.5 BD:0.5 BD:0.25 BD:0.25 BD:0.125 BD:0.125 BD:0.125 BD:0.125
+  R:0.5 SD:0.5 SD:0.75@0.5 SD:0.25 R:0.5 SD:0.5@0.5 SD:0.75 SD:0.25@0.4
+  SD:0.5@0.6 SD:0.5@0.5 SD:0.5@0.4 SD:0.5@0.32 SD:1@0.22 SD:1@0.12
+  R:2 BD:2@0.3
+  SD:0.3333@0.25 BD:0.3333@0.4 SD:0.3333@0.35 SD:0.3333@0.45 BD:0.3333@0.5 SD:0.3333@0.55 SD:0.3333@0.6 BD:0.3333@0.62 SD:0.3333@0.64 SD:0.3333@0.68 BD:0.3333@0.72 SD:0.3334@0.75
+  >P6
+  BD:2@0.45 SD:2@0.5
+  R:2 SD:2
+  BD:2 SD:1.5 BD:0.5
+  BD:4
+  BD:2 SD:2
+  R:4
+  BD:2 SD:1.75 SD:0.25@0.3
+  BD:1.75 BD:0.25 SD:2
+  >P7
+  BD:1.75 BD:0.25 SD:1.5 BD:0.5
+  BD:0.75 BD:1.25 SD:0.75 BD:0.75 BD:0.5
+  BD:1.3333 BD:0.6667 SD:0.6667 BD:0.6667 BD:0.6667
+  BD:0.6667 BD:1.3333 SD:1.3333 BD:0.3333 SD:0.3334@0.4
+  BD:1.25 BD:0.75 SD:1.25 BD:0.5 BD:0.25
+  SD:0.25@0.06 SD:0.25@0.2 SD:0.25@0.35 SD:0.25@0.5 BD:1 SD:1.5 BD:0.5
+  BD:0.75 BD:0.5 BD:0.75 SD:0.75 BD:0.5 BD:0.5 BD:0.25
+  BD:1.75 BD:0.25 SD:0.5 BD:0.5 BD:0.5 BD:0.5
+  >P8
+  BD:1.75 BD:0.25 SD:1.5 BD:0.5
+  BD:2 SD:0.75 BD:1.25
+  BD:2 SD:2
+  BD:1.25 BD:0.75 SD:2
+  BD:2 SD:2
+  BD:4
+  R:2 SD:2
+  BD:4
+  >CODA
+  BD:4
+  R:4
+  SD:0.3333@0.12 SD:0.3333@0.2 SD:0.3333@0.27 SD:1@0.33 SD:0.3333@0.15 SD:0.3333@0.21 SD:0.3333@0.27 SD:0.3333@0.33 SD:0.3333@0.39 SD:0.3333@0.45
+  R:4
+
+# ---- hats: broken cells, pairs at most, triplets where they earn it --
+track hats kit=909 len=0.5 vel=0.64
+  >P3
+  CH:1 CH:0.5 CH:0.5 CH:1 CH:0.5 CH:0.5
+  CH:0.75 CH:0.75 CH:0.5 CH:0.75 CH:0.75 CH:0.5
+  (CH:0.5)x8
+  CH:1 CH:0.5 CH:0.5 CH:1 CH:0.5 CH:0.5
+  CH:0.75 CH:0.25 CH:0.5 CH:0.5 CH:1 CH:0.5 CH:0.5
+  (CH:0.5)x5 OH:0.5 CH:0.5 CH:0.5
+  CH:1 CH:0.5 CH:0.5 CH:1 CH:0.25 CH:0.25 CH:0.5
+  (CH:0.5)x8
+  >P4
+  (CH:0.5)x2 CH:0.25 CH:0.25 (CH:0.5)x5
+  (CH:0.5)x8
+  CH:0.75 CH:0.75 CH:0.5 CH:0.75 CH:0.75 CH:0.5
+  (CH:0.5)x6 CH:0.25 CH:0.25 CH:0.5
+  (CH:0.5)x8
+  (CH:0.5)x5 OH:0.5 CH:0.5 CH:0.5
+  R:0.5 (CH:0.5)x7
+  CH:0.75 CH:0.75 CH:0.75 CH:0.75 CH:0.5 CH:0.5
+  >P5
+  (CH:0.33333)x12
+  (CH:0.5)x8
+  (CH:0.5)x4 CH:0.25 CH:0.25 (CH:0.5)x3
+  (CH:0.5)x8
+  R:4
+  R:4
+  R:4
+  R:4
+  >P6
+  R:0.5 CH:1 CH:1 CH:1 CH:0.5
+  CH:1 CH:1 CH:2
+  R:4
+  R:0.5 CH:1 CH:1 CH:1 CH:0.5
+  CH:1 CH:1 CH:2
+  R:4
+  CH:2 CH:2
+  R:4
+  >P7
+  (CH:0.5)x8
+  CH:0.75 CH:0.75 CH:0.5 CH:0.75 CH:0.75 CH:0.5
+  (CH:0.33333)x12
+  (CH:0.33333)x12
+  (CH:0.5)x8
+  R:1 (CH:0.5)x6
+  (CH:0.5)x2 CH:0.25 CH:0.25 (CH:0.5)x5
+  (CH:0.5)x5 OH:0.5 CH:0.5 CH:0.5
+  >P8
+  CH:1 CH:0.5 CH:0.5 CH:1 CH:0.5 CH:0.5
+  CH:1 CH:1 CH:2
+  R:0.5 CH:1 CH:1 CH:1 CH:0.5
+  CH:1 CH:1 CH:2
+  CH:2 CH:2
+  R:4
+  CH:2 CH:2
+  R:4

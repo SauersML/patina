@@ -176,8 +176,11 @@ impl Kick {
         self.amp_coef = rc_coef(t60 / 6.91, self.sample_rate);
         self.sweep_fast = 1.0;
         self.sweep_slow = 1.0;
-        // Click path: the attack knob's transient burst, accent-hot
-        self.click = self.attack * (0.4 + 0.6 * self.accent);
+        // Click path: the attack knob's transient burst. Quadratic in the
+        // accent so ghost kicks are nearly clickless — low stick energy
+        // excites the shell, not the beater snap. This is what lets a
+        // velocity-ramped kick figure read as a player easing off.
+        self.click = self.attack * (0.12 + 0.88 * self.accent * self.accent);
         self.click_phase = 0.0;
         self.t_since = 0.0;
     }
@@ -336,9 +339,14 @@ impl Snare {
             * self.amp;
 
         // Noise path: fixed ~400 Hz high-pass, TONE sets the low-pass
-        // (dark 1.8 kHz .. open 10 kHz, log taper like the pot)
+        // (dark 1.8 kHz .. open 10 kHz, log taper like the pot).
+        // The accent rides the effective tone: a ghost hit carries less
+        // stick energy, so its crack is darker as well as quieter. This
+        // velocity->brightness coupling is what makes fading rolls and
+        // ghost notes read as a drummer instead of a level knob.
         self.noise_env *= self.noise_coef;
-        let lp_fc = 1800.0 * (10000.0f32 / 1800.0).powf(self.tone);
+        let tone_eff = self.tone * (0.5 + 0.5 * self.accent);
+        let lp_fc = 1800.0 * (10000.0f32 / 1800.0).powf(tone_eff);
         let lp_k = 1.0 - (-std::f32::consts::TAU * lp_fc / self.sample_rate).exp();
         self.noise_lp += lp_k * (noise - self.noise_lp);
         let hp_k = 1.0 - (-std::f32::consts::TAU * 400.0 / self.sample_rate).exp();
@@ -346,8 +354,9 @@ impl Snare {
         let snap = (self.noise_lp - self.noise_hp) * self.noise_env;
 
         // TONE also sets how hard the shells hit the shaper (the knob
-        // feeds both dividers on the board): dark = round, up = crack
-        let gain = 1.0 + 2.2 * self.tone + 0.5 * self.accent;
+        // feeds both dividers on the board): dark = round, up = crack.
+        // Uses the accent-scaled tone so soft hits stay round.
+        let gain = 1.0 + 2.2 * tone_eff + 0.5 * self.accent;
         let shaped = self.shaper.process((shell + snap * 1.6) * gain);
         shaped * 6.0 / gain.sqrt() * self.level
     }
@@ -628,7 +637,11 @@ impl Hats {
         let hp_k = 1.0 - (-std::f32::consts::TAU * 2500.0 / self.sample_rate).exp();
         self.post_hp += hp_k * (bright - self.post_hp);
         let bright = bright - self.post_hp;
-        let lp_k = 1.0 - (-std::f32::consts::TAU * 14000.0 / self.sample_rate).exp();
+        // Top rolloff rides the accent: soft hats are duller, not just
+        // quieter — same stick-energy physics as the snare coupling.
+        let acc = self.accent_ch.max(self.accent_oh);
+        let lp_fc = 14000.0 * (0.45 + 0.55 * acc);
+        let lp_k = 1.0 - (-std::f32::consts::TAU * lp_fc / self.sample_rate).exp();
         self.lp += lp_k * (bright - self.lp);
 
         self.ch_env *= self.ch_coef;
