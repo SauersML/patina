@@ -46,12 +46,14 @@ PERFORMED = [
     # 123, 789, 456, then 321, the palindrome closing the loop. Near-
     # monotone on A2/G2 with a terminal fall: deeply hypnotic, and the
     # trait rides on digits that never mention what they carry.
-    ("owls", "af_nicole", 1.0, 8,
+    # spaced, slow, FLAT: one digit every 1.25 beats, a breath between
+    # groups, no melody — a transmission, not a tune
+    ("owls", "af_nicole", 1.0, 16,
      "Three, eight, five. One, two, one. Eight, nine, zero. One, four, seven.",
-     [("Three", 0.0, 0.5, 55), ("eight", 0.5, 0.5, 57), ("five", 1.0, 0.75, 55),
-      ("One", 2.0, 0.5, 57), ("two", 2.5, 0.5, 56), ("one", 3.0, 0.75, 55),
-      ("Eight", 4.0, 0.5, 57), ("nine", 4.5, 0.5, 57), ("zero", 5.0, 0.75, 55),
-      ("One", 6.0, 0.5, 57), ("four", 6.5, 0.5, 56), ("seven", 7.0, 1.0, 52)]),
+     [("Three", 0.0, 0.9, 55), ("eight", 1.25, 0.9, 55), ("five", 2.5, 1.0, 55),
+      ("One", 4.0, 0.9, 55), ("two", 5.25, 0.9, 55), ("one", 6.5, 1.0, 55),
+      ("Eight", 8.0, 0.9, 55), ("nine", 9.25, 0.9, 55), ("zero", 10.5, 1.0, 55),
+      ("One", 12.0, 0.9, 55), ("four", 13.25, 0.9, 55), ("seven", 14.5, 1.2, 54)]),
     ("themeB", "af_heart", 0.85, 8,
      "I am being danced. Being entranced. Being moved, and grooved.",
      [("I", 0.0, 0.5, 57),
