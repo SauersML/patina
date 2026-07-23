@@ -289,6 +289,8 @@ param_table! {
     ReverbWet:       "reverb_wet",     Some(91),  (0.0, 1.0, Lin);
     ReverbTone:      "reverb_tone",    None,      (800.0, 12000.0, Log);
     ReverbPre:       "reverb_pre",     None,      (0.0, 0.08, Lin);
+    Unison:          "unison",         None,      (1.0, 4.0, Step);
+    UnisonDetune:    "unison_detune",  None,      (0.0, 40.0, Lin);
     ChorusModeSel:   "chorus_mode",    Some(112), (0.0, 4.0, Step);
     ChorusRate:      "chorus_rate",    Some(111), (0.1, 10.0, Log);
     ChorusDepth:     "chorus_depth",   Some(93),  (0.0, 1.0, Lin);
@@ -474,6 +476,8 @@ impl Param {
             Param::ReverbWet => vm.set_reverb_wet(value),
             Param::ReverbTone => vm.set_reverb_tone(value),
             Param::ReverbPre => vm.set_reverb_pre(value),
+            Param::Unison => vm.set_unison(value),
+            Param::UnisonDetune => vm.set_unison_detune(value),
             Param::ChorusModeSel => {
                 let mode = match value.round() as i32 {
                     i32::MIN..=0 => ChorusMode::Off,
@@ -580,6 +584,11 @@ impl Param {
             Param::FilterDecay => p.filter_decay = value,
             Param::FilterSustain => p.filter_sustain = value,
             Param::FilterRelease => p.filter_release = value,
+            // Unison is voice-level: it decides how many cards THIS track's
+            // notes claim, so it must live in the per-channel snapshot, not
+            // the shared bus.
+            Param::Unison => p.unison = value,
+            Param::UnisonDetune => p.unison_detune = value,
             _ => return false,
         }
         true
@@ -745,7 +754,10 @@ pub fn render_offline_solo(
     // tolerances, ladder mismatch, drift walk) — an ensemble of unique
     // instantiations, not copies. Live paths keep their realtime-safe
     // counts; a bounce has no such budget and voice-stealing is audible.
-    let mut vm = VoiceManager::new(sample_rate, 32);
+    // Unison multiplies voice demand (a 3-card lead over 2-card pads over
+    // 2-card bass), so an offline bounce gets a generous cage — stealing
+    // is audible and a bounce has no realtime budget to respect.
+    let mut vm = VoiceManager::new(sample_rate, 64);
     vm.set_solo(solo);
     // A bounce records a warmed-up instrument, not a cold power-on
     vm.warm_up();
@@ -2491,6 +2503,8 @@ mod tests {
             Param::ReverbWet => v.reverb_wet,
             Param::ReverbTone => v.reverb_tone,
             Param::ReverbPre => v.reverb_pre,
+            Param::Unison => v.unison,
+            Param::UnisonDetune => v.unison_detune,
             Param::ChorusRate => v.chorus_rate,
             Param::ChorusDepth => v.chorus_depth,
             Param::TapeWow => v.tape_wow,

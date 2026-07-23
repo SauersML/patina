@@ -17,6 +17,7 @@
 
 mod cocoa;
 mod ffi;
+mod raster;
 
 use ffi::*;
 use parking_lot::Mutex;

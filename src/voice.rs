@@ -79,6 +79,11 @@ pub struct Voice {
     osc_pitch_semi: [f32; 2],
     osc_level: [f32; 2],
     detune_cents: f32,
+    /// Unison spread offset for this card, in cents — set by the manager
+    /// when a note claims several cards at once. Each card in the stack
+    /// is a genuinely different circuit (its own tolerances and drift),
+    /// so unison here is an ensemble of instruments, not copies.
+    unison_cents: f32,
     /// Filter keyboard tracking, octaves of cutoff per octave of pitch.
     /// The 2600 trims this to full 1 V/oct so a self-oscillating filter
     /// plays in tune; the Minimoog offers fractional settings.
@@ -191,6 +196,7 @@ impl Voice {
             osc_pitch_semi: [0.0, 0.0],
             osc_level: [0.72, 0.72],
             detune_cents: 7.0,
+            unison_cents: 0.0,
             key_track: 0.4,
             fm_amount: 0.0,
             fm_mean: 1.0,
@@ -348,6 +354,10 @@ impl Voice {
         self.set_glide_rate(rate);
     }
 
+    pub fn set_unison_cents(&mut self, cents: f32) {
+        self.unison_cents = cents.clamp(-50.0, 50.0);
+    }
+
     pub fn set_key_track(&mut self, amount: f32) {
         self.key_track = amount.clamp(0.0, 1.0);
     }
@@ -378,7 +388,8 @@ impl Voice {
             self.glide_offset = 0.0;
         }
 
-        let frequency = Oscillator::note_to_frequency(note);
+        let frequency = Oscillator::note_to_frequency(note)
+            * (self.unison_cents / 1200.0 * std::f32::consts::LN_2).exp();
         let octaves_from_ref = (frequency / CAL_REF_HZ).log2();
         for (osc, err_cents_per_oct) in self.oscs.iter().zip(self.voct_error) {
             // V/oct tracking error grows with distance from the calibration
@@ -435,6 +446,17 @@ impl Voice {
         substrate: SubstrateState,
         bleed: f32,
     ) -> (f32, f32) {
+        // Idle cards cost nothing. A voice that is not held, has a fully
+        // decayed envelope, and carries no performance-line override is
+        // silent (its only output would be sub-audible VCA bleed): skip
+        // the oscillator + ladder Newton solve entirely. This is what
+        // lets an offline bounce run a large card cage — most cards are
+        // idle most of the time — without paying for 64 filter solves a
+        // sample. A held or still-ringing voice takes the full path below.
+        if !self.held && self.envelope.is_idle() && self.cv_override.is_none() {
+            self.prefilter_delta = 0.0;
+            return (0.0, 0.0);
+        }
         let pulse_width = (self.pulse_width + pw_offset).clamp(0.05, 0.95);
         let amp_env = self.envelope.next_sample();
         let filter_env = self.filter_env.next_sample();

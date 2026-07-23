@@ -1,13 +1,13 @@
-# Knotwork — the bass, from first principles of what a ladder bass IS:
-# fundamental power into the tanh curvature. The old version's comedy
-# (cutoff 480 + res 1.2 = quack, plus FM and noise spit) is gone.
-# Square + saw slightly detuned — the two-oscillator Moog bottom —
-# with the phase-locked sub square welded under. Ladder at 700 Hz,
-# resonance LOW (0.5: no quack, just the rolloff knee), a firm +0.8
-# octave filter kick over 180 ms for the consonant, then a SUSTAINED
-# tone (this is a synth bass, not a plucked instrument). Drive 2.6:
-# the ladder's own saturation is the character. Fast release so
-# 16th motor figures articulate.
+# Knotwork — the bass: fat but TIGHT. unison 2 with only 7 cents
+# spread — two cards for width and beat, not a detuned mess (bass must
+# stay pitch-solid). Square + saw slightly apart over a phase-locked
+# sub square = the two-oscillator Moog bottom with weight underneath.
+# Ladder at 700, resonance LOW (0.5, no quack), a firm +0.8 oct filter
+# kick over 180 ms for the consonant, then a SUSTAINED tone. Drive 2.6:
+# the ladder's own saturation is the grain. Fast release so 16th motor
+# figures articulate cleanly.
+unison 2
+unison_detune 7
 waveform 1
 pulse_width 0.45
 osc2_wave 2

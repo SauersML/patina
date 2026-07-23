@@ -78,6 +78,8 @@ pub struct ParamValues {
     pub reverb_wet: f32,
     pub reverb_tone: f32,
     pub reverb_pre: f32,
+    pub unison: f32,
+    pub unison_detune: f32,
     pub chorus_mode: ChorusMode,
     /// Keyboard register the UI should sit at; patches set it so a bass
     /// preset arrives with the keys already down where it lives.
@@ -202,6 +204,8 @@ impl Default for ParamValues {
             reverb_wet: 0.5,
             reverb_tone: 5500.0,
             reverb_pre: 0.012,
+            unison: 1.0,
+            unison_detune: 12.0,
             chorus_mode: ChorusMode::Off,
             ui_octave: 4.0,
             chorus_rate: 0.5,
@@ -590,52 +594,76 @@ impl VoiceManager {
             None
         };
 
-        // Retrigger if this note is already held on this channel
-        if let Some(voice) = self
-            .voices
-            .iter_mut()
-            .find(|v| v.is_held() && v.note == Some(note) && v.channel() == channel)
-        {
-            if let Some(p) = &chan_params {
-                voice.apply_params(p);
+        // Unison: a note may claim several voice CARDS at once. Each card
+        // is a distinct circuit — its own V/oct tolerances, drift walk,
+        // and stereo position — so a unison stack is an ENSEMBLE of
+        // detuned instruments, the analog "thickness" one card cannot make
+        // (a lone oscillator into a ladder is inherently thin). Count and
+        // spread come from the channel's patch, or the live panel.
+        let (unison_count, unison_detune) = match &chan_params {
+            Some(p) => (p.unison, p.unison_detune),
+            None => (self.params.unison, self.params.unison_detune),
+        };
+        let count = (unison_count.round() as usize).clamp(1, 4);
+
+        // Retrigger every card already holding this note on this channel.
+        let mut retriggered = false;
+        for voice in self.voices.iter_mut() {
+            if voice.is_held() && voice.note == Some(note) && voice.channel() == channel {
+                if let Some(p) = &chan_params {
+                    voice.apply_params(p);
+                }
+                voice.trigger(note, velocity, age, glide_from);
+                retriggered = true;
             }
-            voice.trigger(note, velocity, age, glide_from);
+        }
+        if retriggered {
             return;
         }
 
-        // Prefer a fully idle voice, then the longest-releasing voice,
-        // then steal the oldest held voice
-        let index = self
-            .voices
-            .iter()
-            .position(|v| !v.is_active())
-            .or_else(|| {
-                self.voices
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, v)| !v.is_held())
-                    .min_by_key(|(_, v)| v.age())
-                    .map(|(i, _)| i)
-            })
-            .or_else(|| {
-                self.voices
-                    .iter()
-                    .enumerate()
-                    .min_by_key(|(_, v)| v.age())
-                    .map(|(i, _)| i)
-            });
+        for k in 0..count {
+            // Symmetric detune spread across the stack (total = detune
+            // cents); a single voice sits dead center.
+            let offset = if count > 1 {
+                unison_detune * (k as f32 / (count - 1) as f32 - 0.5)
+            } else {
+                0.0
+            };
+            // Prefer a fully idle voice, then the longest-releasing voice,
+            // then steal the oldest held voice.
+            let index = self
+                .voices
+                .iter()
+                .position(|v| !v.is_active())
+                .or_else(|| {
+                    self.voices
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, v)| !v.is_held())
+                        .min_by_key(|(_, v)| v.age())
+                        .map(|(i, _)| i)
+                })
+                .or_else(|| {
+                    self.voices
+                        .iter()
+                        .enumerate()
+                        .min_by_key(|(_, v)| v.age())
+                        .map(|(i, _)| i)
+                });
 
-        if let Some(i) = index {
-            self.voices[i].set_channel(channel);
-            if let Some(p) = &chan_params {
-                self.voices[i].apply_params(p);
-            } else if channel == 0 {
-                // Panel voices follow the live global params; a voice
-                // previously claimed by a song channel comes home here
-                let p = self.params;
-                self.voices[i].apply_params(&p);
+            if let Some(i) = index {
+                self.voices[i].set_channel(channel);
+                if let Some(p) = &chan_params {
+                    self.voices[i].apply_params(p);
+                } else if channel == 0 {
+                    // Panel voices follow the live global params; a voice
+                    // previously claimed by a song channel comes home here
+                    let p = self.params;
+                    self.voices[i].apply_params(&p);
+                }
+                self.voices[i].set_unison_cents(offset);
+                self.voices[i].trigger(note, velocity, age, glide_from);
             }
-            self.voices[i].trigger(note, velocity, age, glide_from);
         }
     }
 
@@ -1279,6 +1307,14 @@ impl VoiceManager {
         self.reverb.set_pre(self.params.reverb_pre);
     }
 
+    pub fn set_unison(&mut self, v: f32) {
+        self.params.unison = Param::Unison.clamp(v);
+    }
+
+    pub fn set_unison_detune(&mut self, v: f32) {
+        self.params.unison_detune = Param::UnisonDetune.clamp(v);
+    }
+
     pub fn set_chorus_mix(&mut self, mix: f32) {
         self.chorus.set_mix(mix);
     }
@@ -1438,6 +1474,26 @@ fn soft_limit(x: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A unison patch must claim COUNT cards for one note, each a distinct
+    /// circuit — the mechanism behind analog thickness. A count of 3 with
+    /// spread must light three voices whose pitches straddle the target.
+    #[test]
+    fn unison_stacks_detuned_cards() {
+        let sr = 48000.0;
+        let mut vm = VoiceManager::new(sr, 16);
+        let mut p = ParamValues::neutral();
+        p.unison = 3.0;
+        p.unison_detune = 20.0;
+        vm.set_channel_params(1, p);
+        vm.note_on_channel(69, 0.9, 1); // A4 on channel 1
+        let held = vm.voices.iter().filter(|v| v.is_held()).count();
+        assert_eq!(held, 3, "unison 3 should claim 3 cards, got {held}");
+        // A plain note claims exactly one.
+        let mut vm2 = VoiceManager::new(sr, 16);
+        vm2.note_on(69, 0.9);
+        assert_eq!(vm2.voices.iter().filter(|v| v.is_held()).count(), 1);
+    }
 
     #[test]
     fn renders_sound_and_decays() {
