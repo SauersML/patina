@@ -53,6 +53,23 @@ use crate::vocoder::Vocoder;
 /// Reserved song channel for the voice box (the drums own u16::MAX).
 pub const VOX_CHANNEL: u16 = u16::MAX - 1;
 
+/// A knob write. Every voice-box control is also an automation lane, and
+/// automation values are parsed floats — `automate vox_breath NaN` is a
+/// song the parser accepts. `f32::clamp` returns NaN unchanged, and both
+/// the tract (recursive resonators) and the smoothed output gains
+/// (`level += (target - level) * k`) never recover from a single NaN: the
+/// voice box goes silent for the rest of the session. A non-finite write
+/// is dropped, so the knob keeps the position it had; infinities still
+/// clamp to the stop.
+#[inline]
+fn knob(current: f32, v: f32, lo: f32, hi: f32) -> f32 {
+    if v.is_nan() {
+        current
+    } else {
+        v.clamp(lo, hi)
+    }
+}
+
 /// Fourth formant: fixed, like the higher tract resonances it stands for.
 const F4: f32 = 3300.0;
 const B4: f32 = 280.0;
@@ -268,13 +285,21 @@ pub fn parse_lyric(s: &str) -> Result<Syllable, String> {
             amp = part[i + 1..]
                 .parse::<f32>()
                 .map_err(|_| format!("lyric '{}': bad amplitude", raw))?;
+            // clamp() would pass NaN through, and the tract is recursive:
+            // one NaN sample poisons the voice for good
+            if !amp.is_finite() {
+                return Err(format!("lyric '{}': bad amplitude", raw));
+            }
             part = &part[..i];
         }
         if let Some(i) = part.rfind(':') {
             let v = part[i + 1..]
                 .parse::<f32>()
                 .map_err(|_| format!("lyric '{}': bad duration (milliseconds)", raw))?;
-            if v <= 0.0 {
+            // `!(v > 0.0)` rather than `v <= 0.0`: NaN fails every
+            // comparison, and a NaN length would silently become a
+            // zero-sample segment
+            if !(v > 0.0) || v.is_infinite() {
                 return Err(format!("lyric '{}': duration must be positive", raw));
             }
             ms = Some(v);
@@ -493,18 +518,18 @@ impl VoxSource {
     }
 
     pub fn set_breath(&mut self, v: f32) {
-        self.breath = v.clamp(0.0, 1.0);
+        self.breath = knob(self.breath, v, 0.0, 1.0);
     }
 
     pub fn set_vibrato(&mut self, v: f32) {
-        self.vibrato = v.clamp(0.0, 1.0);
+        self.vibrato = knob(self.vibrato, v, 0.0, 1.0);
     }
 
     /// How much the voice performs on its own: pitch accents on stressed
     /// syllables, declination across the phrase, final falls and rises.
     /// Low for singing (the notes are the melody), high for speech.
     pub fn set_intonation(&mut self, v: f32) {
-        self.intonation = v.clamp(0.0, 1.0);
+        self.intonation = knob(self.intonation, v, 0.0, 1.0);
     }
 
     /// The next note-on will sing this. Set from the song's lyric events,
@@ -561,7 +586,12 @@ impl VoxSource {
                 (0.8 - 0.35 * self.syl_index as f32).max(-2.2) * self.intonation;
             self.boundary = syl.boundary;
 
-            let gain = 0.4 + 0.6 * velocity.clamp(0.0, 1.0);
+            // Velocity is a parsed float straight off the lyric line and
+            // f32::clamp returns NaN unchanged. The tract is recursive —
+            // one NaN sample makes every later sample NaN, forever, on
+            // every later syllable — so a bad velocity must not reach it.
+            let vel = if velocity.is_nan() { 0.0 } else { velocity.clamp(0.0, 1.0) };
+            let gain = 0.4 + 0.6 * vel;
             let (main, coda) = self.build_syllable(&syl.phones, gain);
             // A new syllable interrupts whatever was still queued (fast
             // passages drop their codas, like a hurried singer)
@@ -1094,6 +1124,10 @@ fn load_wav_mono_fmt(path: &str) -> Result<(Vec<f32>, u32, u16, u16), String> {
     if samples.is_empty() {
         return Err(format!("wav '{}': empty", path));
     }
+    // Everything downstream divides by this rate
+    if rate == 0 {
+        return Err(format!("wav '{}': sample rate is 0", path));
+    }
     Ok((samples, rate, format, bits))
 }
 
@@ -1148,11 +1182,11 @@ impl VoxBox {
     /// carrier, so its loudness is fixed by post-tanh makeup — headroom
     /// above unity is the only way a song can push a vocoder chorus.
     pub fn set_level(&mut self, v: f32) {
-        self.level_t = v.clamp(0.0, 2.0);
+        self.level_t = knob(self.level_t, v, 0.0, 2.0);
     }
 
     pub fn set_dry(&mut self, v: f32) {
-        self.dry_t = v.clamp(0.0, 1.0);
+        self.dry_t = knob(self.dry_t, v, 0.0, 1.0);
     }
 
     pub fn set_mode(&mut self, mode: crate::vocoder::VocoderMode) {
@@ -1170,21 +1204,38 @@ impl VoxBox {
         self.talker.set_clarity(v);
     }
 
-    /// Load a recorded modulator, resampled to the engine rate and
-    /// peak-normalized. It starts from the top at the next phrase (a vox
-    /// note-on with no other vox notes held).
-    pub fn set_wav(&mut self, samples: &[f32], source_rate: u32) {
+    /// Linear resample of a loaded file onto the engine clock. Shared by
+    /// the modulator and the pitch curve so the two can never disagree
+    /// about length — they are indexed by the same `wav_pos`.
+    ///
+    /// Two edges the naive form gets wrong: a 0 Hz header (malformed, but
+    /// nothing upstream promises otherwise) divides by zero and asks for a
+    /// `usize::MAX` allocation, and a file shorter than the ratio (three
+    /// frames at 192 kHz onto a 48 kHz engine) resamples to an EMPTY
+    /// buffer that later gets a playhead pointed at it.
+    fn resample(&self, samples: &[f32], source_rate: u32) -> Vec<f32> {
+        if samples.is_empty() || source_rate == 0 {
+            return Vec::new();
+        }
         let ratio = source_rate as f64 / self.sample_rate as f64;
-        let out_len = (samples.len() as f64 / ratio) as usize;
+        let out_len = ((samples.len() as f64 / ratio) as usize).max(1);
         let mut out = Vec::with_capacity(out_len);
         for i in 0..out_len {
             let t = i as f64 * ratio;
-            let i0 = t as usize;
+            let i0 = (t as usize).min(samples.len() - 1);
             let frac = (t - i0 as f64) as f32;
             let a = samples[i0];
             let b = samples[(i0 + 1).min(samples.len() - 1)];
             out.push(a + (b - a) * frac);
         }
+        out
+    }
+
+    /// Load a recorded modulator, resampled to the engine rate and
+    /// peak-normalized. It starts from the top at the next phrase (a vox
+    /// note-on with no other vox notes held).
+    pub fn set_wav(&mut self, samples: &[f32], source_rate: u32) {
+        let mut out = self.resample(samples, source_rate);
         let peak = out.iter().fold(0.0f32, |a, &s| a.max(s.abs()));
         if peak > 1e-6 {
             let g = 0.9 / peak;
@@ -1192,7 +1243,9 @@ impl VoxBox {
                 *s *= g;
             }
         }
-        self.wav = Some(out);
+        // An empty reel is no reel: leaving Some(vec![]) here would arm a
+        // playhead on nothing at the next note-on
+        self.wav = (!out.is_empty()).then_some(out);
         self.wav_active = false;
         self.wav_pos = 0;
     }
@@ -1202,18 +1255,8 @@ impl VoxBox {
     /// the melody and the mouth can never drift apart. Values pass
     /// through unnormalized — a float32 wav carries 62.0 as 62.0.
     pub fn set_pitch_curve(&mut self, samples: &[f32], source_rate: u32) {
-        let ratio = source_rate as f64 / self.sample_rate as f64;
-        let out_len = (samples.len() as f64 / ratio) as usize;
-        let mut out = Vec::with_capacity(out_len);
-        for i in 0..out_len {
-            let t = i as f64 * ratio;
-            let i0 = t as usize;
-            let frac = (t - i0 as f64) as f32;
-            let a = samples[i0];
-            let b = samples[(i0 + 1).min(samples.len() - 1)];
-            out.push(a + (b - a) * frac);
-        }
-        self.pitch_curve = Some(out);
+        let out = self.resample(samples, source_rate);
+        self.pitch_curve = (!out.is_empty()).then_some(out);
     }
 
     /// The performance line's pitch right now, as CV in octaves from
@@ -1264,10 +1307,16 @@ impl VoxBox {
     #[inline]
     pub fn process(&mut self, carrier: f32) -> f32 {
         let m = if self.wav_active {
-            let w = self.wav.as_ref().unwrap();
-            let s = w[self.wav_pos];
+            // `get`, not `[]`: this runs inside the host's audio callback,
+            // where an index panic takes the whole DAW down
+            let len = self.wav.as_ref().map_or(0, |w| w.len());
+            let s = self
+                .wav
+                .as_ref()
+                .and_then(|w| w.get(self.wav_pos).copied())
+                .unwrap_or(0.0);
             self.wav_pos += 1;
-            if self.wav_pos >= w.len() {
+            if self.wav_pos >= len {
                 self.wav_active = false;
             }
             s
@@ -1325,6 +1374,13 @@ mod tests {
         assert!(parse_lyric("QX").is_err());
         assert!(parse_lyric("").is_err());
         assert!(parse_lyric("AA:-5").is_err());
+        // "NaN"/"inf" parse as floats and slip past `<= 0.0` (NaN fails
+        // every comparison); the tract is recursive, so one NaN sample
+        // silences the voice for the rest of the session
+        assert!(parse_lyric("AA:NaN").is_err(), "NaN duration");
+        assert!(parse_lyric("AA:inf").is_err(), "infinite duration");
+        assert!(parse_lyric("AA@NaN").is_err(), "NaN amplitude");
+        assert!(parse_lyric("AA@inf").is_err(), "infinite amplitude");
     }
 
     fn zcr(samples: &[f32]) -> f32 {
@@ -1830,6 +1886,94 @@ mod tests {
             loud = loud.max(vb.process(saw(n)).abs());
         }
         assert!(loud > 10.0 * quiet.max(0.02), "speech must open the vocoder: {loud} vs {quiet}");
+    }
+
+    /// Every voice-box knob is an automation lane, and automation values
+    /// are parsed floats — `automate vox_breath NaN` is a song the parser
+    /// accepts. clamp() passes NaN through, and both the tract and the
+    /// smoothed output gains are recursive: one NaN write silences the
+    /// voice box for the rest of the session.
+    #[test]
+    fn a_non_finite_knob_cannot_poison_the_voice_box() {
+        let sr = 48000.0;
+        type Knob = fn(&mut VoxBox, f32);
+        let knobs: [(&str, Knob); 6] = [
+            ("vox_level", VoxBox::set_level),
+            ("vox_dry", VoxBox::set_dry),
+            ("vox_clarity", VoxBox::set_clarity),
+            ("vox_breath", |vb, v| vb.source.set_breath(v)),
+            ("vox_vibrato", |vb, v| vb.source.set_vibrato(v)),
+            ("vox_intonation", |vb, v| vb.source.set_intonation(v)),
+        ];
+        let saw = |n: usize| (((n as f32 * 110.0 / sr) % 1.0) * 2.0 - 1.0) * 5.0;
+        for (name, set) in knobs {
+            for mode in [
+                crate::vocoder::VocoderMode::TalkBox,
+                crate::vocoder::VocoderMode::Talker,
+                crate::vocoder::VocoderMode::Spectral,
+            ] {
+                let mut vb = VoxBox::new(sr);
+                vb.set_mode(mode);
+                set(&mut vb, f32::NAN);
+                vb.source.set_syllable(parse_lyric("AA").unwrap());
+                vb.note_on(45, 1.0);
+                let mut peak = 0.0f32;
+                for n in 0..(sr as usize / 4) {
+                    let y = vb.process(saw(n));
+                    assert!(y.is_finite(), "{name} = NaN poisoned {mode:?}");
+                    peak = peak.max(y.abs());
+                }
+                assert!(peak > 1e-4, "{name} = NaN silenced {mode:?}");
+            }
+        }
+    }
+
+    /// A recording shorter than the resampling ratio (a handful of frames
+    /// at a rate above the engine's) resamples to NOTHING. The box must
+    /// not then arm a playhead on an empty buffer — that is an index
+    /// panic inside the host's audio callback.
+    #[test]
+    fn a_wav_too_short_to_resample_does_not_panic() {
+        let sr = 48000.0;
+        let mut vb = VoxBox::new(sr);
+        vb.set_wav(&[0.1, -0.1, 0.2], 192_000); // 3 frames / ratio 4 = 0 out
+        vb.note_on(45, 1.0);
+        for k in 0..2000 {
+            let y = vb.process((((k as f32 * 110.0 / sr) % 1.0) * 2.0 - 1.0) * 5.0);
+            assert!(y.is_finite());
+        }
+        // A 0 Hz header would divide the resampler by zero (and ask for a
+        // usize::MAX allocation); it must be refused, not survived.
+        let mut vb = VoxBox::new(sr);
+        vb.set_wav(&[0.1, -0.1, 0.2], 0);
+        vb.set_pitch_curve(&[62.0, 62.0], 0);
+        vb.note_on(45, 1.0);
+        for k in 0..2000 {
+            let y = vb.process((((k as f32 * 110.0 / sr) % 1.0) * 2.0 - 1.0) * 5.0);
+            assert!(y.is_finite());
+        }
+    }
+
+    /// Velocity comes off the song parser unvalidated (`C4@NaN` parses).
+    /// f32::clamp passes NaN through, and the voice's tract state is
+    /// recursive: one NaN sample makes every later sample NaN, for the
+    /// life of the plugin, on every later syllable.
+    #[test]
+    fn a_non_finite_velocity_cannot_poison_the_voice() {
+        let sr = 48000.0;
+        let mut v = VoxSource::new(sr);
+        v.set_syllable(parse_lyric("AA").unwrap());
+        v.note_on(45, f32::NAN);
+        let out = render_secs(&mut v, 0.3, sr);
+        assert!(out.iter().all(|s| s.is_finite()), "NaN velocity poisoned the tract");
+        v.note_off(45);
+        render_secs(&mut v, 0.2, sr);
+        // The next syllable must still speak
+        v.set_syllable(parse_lyric("AA").unwrap());
+        v.note_on(45, 0.9);
+        let out = render_secs(&mut v, 0.4, sr);
+        assert!(out.iter().all(|s| s.is_finite()));
+        assert!(rms(&out[out.len() / 2..]) > 0.03, "the voice never recovered");
     }
 
     /// WAV round trip: write a file with the engine's own writer format

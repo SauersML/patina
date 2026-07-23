@@ -56,6 +56,23 @@ pub fn slot_for_channel(channel: u16) -> Option<usize> {
     }
 }
 
+/// The params the deck owns. One list: `set_param` uses it both to decide
+/// whether to claim a value and to route it, so "claimed" and "applied"
+/// can never disagree.
+pub fn is_sampler_param(param: Param) -> bool {
+    matches!(
+        param,
+        Param::SmpPitch
+            | Param::SmpStart
+            | Param::SmpGain
+            | Param::SmpPan
+            | Param::SmpAttack
+            | Param::SmpRelease
+            | Param::SmpCutoff
+            | Param::SmpRes
+    )
+}
+
 /// Heads across the whole deck (not per slot): enough for thick pads on
 /// one slot or a busy multi-slot arrangement, small enough to stay cheap.
 const NUM_HEADS: usize = 24;
@@ -307,7 +324,9 @@ pub fn analyze_epochs(data: &SampleData) -> Vec<(f64, f64, bool)> {
         }
         env[i] = acc;
     }
-    let uv_step = (rate * 0.005) as f64;
+    // At least one frame per unvoiced mark: a reel claiming an absurdly
+    // low rate would otherwise step by zero and walk this loop forever.
+    let uv_step = ((rate * 0.005) as f64).max(1.0);
     let mut epochs = Vec::new();
     let mut i = 0.0f64;
     while (i as usize) < n.saturating_sub(2) {
@@ -568,20 +587,23 @@ impl SamplerBank {
     /// Live per-slot automation. Returns false for non-sampler params so
     /// the caller can fall through to the ordinary channel path.
     pub fn set_param(&mut self, index: usize, param: Param, value: f32) -> bool {
+        // The deck claims its own params whether or not the slot has
+        // loaded (a set before load is a no-op, not a global fall-through)
+        // and whatever the value is — one list, so the two answers cannot
+        // drift apart.
+        if !is_sampler_param(param) {
+            return false;
+        }
+        // Automation values are whatever the song or host wrote, and
+        // f32::clamp returns NaN unchanged. A single non-finite write would
+        // live in the transport forever: a NaN read position never reaches
+        // the end of tape, so the head sounds NaN until the plugin is
+        // reloaded. Drop the write, keep the param.
+        if !value.is_finite() {
+            return true;
+        }
         let Some(slot) = self.slots.get_mut(index).and_then(|s| s.as_mut()) else {
-            // Still claim sampler params (a set before the slot loads is
-            // a no-op, not a global fall-through)
-            return matches!(
-                param,
-                Param::SmpPitch
-                    | Param::SmpStart
-                    | Param::SmpGain
-                    | Param::SmpPan
-                    | Param::SmpAttack
-                    | Param::SmpRelease
-                    | Param::SmpCutoff
-                    | Param::SmpRes
-            );
+            return true;
         };
         let c = &mut slot.cfg;
         match param {
@@ -635,9 +657,12 @@ impl SamplerBank {
         let start = if cfg.reverse { r1 - 1.0 - scrub } else { r0 + scrub };
 
         // Latch the sustain loop, clamped into the region; a degenerate
-        // loop disables itself
+        // loop disables itself. `chop` can slice the region below one
+        // frame (128 pads out of a 64-frame click), which would leave the
+        // loop-start window inverted — f64::clamp panics on min > max, so
+        // the window is built from the region, not assumed wider than it.
         let looping = cfg.loop_pts.and_then(|(a, b)| {
-            let a = (a as f64 * rate).clamp(r0, r1 - 1.0);
+            let a = (a as f64 * rate).clamp(r0, (r1 - 1.0).max(r0));
             let b = (b as f64 * rate).clamp(r0, r1);
             (b - a >= 4.0).then_some((a, b))
         });
@@ -679,7 +704,11 @@ impl SamplerBank {
         let Some(idx) = idx else { return };
 
         self.counter += 1;
-        let vel = velocity.clamp(0.0, 1.0);
+        // Song velocities are parsed floats and never validated (`C4@NaN`
+        // is a legal token). f32::clamp passes NaN through, and a NaN
+        // vel_gain would multiply into the slot bus for the life of the
+        // plugin — every later note on any slot included.
+        let vel = if velocity.is_nan() { 0.0 } else { velocity.clamp(0.0, 1.0) };
         self.heads[idx] = Head {
             stage: Stage::Attack,
             slot: slot_idx,
@@ -769,6 +798,15 @@ impl SamplerBank {
                 * ((semis / 12.0).exp2() as f64)
                 * cfg.speed.clamp(0.03, 32.0) as f64
                 * pitch_mult.max(0.01) as f64;
+            // Backstop: a non-finite transport can never reach the end of
+            // tape (every comparison against NaN is false), so the head
+            // would sound NaN forever and poison the whole mix bus. Lift
+            // it off the reel instead. The setters above keep automation
+            // finite; this catches anything latched at load time.
+            if !step.is_finite() || !h.pos.is_finite() {
+                h.stage = Stage::Off;
+                continue;
+            }
 
             // The envelope
             match h.stage {
@@ -806,7 +844,10 @@ impl SamplerBank {
             // the cursor advances at natural (or `speed`-stretched) time,
             // so pitch and duration are independent.
             if cfg.psola {
-                if let Some(ep) = self.epochs[h.slot].as_ref() {
+                // A reel too short to hold one analysis step yields no
+                // epochs at all; grain launching would index an empty
+                // table. Fall through to the ordinary varispeed read.
+                if let Some(ep) = self.epochs[h.slot].as_ref().filter(|e| !e.is_empty()) {
                     if h.ps_n == 0.0 {
                         h.ps_cursor = h.pos.max(r0);
                     }
@@ -953,8 +994,17 @@ impl SamplerBank {
                             h.pos = lb - 1.0; // reverse loop: hard wrap (no xfade)
                         }
                     } else if h.pos >= lb {
-                        // The crossfade already played la..la+xfade; land past it
-                        h.pos = la + (h.pos - lb) + h.xfade_frames;
+                        // The crossfade already played la..la+xfade; land
+                        // past it. Wrap MODULO the loop body, not by one
+                        // length: a step wider than the loop (a short loop
+                        // played far above the root, or `beats=` fitting a
+                        // 32x speed) would otherwise overshoot further
+                        // every wrap and walk clean off the end of the
+                        // tape — where the declick reads zero and the head
+                        // never terminates, because looping heads are
+                        // never tested for end-of-tape.
+                        let body = (lb - h.xfade_frames) - la;
+                        h.pos = la + h.xfade_frames + (h.pos - lb).rem_euclid(body.max(1e-9));
                     }
                 }
                 None => {}
@@ -1051,6 +1101,11 @@ pub fn load_wav_stereo(path: &str) -> Result<SampleData, String> {
     let out = out.ok_or_else(|| format!("wav '{}': no data chunk", path))?;
     if out.frames() == 0 {
         return Err(format!("wav '{}': empty data chunk", path));
+    }
+    // A 0 Hz reel divides by zero everywhere downstream (the psola epoch
+    // walker steps by zero and never terminates); reject it at the door.
+    if out.rate == 0 {
+        return Err(format!("wav '{}': sample rate is 0", path));
     }
     Ok(out)
 }
@@ -1440,6 +1495,141 @@ mod tests {
             "24 heads at 4x stretch: {:.1}x realtime (sink {acc})",
             (n as f64 / 48000.0) / secs
         );
+    }
+
+    /// A loop shorter than one read step must still LOOP. The wrap has to
+    /// fold the whole overshoot back, or every wrap lands further past the
+    /// loop end than the last and the head walks off the reel — and a
+    /// looping head is never checked for end-of-tape, so it stays there
+    /// forever, silent (the edge declick reads zero past the region).
+    #[test]
+    fn a_loop_narrower_than_the_step_still_loops() {
+        let n = 48000usize;
+        let ramp: Vec<f32> = (0..n).map(|i| i as f32 / n as f32).collect();
+        let data = Arc::new(SampleData { left: ramp.clone(), right: ramp, rate: 48000 });
+        let mut bank = SamplerBank::new(48000.0);
+        // ~9.6-frame loop at the middle of the reel, read 32 frames a step
+        // (no crossfade, so the probe reads the ramp itself)
+        let cfg = SlotConfig {
+            loop_pts: Some((0.5, 0.5002)),
+            xfade: 0.0,
+            speed: 32.0,
+            attack: 0.001,
+            ..Default::default()
+        };
+        bank.set_slot(0, SamplerSlot { data, cfg });
+        bank.note_on(0, 60, 1.0);
+        for _ in 0..2000 {
+            bank.render_next(1.0); // reach and pass the loop point
+        }
+        for _ in 0..20000 {
+            let v = bank.render_next(1.0).0 / (PROGRAM_V * cfg.gain);
+            assert!(
+                (v - 0.5).abs() < 0.02,
+                "the head left its loop: read {v:.3}, loop sits at ramp level 0.5"
+            );
+        }
+        assert!(bank.any_active(), "looped head died");
+    }
+
+    /// A short reel sliced into many pads: every slice can be under one
+    /// source frame. The latched loop must clamp into that sliver without
+    /// asking f64::clamp for an inverted range (min > max = panic).
+    #[test]
+    fn sub_frame_chop_slices_survive_a_loop() {
+        let n = 64usize; // 64 frames / 128 pads = half a frame per pad
+        let s = vec![0.5f32; n];
+        let data = Arc::new(SampleData { left: s.clone(), right: s, rate: 48000 });
+        let mut bank = SamplerBank::new(48000.0);
+        let cfg = SlotConfig {
+            chop: 128,
+            loop_pts: Some((0.0, f32::MAX)), // what bare `loop` parses to
+            ..Default::default()
+        };
+        bank.set_slot(0, SamplerSlot { data, cfg });
+        for note in [60u8, 61, 127] {
+            bank.note_on(0, note, 1.0);
+            for _ in 0..256 {
+                let (l, r) = bank.render_next(1.0);
+                assert!(l.is_finite() && r.is_finite());
+            }
+        }
+    }
+
+    /// A reel too short to hold a single pitch period yields no epochs;
+    /// psola playback must decline rather than index an empty table.
+    #[test]
+    fn psola_on_a_two_frame_reel_does_not_panic() {
+        let data = Arc::new(SampleData {
+            left: vec![0.2, -0.2],
+            right: vec![0.2, -0.2],
+            rate: 48000,
+        });
+        let mut bank = SamplerBank::new(48000.0);
+        bank.set_slot(0, SamplerSlot {
+            data,
+            cfg: SlotConfig { psola: true, ..Default::default() },
+        });
+        bank.note_on(0, 67, 1.0);
+        for _ in 0..1000 {
+            let (l, r) = bank.render_next(1.0);
+            assert!(l.is_finite() && r.is_finite());
+        }
+    }
+
+    /// A malformed reel claiming 0 Hz would divide the epoch walker by
+    /// zero and loop forever; the loader must reject it first.
+    #[test]
+    fn zero_rate_wav_is_rejected() {
+        let n = 32usize;
+        let mut d = Vec::new();
+        d.extend_from_slice(b"RIFF");
+        d.extend_from_slice(&(4 + 8 + 16 + 8 + n as u32 * 2).to_le_bytes());
+        d.extend_from_slice(b"WAVEfmt ");
+        d.extend_from_slice(&16u32.to_le_bytes());
+        d.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        d.extend_from_slice(&1u16.to_le_bytes()); // mono
+        d.extend_from_slice(&0u32.to_le_bytes()); // sample rate 0
+        d.extend_from_slice(&0u32.to_le_bytes());
+        d.extend_from_slice(&2u16.to_le_bytes());
+        d.extend_from_slice(&16u16.to_le_bytes());
+        d.extend_from_slice(b"data");
+        d.extend_from_slice(&(n as u32 * 2).to_le_bytes());
+        d.extend_from_slice(&vec![0u8; n * 2]);
+        let path = std::env::temp_dir().join("patina-zero-rate-test.wav");
+        std::fs::write(&path, d).unwrap();
+        assert!(load_wav_stereo(path.to_str().unwrap()).is_err());
+    }
+
+    /// Velocity and automation arrive unvalidated (a song may write
+    /// `@NaN` or `pitch=NaN`). f32::clamp passes NaN straight through, so
+    /// an unguarded write poisons the head's gain or read position for
+    /// the life of the plugin — every later note mixes into NaN too.
+    #[test]
+    fn non_finite_input_cannot_poison_the_deck() {
+        let mut bank = bank_with(SlotConfig { attack: 0.001, ..Default::default() });
+        bank.note_on(0, 60, f32::NAN);
+        for _ in 0..4800 {
+            let (l, r) = bank.render_next(1.0);
+            assert!(l.is_finite() && r.is_finite(), "NaN velocity poisoned the mix");
+        }
+
+        let mut bank = bank_with(SlotConfig { attack: 0.001, ..Default::default() });
+        bank.note_on(0, 60, 1.0);
+        bank.set_param(0, Param::SmpPitch, f32::NAN);
+        bank.set_param(0, Param::SmpStart, f32::NAN);
+        for _ in 0..4800 {
+            let (l, r) = bank.render_next(1.0);
+            assert!(l.is_finite() && r.is_finite(), "NaN automation poisoned the mix");
+        }
+        // And a head that somehow already holds a non-finite transport
+        // must die instead of sounding forever
+        let mut bank = bank_with(SlotConfig { pitch_semis: f32::NAN, ..Default::default() });
+        bank.note_on(0, 60, 1.0);
+        for _ in 0..4800 {
+            let (l, r) = bank.render_next(1.0);
+            assert!(l.is_finite() && r.is_finite(), "NaN slot config poisoned the mix");
+        }
     }
 
     #[test]

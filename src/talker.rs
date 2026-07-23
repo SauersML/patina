@@ -281,6 +281,13 @@ impl Talker {
     }
 
     pub fn set_clarity(&mut self, c: f32) {
+        // Automation values are parsed floats and `f32::clamp` returns NaN
+        // unchanged. A NaN clarity would build a whole Voicing of NaNs and
+        // retune the output biquads with NaN coefficients — the circuit
+        // never produces a finite sample again. Keep the current setting.
+        if c.is_nan() {
+            return;
+        }
         let c = c.clamp(0.0, 1.0);
         // Automation calls this every block: rebuild the voicing and the
         // output filters ONLY when the value moves, or the filters' state

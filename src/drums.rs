@@ -111,6 +111,40 @@ fn white(state: &mut u32) -> f32 {
     (xorshift(state) >> 8) as f32 / (1u32 << 23) as f32 - 1.0
 }
 
+/// The trigger pulse's accent voltage, 0..1. Velocity arrives unvalidated
+/// — the song parser accepts any float after `@`, and hosts are hosts —
+/// and `f32::clamp` returns NaN unchanged. A NaN accent LATCHES a voice:
+/// its envelope becomes NaN, the render early-out (`amp < 1e-5`) is false
+/// forever, `is_active` (`amp > 1e-4`) is false forever, and the board
+/// pours NaN onto the bus while reporting silence. One conversion, used
+/// by every trigger, so no voice can grow its own version of this.
+#[inline]
+fn accent_of(velocity: f32) -> f32 {
+    if velocity.is_nan() {
+        0.0
+    } else {
+        velocity.clamp(0.0, 1.0)
+    }
+}
+
+/// A panel-knob write, 0..1. Every knob is also an automation lane, and
+/// automation values are parsed floats — `automate bd_tune NaN` is a
+/// song the parser accepts. `f32::clamp` returns NaN unchanged, and a NaN
+/// knob is permanent: it either poisons its voice (a NaN oscillator phase
+/// never comes back, and the voice's `amp < 1e-5` early-out is false
+/// forever) or silently kills a bus stage (NaN fails every `if`, so the
+/// drive and tone stages just stop existing). A non-finite write is
+/// dropped and the knob keeps the position it had; infinities still clamp
+/// to the stop, as they always did.
+#[inline]
+fn knob(current: f32, v: f32) -> f32 {
+    if v.is_nan() {
+        current
+    } else {
+        v.clamp(0.0, 1.0)
+    }
+}
+
 /// Per-sample decay coefficient for an RC discharge with time constant
 /// `tau` seconds. T60 = 6.91 * tau.
 #[inline]
@@ -178,7 +212,7 @@ impl Kick {
     }
 
     fn trigger(&mut self, vel: f32) {
-        self.accent = vel.clamp(0.0, 1.0);
+        self.accent = accent_of(vel);
         // The trigger pulse dumps into the bridged-T: the ring restarts
         // from a defined phase every hit — the 909's machine-tight attack
         // (unlike an 808 rung mid-swing)
@@ -314,7 +348,7 @@ impl Snare {
     }
 
     fn trigger(&mut self, vel: f32) {
-        self.accent = vel.clamp(0.0, 1.0);
+        self.accent = accent_of(vel);
         self.phase1 = 0.0;
         self.phase2 = 0.31;
         self.amp = 0.55 + 0.45 * self.accent;
@@ -419,7 +453,7 @@ impl Rim {
     }
 
     fn trigger(&mut self, vel: f32) {
-        self.accent = vel.clamp(0.0, 1.0);
+        self.accent = accent_of(vel);
         for (i, (_, lvl, t60)) in RIM_MODES.iter().enumerate() {
             self.phases[i] = 0.0;
             self.amps[i] = lvl * (0.6 + 0.4 * self.accent);
@@ -492,7 +526,7 @@ impl Clap {
     }
 
     fn trigger(&mut self, vel: f32) {
-        self.accent = vel.clamp(0.0, 1.0);
+        self.accent = accent_of(vel);
         self.t = 0.0;
         self.burst = 0.7 + 0.3 * self.accent;
         self.bursts_left = 2; // two RETRIGGERS after the first palm (3 total)
@@ -603,7 +637,7 @@ impl Hats {
     }
 
     fn trigger_closed(&mut self, vel: f32) {
-        self.accent_ch = vel.clamp(0.0, 1.0);
+        self.accent_ch = accent_of(vel);
         self.ch_env = 0.6 + 0.4 * self.accent_ch;
         // CH T60 ~25..140 ms
         let t60 = 0.025 + 0.115 * self.ch_decay;
@@ -616,7 +650,7 @@ impl Hats {
     }
 
     fn trigger_open(&mut self, vel: f32) {
-        self.accent_oh = vel.clamp(0.0, 1.0);
+        self.accent_oh = accent_of(vel);
         self.oh_env = 0.55 + 0.45 * self.accent_oh;
         self.oh_fast = 0.5;
         // OH T60 ~0.15..1.0 s
@@ -818,70 +852,70 @@ impl DrumMachine {
     // --- Panel ---------------------------------------------------------
 
     pub fn set_bd_level(&mut self, v: f32) {
-        self.kick.level = v.clamp(0.0, 1.0);
+        self.kick.level = knob(self.kick.level, v);
     }
     pub fn set_bd_tune(&mut self, v: f32) {
-        self.kick.tune = v.clamp(0.0, 1.0);
+        self.kick.tune = knob(self.kick.tune, v);
     }
     pub fn set_bd_attack(&mut self, v: f32) {
-        self.kick.attack = v.clamp(0.0, 1.0);
+        self.kick.attack = knob(self.kick.attack, v);
     }
     pub fn set_bd_decay(&mut self, v: f32) {
-        self.kick.decay = v.clamp(0.0, 1.0);
+        self.kick.decay = knob(self.kick.decay, v);
     }
     pub fn set_bd_sweep(&mut self, v: f32) {
-        self.kick.sweep = v.clamp(0.0, 1.0);
+        self.kick.sweep = knob(self.kick.sweep, v);
     }
     pub fn set_bd_drive(&mut self, v: f32) {
-        self.kick.drive = v.clamp(0.0, 1.0);
+        self.kick.drive = knob(self.kick.drive, v);
     }
     pub fn set_sd_level(&mut self, v: f32) {
-        self.snare.level = v.clamp(0.0, 1.0);
+        self.snare.level = knob(self.snare.level, v);
     }
     pub fn set_sd_tune(&mut self, v: f32) {
-        self.snare.tune = v.clamp(0.0, 1.0);
+        self.snare.tune = knob(self.snare.tune, v);
     }
     pub fn set_sd_tone(&mut self, v: f32) {
-        self.snare.tone = v.clamp(0.0, 1.0);
+        self.snare.tone = knob(self.snare.tone, v);
     }
     pub fn set_sd_snappy(&mut self, v: f32) {
-        self.snare.snappy = v.clamp(0.0, 1.0);
+        self.snare.snappy = knob(self.snare.snappy, v);
     }
     pub fn set_sd_decay(&mut self, v: f32) {
-        self.snare.decay = v.clamp(0.0, 1.0);
+        self.snare.decay = knob(self.snare.decay, v);
     }
     pub fn set_rs_level(&mut self, v: f32) {
-        self.rim.level = v.clamp(0.0, 1.0);
+        self.rim.level = knob(self.rim.level, v);
     }
     pub fn set_rs_tune(&mut self, v: f32) {
-        self.rim.tune = v.clamp(0.0, 1.0);
+        self.rim.tune = knob(self.rim.tune, v);
     }
     pub fn set_cp_level(&mut self, v: f32) {
-        self.clap.level = v.clamp(0.0, 1.0);
+        self.clap.level = knob(self.clap.level, v);
     }
     pub fn set_cp_decay(&mut self, v: f32) {
-        self.clap.decay = v.clamp(0.0, 1.0);
+        self.clap.decay = knob(self.clap.decay, v);
     }
     pub fn set_hh_level(&mut self, v: f32) {
-        self.hats.level = v.clamp(0.0, 1.0);
+        self.hats.level = knob(self.hats.level, v);
     }
     pub fn set_hh_tune(&mut self, v: f32) {
-        self.hats.tune = v.clamp(0.0, 1.0);
+        self.hats.tune = knob(self.hats.tune, v);
     }
     pub fn set_hh_metal(&mut self, v: f32) {
-        self.hats.metal = v.clamp(0.0, 1.0);
+        self.hats.metal = knob(self.hats.metal, v);
     }
     pub fn set_ch_decay(&mut self, v: f32) {
-        self.hats.ch_decay = v.clamp(0.0, 1.0);
+        self.hats.ch_decay = knob(self.hats.ch_decay, v);
     }
     pub fn set_oh_decay(&mut self, v: f32) {
-        self.hats.oh_decay = v.clamp(0.0, 1.0);
+        self.hats.oh_decay = knob(self.hats.oh_decay, v);
     }
     pub fn set_drive(&mut self, v: f32) {
-        self.drive_target = v.clamp(0.0, 1.0);
+        self.drive_target = knob(self.drive_target, v);
     }
     pub fn set_tone(&mut self, v: f32) {
-        self.tone_target = v.clamp(0.0, 1.0);
+        self.tone_target = knob(self.tone_target, v);
     }
 }
 
@@ -1163,6 +1197,101 @@ mod tests {
         }
         assert!(peak > 1.0, "the board speaks in volts and should be hot");
         assert!(!dm.is_active(), "everything decays to silence");
+    }
+
+    /// Velocity reaches the trigger bus straight off the song parser
+    /// (`BD@NaN` is a legal token) and off any host that hands us a bad
+    /// float. f32::clamp returns NaN unchanged, so an unguarded accent
+    /// latches: the voice's early-out compares NaN < 1e-5 (false) and
+    /// renders forever, `is_active` compares NaN > 1e-4 (false) and
+    /// reports silence, and the board emits NaN until it is rebuilt.
+    #[test]
+    fn a_non_finite_velocity_cannot_latch_the_board() {
+        for note in [0u8, 1, 2, 3, 4, 5, 36, 38, 37, 39, 42, 46] {
+            let mut dm = DrumMachine::new(SR);
+            dm.trigger_note(note, f32::NAN);
+            for _ in 0..(0.2 * SR) as usize {
+                let (l, r) = dm.render_next();
+                assert!(l.is_finite() && r.is_finite(), "note {note} poisoned the board");
+            }
+            // And a good hit afterwards must still speak
+            dm.trigger_note(note, 1.0);
+            let mut peak = 0.0f32;
+            for _ in 0..(0.2 * SR) as usize {
+                let (l, r) = dm.render_next();
+                assert!(l.is_finite() && r.is_finite(), "note {note} poisoned the board");
+                peak = peak.max(l.abs());
+            }
+            assert!(peak > 0.01, "note {note} stayed dead after a NaN trigger");
+        }
+    }
+
+    /// Out-of-range velocities behave like their nearest legal accent
+    /// rather than driving the resonators past their trigger voltage.
+    #[test]
+    fn velocity_outside_zero_to_one_is_bounded() {
+        for vel in [-3.0f32, 0.0, 1.0, 9.0, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut dm = DrumMachine::new(SR);
+            for note in [36u8, 38, 37, 39, 42, 46] {
+                dm.trigger_note(note, vel);
+            }
+            let mut peak = 0.0f32;
+            for _ in 0..(1.0 * SR) as usize {
+                let (l, r) = dm.render_next();
+                assert!(l.is_finite() && r.is_finite(), "velocity {vel} broke the board");
+                peak = peak.max(l.abs());
+            }
+            assert!(peak < 60.0, "velocity {vel} blew the rail, peak={peak}");
+        }
+    }
+
+
+    /// Panel knobs are automation lanes and automation values are parsed
+    /// floats — `automate bd_tune NaN` is a song the parser accepts.
+    /// clamp() passes NaN through, and a NaN knob is permanent: it either
+    /// poisons its voice for the life of the plugin or silently deletes a
+    /// bus stage (NaN fails every `if`). Every knob, one hit each.
+    #[test]
+    fn a_non_finite_knob_cannot_poison_the_board() {
+        type Knob = fn(&mut DrumMachine, f32);
+        let knobs: [(&str, Knob); 22] = [
+            ("bd_level", DrumMachine::set_bd_level),
+            ("bd_tune", DrumMachine::set_bd_tune),
+            ("bd_attack", DrumMachine::set_bd_attack),
+            ("bd_decay", DrumMachine::set_bd_decay),
+            ("bd_sweep", DrumMachine::set_bd_sweep),
+            ("bd_drive", DrumMachine::set_bd_drive),
+            ("sd_level", DrumMachine::set_sd_level),
+            ("sd_tune", DrumMachine::set_sd_tune),
+            ("sd_tone", DrumMachine::set_sd_tone),
+            ("sd_snappy", DrumMachine::set_sd_snappy),
+            ("sd_decay", DrumMachine::set_sd_decay),
+            ("rs_level", DrumMachine::set_rs_level),
+            ("rs_tune", DrumMachine::set_rs_tune),
+            ("cp_level", DrumMachine::set_cp_level),
+            ("cp_decay", DrumMachine::set_cp_decay),
+            ("hh_level", DrumMachine::set_hh_level),
+            ("hh_tune", DrumMachine::set_hh_tune),
+            ("hh_metal", DrumMachine::set_hh_metal),
+            ("ch_decay", DrumMachine::set_ch_decay),
+            ("oh_decay", DrumMachine::set_oh_decay),
+            ("drive", DrumMachine::set_drive),
+            ("tone", DrumMachine::set_tone),
+        ];
+        for (name, set) in knobs {
+            let mut dm = DrumMachine::new(SR);
+            set(&mut dm, f32::NAN);
+            for note in [36u8, 38, 37, 39, 42, 46] {
+                dm.trigger_note(note, 1.0);
+            }
+            let mut peak = 0.0f32;
+            for _ in 0..(0.5 * SR) as usize {
+                let (l, r) = dm.render_next();
+                assert!(l.is_finite() && r.is_finite(), "{name} = NaN poisoned the board");
+                peak = peak.max(l.abs());
+            }
+            assert!(peak > 0.01, "{name} = NaN silenced the board");
+        }
     }
 
     #[test]
