@@ -33,14 +33,11 @@ plugin = ["dep:nice-plug"]
 # The native AUv2 Audio Unit for Logic Pro / GarageBand (macOS only —
 # talks straight to the AudioComponent ABI):
 #   scripts/bundle-au.sh
-# Ships with the host's generic parameter view, which works out of process.
-au = []
-# Experimental custom egui panel for the AU. OFF by default: getting an
-# AUv2 CocoaUI view to remote correctly through Logic's out-of-process host
-# is still being worked out (JUCE/iPlug2 manage it, so it's achievable).
-au-custom-view = ["au", "editor"]
-# The shared egui plugin editor (crate::panel widgets, software-rendered
-# into a host-provided layer-backed view — see src/au/cocoa.rs)
+# Ships the custom egui panel (src/au/cocoa.rs), which renders through
+# AppKit's drawRect: cycle so it survives Logic's out-of-process view host.
+au = ["editor"]
+# The shared egui plugin editor (crate::panel widgets, software-rendered —
+# src/editor.rs, src/au/raster.rs, src/au/cocoa.rs)
 editor = ["dep:egui"]
 
 [dependencies]

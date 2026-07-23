@@ -15,17 +15,15 @@
 // be grepped against the SDK headers.
 #![allow(non_upper_case_globals)]
 
-// The custom egui view (au/cocoa.rs) is gated OFF by default: on macOS 26
-// Logic hosts every AU out of process, and Apple's system view bridge
-// (_RemoteAUv2ViewFactory) never delegates back to an AUv2 plugin's
-// CocoaUI factory — so a custom AUv2 view can only ever be blank there.
-// Without it, hosts fall back to their generic parameter view, which works
-// out of process. A real custom panel in Logic needs AUv3 packaging; the
-// editor/panel/raster code is kept, ready for that, behind this feature.
-#[cfg(feature = "au-custom-view")]
+// The custom egui panel (au/cocoa.rs) rides the `editor` feature, which the
+// default `au` build turns on. It survives Logic's out-of-process view host
+// by software-rendering through AppKit's drawRect: cycle; see au/cocoa.rs
+// for the two subtleties that make that work. Building without `editor`
+// drops the custom view and hosts fall back to their generic parameter view.
+#[cfg(feature = "editor")]
 mod cocoa;
 mod ffi;
-#[cfg(feature = "au-custom-view")]
+#[cfg(feature = "editor")]
 mod raster;
 
 use ffi::*;
@@ -440,9 +438,9 @@ fn property_info(
             err => Err(err),
         },
         kMusicDeviceProperty_InstrumentCount => global_only(4, false),
-        #[cfg(feature = "au-custom-view")]
+        #[cfg(feature = "editor")]
         kAudioUnitProperty_CocoaUI => global_only(size_of::<AudioUnitCocoaViewInfo>(), false),
-        #[cfg(feature = "au-custom-view")]
+        #[cfg(feature = "editor")]
         cocoa::PROP_PATINA_UNIT => global_only(size_of::<[u64; 2]>(), false),
         _ => Err(kAudioUnitErr_InvalidProperty),
     }
@@ -660,7 +658,7 @@ unsafe extern "C" fn au_get_property(
             write_out(unit.state.lock().should_allocate, out_data, io_size)
         }
         kMusicDeviceProperty_InstrumentCount => write_out(0u32, out_data, io_size),
-        #[cfg(feature = "au-custom-view")]
+        #[cfg(feature = "editor")]
         kAudioUnitProperty_CocoaUI => match cocoa::cocoa_view_info() {
             Some((bundle_url, class_name)) => write_out(
                 AudioUnitCocoaViewInfo {
@@ -674,7 +672,7 @@ unsafe extern "C" fn au_get_property(
             None => kAudioUnitErr_InvalidProperty,
         },
         // The in-process handshake with our own Cocoa view (see au/cocoa.rs).
-        #[cfg(feature = "au-custom-view")]
+        #[cfg(feature = "editor")]
         cocoa::PROP_PATINA_UNIT => {
             let handshake = [unit as *const AuUnit as u64, std::process::id() as u64];
             write_out(handshake, out_data, io_size)

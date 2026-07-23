@@ -1,17 +1,25 @@
 // The AU's custom view. kAudioUnitProperty_CocoaUI hands the host a factory
-// class name; the host instantiates it and calls uiViewForAudioUnit:, and
-// we answer with an NSView that software-renders the shared egui editor
-// (src/editor.rs, src/au/raster.rs) into its layer.
+// class name; the host instantiates it and calls uiViewForAudioUnit:, and we
+// answer with an NSView that software-renders the shared egui editor
+// (src/editor.rs, src/au/raster.rs).
 //
-// This deliberately uses NO GPU: modern Logic hosts AUs out of process, and
-// an OpenGL/Metal context drawn in the hosting service can't be composited
-// back into Logic's window through AppKit's ViewBridge (it shows up blank /
-// 1×1). A layer-backed view whose `layer.contents` is a CPU-drawn bitmap
-// remotes cleanly and sizes correctly. A ~30 Hz timer re-runs egui and
-// updates the layer; mouse events feed straight back into egui.
+// Getting this to work out of process (how Logic always hosts AUs) took two
+// things that are easy to get wrong:
+//   1. AUCocoaUIBase declares interfaceVersion AND uiViewForAudioUnit: as
+//      INSTANCE methods. Register interfaceVersion on the metaclass and the
+//      bridge's conformance check fails, so it never calls the factory.
+//   2. Rendering must ride AppKit's normal display cycle — drawRect:, marked
+//      dirty via setNeedsDisplay: — NOT a private NSTimer pushing
+//      layer.contents. The out-of-process view service pumps the former and
+//      not the latter, so the timer/layer path draws blank there. A GPU
+//      context is worse still: it can't composite across the ViewBridge at
+//      all. So we draw a CPU bitmap into the view's CGContext each pass and
+//      drive parameters through the AudioUnit proxy API (which bridges
+//      across the process boundary), never touching the engine directly.
 //
-// Two classes are registered with the Objective-C runtime on first use — no
-// .xib, no Objective-C source. Class names carry the crate version so two
+// Two classes are registered with the Objective-C runtime at load (the view
+// service instantiates the factory by name, so it must exist there before
+// any of our other code runs). Class names carry the crate version so two
 // loaded Patina versions can't collide in the runtime's flat namespace.
 
 #![allow(non_snake_case)]
@@ -66,7 +74,6 @@ extern "C" {
         types: *const c_char,
     ) -> u8;
     fn class_addProtocol(cls: Class, protocol: *mut c_void) -> u8;
-    fn object_getClass(obj: Id) -> Class;
     fn object_getInstanceVariable(obj: Id, name: *const c_char, out: *mut *mut c_void) -> Id;
     fn object_setInstanceVariable(obj: Id, name: *const c_char, value: *mut c_void) -> Id;
     fn sel_registerName(name: *const c_char) -> Sel;
@@ -127,6 +134,11 @@ extern "C" {
     fn CGBitmapContextCreateImage(ctx: CGContextRef) -> CGImageRef;
     fn CGContextRelease(ctx: CGContextRef);
     fn CGImageRelease(img: CGImageRef);
+    fn CGContextDrawImage(ctx: CGContextRef, rect: CGRect, image: CGImageRef);
+    fn CGContextSaveGState(ctx: CGContextRef);
+    fn CGContextRestoreGState(ctx: CGContextRef);
+    fn CGContextTranslateCTM(ctx: CGContextRef, tx: f64, ty: f64);
+    fn CGContextScaleCTM(ctx: CGContextRef, sx: f64, sy: f64);
 }
 
 #[link(name = "AudioToolbox", kind = "framework")]
@@ -185,10 +197,6 @@ unsafe fn send_void_id(obj: Id, s: Sel, a: Id) {
 }
 unsafe fn send_void_bool(obj: Id, s: Sel, a: u8) {
     let f: unsafe extern "C" fn(Id, Sel, u8) = transmute(objc_msgSend as *const c_void);
-    f(obj, s, a)
-}
-unsafe fn send_void_f64(obj: Id, s: Sel, a: f64) {
-    let f: unsafe extern "C" fn(Id, Sel, f64) = transmute(objc_msgSend as *const c_void);
     f(obj, s, a)
 }
 
@@ -333,8 +341,11 @@ impl ViewState {
         }
     }
 
-    /// Run egui once and push the result into the view's layer.
-    unsafe fn render(&mut self) {
+    /// Run egui once and draw the result into the view's current AppKit
+    /// graphics context. Called from `drawRect:` so it rides the standard
+    /// display cycle — which the out-of-process AU view service pumps, unlike
+    /// a private NSTimer or manual layer.contents push.
+    unsafe fn draw_current(&mut self) {
         let ppp = self.ppp();
         let raw = egui::RawInput {
             screen_rect: Some(Rect::from_min_size(
@@ -361,7 +372,6 @@ impl ViewState {
         self.raster.clear([0x0a, 0x11, 0x14]);
         self.raster.paint(&prims, ppp);
 
-        // Wrap the framebuffer in a CGImage and hand it to the layer.
         let bitmap = CGBitmapContextCreate(
             self.raster.fb.as_mut_ptr() as *mut c_void,
             pw,
@@ -376,14 +386,38 @@ impl ViewState {
         }
         let image = CGBitmapContextCreateImage(bitmap);
         CGContextRelease(bitmap);
-        if !image.is_null() {
-            let layer = send0(self.view, sel("layer"));
-            if !layer.is_null() {
-                send_void_f64(layer, sel("setContentsScale:"), ppp as f64);
-                send_void_id(layer, sel("setContents:"), image);
-            }
-            CGImageRelease(image);
+        if image.is_null() {
+            return;
         }
+
+        // Draw into the view's current CGContext at its bounds (points); the
+        // context already carries the backing-scale transform, so the
+        // physical-pixel image maps 1:1.
+        let nsgc = send0(cls("NSGraphicsContext"), sel("currentContext"));
+        if !nsgc.is_null() {
+            let cg = send0(nsgc, sel("CGContext"));
+            if !cg.is_null() {
+                let h = EDITOR_HEIGHT as f64;
+                let bounds = CGRect {
+                    origin: CGPoint { x: 0.0, y: 0.0 },
+                    size: CGSize { width: EDITOR_WIDTH as f64, height: h },
+                };
+                // Our framebuffer is top-to-bottom; the view is flipped, so
+                // flip the y-axis to cancel CGContextDrawImage's bottom-up
+                // default and land the image right-side up.
+                CGContextSaveGState(cg);
+                CGContextTranslateCTM(cg, 0.0, h);
+                CGContextScaleCTM(cg, 1.0, -1.0);
+                CGContextDrawImage(cg, bounds, image);
+                CGContextRestoreGState(cg);
+            }
+        }
+        CGImageRelease(image);
+    }
+
+    /// Ask AppKit to redraw the view on the next display pass.
+    unsafe fn set_needs_display(&self) {
+        send_void_bool(self.view, sel("setNeedsDisplay:"), 1);
     }
 
     /// Convert an NSEvent's window-space location into egui points.
@@ -443,6 +477,7 @@ unsafe fn register_view_class() {
     // Layout, which reads this; without it the container collapses to 1×1.
     add("intrinsicContentSize", intrinsic_content_size as *const c_void, "{CGSize=dd}@:");
     add("acceptsFirstMouse:", accepts_first_mouse as *const c_void, "B@:@");
+    add("drawRect:", draw_rect as *const c_void, "v@:{CGRect={CGPoint=dd}{CGSize=dd}}");
     add("drawTick:", draw_tick as *const c_void, "v@:@");
     add("mouseDown:", mouse_down as *const c_void, "v@:@");
     add("mouseDragged:", mouse_dragged as *const c_void, "v@:@");
@@ -464,11 +499,21 @@ unsafe fn register_factory_class() {
     if factory.is_null() {
         return;
     }
+    // AUCocoaUIBase declares BOTH interfaceVersion and uiViewForAudioUnit:
+    // as INSTANCE methods. Registering interfaceVersion on the metaclass
+    // (a class method) made the bridge's `[factory interfaceVersion]` fail
+    // conformance, so it never called our factory.
     class_addMethod(
-        object_getClass(factory), // class method -> metaclass
+        factory,
         sel("interfaceVersion"),
         interface_version as *const c_void,
         CString::new("I@:").unwrap().as_ptr(),
+    );
+    class_addMethod(
+        factory,
+        sel("description"),
+        factory_description as *const c_void,
+        CString::new("@@:").unwrap().as_ptr(),
     );
     class_addMethod(
         factory,
@@ -482,6 +527,12 @@ unsafe fn register_factory_class() {
     }
     objc_registerClassPair(factory);
     FACTORY_CLASS.store(factory as usize, Ordering::Release);
+}
+
+unsafe extern "C" fn factory_description(_this: Id, _cmd: Sel) -> Id {
+    // A CFString is toll-free bridged to NSString; the host treats it as
+    // autoreleased, which matches -description's contract.
+    cfstring("Patina") as Id
 }
 
 // --- View method implementations --------------------------------------------
@@ -498,9 +549,17 @@ unsafe extern "C" fn accepts_first_mouse(_this: Id, _cmd: Sel, _event: Id) -> u8
     1
 }
 
+unsafe extern "C" fn draw_rect(this: Id, _cmd: Sel, _dirty: CGRect) {
+    if let Some(state) = ViewState::from_view(this) {
+        state.draw_current();
+    }
+}
+
+/// Timer only marks the view dirty; the actual paint happens in drawRect:
+/// on AppKit's display pass, so it works even where our timer wouldn't.
 unsafe extern "C" fn draw_tick(this: Id, _cmd: Sel, _timer: Id) {
     if let Some(state) = ViewState::from_view(this) {
-        state.render();
+        state.set_needs_display();
     }
 }
 
@@ -515,6 +574,7 @@ unsafe fn push_button(this: Id, event: Id, button: PointerButton, pressed: bool)
             pressed,
             modifiers: Modifiers::default(),
         });
+        state.set_needs_display();
     }
 }
 
@@ -536,6 +596,7 @@ unsafe extern "C" fn mouse_moved(this: Id, _cmd: Sel, event: Id) {
         let pos = state.event_pos(event);
         state.mouse = pos;
         state.pending.push(Event::PointerMoved(pos));
+        state.set_needs_display();
     }
 }
 
@@ -544,6 +605,7 @@ unsafe extern "C" fn mouse_dragged(this: Id, _cmd: Sel, event: Id) {
         let pos = state.event_pos(event);
         state.mouse = pos;
         state.pending.push(Event::PointerMoved(pos));
+        state.set_needs_display();
     }
 }
 
@@ -562,6 +624,7 @@ unsafe extern "C" fn scroll_wheel(this: Id, _cmd: Sel, event: Id) {
             delta: vec2(dx, dy),
             modifiers: Modifiers::default(),
         });
+        state.set_needs_display();
     }
 }
 
@@ -668,10 +731,8 @@ unsafe extern "C" fn ui_view_for_audio_unit(
     let ivar = CString::new(STATE_IVAR).unwrap();
     object_setInstanceVariable(view, ivar.as_ptr(), Box::into_raw(state) as *mut c_void);
 
-    // Paint the first frame immediately so the view is never blank.
-    if let Some(s) = ViewState::from_view(view) {
-        s.render();
-    }
+    // Ask for the first paint on the next display pass.
+    send_void_bool(view, sel("setNeedsDisplay:"), 1);
     // Returned +1 per AUCocoaUIBase convention; the host releases it.
     view
 }

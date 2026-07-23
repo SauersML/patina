@@ -61,11 +61,12 @@ driven by one shared parameter table (`src/host_params.rs`):
   against it. In Logic, it appears as an instrument under
   **Sauers → Patina**; keyboard voices on any MIDI channel, the 909 board on
   channel 10, and every knob automatable with Logic's parameter curves. It
-  ships with the host's generic parameter view, which renders reliably in
-  Logic's out-of-process AU sandbox. A custom egui panel (the same widgets
-  as the app, software-rendered — `src/editor.rs`, `src/au/raster.rs`,
-  `src/au/cocoa.rs`) builds behind the `au-custom-view` feature; wiring an
-  AUv2 CocoaUI view through Logic's out-of-process host is still in progress.
+  carries the **same panel as the standalone app** — the exact knobs, glass,
+  and glyphs — software-rendered (`src/editor.rs`, `src/au/raster.rs`) and
+  vended as a CocoaUI view (`src/au/cocoa.rs`) that survives Logic's
+  out-of-process view host by drawing through AppKit's `drawRect:` cycle.
+  Build with `--no-default-features --features au`; drop `editor` from the
+  feature set to fall back to the host's generic parameter view.
 
 On macOS the git hooks install all three automatically after every commit
 (`scripts/install-plugins.sh`).
