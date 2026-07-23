@@ -33,10 +33,15 @@ plugin = ["dep:nice-plug"]
 # The native AUv2 Audio Unit for Logic Pro / GarageBand (macOS only —
 # talks straight to the AudioComponent ABI):
 #   scripts/bundle-au.sh
-au = ["editor"]
-# The shared egui plugin editor (crate::panel widgets inside a
-# host-provided window via baseview)
-editor = ["dep:egui", "dep:egui-baseview", "dep:baseview", "dep:raw-window-handle"]
+# Ships with the host's generic parameter view, which works out of process.
+au = []
+# Experimental custom egui panel for the AU. OFF by default: getting an
+# AUv2 CocoaUI view to remote correctly through Logic's out-of-process host
+# is still being worked out (JUCE/iPlug2 manage it, so it's achievable).
+au-custom-view = ["au", "editor"]
+# The shared egui plugin editor (crate::panel widgets, software-rendered
+# into a host-provided layer-backed view — see src/au/cocoa.rs)
+editor = ["dep:egui"]
 
 [dependencies]
 parking_lot = "0.12.1"
@@ -54,14 +59,12 @@ crossbeam-channel = { version = "0.5.14", optional = true }
 
 nice-plug = { version = "0.1.10", optional = true }
 
-# Shared plugin editor: the same egui as eframe re-exports (versions must
-# stay in lockstep), hosted in plugin windows by baseview. egui-baseview
-# ec70c3f is the egui 0.31 revision; its pinned baseview rev must match
-# ours exactly or cargo will build two incompatible copies.
+# Shared plugin editor: the same egui version eframe re-exports (they must
+# stay in lockstep). The AU front end software-renders egui's tessellated
+# output (src/au/raster.rs) into a layer-backed NSView — no windowing or
+# GPU crate, because a GPU context can't remote out of Logic's hosting
+# service (see src/au/cocoa.rs).
 egui = { version = "0.31", optional = true }
-egui-baseview = { git = "https://github.com/BillyDM/egui-baseview.git", rev = "ec70c3fe6b2f", optional = true }
-baseview = { git = "https://github.com/RustAudio/baseview.git", rev = "9a0b42c09d712777b2edb4c5e0cb6baf21e988f0", optional = true }
-raw-window-handle = { version = "0.5", optional = true }
 
 # The tape engine runs 8x-oversampled hysteresis; keep debug builds realtime
 [profile.dev]

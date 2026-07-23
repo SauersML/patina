@@ -27,23 +27,11 @@ use egui::{pos2, vec2, Event, Modifiers, PointerButton, Pos2, Rect};
 
 use super::ffi::{cfstring, CFStringRef, OSStatus};
 use super::raster::Raster;
-use super::AuUnit;
 use crate::editor::{EditorState, ParamHost, EDITOR_HEIGHT, EDITOR_WIDTH};
 
 /// Private property carrying the [pointer, pid] handshake to the in-process
 /// view. Apple reserves IDs below 64000; this sits in the third-party range.
 pub const PROP_PATINA_UNIT: u32 = 64001;
-
-/// Temporary diagnostic: append-only trace visible from whatever process
-/// (possibly the hosting service) actually builds the view.
-fn trace(msg: &str) {
-    use std::io::Write;
-    if let Ok(mut f) =
-        std::fs::OpenOptions::new().create(true).append(true).open("/tmp/patina-au.log")
-    {
-        let _ = writeln!(f, "[pid {}] {}", std::process::id(), msg);
-    }
-}
 
 /// Editor refresh rate. 30 Hz keeps arcs and hover smooth without burning
 /// CPU on a mostly static panel.
@@ -143,13 +131,20 @@ extern "C" {
 
 #[link(name = "AudioToolbox", kind = "framework")]
 extern "C" {
-    fn AudioUnitGetProperty(
+    fn AudioUnitGetParameter(
         unit: *mut c_void,
-        prop: u32,
+        param: u32,
         scope: u32,
         elem: u32,
-        out_data: *mut c_void,
-        io_size: *mut u32,
+        out_value: *mut f32,
+    ) -> OSStatus;
+    fn AudioUnitSetParameter(
+        unit: *mut c_void,
+        param: u32,
+        scope: u32,
+        elem: u32,
+        value: f32,
+        buffer_offset: u32,
     ) -> OSStatus;
     fn AUEventListenerNotify(
         listener: *mut c_void,
@@ -157,6 +152,19 @@ extern "C" {
         event: *const AudioUnitEvent,
     ) -> OSStatus;
 }
+
+/// Register the view + factory classes at dylib load, in whatever process
+/// loads us. The out-of-process view bridge instantiates the factory in the
+/// host's UI process via NSClassFromString, so the class must already exist
+/// there — and nothing else of ours runs in that process first.
+#[used]
+#[cfg_attr(target_os = "macos", link_section = "__DATA,__mod_init_func")]
+static LOAD_CTOR: extern "C" fn() = {
+    extern "C" fn ctor() {
+        register_classes();
+    }
+    ctor
+};
 
 // msgSend, cast per call site to the concrete signature.
 unsafe fn send0(obj: Id, s: Sel) -> Id {
@@ -239,12 +247,12 @@ fn bundle_path() -> Option<String> {
 // ParamHost over the AU's parameter atomics
 // ---------------------------------------------------------------------------
 
-/// The view always lives in the same process as the unit (the host hosts
-/// both in one AUHostingService), so a raw pointer is sound for the view's
-/// lifetime; hosts tear down the view before disposing the unit. The pid
-/// half of the handshake guarantees this before we ever dereference.
+/// Parameters are driven through the standard AudioUnit C API on the
+/// `audio_unit` the host handed the view. That handle is a real, possibly
+/// cross-process proxy: out of process, the view lives in the host's UI
+/// process while the engine runs in AUHostingService, and Get/SetParameter
+/// bridge between them. So the view never touches the engine directly.
 struct AuParamHost {
-    unit: *const AuUnit,
     au: *mut c_void,
 }
 unsafe impl Send for AuParamHost {}
@@ -261,16 +269,19 @@ impl AuParamHost {
                 mElement: 0,
             },
         };
-        unsafe { AUEventListenerNotify(null_mut(), null_mut(), &event) };
+        unsafe { AUEventListenerNotify(null_mut(), self.au, &event) };
     }
 }
 
 impl ParamHost for AuParamHost {
     fn get(&self, index: usize) -> f32 {
-        unsafe { (*self.unit).value(index) }
+        let mut value = 0.0f32;
+        unsafe { AudioUnitGetParameter(self.au, index as u32, 0, 0, &mut value) };
+        value
     }
     fn set(&self, index: usize, value: f32) {
-        unsafe { (*self.unit).set_value(index, value) };
+        unsafe { AudioUnitSetParameter(self.au, index as u32, 0, 0, value, 0) };
+        // Let the host observe the change for automation recording.
         self.notify(0, index); // kAudioUnitEvent_ParameterValueChange
     }
     fn begin_gesture(&self, index: usize) {
@@ -583,30 +594,8 @@ unsafe extern "C" fn ui_view_for_audio_unit(
     audio_unit: *mut c_void,
     _size: CGSize,
 ) -> Id {
-    // [pointer, pid] handshake: only build the live view when the unit is
-    // in this process. Otherwise return nil so the host uses its generic
-    // view rather than us dereferencing a foreign address.
-    let mut handshake: [u64; 2] = [0, 0];
-    let mut io_size = size_of::<[u64; 2]>() as u32;
-    let status = AudioUnitGetProperty(
-        audio_unit,
-        PROP_PATINA_UNIT,
-        0,
-        0,
-        handshake.as_mut_ptr() as *mut c_void,
-        &mut io_size,
-    );
-    let unit_addr = handshake[0] as usize;
-    trace(&format!(
-        "ui_view_for_audio_unit: status={status} unit=0x{unit_addr:x} pid_match={}",
-        handshake[1] == std::process::id() as u64
-    ));
-    if status != 0 || unit_addr == 0 || handshake[1] != std::process::id() as u64 {
-        return null_mut();
-    }
-
     let view_cls = VIEW_CLASS.load(Ordering::Acquire) as Class;
-    if view_cls.is_null() {
+    if audio_unit.is_null() || view_cls.is_null() {
         return null_mut();
     }
 
@@ -645,7 +634,7 @@ unsafe extern "C" fn ui_view_for_audio_unit(
     let _: Id = send0(tracking, sel("release"));
 
     // Build the egui side.
-    let host = Arc::new(AuParamHost { unit: unit_addr as *const AuUnit, au: audio_unit });
+    let host = Arc::new(AuParamHost { au: audio_unit });
     let ctx = egui::Context::default();
     let mut state = Box::new(ViewState {
         view,
@@ -683,8 +672,6 @@ unsafe extern "C" fn ui_view_for_audio_unit(
     if let Some(s) = ViewState::from_view(view) {
         s.render();
     }
-    trace("ui_view_for_audio_unit: view built + first frame painted");
-
     // Returned +1 per AUCocoaUIBase convention; the host releases it.
     view
 }
@@ -694,15 +681,10 @@ unsafe extern "C" fn ui_view_for_audio_unit(
 /// resolved (the host then uses its generic view).
 pub fn cocoa_view_info() -> Option<(*const c_void, CFStringRef)> {
     register_classes();
-    trace(&format!(
-        "cocoa_view_info asked; factory_registered={}",
-        FACTORY_CLASS.load(Ordering::Acquire) != 0
-    ));
     if FACTORY_CLASS.load(Ordering::Acquire) == 0 {
         return None;
     }
     let path = bundle_path()?;
-    trace(&format!("cocoa_view_info -> bundle {path}"));
     unsafe {
         let cf_path = cfstring(&path);
         let url = CFURLCreateWithFileSystemPath(null(), cf_path, 0, 1);
