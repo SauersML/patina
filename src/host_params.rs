@@ -338,8 +338,13 @@ pub fn param_defs() -> Vec<ParamDef> {
 
 /// Route one MIDI note-on to the keyboard voices or, on GM channel 10
 /// (0-indexed 9), the 909 board. Velocity is 0..1.
+/// Channel 10 is the GM drum convention, but hosts built around software
+/// instruments (Logic) give the user no way to choose a MIDI channel — so
+/// the board also always answers the reserved sliver at the bottom of the
+/// range, on every channel. Those notes are below anything playable, so the
+/// keyboard voices lose nothing.
 pub fn note_on(vm: &mut VoiceManager, channel: u8, note: u8, velocity: f32) {
-    if channel == 9 {
+    if channel == 9 || crate::drums::is_low_drum_note(note) {
         vm.note_on_channel(note, velocity, crate::drums::DRUM_CHANNEL);
     } else {
         vm.note_on(note, velocity);
@@ -347,13 +352,31 @@ pub fn note_on(vm: &mut VoiceManager, channel: u8, note: u8, velocity: f32) {
 }
 
 pub fn note_off(vm: &mut VoiceManager, channel: u8, note: u8) {
-    if channel != 9 {
+    // Drum hits are one-shots — they ring out on their own envelopes, so a
+    // note-off must not chase them (and must not stop a keyboard voice that
+    // never started).
+    if channel != 9 && !crate::drums::is_low_drum_note(note) {
         vm.note_off(note);
     }
 }
 
 #[cfg(test)]
 mod tests {
+
+    /// Logic gives software-instrument tracks no MIDI-channel control, so
+    /// the reserved bottom sliver has to reach the 909 on ANY channel or the
+    /// drums are unplayable there. Notes above the sliver must still be
+    /// keyboard voices on non-drum channels.
+    #[test]
+    fn bottom_sliver_always_reaches_the_drums() {
+        for note in 0..=crate::drums::LOW_DRUM_LAST {
+            assert!(crate::drums::is_low_drum_note(note), "note {note} should be a drum");
+        }
+        assert!(!crate::drums::is_low_drum_note(crate::drums::LOW_DRUM_LAST + 1));
+        // The sliver sits below any playable key, so nothing musical is lost.
+        assert!(crate::drums::LOW_DRUM_LAST < 21, "sliver must stay below A0");
+    }
+
 
     /// A parameter's position in PRESENTATION IS its AudioUnitParameterID,
     /// and hosts record automation curves against that number. Reordering the

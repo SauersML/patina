@@ -66,6 +66,20 @@ const NOTE_CLAP: u8 = 39; // D#1
 const NOTE_CH: u8 = 42; // F#1 (44 pedal hat accepted too)
 const NOTE_OH: u8 = 46; // A#1
 
+/// The board also owns a sliver at the very bottom of MIDI: six semitones
+/// from C-2 (note 0) up. Hosts aimed at software instruments — Logic above
+/// all — hide MIDI channel selection entirely, so "put the drums on channel
+/// 10" is not something a user can actually do there. These notes sit below
+/// anything playable, so the board stays reachable on ANY channel without
+/// costing the keyboard a single usable key.
+///     C-2 kick · C#-2 rim · D-2 snare · D#-2 clap · E-2 closed · F-2 open
+pub const LOW_DRUM_LAST: u8 = 5;
+
+/// Is this one of the reserved bottom-of-range drum notes?
+pub fn is_low_drum_note(note: u8) -> bool {
+    note <= LOW_DRUM_LAST
+}
+
 /// Drum names for the song DSL (`track beat kit=909`): BD SD RS CP CH OH.
 pub fn note_from_name(s: &str) -> Option<u8> {
     Some(match s.to_ascii_uppercase().as_str() {
@@ -712,6 +726,14 @@ impl DrumMachine {
     /// Trigger by (GM) note number; velocity is the accent voltage.
     pub fn trigger_note(&mut self, note: u8, velocity: f32) {
         match note {
+            // The reserved bottom sliver (C-2 up), reachable on any channel
+            0 => self.kick.trigger(velocity),
+            1 => self.rim.trigger(velocity),
+            2 => self.snare.trigger(velocity),
+            3 => self.clap.trigger(velocity),
+            4 => self.hats.trigger_closed(velocity),
+            5 => self.hats.trigger_open(velocity),
+            // The GM map, for drum-mode controllers and channel-10 tracks
             35 | 36 => self.kick.trigger(velocity),
             38 | 40 => self.snare.trigger(velocity),
             37 => self.rim.trigger(velocity),
