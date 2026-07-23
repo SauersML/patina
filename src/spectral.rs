@@ -255,7 +255,7 @@ mod tests {
         }
         assert!(virgin < 0.05, "no shape yet: carrier must stay shut, got {virgin}");
 
-        let mut noise = crate::noise::NoiseSource::new();
+        let mut noise = crate::noise::NoiseSource::new(sr);
         let (mut y1, mut y2) = (0.0f32, 0.0f32);
         let c = -(-std::f32::consts::TAU * 100.0 / sr).exp();
         let b = 2.0 * (-std::f32::consts::PI * 100.0 / sr).exp()

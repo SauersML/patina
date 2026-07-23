@@ -162,7 +162,7 @@ impl Vocoder {
             .collect();
         let mut v = Self {
             channels,
-            noise: NoiseSource::new(),
+            noise: NoiseSource::new(sample_rate),
             sample_rate,
             attack: 0.0,
             release: 0.0,

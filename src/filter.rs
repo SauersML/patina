@@ -98,6 +98,11 @@ const ARP_RAIL: f32 = 13.5;
 /// Newton-Raphson stopping tolerance on the residual, volts.
 const NEWTON_TOL: f32 = 1e-6;
 const NEWTON_MAX_ITERS: usize = 8;
+/// Panel slew on cutoff and resonance: enough to de-zipper stepped
+/// automation, short enough to still feel immediate. A TIME, derived per
+/// rate — a hardcoded coefficient made a swept cutoff arrive twice as
+/// fast at 96 kHz, so the same automation rendered differently.
+const PARAM_SLEW_TAU_S: f32 = 0.004;
 
 pub struct LadderFilter {
     model: CircuitModel,
@@ -120,6 +125,8 @@ pub struct LadderFilter {
     fb_dc: f32,
     fb_dc_a: f32,
     thermal_drift: f32,
+    /// Panel-slew coefficient for `PARAM_SLEW_TAU_S` at this rate.
+    param_slew_k: f32,
     rng: u32,
     sat_adaa: AdaaTanh,
     /// Diagnostic: worst Newton iteration count since last read.
@@ -166,6 +173,7 @@ impl LadderFilter {
             // Updated once per 2x substep, so the rate is 2*sample_rate
             fb_dc_a: 1.0 - (-2.0 * PI * 25.0 / (2.0 * sample_rate)).exp(),
             thermal_drift: 0.0,
+            param_slew_k: crate::voice::smoothing_coef(PARAM_SLEW_TAU_S, sample_rate),
             rng,
             sat_adaa: AdaaTanh::new(),
             max_iters_seen: 0,
@@ -371,9 +379,10 @@ impl LadderFilter {
         self.thermal_drift =
             (self.thermal_drift + (rand01(&mut self.rng) - 0.5) * 1e-4) * 0.9995;
 
-        // ~4 ms parameter slew removes zipper noise from stepped automation
-        self.cutoff += (self.target_cutoff - self.cutoff) * 0.006;
-        self.resonance += (self.target_resonance - self.resonance) * 0.006;
+        // PARAM_SLEW_TAU_S panel slew removes zipper noise from stepped
+        // automation
+        self.cutoff += (self.target_cutoff - self.cutoff) * self.param_slew_k;
+        self.resonance += (self.target_resonance - self.resonance) * self.param_slew_k;
 
         let fc_top = match self.model {
             // The 4072's documented bandwidth ceiling
@@ -923,6 +932,38 @@ mod tests {
         assert!(
             worst <= NEWTON_MAX_ITERS,
             "Newton hit the iteration cap: {worst}"
+        );
+    }
+
+    /// The panel slew is a TIME. As a bare per-sample coefficient the
+    /// same automated cutoff sweep arrived in 3.8 ms at 44.1 kHz and
+    /// 1.7 ms at 96 kHz — the same song rendered differently.
+    #[test]
+    fn the_panel_slew_takes_the_same_time_at_every_rate() {
+        let settle_ms = |sr: f32| -> f32 {
+            let mut f = LadderFilter::new(sr, 3);
+            f.set_cutoff(200.0);
+            for _ in 0..(sr as usize) {
+                f.process(0.0, 1.0);
+            }
+            f.set_cutoff(8000.0);
+            // One time constant covers 63.2% of the step
+            let target = 200.0 + 0.632 * (8000.0 - 200.0);
+            let mut n = 0usize;
+            while f.cutoff < target {
+                f.process(0.0, 1.0);
+                n += 1;
+                assert!(n < sr as usize, "the cutoff slew never arrived");
+            }
+            n as f32 / sr * 1000.0
+        };
+        let a = settle_ms(44100.0);
+        let b = settle_ms(96000.0);
+        let want = PARAM_SLEW_TAU_S * 1000.0;
+        assert!(
+            (a / want - 1.0).abs() < 0.05 && (a / b - 1.0).abs() < 0.05,
+            "cutoff slew took {a:.2} ms at 44.1 kHz and {b:.2} ms at 96 kHz, \
+             expected {want:.2} ms at both"
         );
     }
 }

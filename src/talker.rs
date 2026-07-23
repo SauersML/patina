@@ -275,7 +275,7 @@ impl Talker {
             wah_fc: 800.0,
             wah_slew: 1.0 - (-1.0 / (0.012 * sample_rate)).exp(),
             wah: Lowpass::tuned(800.0, 1.3, sample_rate),
-            noise: NoiseSource::new(),
+            noise: NoiseSource::new(sample_rate),
             voicing: Voicing::at(0.0),
         }
     }
@@ -562,7 +562,7 @@ mod tests {
         let bcoef = 2.0 * (-std::f32::consts::PI * 120.0 / sr).exp()
             * (std::f32::consts::TAU * 900.0 / sr).cos();
         let a = 1.0 - bcoef - c;
-        let mut noise = NoiseSource::new();
+        let mut noise = NoiseSource::new(sr);
         let mut out = Vec::with_capacity(sr as usize);
         for n in 0..(sr as usize) {
             let m = {

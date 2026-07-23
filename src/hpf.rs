@@ -7,10 +7,16 @@
 
 use std::f32::consts::PI;
 
+/// Panel slew on the cutoff control, as a TIME so stepped automation
+/// ramps identically at every host rate.
+const PARAM_SLEW_TAU_S: f32 = 0.004;
+
 pub struct HighPassLadder {
     sample_rate: f32,
     target_cutoff: f32,
     cutoff: f32, // smoothed
+    /// Slew coefficient for `PARAM_SLEW_TAU_S` at this rate.
+    slew_k: f32,
     s: [f32; 4],
 }
 
@@ -20,6 +26,7 @@ impl HighPassLadder {
             sample_rate,
             target_cutoff: 16.0,
             cutoff: 16.0,
+            slew_k: crate::voice::smoothing_coef(PARAM_SLEW_TAU_S, sample_rate),
             s: [0.0; 4],
         }
     }
@@ -31,7 +38,7 @@ impl HighPassLadder {
 
     #[inline]
     pub fn process(&mut self, input: f32) -> f32 {
-        self.cutoff += (self.target_cutoff - self.cutoff) * 0.006;
+        self.cutoff += (self.target_cutoff - self.cutoff) * self.slew_k;
         // Trapezoidal (zero-delay) one-pole integrators, so the passband
         // stays flat instead of sagging like an explicit discretization
         let g = (PI * self.cutoff / self.sample_rate).tan();
@@ -89,5 +96,35 @@ mod tests {
             }
         }
         assert!(peak > 0.9, "110 Hz should pass at 16 Hz cutoff, got {peak}");
+    }
+
+    /// The cutoff slew is a TIME, not a per-sample number: a hardcoded
+    /// coefficient made automated sweeps arrive twice as fast at 96 kHz.
+    #[test]
+    fn the_cutoff_slew_takes_the_same_time_at_every_rate() {
+        let settle_ms = |sr: f32| -> f32 {
+            let mut h = HighPassLadder::new(sr);
+            h.set_cutoff(100.0);
+            for _ in 0..(sr as usize) {
+                h.process(0.0);
+            }
+            h.set_cutoff(4000.0);
+            let target = 100.0 + 0.632 * (4000.0 - 100.0);
+            let mut n = 0usize;
+            while h.cutoff < target {
+                h.process(0.0);
+                n += 1;
+                assert!(n < sr as usize, "the cutoff slew never arrived");
+            }
+            n as f32 / sr * 1000.0
+        };
+        let a = settle_ms(44100.0);
+        let b = settle_ms(96000.0);
+        let want = PARAM_SLEW_TAU_S * 1000.0;
+        assert!(
+            (a / want - 1.0).abs() < 0.05 && (a / b - 1.0).abs() < 0.05,
+            "hpf cutoff slew took {a:.2} ms at 44.1 kHz and {b:.2} ms at \
+             96 kHz, expected {want:.2} ms at both"
+        );
     }
 }

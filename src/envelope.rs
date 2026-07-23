@@ -42,6 +42,10 @@ const STEAL_SECONDS: f32 = 0.0025;
 /// away — no audible discontinuity to smooth over.
 const STEAL_FLOOR: f32 = 1e-3;
 
+/// How fast the Sustain stage chases a moved sustain control. A TIME, so
+/// live sustain automation ramps the same way at every host rate.
+const SUSTAIN_TRACK_TAU_S: f32 = 0.0045;
+
 pub struct Envelope {
     attack: AtomicU32,
     decay: AtomicU32,
@@ -54,6 +58,8 @@ pub struct Envelope {
     current_level: f32,
     /// Per-sample discharge step while in `Steal` (constant current).
     steal_step: f32,
+    /// Sustain-tracking coefficient for `SUSTAIN_TRACK_TAU_S` at this rate.
+    sustain_track_k: f32,
     sample_rate: f32,
 }
 
@@ -68,6 +74,7 @@ impl Envelope {
             stage: EnvelopeStage::Idle,
             current_level: 0.0,
             steal_step: 0.0,
+            sustain_track_k: crate::voice::smoothing_coef(SUSTAIN_TRACK_TAU_S, sample_rate),
             sample_rate,
         }
     }
@@ -121,7 +128,8 @@ impl Envelope {
             EnvelopeStage::Sustain => {
                 // Track the sustain control smoothly so live tweaks don't step
                 let sustain_level = f32::from_bits(self.sustain.load(Ordering::Relaxed));
-                self.current_level += (sustain_level - self.current_level) * 0.005;
+                self.current_level +=
+                    (sustain_level - self.current_level) * self.sustain_track_k;
             }
             EnvelopeStage::Release => {
                 let release_time = f32::from_bits(self.release.load(Ordering::Relaxed));
@@ -364,6 +372,40 @@ mod tests {
         assert!(
             after >= level,
             "a held retrigger must not discharge the cap: {level} -> {after}"
+        );
+    }
+
+    /// The Sustain stage chases a moved sustain control over a fixed
+    /// TIME. As a bare per-sample coefficient the same automation ramped
+    /// in 4.5 ms at 44.1 kHz and 2.1 ms at 96 kHz.
+    #[test]
+    fn sustain_tracking_takes_the_same_time_at_every_rate() {
+        let tau_ms = |sr: f32| -> f32 {
+            let mut env = Envelope::new(sr);
+            env.set_attack(0.001);
+            env.set_decay(0.001);
+            env.set_sustain(1.0);
+            env.note_on();
+            for _ in 0..(0.2 * sr) as usize {
+                env.next_sample();
+            }
+            // Now sitting in Sustain; move the control and time the ramp
+            env.set_sustain(0.0);
+            let mut n = 0usize;
+            while env.next_sample() > 1.0 / std::f32::consts::E {
+                n += 1;
+                assert!(n < sr as usize, "the sustain tracker never moved");
+            }
+            n as f32 / sr * 1000.0
+        };
+        let a = tau_ms(44100.0);
+        let b = tau_ms(96000.0);
+        assert!(
+            (a / (SUSTAIN_TRACK_TAU_S * 1000.0) - 1.0).abs() < 0.05
+                && (a / b - 1.0).abs() < 0.05,
+            "sustain tracking took {a:.2} ms at 44.1 kHz and {b:.2} ms at \
+             96 kHz, expected {:.2} ms at both",
+            SUSTAIN_TRACK_TAU_S * 1000.0
         );
     }
 }

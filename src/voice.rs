@@ -31,6 +31,26 @@ const MIXER_GAIN: f32 = 0.45;
 /// accumulates in cents per octave away from this point.
 const CAL_REF_HZ: f32 = 261.63;
 
+/// Corner of the post-filter output coupling. Moog dwg #1149's 2.5 uF
+/// into the ~2K following stage puts it at 1/(2*pi*R*C) = 31.8 Hz. It is
+/// a component value, so it stays put in HERTZ: a hardcoded pole is a
+/// 44.1 kHz assumption that becomes a 69 Hz high-pass at 96 kHz and guts
+/// the bottom octave of every bass patch.
+const DC_BLOCK_HZ: f32 = 31.8;
+
+/// The mean-tracker that keeps exponential FM pitch-neutral, as a TIME
+/// constant rather than a per-sample coefficient (see render's FM block).
+const FM_MEAN_TAU_S: f32 = 0.09;
+
+/// One-pole smoothing coefficient for a given time constant.
+#[inline]
+pub(crate) fn smoothing_coef(tau_seconds: f32, sample_rate: f32) -> f32 {
+    if !(sample_rate > 0.0) || tau_seconds <= 0.0 {
+        return 1.0;
+    }
+    (1.0 - (-1.0 / (tau_seconds * sample_rate)).exp()).clamp(0.0, 1.0)
+}
+
 pub struct Voice {
     pub oscs: [Oscillator; 3],
     circuit: CircuitModel,
@@ -95,6 +115,8 @@ pub struct Voice {
     /// Slow mean of the exponential FM multiplier, divided back out so
     /// FM is pitch-neutral (see render's FM block).
     fm_mean: f32,
+    /// Its tracking coefficient for `FM_MEAN_TAU_S` at this rate.
+    fm_mean_k: f32,
     prev_osc2: f32,
     /// Hard sync, 2600-style: VCO1 masters VCO2's ramp reset.
     sync_on: bool,
@@ -109,6 +131,9 @@ pub struct Voice {
     /// unipolar/asymmetric pulses legitimately push DC through the ladder.
     dc_x1: f32,
     dc_y1: f32,
+    /// Pole of that DC block, derived from `DC_BLOCK_HZ` and the host
+    /// rate — it is a CAPACITOR, so its corner is fixed in hertz.
+    dc_a: f32,
     /// This card's sensitivity to the shared chassis state (rail and heat):
     /// every board reacts to the same environment, each by its own amount.
     substrate_sens: f32,
@@ -200,12 +225,14 @@ impl Voice {
             key_track: 0.4,
             fm_amount: 0.0,
             fm_mean: 1.0,
+            fm_mean_k: smoothing_coef(FM_MEAN_TAU_S, sample_rate),
             prev_osc2: 0.0,
             sync_on: false,
             ring_amount: 0.0,
             ring_leak,
             dc_x1: 0.0,
             dc_y1: 0.0,
+            dc_a: (-std::f32::consts::TAU * DC_BLOCK_HZ / sample_rate).exp(),
             substrate_sens,
             vca_feedthrough,
             prev_env: 0.0,
@@ -529,10 +556,12 @@ impl Voice {
             // Exponential FM is not pitch-neutral: any DC in the modulator
             // (a non-50% pulse) shifts the note wholesale, and even a
             // zero-mean modulator reads sharp on average (E[2^x] > 1).
-            // Track the multiplier's slow mean (tau ~ 80 ms) and divide it
-            // out: the audio-rate sidebands — the TIMBRE — pass through,
-            // the tuning stays put.
-            self.fm_mean += (raw - self.fm_mean) * 2.5e-4;
+            // Track the multiplier's slow mean (tau FM_MEAN_TAU_S) and
+            // divide it out: the audio-rate sidebands — the TIMBRE — pass
+            // through, the tuning stays put. The coefficient is derived
+            // from the rate, or the tracker would follow twice as much of
+            // the modulator at 96 kHz and cancel real FM movement.
+            self.fm_mean += (raw - self.fm_mean) * self.fm_mean_k;
             raw / self.fm_mean.max(1e-3)
         } else {
             self.fm_mean = 1.0;
@@ -580,7 +609,7 @@ impl Voice {
         // the operating-point DC the unipolar and asymmetric pulses push
         // through the ladder, before the VCA can gate it into thumps
         let filtered = {
-            let y = filtered - self.dc_x1 + 0.9955 * self.dc_y1;
+            let y = filtered - self.dc_x1 + self.dc_a * self.dc_y1;
             self.dc_x1 = filtered;
             self.dc_y1 = y;
             y
@@ -742,6 +771,81 @@ mod tests {
             v.glide_remaining(),
             0.0,
             "a stale glide distance was carried into an unrelated note"
+        );
+    }
+
+    /// The output coupling is a CAPACITOR: 2.5 uF into the following
+    /// stage puts its corner at ~32 Hz and leaves it there. A hardcoded
+    /// pole made it a 32 Hz high-pass at 44.1 kHz and a 69 Hz one at
+    /// 96 kHz, so the same bass patch lost its bottom octave depending on
+    /// what the host was running at.
+    #[test]
+    fn the_output_coupling_corner_does_not_track_the_sample_rate() {
+        // E1 (~41 Hz) sits right on the coupling's knee, where a moved
+        // corner shows up as a level change
+        let level_at = |sr: f32| -> f32 {
+            let mut v = Voice::new(sr, 0, 1);
+            v.set_waveform(Waveform::Sine);
+            v.set_filter_cutoff(16000.0);
+            v.set_filter_env_amount(0.0);
+            v.envelope.set_attack(0.005);
+            v.envelope.set_decay(0.01);
+            v.envelope.set_sustain(1.0);
+            v.trigger(28, 1.0, 0, None);
+            for _ in 0..(0.5 * sr) as usize {
+                v.render_next(0.0, 1.0, 0.0, 0.0, NEUTRAL, 0.0);
+            }
+            let mut peak = 0.0f32;
+            for _ in 0..(0.5 * sr) as usize {
+                let (l, _) = v.render_next(0.0, 1.0, 0.0, 0.0, NEUTRAL, 0.0);
+                peak = peak.max(l.abs());
+            }
+            peak
+        };
+        let a = level_at(44100.0);
+        let b = level_at(96000.0);
+        assert!(a > 0.05, "the low note never sounded: {a}");
+        assert!(
+            (a / b - 1.0).abs() < 0.08,
+            "a 41 Hz note came out at {a:.4} at 44.1 kHz but {b:.4} at 96 kHz \
+             — the DC block's corner is tracking the sample rate"
+        );
+    }
+
+    /// The FM mean-tracker is specified as a time constant, so it must
+    /// cancel the same amount of the modulator at every rate. Left as a
+    /// per-sample number it ran at 91 ms at 44.1 kHz and 42 ms at 96 kHz,
+    /// following — and cancelling — twice as much real FM movement.
+    #[test]
+    fn the_fm_mean_tracker_holds_its_time_constant() {
+        // How far the tracker has travelled after ONE time constant of
+        // real time. If the coefficient is hardcoded it races ahead at
+        // the higher rate and cancels FM movement it should have passed.
+        let travelled_after_one_tau = |sr: f32| -> f32 {
+            let mut v = Voice::new(sr, 0, 1);
+            v.set_waveform(Waveform::Sine);
+            v.set_osc_waveform(1, Waveform::Square);
+            v.set_osc_pitch(1, 12.0);
+            v.set_osc_level(1, 0.0);
+            v.set_pulse_width(0.7); // DC-heavy modulator: mean well off 1.0
+            v.set_fm_amount(0.6);
+            v.set_filter_cutoff(18000.0);
+            v.trigger(69, 1.0, 0, None);
+            for _ in 0..(FM_MEAN_TAU_S * sr) as usize {
+                v.render_next(0.0, 1.0, 0.0, 0.0, NEUTRAL, 0.0);
+            }
+            v.fm_mean // starts at exactly 1.0
+        };
+        let a = travelled_after_one_tau(44100.0);
+        let b = travelled_after_one_tau(96000.0);
+        assert!(
+            (a - 1.0).abs() > 0.01,
+            "the tracker never moved, so this proves nothing: {a}"
+        );
+        assert!(
+            ((a - 1.0) / (b - 1.0) - 1.0).abs() < 0.06,
+            "after one time constant of REAL time the FM mean-tracker had \
+             reached {a:.4} at 44.1 kHz but {b:.4} at 96 kHz"
         );
     }
 }

@@ -418,7 +418,7 @@ impl VoiceManager {
             chorus: Chorus::new(sample_rate),
             tape: Tape::new(sample_rate),
             fuzz: Fuzz::new(),
-            noise_source: NoiseSource::new(),
+            noise_source: NoiseSource::new(sample_rate),
             noise_gain: 0.0,
             spring: SpringReverb::new(sample_rate),
             lfo: Lfo::new(sample_rate),

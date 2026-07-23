@@ -511,7 +511,7 @@ impl VoxSource {
             shimmer_lp: 0.0,
             breath: 0.12,
             tilt_lp: 0.0,
-            noise: NoiseSource::new(),
+            noise: NoiseSource::new(sample_rate),
             res: [Resonator::default(); 4],
             fric_res: Resonator::default(),
         }
