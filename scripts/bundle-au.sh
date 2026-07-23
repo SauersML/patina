@@ -48,6 +48,10 @@ cat > "$bundle/Contents/Info.plist" <<PLIST
 	<string>Patina</string>
 	<key>CFBundlePackageType</key>
 	<string>BNDL</string>
+	<!-- The AU view bridge resolves our Cocoa view factory through the
+	     bundle; naming it here is how working AUv2 plugins expose it. -->
+	<key>NSPrincipalClass</key>
+	<string>PatinaAUViewFactory</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$version</string>
 	<key>CFBundleVersion</key>

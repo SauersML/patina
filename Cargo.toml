@@ -14,6 +14,11 @@ name = "patina"
 path = "src/main.rs"
 required-features = ["app"]
 
+[build-dependencies]
+# Compiles src/au/factory.m (the AU view factory must be a real
+# compiled ObjC class so the host can resolve it through the bundle).
+cc = "1"
+
 [features]
 default = ["app"]
 # The standalone desktop app (window, audio device, hardware MIDI in)

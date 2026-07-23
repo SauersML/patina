@@ -459,12 +459,22 @@ static DREW: Once = Once::new();
 static VIEW_CLASS: AtomicUsize = AtomicUsize::new(0);
 static FACTORY_CLASS: AtomicUsize = AtomicUsize::new(0);
 
+// Plain, stable class names. The host resolves the factory by name through
+// the bundle (Info.plist NSPrincipalClass names this same string), so it has
+// to match exactly and must not move with the crate version.
 fn versioned(name: &str) -> String {
-    format!("{}_{}", name, env!("CARGO_PKG_VERSION").replace('.', "_"))
+    name.to_string()
 }
 
 pub fn factory_class_name() -> String {
-    versioned("PatinaAUViewFactory")
+    "PatinaAUViewFactory".to_string()
+}
+
+extern "C" {
+    /// Defined in src/au/factory.m purely so the linker keeps that object
+    /// file — and with it the PatinaAUViewFactory class the host resolves
+    /// by name.
+    fn patina_au_factory_anchor();
 }
 
 /// Register both Objective-C classes. Safe — and necessary — to call
@@ -481,6 +491,7 @@ pub fn register_classes() {
     }
     let _guard = LOCK.lock();
     unsafe {
+        patina_au_factory_anchor();
         if VIEW_CLASS.load(Ordering::Acquire) == 0 {
             register_view_class();
         }
@@ -725,6 +736,19 @@ unsafe extern "C" fn view_dealloc(this: Id, _cmd: Sel) {
 unsafe extern "C" fn interface_version(_this: Id, _cmd: Sel) -> u32 {
     trace("interface_version called");
     0
+}
+
+/// Entry point for the compiled Objective-C factory (src/au/factory.m).
+/// Returns a +1 NSView; the host releases it, per AUCocoaUIBase.
+#[no_mangle]
+pub unsafe extern "C" fn patina_au_create_view(audio_unit: *mut c_void) -> *mut c_void {
+    trace("patina_au_create_view: called from ObjC factory");
+    ui_view_for_audio_unit(
+        null_mut(),
+        null_mut(),
+        audio_unit,
+        CGSize { width: EDITOR_WIDTH as f64, height: EDITOR_HEIGHT as f64 },
+    )
 }
 
 unsafe extern "C" fn ui_view_for_audio_unit(
