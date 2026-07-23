@@ -474,6 +474,32 @@ mod tests {
         }
     }
 
+    /// `Seconds` and `Hertz` mean "map this control logarithmically", and
+    /// every front end acts on that: the editor knob converts with
+    /// `(v/min).ln() / (max/min).ln()`, the AU sets
+    /// kAudioUnitParameterFlag_DisplayLogarithmic, and the CLAP/VST3 build
+    /// uses a skewed range. A minimum of zero turns the knob's conversion
+    /// into inf/inf = NaN, and that NaN is written straight back to the host
+    /// as the parameter's new value — which then reaches the engine. Pin the
+    /// precondition here so a future log-displayed parameter cannot open
+    /// that hole.
+    #[test]
+    fn logarithmic_displays_have_a_positive_minimum() {
+        for def in param_defs() {
+            if let ParamDef::Float(f) = def {
+                if matches!(f.display, Display::Seconds | Display::Hertz) {
+                    assert!(
+                        f.min > 0.0 && f.max > f.min,
+                        "`{}` is displayed logarithmically but spans [{}, {}]",
+                        f.id,
+                        f.min,
+                        f.max
+                    );
+                }
+            }
+        }
+    }
+
     /// Single-frequency magnitude via Goertzel — enough to weigh a partial.
     fn goertzel(samples: &[f32], sr: f32, freq: f32) -> f32 {
         let w = 2.0 * std::f32::consts::PI * freq / sr;

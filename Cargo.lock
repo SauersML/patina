@@ -2824,6 +2824,7 @@ name = "patina"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "cc",
  "cpal",
  "crossbeam-channel",
  "dasp_sample",

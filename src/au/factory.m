@@ -43,8 +43,9 @@ void patina_au_factory_anchor(void) {}
 
 - (NSView *)uiViewForAudioUnit:(AudioUnit)inAudioUnit withSize:(NSSize)inPreferredSize {
     (void)inPreferredSize;
-    // Rust returns a +1 NSView; AUCocoaUIBase's contract has the host
-    // release it, so hand it straight back.
+    // Rust returns the view already autoreleased, which is exactly what
+    // AUCocoaUIBase asks for ("retain count of 1 and autoreleased"), so
+    // hand it straight back — do not add another autorelease here.
     return (NSView *)patina_au_create_view((void *)inAudioUnit);
 }
 

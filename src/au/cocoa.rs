@@ -608,9 +608,12 @@ unsafe fn register_factory_class() {
 }
 
 unsafe extern "C" fn factory_description(_this: Id, _cmd: Sel) -> Id {
-    // A CFString is toll-free bridged to NSString; the host treats it as
-    // autoreleased, which matches -description's contract.
-    cfstring("Patina") as Id
+    // A CFString is toll-free bridged to NSString. `cfstring` hands back a
+    // +1 reference and -description must return an autoreleased object
+    // (the caller does not balance a retain), so autorelease it here or the
+    // string leaks on every call.
+    let s = cfstring("Patina") as Id;
+    send0(s, sel("autorelease"))
 }
 
 /// Start the ~30 Hz redraw timer. NSTimer RETAINS its target, so the view
@@ -814,7 +817,11 @@ unsafe extern "C" fn interface_version(_this: Id, _cmd: Sel) -> u32 {
 }
 
 /// Entry point for the compiled Objective-C factory (src/au/factory.m).
-/// Returns a +1 NSView; the host releases it, per AUCocoaUIBase.
+/// Returns an NSView with retain count 1, AUTORELEASED — that is the exact
+/// wording of the AUCocoaUIBase contract in AUCocoaUIView.h: "Each view
+/// must be returned with a retain count of 1 and autoreleased. It is the
+/// client's responsibility to retain the returned view and to release the
+/// view when it's no longer needed."
 #[no_mangle]
 pub unsafe extern "C" fn patina_au_create_view(audio_unit: *mut c_void) -> *mut c_void {
     guard(null_mut(), || ui_view_for_audio_unit(
@@ -877,7 +884,7 @@ unsafe extern "C" fn ui_view_for_audio_unit(
     let host = Arc::new(AuParamHost { au: audio_unit });
     let nparams = crate::host_params::param_defs().len();
     let ctx = egui::Context::default();
-    let mut state = Box::new(ViewState {
+    let state = Box::new(ViewState {
         view,
         host: host.clone(),
         last_params: (0..nparams).map(|i| host.get(i)).collect(),
@@ -893,20 +900,29 @@ unsafe extern "C" fn ui_view_for_audio_unit(
         timer: null_mut(),
     });
 
-    // Repeating timer drives redraws. scheduledTimer... returns an
-    // autoreleased, run-loop-retained timer; it retains `view` as its
-    // target until invalidated in dealloc.
-    state.timer = schedule_redraw_timer(view);
+    // The redraw timer is NOT started here. NSTimer retains its target, so
+    // a timer scheduled at construction keeps the view alive by itself: a
+    // host that never puts the view in a window (or that drops it before
+    // doing so) would leave a retained view with a live timer and no
+    // -dealloc, forever. `viewDidMoveToWindow` starts it when the view goes
+    // on screen and invalidates it when it comes off, which is exactly the
+    // window in which redrawing means anything.
 
     let ivar = CString::new(STATE_IVAR).unwrap();
     object_setInstanceVariable(view, ivar.as_ptr(), Box::into_raw(state) as *mut c_void);
 
     // Ask for the first paint on the next display pass.
     send_void_bool(view, sel("setNeedsDisplay:"), 1);
-    // Hand back an AUTORELEASED view: that is what AUCocoaUIBase hosts
-    // expect, and returning +1 instead leaves the retain count unbalanced.
-    let _: Id = send0(view, sel("autorelease"));
-    view
+
+    // AUCocoaUIView.h: "Each view must be returned with a retain count of 1
+    // and autoreleased. It is the client's responsibility to retain the
+    // returned view and to release the view when it's no longer needed."
+    // Handing back a bare +1 meant the client's retain/release cycle landed
+    // back on 1, so -dealloc NEVER ran: the NSView, its ViewState (egui
+    // context, the baked backdrop texture, the full-size framebuffer) and
+    // its CGColorSpace leaked on every open of the panel, and the leaked
+    // view stayed wired to AppKit with a live tracking area.
+    send0(view, sel("autorelease"))
 }
 
 /// Build the (bundle URL, view class name) pair for

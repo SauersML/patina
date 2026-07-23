@@ -411,3 +411,80 @@ impl EditorState {
 /// The waveform selector widget draws exactly four cells; pin the table's
 /// variant count to that expectation.
 const _: () = assert!(host_params::WAVEFORM_VARIANTS.len() == 4);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    /// Records what the panel writes, and answers every read with the
+    /// table default.
+    struct Recording {
+        defs: Vec<ParamDef>,
+        writes: Mutex<Vec<(usize, f32)>>,
+    }
+
+    impl ParamHost for Recording {
+        fn get(&self, index: usize) -> f32 {
+            self.defs[index].default_value()
+        }
+        fn set(&self, index: usize, value: f32) {
+            self.writes.lock().unwrap().push((index, value));
+        }
+        fn begin_gesture(&self, _index: usize) {}
+        fn end_gesture(&self, _index: usize) {}
+    }
+
+    /// Every widget in the panel looks its parameter up by string id and
+    /// PANICS on a miss (`index_of[id]`, plus `unreachable!` if a float/
+    /// selector is confused for the other). Those panics are reachable
+    /// straight from `drawRect:` inside the host's view process, where they
+    /// abort the process rather than unwind.
+    ///
+    /// Laying out a whole frame touches every lookup, so renaming or
+    /// retyping a table entry fails here instead of in Logic.
+    #[test]
+    fn a_full_panel_frame_resolves_every_parameter_id() {
+        let host = Arc::new(Recording {
+            defs: host_params::param_defs(),
+            writes: Mutex::new(Vec::new()),
+        });
+        let mut editor = EditorState::new(host.clone());
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(
+            egui::pos2(0.0, 0.0),
+            egui::vec2(EDITOR_WIDTH as f32, EDITOR_HEIGHT as f32),
+        );
+
+        // Two passes: the first bakes textures and allocates widget ids, the
+        // second runs with everything warm and the pointer inside the panel
+        // (hover/interaction paths take different branches).
+        for pass in 0..2 {
+            let mut input = egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(pass as f64 / 30.0),
+                focused: true,
+                ..Default::default()
+            };
+            if pass == 1 {
+                let p = screen.center();
+                input.events.push(egui::Event::PointerMoved(p));
+                input.events.push(egui::Event::PointerButton {
+                    pos: p,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                });
+            }
+            let output = ctx.run(input, |ctx| editor.update(ctx));
+            assert!(!output.shapes.is_empty(), "pass {pass} drew nothing");
+        }
+
+        // Whatever the click landed on, it must be a real, in-range value —
+        // never a NaN out of a logarithmic mapping with a zero minimum.
+        for (index, value) in host.writes.lock().unwrap().iter() {
+            let def = &host.defs[*index];
+            assert!(value.is_finite(), "`{}` written as {value}", def.id());
+        }
+    }
+}

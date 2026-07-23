@@ -80,11 +80,19 @@ impl Raster {
                 Some([px, py]) => {
                     if let Some(tex) = self.textures.get_mut(id) {
                         for row in 0..ih {
+                            let y = py + row;
+                            if y >= tex.h {
+                                break;
+                            }
                             for col in 0..iw {
-                                let dst = (py + row) * tex.w + (px + col);
-                                if dst < tex.px.len() {
-                                    tex.px[dst] = new_px[row * iw + col];
+                                // Bound the COLUMN too: a `dst < len` test
+                                // alone lets an overwide patch wrap onto the
+                                // start of the next row and corrupt it.
+                                let x = px + col;
+                                if x >= tex.w {
+                                    break;
                                 }
+                                tex.px[y * tex.w + x] = new_px[row * iw + col];
                             }
                         }
                     }
