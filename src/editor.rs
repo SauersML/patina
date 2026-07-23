@@ -214,9 +214,12 @@ impl EditorState {
         }
         self.touched = false;
 
-        // Hosts automate parameters while the panel is open — keep readouts
-        // live even without local input.
-        ctx.request_repaint_after(std::time::Duration::from_millis(33));
+        // Deliberately NO unconditional repaint request here. Redrawing this
+        // panel means software-rasterising ~4M pixels; asking for it every
+        // frame pinned a CPU core even when nothing moved, which the AU host
+        // flags as a runaway process. The view is marked dirty only when a
+        // parameter actually changes or the mouse does something (see
+        // src/au/cocoa.rs).
     }
 
     fn panel_body(&mut self, ui: &mut egui::Ui) {

@@ -300,6 +300,11 @@ impl ParamHost for AuParamHost {
 
 struct ViewState {
     view: Id, // unretained; the ivar owner
+    /// The same host the editor drives, kept so the timer can poll for
+    /// parameter movement cheaply without rendering anything.
+    host: Arc<dyn ParamHost>,
+    /// Last parameter values seen, to detect host-side automation.
+    last_params: Vec<f32>,
     ctx: egui::Context,
     editor: EditorState,
     raster: Raster,
@@ -680,13 +685,27 @@ unsafe extern "C" fn draw_rect(this: Id, _cmd: Sel, _dirty: CGRect) {
     })
 }
 
-/// Timer only marks the view dirty; the actual paint happens in drawRect:
-/// on AppKit's display pass, so it works even where our timer wouldn't.
+/// The timer does NOT repaint on its own. A repaint rasterises the whole
+/// panel in software (millions of pixels), so doing it unconditionally at
+/// frame rate burns a core forever and the AU host kills us for it. Instead
+/// we poll the parameters — cheap — and only mark the view dirty when the
+/// host has actually moved one (automation, or another editor). Local
+/// interaction marks it dirty from the mouse handlers.
 unsafe extern "C" fn draw_tick(this: Id, _cmd: Sel, _timer: Id) {
     guard((), || {
-    if let Some(state) = ViewState::from_view(this) {
-        state.set_needs_display();
-    }
+        if let Some(state) = ViewState::from_view(this) {
+            let mut changed = false;
+            for i in 0..state.last_params.len() {
+                let v = state.host.get(i);
+                if v != state.last_params[i] {
+                    state.last_params[i] = v;
+                    changed = true;
+                }
+            }
+            if changed {
+                state.set_needs_display();
+            }
+        }
     })
 }
 
@@ -856,9 +875,12 @@ unsafe extern "C" fn ui_view_for_audio_unit(
 
     // Build the egui side.
     let host = Arc::new(AuParamHost { au: audio_unit });
+    let nparams = crate::host_params::param_defs().len();
     let ctx = egui::Context::default();
     let mut state = Box::new(ViewState {
         view,
+        host: host.clone(),
+        last_params: (0..nparams).map(|i| host.get(i)).collect(),
         ctx,
         editor: EditorState::new(host),
         raster: Raster::new(),
