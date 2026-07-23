@@ -320,16 +320,37 @@ struct ViewState {
     mouse: Pos2,
     pending: Vec<Event>,
     timer: Id,
+    /// Set while a callback holds `&mut` to this state. AppKit callbacks can
+    /// nest -- a cross-process AudioUnitGetParameter/SetParameter can pump
+    /// the run loop, and the timer polls every parameter -- so without this
+    /// a nested drawRect:/mouse event would hand out a SECOND live &mut to
+    /// the same object, which is undefined behaviour.
+    in_use: bool,
 }
 
 const STATE_IVAR: &str = "patinaState";
 
 impl ViewState {
-    unsafe fn from_view<'a>(this: Id) -> Option<&'a mut ViewState> {
+    /// Borrow the state for the duration of one host callback.
+    ///
+    /// Returns None if this view's state is ALREADY borrowed further up the
+    /// stack: AppKit callbacks nest (a cross-process parameter read can pump
+    /// the run loop and deliver a drawRect: or a mouse event inside our own
+    /// frame), and aliasing `&mut` is undefined behaviour. Refusing the
+    /// nested call costs at most one dropped frame, which the outer call is
+    /// about to render anyway.
+    unsafe fn with<R>(this: Id, f: impl FnOnce(&mut ViewState) -> R) -> Option<R> {
         let ivar = CString::new(STATE_IVAR).unwrap();
         let mut ptr: *mut c_void = null_mut();
         object_getInstanceVariable(this, ivar.as_ptr(), &mut ptr);
-        (ptr as *mut ViewState).as_mut()
+        let p = ptr as *mut ViewState;
+        if p.is_null() || (*p).in_use {
+            return None;
+        }
+        (*p).in_use = true;
+        let out = f(&mut *p);
+        (*p).in_use = false;
+        Some(out)
     }
 
     /// Physical pixels-per-point from the hosting window (Retina = 2).
@@ -641,7 +662,7 @@ unsafe fn schedule_redraw_timer(view: Id) -> Id {
 unsafe extern "C" fn view_did_move_to_window(this: Id, _cmd: Sel) {
     guard((), || {
     let on_screen = !send0(this, sel("window")).is_null();
-    if let Some(state) = ViewState::from_view(this) {
+    ViewState::with(this, |state| {
         if on_screen {
             if state.timer.is_null() {
                 state.timer = schedule_redraw_timer(this);
@@ -650,7 +671,7 @@ unsafe extern "C" fn view_did_move_to_window(this: Id, _cmd: Sel) {
             let _: Id = send0(state.timer, sel("invalidate"));
             state.timer = null_mut();
         }
-    }
+    });
     })
 }
 
@@ -682,9 +703,9 @@ unsafe extern "C" fn accepts_first_mouse(_this: Id, _cmd: Sel, _event: Id) -> u8
 
 unsafe extern "C" fn draw_rect(this: Id, _cmd: Sel, _dirty: CGRect) {
     guard((), || {
-    if let Some(state) = ViewState::from_view(this) {
+    ViewState::with(this, |state| {
         state.draw_current();
-    }
+    });
     })
 }
 
@@ -696,7 +717,7 @@ unsafe extern "C" fn draw_rect(this: Id, _cmd: Sel, _dirty: CGRect) {
 /// interaction marks it dirty from the mouse handlers.
 unsafe extern "C" fn draw_tick(this: Id, _cmd: Sel, _timer: Id) {
     guard((), || {
-        if let Some(state) = ViewState::from_view(this) {
+        ViewState::with(this, |state| {
             let mut changed = false;
             for i in 0..state.last_params.len() {
                 let v = state.host.get(i);
@@ -708,13 +729,13 @@ unsafe extern "C" fn draw_tick(this: Id, _cmd: Sel, _timer: Id) {
             if changed {
                 state.set_needs_display();
             }
-        }
+        });
     })
 }
 
 unsafe fn push_button(this: Id, event: Id, button: PointerButton, pressed: bool) {
     guard((), || {
-    if let Some(state) = ViewState::from_view(this) {
+    ViewState::with(this, |state| {
         let pos = state.event_pos(event);
         state.mouse = pos;
         state.pending.push(Event::PointerMoved(pos));
@@ -725,7 +746,7 @@ unsafe fn push_button(this: Id, event: Id, button: PointerButton, pressed: bool)
             modifiers: Modifiers::default(),
         });
         state.set_needs_display();
-    }
+    });
     })
 }
 
@@ -744,37 +765,37 @@ unsafe extern "C" fn right_mouse_up(this: Id, _cmd: Sel, event: Id) {
 
 unsafe extern "C" fn mouse_moved(this: Id, _cmd: Sel, event: Id) {
     guard((), || {
-    if let Some(state) = ViewState::from_view(this) {
+    ViewState::with(this, |state| {
         let pos = state.event_pos(event);
         state.mouse = pos;
         state.pending.push(Event::PointerMoved(pos));
         state.set_needs_display();
-    }
+    });
     })
 }
 
 unsafe extern "C" fn mouse_dragged(this: Id, _cmd: Sel, event: Id) {
     guard((), || {
-    if let Some(state) = ViewState::from_view(this) {
+    ViewState::with(this, |state| {
         let pos = state.event_pos(event);
         state.mouse = pos;
         state.pending.push(Event::PointerMoved(pos));
         state.set_needs_display();
-    }
+    });
     })
 }
 
 unsafe extern "C" fn mouse_exited(this: Id, _cmd: Sel, _event: Id) {
     guard((), || {
-    if let Some(state) = ViewState::from_view(this) {
+    ViewState::with(this, |state| {
         state.pending.push(Event::PointerGone);
-    }
+    });
     })
 }
 
 unsafe extern "C" fn scroll_wheel(this: Id, _cmd: Sel, event: Id) {
     guard((), || {
-    if let Some(state) = ViewState::from_view(this) {
+    ViewState::with(this, |state| {
         let dx = send0_f64(event, sel("scrollingDeltaX")) as f32;
         let dy = send0_f64(event, sel("scrollingDeltaY")) as f32;
         state.pending.push(Event::MouseWheel {
@@ -783,7 +804,7 @@ unsafe extern "C" fn scroll_wheel(this: Id, _cmd: Sel, event: Id) {
             modifiers: Modifiers::default(),
         });
         state.set_needs_display();
-    }
+    });
     })
 }
 
@@ -898,6 +919,7 @@ unsafe extern "C" fn ui_view_for_audio_unit(
         mouse: pos2(-1.0, -1.0),
         pending: Vec::new(),
         timer: null_mut(),
+        in_use: false,
     });
 
     // The redraw timer is NOT started here. NSTimer retains its target, so
