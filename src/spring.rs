@@ -17,6 +17,21 @@
 
 use std::f32::consts::TAU;
 
+/// Snap values that have decayed past all audibility to exactly zero.
+/// The spring loop decays exponentially forever, so without this every
+/// delay slot, allpass and damping pole sits full of DENORMALS for tens
+/// of seconds after each ring-out -- and denormal arithmetic costs 10-100x
+/// a normal multiply on x86, so the unit's CPU load rises after the music
+/// stops. 1e-20 is -400 dBFS: inaudible, and far above the denormal cliff.
+#[inline]
+fn flush(x: f32) -> f32 {
+    if x.abs() < 1e-20 {
+        0.0
+    } else {
+        x
+    }
+}
+
 /// First-order allpass, H(z) = (a + z^-1) / (1 + a z^-1).
 struct Allpass {
     a: f32,
@@ -31,7 +46,7 @@ impl Allpass {
 
     #[inline]
     fn process(&mut self, x: f32) -> f32 {
-        let y = self.a * x + self.x1 - self.a * self.y1;
+        let y = flush(self.a * x + self.x1 - self.a * self.y1);
         self.x1 = x;
         self.y1 = y;
         y
@@ -53,7 +68,7 @@ impl OnePoleLp {
 
     #[inline]
     fn process(&mut self, x: f32) -> f32 {
-        self.state += self.a * (x - self.state);
+        self.state = flush(self.state + self.a * (x - self.state));
         self.state
     }
 }
@@ -102,7 +117,7 @@ impl Spring {
             v = ap.process(v);
         }
         v = self.damping.process(v);
-        self.delay[self.idx] = input + v * self.feedback;
+        self.delay[self.idx] = flush(input + v * self.feedback);
         self.idx = (self.idx + 1) % self.delay.len();
         v
     }
@@ -114,8 +129,10 @@ pub struct SpringReverb {
     drive_lp: OnePoleLp,
     send_hp: OnePoleHp,
     send_lp: OnePoleLp,
-    // lets the springs ring out after a send burst even at zero wet
+    // lets the springs ring out after a send burst even at zero wet:
+    // a peak-hold follower on what the PICKUPS are actually putting out
     send_tail: f32,
+    tail_k: f32,
     wet: f32,
     smoothed: f32,
 }
@@ -135,6 +152,9 @@ impl SpringReverb {
             send_hp: OnePoleHp::new(120.0, sample_rate),
             send_lp: OnePoleLp::new(4200.0, sample_rate),
             send_tail: 0.0,
+            // 250 ms release, expressed in seconds so it means the same
+            // thing at 44.1, 48 and 96 kHz
+            tail_k: (-1.0 / (0.25 * sample_rate)).exp(),
             wet: 0.0,
             smoothed: 0.0,
         }
@@ -161,13 +181,20 @@ impl SpringReverb {
         send_left: f32,
         send_right: f32,
     ) -> (f32, f32) {
+        // Springs are a feedback loop with nothing to trap a bad value: one
+        // non-finite sample rings around them forever. Screening the input
+        // is O(1) and turns a permanent kill into a one-sample dropout.
+        let left = if left.is_finite() { left } else { 0.0 };
+        let right = if right.is_finite() { right } else { 0.0 };
+        let send_left = if send_left.is_finite() { send_left } else { 0.0 };
+        let send_right = if send_right.is_finite() { send_right } else { 0.0 };
+
         self.smoothed += (self.wet - self.smoothed) * 0.001;
         let w = self.smoothed;
         let send = (send_left + send_right) * 0.5;
         if w < 0.002 && self.wet < 0.002 && send.abs() < 1e-6 && self.send_tail < 1e-5 {
             return (left, right);
         }
-        self.send_tail = self.send_tail.max(send.abs()) * 0.9995;
 
         // Mono spring drive with soft input electronics
         let mono = (left + right) * 0.5;
@@ -189,6 +216,15 @@ impl SpringReverb {
         // The two pickup returns split unevenly into the stereo outputs
         let wet_l = (s0 * 0.85 + s1 * 0.35) * 1.7;
         let wet_r = (s1 * 0.85 + s0 * 0.35) * 1.7;
+
+        // Hold the engage gate open on what the PICKUPS are doing, not on
+        // what the send bus did. Keyed to the send level it went quiet
+        // ~0.5 s after a burst while the springs were still ringing near
+        // -39 dBFS, and the output stepped straight to zero: an audible
+        // click on the tail of every send hit. The springs decay to true
+        // zero (see `flush`), so this still closes.
+        let ring = wet_l.abs().max(wet_r.abs()).max(send.abs());
+        self.send_tail = ring.max(self.send_tail * self.tail_k);
 
         (
             left * (1.0 - w) + wet_l,
@@ -239,5 +275,128 @@ mod tests {
             late < early * 0.2,
             "spring should decay: early={early}, late={late}"
         );
+    }
+
+    /// Regression: the engage gate was held open by a follower on the SEND
+    /// INPUT level (`send_tail.max(send) * 0.9995`), which decayed far
+    /// faster than the springs themselves. After a 50 ms send burst at zero
+    /// wet the gate closed at t = 0.519 s while the pickups were still
+    /// putting out -39 dBFS, and the output stepped straight to hard zero:
+    /// an audible click on the tail of every send hit.
+    #[test]
+    fn the_send_tail_is_not_cut_off_mid_ring() {
+        let sr = 48000.0f32;
+        let mut spring = SpringReverb::new(sr);
+        spring.set_wet(0.0); // send-only: the gate is the one thing keeping it alive
+        let burst = (0.05 * sr) as usize;
+        let mut out = Vec::new();
+        for n in 0..(3.0 * sr) as usize {
+            let s = if n < burst {
+                (TAU * 300.0 * n as f32 / sr).sin() * 0.8
+            } else {
+                0.0
+            };
+            let (l, _) = spring.process_with_send(0.0, 0.0, s, s);
+            assert!(l.is_finite());
+            out.push(l);
+        }
+        // Where does the output become permanently zero?
+        let mut cut = out.len();
+        while cut > 0 && out[cut - 1] == 0.0 {
+            cut -= 1;
+        }
+        assert!(cut > burst, "the springs must ring at all");
+        let level_at_cut = out[cut.saturating_sub(400)..cut]
+            .iter()
+            .fold(0.0f32, |a, &x| a.max(x.abs()));
+        assert!(
+            level_at_cut < 1e-4,
+            "gate closed on a ring still at {:.1} dBFS (t = {:.3} s)",
+            20.0 * level_at_cut.max(1e-12).log10(),
+            cut as f32 / sr
+        );
+    }
+
+    /// The same gate guards the panel knob, and it had the same fault:
+    /// riding REVERB down to zero let `smoothed` cross the 0.002 threshold
+    /// ~0.13 s later and the still-ringing springs were cut off there.
+    #[test]
+    fn closing_the_wet_knob_does_not_chop_the_ring() {
+        let sr = 48000.0f32;
+        let mut spring = SpringReverb::new(sr);
+        spring.set_wet(1.0);
+        for _ in 0..20000 {
+            spring.process(0.0, 0.0);
+        }
+        for n in 0..(0.05 * sr) as usize {
+            let x = (TAU * 300.0 * n as f32 / sr).sin() * 0.8;
+            spring.process(x, x);
+        }
+        spring.set_wet(0.0); // knob slammed shut on a ringing tank
+        let mut out = Vec::new();
+        for _ in 0..(4.0 * sr) as usize {
+            out.push(spring.process(0.0, 0.0).0);
+        }
+        let mut cut = out.len();
+        while cut > 0 && out[cut - 1] == 0.0 {
+            cut -= 1;
+        }
+        let level_at_cut = out[cut.saturating_sub(400)..cut]
+            .iter()
+            .fold(0.0f32, |a, &x| a.max(x.abs()));
+        assert!(
+            level_at_cut < 1e-4,
+            "knob-off chopped a ring still at {:.1} dBFS (t = {:.3} s)",
+            20.0 * level_at_cut.max(1e-12).log10(),
+            cut as f32 / sr
+        );
+    }
+
+    /// Regression: the spring loop decays exponentially forever, so once it
+    /// passed the f32 denormal cliff every delay slot, allpass and damping
+    /// pole held a denormal for tens of seconds. Denormal arithmetic is
+    /// 10-100x slower on x86: the unit got MORE expensive after the note
+    /// ended. Measured before the fix: ~457,000 denormal output samples in
+    /// 20 s at 48 kHz.
+    #[test]
+    fn a_dead_ring_flushes_instead_of_going_denormal() {
+        let sr = 48000.0f32;
+        let mut spring = SpringReverb::new(sr);
+        spring.set_wet(1.0);
+        for _ in 0..20000 {
+            spring.process(0.0, 0.0);
+        }
+        spring.process(1.0, 1.0);
+        let mut denormals = 0usize;
+        for _ in 0..(20.0 * sr) as usize {
+            let (l, r) = spring.process(0.0, 0.0);
+            for v in [l, r] {
+                if v != 0.0 && v.abs() < f32::MIN_POSITIVE {
+                    denormals += 1;
+                }
+            }
+        }
+        assert_eq!(denormals, 0, "denormal output samples");
+        let (l, r) = spring.process(0.0, 0.0);
+        assert_eq!((l, r), (0.0, 0.0), "springs should have come to rest");
+    }
+
+    /// One non-finite sample used to ring around the spring loop forever.
+    #[test]
+    fn a_nan_does_not_poison_the_springs() {
+        let mut spring = SpringReverb::new(48000.0);
+        spring.set_wet(0.5);
+        spring.process(f32::NAN, f32::NAN);
+        spring.process_with_send(0.0, 0.0, f32::INFINITY, f32::NAN);
+        let mut energy = 0.0f32;
+        for n in 0..48000 {
+            let x = (TAU * 220.0 * n as f32 / 48000.0).sin() * 0.5;
+            let (l, r) = spring.process(x, x);
+            assert!(l.is_finite() && r.is_finite(), "poisoned at sample {n}");
+            if n > 4800 {
+                energy += l * l;
+            }
+        }
+        assert!(energy > 1.0, "spring should be passing audio again: {energy}");
     }
 }

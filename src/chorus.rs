@@ -18,8 +18,11 @@ pub struct Chorus {
     saturation: Saturation,
     feedback: f32,
     voices: Vec<Voice>,
-    rate: f32,
-    depth: f32,
+    /// Panel overrides of the mode presets. `None` = the knob has never
+    /// been touched, so the selected mode's own preset stands; `Some` = a
+    /// knob position that must survive a switch throw (see `set_mode`).
+    rate: Option<f32>,
+    depth: Option<f32>,
     wet_dry_mix: f32,
 }
 
@@ -79,8 +82,8 @@ impl Chorus {
             noise_generator: NoiseGenerator::new(),
             saturation: Saturation::new(),
             feedback: 0.25,
-            rate: 0.5,
-            depth: 0.5,
+            rate: None,
+            depth: None,
             voices: vec![
                 Voice::new(0.513, 0.515, 0.007),
                 Voice::new(0.75, 0.753, 0.006),
@@ -95,26 +98,36 @@ impl Chorus {
         // that re-randomizes (or resets) state must early-return on an
         // unchanged value, or the per-voice detune re-rolls continuously
         let rate = rate.clamp(0.1, 10.0);
-        if rate == self.rate {
+        if self.rate == Some(rate) {
             return;
         }
-        self.rate = rate;
-        for voice in &mut self.voices {
-            voice.rate_left = self.rate * (0.9 + rand::thread_rng().gen::<f32>() * 0.2);
-            voice.rate_right = self.rate * (0.9 + rand::thread_rng().gen::<f32>() * 0.2);
-        }
+        self.rate = Some(rate);
+        self.apply_rate();
     }
 
     pub fn set_depth(&mut self, depth: f32) {
         let depth = depth.clamp(0.0, 1.0);
-        if depth == self.depth {
+        if self.depth == Some(depth) {
             return;
         }
-        self.depth = depth;
+        self.depth = Some(depth);
+        self.apply_depth();
+    }
+
+    fn apply_rate(&mut self) {
+        let Some(rate) = self.rate else { return };
+        for voice in &mut self.voices {
+            voice.rate_left = rate * (0.9 + rand::thread_rng().gen::<f32>() * 0.2);
+            voice.rate_right = rate * (0.9 + rand::thread_rng().gen::<f32>() * 0.2);
+        }
+    }
+
+    fn apply_depth(&mut self) {
+        let Some(depth) = self.depth else { return };
         for voice in &mut self.voices {
             // Knob is 0..1; voice depth is the LFO delay swing in seconds.
             // Full depth = 10 ms, matching the scale of the mode presets.
-            voice.depth = self.depth * 0.010 * (0.9 + rand::thread_rng().gen::<f32>() * 0.2);
+            voice.depth = depth * 0.010 * (0.9 + rand::thread_rng().gen::<f32>() * 0.2);
         }
     }
 
@@ -157,6 +170,16 @@ impl Chorus {
                 self.wet_dry_mix = 0.6;
             },
         }
+        // A switch throw rebuilds the BBD voices from the mode's own
+        // preset, which used to silently DISCARD the rate and depth knobs:
+        // the setters early-return on an unchanged value (they must, they
+        // re-roll per-voice detune), so re-asserting the same knob position
+        // afterwards -- which is exactly what song automation and the UI's
+        // apply-all do, every block -- was a no-op and the panel controls
+        // stayed dead until someone physically moved them. Re-derive the
+        // overrides here so the knobs survive the switch.
+        self.apply_rate();
+        self.apply_depth();
     }
 
 
@@ -185,6 +208,14 @@ impl Chorus {
         if self.mode == ChorusMode::Off {
             return (input_left, input_right);
         }
+        // The BBD line feeds back on itself, so one non-finite sample
+        // circulates forever and the chorus never produces audio again.
+        // Screening the input is O(1) and makes it a one-sample dropout.
+        let input_left = if input_left.is_finite() { input_left } else { 0.0 };
+        let input_right = if input_right.is_finite() { input_right } else { 0.0 };
+        let send_left = if send_left.is_finite() { send_left } else { 0.0 };
+        let send_right = if send_right.is_finite() { send_right } else { 0.0 };
+
         let m = self.wet_dry_mix.clamp(0.0, 1.0);
         let fed_left = input_left * m + send_left;
         let fed_right = input_right * m + send_right;
@@ -392,6 +423,77 @@ mod tests {
         chorus.set_mode(ChorusMode::II);
         assert_eq!(chorus.wet_dry_mix, 0.12, "mix override must survive");
         assert_eq!(chorus.voices[0].phase_left, phase_before, "voices must not rebuild");
+    }
+
+    /// Regression: a mode switch rebuilds the voices from the mode preset,
+    /// and the rate/depth setters early-return on an unchanged value. The
+    /// combination used to leave both knobs DEAD after every switch throw —
+    /// re-asserting the same knob position (which song automation and the
+    /// UI's apply-all do every block) changed nothing, so `chorus_depth 1.0`
+    /// silently played at the preset's 0.4-0.7 ms.
+    #[test]
+    fn rate_and_depth_knobs_survive_a_mode_switch() {
+        let mut chorus = Chorus::new(48000.0);
+        chorus.set_mode(ChorusMode::II);
+        chorus.set_rate(4.0);
+        chorus.set_depth(0.9);
+
+        chorus.set_mode(ChorusMode::IV);
+        // ...automation re-asserts the same values on the next block
+        chorus.set_rate(4.0);
+        chorus.set_depth(0.9);
+
+        assert_eq!(chorus.voices.len(), 4, "mode IV still builds four voices");
+        for v in &chorus.voices {
+            // 9 ms +-10% per-voice detune, NOT the 4-7 ms mode preset
+            assert!(
+                (0.0081..=0.0099).contains(&v.depth),
+                "depth knob was discarded by the switch: {}",
+                v.depth
+            );
+            // 4 Hz +-10%, NOT the mode's 0.5/0.75/1.0/1.25 Hz preset
+            assert!(
+                (3.6..=4.4).contains(&v.rate_left) && (3.6..=4.4).contains(&v.rate_right),
+                "rate knob was discarded by the switch: {} / {}",
+                v.rate_left,
+                v.rate_right
+            );
+        }
+    }
+
+    /// ...but a knob nobody has touched must not override anything: the
+    /// mode presets are the hardware's character and have to survive.
+    #[test]
+    fn untouched_knobs_leave_the_mode_preset_alone() {
+        let mut chorus = Chorus::new(48000.0);
+        chorus.set_mode(ChorusMode::III);
+        assert_eq!(chorus.voices.len(), 2);
+        for v in &chorus.voices {
+            assert_eq!(v.depth, 0.0037, "mode III's own depth preset");
+        }
+        assert_eq!(chorus.voices[0].rate_left, 0.513);
+        assert_eq!(chorus.voices[1].rate_left, 0.863);
+    }
+
+    /// A single non-finite sample used to circulate in the BBD feedback
+    /// line forever — the chorus never produced audio again for the life of
+    /// the process. It must cost one sample, not the session.
+    #[test]
+    fn a_nan_does_not_kill_the_bbd_line() {
+        let mut chorus = Chorus::new(48000.0);
+        chorus.set_mode(ChorusMode::III);
+        chorus.process(f32::NAN, f32::INFINITY);
+        chorus.process_with_send(0.0, 0.0, f32::NAN, f32::NAN);
+        let mut energy = 0.0f32;
+        for n in 0..48000 {
+            let x = (2.0 * PI * 220.0 * n as f32 / 48000.0).sin() * 0.5;
+            let (l, r) = chorus.process(x, x);
+            assert!(l.is_finite() && r.is_finite(), "poisoned at sample {n}");
+            if n > 4800 {
+                energy += l * l;
+            }
+        }
+        assert!(energy > 1.0, "chorus should be passing audio again: {energy}");
     }
 
     #[test]

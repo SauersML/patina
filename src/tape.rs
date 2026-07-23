@@ -343,6 +343,12 @@ impl Tape {
     }
 
     pub fn process(&mut self, input_left: f32, input_right: f32) -> (f32, f32) {
+        // Nothing non-finite gets onto the tape. The transport delay would
+        // otherwise hold it for ~12 ms and the print-through wind for 1.35 s
+        // (see `process_channel`), long after the fault that produced it.
+        let input_left = if input_left.is_finite() { input_left } else { 0.0 };
+        let input_right = if input_right.is_finite() { input_right } else { 0.0 };
+
         // Keep the transport rolling even when idle so turning a knob up
         // never reads stale audio out of the delay line
         self.buffer_left[self.write] = input_left;
@@ -493,6 +499,16 @@ impl Tape {
         ];
         let recorded = self.down1[ch].down(d2[0], d2[1]);
 
+        // The finiteness net in `process` restores the magnetic path, but it
+        // runs AFTER this sample has already been laid down on the reel —
+        // and it does not reach the print-through wind. A non-finite
+        // `recorded` therefore came back as `echo` 1.35 s later, poisoned
+        // `print_lp`'s state permanently (a one-pole never leaves NaN), and
+        // from then on every sample tripped the net: the deck went silent
+        // for the life of the process. Screen it where the magnetic path
+        // ends, before anything stores it.
+        let recorded = if recorded.is_finite() { recorded } else { 0.0 };
+
         // --- The reel: print-through from adjacent winds, then dropouts ---
         let echo = self.print_buffer[ch][self.print_index];
         self.print_buffer[ch][self.print_index] = recorded;
@@ -533,6 +549,9 @@ impl Tape {
         self.trim_low[ch] = OnePoleHighPass::new(self.sample_rate, TRIM_LOW_HZ);
         self.trim_high[ch] = OnePoleHighPass::new(self.sample_rate, TRIM_HIGH_HZ);
         self.dc_block[ch] = OnePoleHighPass::new(self.sample_rate, 10.0);
+        // The print-through lowpass is part of this channel's retained
+        // state too: leaving it out let one bad sample survive the flush.
+        self.print_lp[ch] = OnePole::new(self.sample_rate, 2500.0);
     }
 }
 
@@ -1165,6 +1184,51 @@ mod tests {
         }
         let n = signal.len() as f64;
         (2.0 * (re * re + im * im).sqrt() / n) as f32
+    }
+
+    /// Regression: the finiteness net in `process` flushed the magnetic
+    /// path but not the reel. One non-finite sample was laid down on the
+    /// print-through wind, came back as `echo` PRINT_DELAY_S later, poisoned
+    /// `print_lp`'s state for good, and from then on every single sample
+    /// tripped the net — the deck went permanently silent 1.35 s after the
+    /// fault. Measured before the fix: 1.59 s and counting of hard zero at
+    /// the end of a 3 s run.
+    #[test]
+    fn one_nan_does_not_silence_the_deck_a_wind_later() {
+        for (drive, age) in [(0.5f32, 0.0f32), (0.5, 0.9)] {
+            let mut tape = Tape::new(FS);
+            tape.set_drive(drive);
+            tape.set_age(age);
+            tape.process(f32::NAN, f32::NAN);
+            tape.process(f32::INFINITY, -f32::INFINITY);
+            // Well past PRINT_DELAY_S, where the poisoned wind comes back
+            let total = (PRINT_DELAY_S * FS) as usize + FS as usize;
+            let mut energy = 0.0f64;
+            let mut longest_silence = 0usize;
+            let mut run = 0usize;
+            for (i, x) in sine(total, 220.0).enumerate() {
+                let (l, r) = tape.process(x, x);
+                assert!(l.is_finite() && r.is_finite(), "non-finite at {i}");
+                if l == 0.0 {
+                    run += 1;
+                    longest_silence = longest_silence.max(run);
+                } else {
+                    run = 0;
+                }
+                if i > total / 2 {
+                    energy += (l * l) as f64;
+                }
+            }
+            assert!(
+                longest_silence < (0.05 * FS) as usize,
+                "deck went silent for {} samples (drive={drive} age={age})",
+                longest_silence
+            );
+            assert!(
+                energy > 1.0,
+                "deck should still be recording (drive={drive} age={age}): {energy}"
+            );
+        }
     }
 
     #[test]

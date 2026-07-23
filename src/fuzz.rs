@@ -58,6 +58,14 @@ impl Fuzz {
     }
 
     pub fn process(&mut self, left: f32, right: f32) -> (f32, f32) {
+        // The ADAA shaper and the DC blocker both keep state, and neither
+        // can ever leave a non-finite value: ln(cosh(NaN)) is NaN and the
+        // blocker's pole feeds its own NaN back. The pedal is first on the
+        // master bus, so one bad sample used to kill the instrument for the
+        // life of the process. Screening the input is O(1).
+        let left = if left.is_finite() { left } else { 0.0 };
+        let right = if right.is_finite() { right } else { 0.0 };
+
         self.smoothed += (self.amount - self.smoothed) * 0.001;
         let w = self.smoothed;
         if w < 0.002 && self.amount < 0.002 {
@@ -98,6 +106,31 @@ mod tests {
             assert_eq!(l, x);
             assert_eq!(r, x);
         }
+    }
+
+    /// The ADAA shaper and the DC blocker both carry state across samples,
+    /// and neither can leave a non-finite value once it is in: `ln_cosh`
+    /// keeps returning NaN and the blocker's pole feeds NaN back forever.
+    /// The pedal sits FIRST on the master bus, so one bad sample from any
+    /// voice used to take the whole instrument down for good.
+    #[test]
+    fn a_nan_does_not_kill_the_pedal() {
+        let mut fuzz = Fuzz::new();
+        fuzz.set_amount(1.0);
+        for _ in 0..8000 {
+            fuzz.process(0.0, 0.0);
+        }
+        fuzz.process(f32::NAN, f32::INFINITY);
+        let mut energy = 0.0f32;
+        for n in 0..44100 {
+            let x = (TAU * 220.0 * n as f32 / 44100.0).sin() * 0.5;
+            let (l, r) = fuzz.process(x, x);
+            assert!(l.is_finite() && r.is_finite(), "poisoned at sample {n}");
+            if n > 4410 {
+                energy += l * l;
+            }
+        }
+        assert!(energy > 1.0, "fuzz should be passing audio again: {energy}");
     }
 
     #[test]

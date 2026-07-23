@@ -32,6 +32,25 @@ const MOD_RATES: [f32; 4] = [0.071, 0.113, 0.167, 0.229];
 /// Modulation depth, ms (a few cents of pitch at these rates).
 const MOD_DEPTH_MS: f32 = 0.16;
 
+/// Snap values that have decayed past all audibility to exactly zero.
+///
+/// An FDN tail is a pure exponential with nothing to stop it: once the
+/// stored energy passes ~1e-38 every line and every damping pole is full
+/// of DENORMALS, and it stays that way for tens of seconds because each
+/// pass only shaves a fraction of a dB. Denormal arithmetic costs 10-100x
+/// a normal multiply on x86, so the reverb's CPU load *rises* after the
+/// music stops — the classic cause of dropouts on an otherwise idle host.
+/// 1e-20 is -400 dBFS: seventeen orders of magnitude below the quietest
+/// thing anyone has ever heard, and eighteen above the denormal cliff.
+#[inline]
+fn flush(x: f32) -> f32 {
+    if x.abs() < 1e-20 {
+        0.0
+    } else {
+        x
+    }
+}
+
 struct DelayLine {
     buffer: Vec<f32>,
     write: usize,
@@ -47,7 +66,7 @@ impl DelayLine {
 
     #[inline]
     fn push(&mut self, x: f32) {
-        self.buffer[self.write] = x;
+        self.buffer[self.write] = flush(x);
         self.write = (self.write + 1) % self.buffer.len();
     }
 
@@ -110,7 +129,7 @@ impl OnePoleLp {
 
     #[inline]
     fn process(&mut self, x: f32) -> f32 {
-        self.state += self.a * (x - self.state);
+        self.state = flush(self.state + self.a * (x - self.state));
         self.state
     }
 
@@ -222,6 +241,17 @@ impl Reverb {
         send_left: f32,
         send_right: f32,
     ) -> (f32, f32) {
+        // The tank is a closed feedback network with no nonlinearity to
+        // trap a bad value: one non-finite sample entering it circulates
+        // forever and the reverb -- which sits across the whole master bus
+        // -- is dead until the plugin is reloaded. Screening the input is
+        // O(1) and turns a permanent kill into a one-sample dropout.
+        // (tape.rs takes the same position on its own magnetic state.)
+        let input_left = if input_left.is_finite() { input_left } else { 0.0 };
+        let input_right = if input_right.is_finite() { input_right } else { 0.0 };
+        let send_left = if send_left.is_finite() { send_left } else { 0.0 };
+        let send_right = if send_right.is_finite() { send_right } else { 0.0 };
+
         // Feed: mono sum through pre-delay and band limits into the
         // diffusion chain
         let mono = (input_left + input_right) * 0.5 * self.wet
@@ -393,5 +423,57 @@ mod tests {
             peak = peak.max(l.abs().max(r.abs()));
         }
         assert!(peak < 60.0, "reverb must stay bounded, peak {peak}");
+    }
+
+    /// Regression: the tail is a pure exponential, so once it passed the
+    /// f32 denormal cliff every tank line and damping pole was full of
+    /// denormals — and STAYED that way for tens of seconds, because each
+    /// pass only shaves a fraction of a dB. Denormal arithmetic is 10-100x
+    /// slower on x86, so the reverb's CPU cost went UP after the music
+    /// stopped. Measured before the fix: ~565,000 denormal output samples
+    /// in 20 s at 48 kHz, still going at the end.
+    #[test]
+    fn a_dead_tail_flushes_instead_of_going_denormal() {
+        for sr in [44100.0f32, 48000.0, 96000.0] {
+            let mut reverb = Reverb::new(sr);
+            reverb.set_wet(1.0);
+            reverb.set_decay(0.3);
+            reverb.process(1.0, 1.0);
+            let mut denormals = 0usize;
+            let n = (20.0 * sr) as usize;
+            for _ in 0..n {
+                let (l, r) = reverb.process(0.0, 0.0);
+                for v in [l, r] {
+                    if v != 0.0 && v.abs() < f32::MIN_POSITIVE {
+                        denormals += 1;
+                    }
+                }
+            }
+            assert_eq!(denormals, 0, "denormal output samples at {sr} Hz");
+            // and the tank really is at rest, not merely quiet
+            let (l, r) = reverb.process(0.0, 0.0);
+            assert_eq!((l, r), (0.0, 0.0), "tank should have flushed at {sr} Hz");
+        }
+    }
+
+    /// The tank is a closed feedback network across the whole master bus:
+    /// one non-finite sample used to circulate in it forever, so the
+    /// instrument stayed dead until the plugin was reloaded.
+    #[test]
+    fn a_nan_does_not_poison_the_tank() {
+        let mut reverb = Reverb::new(48000.0);
+        reverb.set_wet(0.5);
+        reverb.process(f32::NAN, f32::NAN);
+        reverb.process_with_send(0.0, 0.0, f32::INFINITY, f32::NAN);
+        let mut energy = 0.0f32;
+        for n in 0..48000 {
+            let x = (TAU * 220.0 * n as f32 / 48000.0).sin() * 0.5;
+            let (l, r) = reverb.process(x, x);
+            assert!(l.is_finite() && r.is_finite(), "poisoned at sample {n}");
+            if n > 4800 {
+                energy += l * l;
+            }
+        }
+        assert!(energy > 1.0, "reverb should be passing audio again: {energy}");
     }
 }

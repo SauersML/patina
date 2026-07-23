@@ -163,6 +163,12 @@ impl SlewLimiter {
 
     #[inline]
     pub fn process(&mut self, x: f32) -> f32 {
+        // `f32::clamp` PROPAGATES NaN, so a single non-finite sample on the
+        // summing bus used to lodge in `state` and every sample after it
+        // came out NaN — the master output was dead until the plugin was
+        // reloaded. This is the last stage every voice passes through, so
+        // it is also the last place to catch it.
+        let x = if x.is_finite() { x } else { self.state };
         let delta = (x - self.state).clamp(-self.max_step, self.max_step);
         self.state += delta;
         self.state
@@ -223,6 +229,28 @@ mod tests {
             warmed.pitch_mult
         );
         assert!(warmed.cutoff_oct.abs() < 0.02);
+    }
+
+    /// `f32::clamp` propagates NaN, so a single non-finite sample on the
+    /// summing bus used to stick in the limiter's state and every later
+    /// sample came out NaN — the master output was dead for the life of the
+    /// process. The limiter is the LAST thing every voice passes through.
+    #[test]
+    fn slew_limiter_recovers_from_a_nan() {
+        let sr = 48000.0;
+        let mut slew = SlewLimiter::new(sr);
+        slew.process(f32::NAN);
+        slew.process(f32::INFINITY);
+        let mut energy = 0.0f32;
+        for n in 0..48000 {
+            let x = (TAU * 220.0 * n as f32 / sr).sin() * 5.0;
+            let y = slew.process(x);
+            assert!(y.is_finite(), "poisoned at sample {n}");
+            if n > 100 {
+                energy += y * y;
+            }
+        }
+        assert!(energy > 1.0, "bus should be passing audio again: {energy}");
     }
 
     #[test]
