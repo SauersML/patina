@@ -22,7 +22,7 @@ use crate::panel::{
 /// source mixer, unison, routing, and the extended reverb), so it is taller
 /// than the original four-row layout.
 pub const EDITOR_WIDTH: u32 = 1200;
-pub const EDITOR_HEIGHT: u32 = 900;
+pub const EDITOR_HEIGHT: u32 = 810;
 
 /// What the editor needs from its host: parameter access by table index
 /// (the index into `host_params::param_defs()`, which is also the AU
@@ -376,9 +376,11 @@ impl EditorState {
 
         // Row 6 — the 909 rhythm section
         card(ui, "Rhythm Section · 909 · MIDI CH 10", tex.as_mut(), None, |ui| {
+            // 23 pads don't fit on one line at panel density — the last of
+            // them used to run off the right edge — so the board wraps onto
+            // two rows the way the hardware splits drums from cymbals.
+            ui.spacing_mut().item_spacing.x = 4.0;
             ui.horizontal(|ui| {
-                // The pads only fit across one row at panel density
-                ui.spacing_mut().item_spacing.x = 4.0;
                 self.drum_group(ui, "Kick", &[
                     ("bd_level", "Level"), ("bd_tune", "Tune"), ("bd_attack", "Attack"),
                     ("bd_decay", "Decay"), ("bd_sweep", "Sweep"), ("bd_drive", "Drive"),
@@ -393,7 +395,9 @@ impl EditorState {
                     ("rs_level", "Rim Lvl"), ("rs_tune", "Rim Tune"),
                     ("cp_level", "Clap Lvl"), ("cp_decay", "Clap Dec"),
                 ]);
-                panel::vseparator(ui, 90.0);
+            });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
                 self.drum_group(ui, "Hats", &[
                     ("hh_level", "Level"), ("hh_tune", "Tune"), ("hh_metal", "Metal"),
                     ("ch_decay", "Closed"), ("oh_decay", "Open"),
