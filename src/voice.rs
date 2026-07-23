@@ -131,9 +131,9 @@ pub struct Voice {
     /// unipolar/asymmetric pulses legitimately push DC through the ladder.
     dc_x1: f32,
     dc_y1: f32,
-    /// Pole of that DC block, derived from `DC_BLOCK_HZ` and the host
-    /// rate — it is a CAPACITOR, so its corner is fixed in hertz.
-    dc_a: f32,
+    /// Post-ladder coupling pole, derived from the rate so the corner sits
+    /// at the same frequency instead of doubling at 96 kHz.
+    dc_pole: f32,
     /// This card's sensitivity to the shared chassis state (rail and heat):
     /// every board reacts to the same environment, each by its own amount.
     substrate_sens: f32,
@@ -232,7 +232,10 @@ impl Voice {
             ring_leak,
             dc_x1: 0.0,
             dc_y1: 0.0,
-            dc_a: (-std::f32::consts::TAU * DC_BLOCK_HZ / sample_rate).exp(),
+            dc_pole: crate::smoothing::dc_blocker_pole(
+                crate::smoothing::DC_BLOCK_HZ,
+                sample_rate,
+            ),
             substrate_sens,
             vca_feedthrough,
             prev_env: 0.0,
@@ -609,7 +612,7 @@ impl Voice {
         // the operating-point DC the unipolar and asymmetric pulses push
         // through the ladder, before the VCA can gate it into thumps
         let filtered = {
-            let y = filtered - self.dc_x1 + self.dc_a * self.dc_y1;
+            let y = filtered - self.dc_x1 + self.dc_pole * self.dc_y1;
             self.dc_x1 = filtered;
             self.dc_y1 = y;
             y

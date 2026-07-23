@@ -104,6 +104,24 @@ impl Substrate {
     /// current that was just drawn, a genuine one-sample-lagged feedback
     /// loop through the power supply.
     pub fn step(&mut self, current_proxy: f32) -> SubstrateState {
+        // The rail feeds every expo converter in the instrument, so anything
+        // that lodges in `sag` is heard as the pitch and cutoff of the WHOLE
+        // machine, forever — `sag` is an IIR state with no path back out.
+        //
+        // A non-finite load currently fails to lodge only because
+        // `f32::min` is specified to return its non-NaN operand, so
+        // `NaN.min(4.0)` is 4.0. That is an IEEE accident, not a design:
+        // one refactor to `clamp` (which propagates NaN), or reordering the
+        // comparison, and this silently becomes a permanent NaN latch on
+        // every oscillator in the bank. Say what we mean instead.
+        // `current_proxy` is a summed magnitude, so it is also non-negative
+        // by contract — state that too rather than assume it.
+        let current_proxy = if current_proxy.is_finite() {
+            current_proxy.max(0.0)
+        } else {
+            0.0
+        };
+
         // Rail sag toward the load, through the local RC
         let target = SAG_FULL * current_proxy.min(4.0) * 0.25;
         self.sag += self.sag_a * (target - self.sag);
@@ -251,6 +269,41 @@ mod tests {
             }
         }
         assert!(energy > 1.0, "bus should be passing audio again: {energy}");
+    }
+
+    /// The chassis must not latch a bad load. It used to survive one only
+    /// because `f32::min` returns its non-NaN operand — this pins the
+    /// explicit screen, so a later `min` -> `clamp` cannot quietly turn
+    /// every oscillator's pitch into NaN for the life of the process.
+    #[test]
+    fn a_bad_load_does_not_latch_into_the_rail() {
+        let mut sub = Substrate::new(48000.0);
+        sub.force_warm();
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1e30] {
+            sub.step(bad);
+            let s = sub.step(bad);
+            assert!(
+                s.pitch_mult.is_finite() && s.cutoff_oct.is_finite(),
+                "{bad} latched into the rail"
+            );
+        }
+        // and the rail recovers to its quiet operating point
+        let mut s = sub.step(0.0);
+        for _ in 0..48000 {
+            s = sub.step(0.0);
+        }
+        assert!(
+            (s.pitch_mult - 1.0).abs() < 1e-3,
+            "rail should settle back to unity, got {}",
+            s.pitch_mult
+        );
+        // a negative "magnitude" must not push pitch the wrong way either
+        let quiet = sub.step(0.0).pitch_mult;
+        let negative = sub.step(-5.0).pitch_mult;
+        assert!(
+            (negative - quiet).abs() < 1e-6,
+            "negative load moved the rail: {quiet} -> {negative}"
+        );
     }
 
     #[test]

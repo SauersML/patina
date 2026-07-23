@@ -133,6 +133,9 @@ pub struct SpringReverb {
     // a peak-hold follower on what the PICKUPS are actually putting out
     send_tail: f32,
     tail_k: f32,
+    /// Knob de-zipper coefficient, derived from the rate so the engage
+    /// ramp lasts the same time at every sample rate.
+    smooth_k: f32,
     wet: f32,
     smoothed: f32,
 }
@@ -155,6 +158,10 @@ impl SpringReverb {
             // 250 ms release, expressed in seconds so it means the same
             // thing at 44.1, 48 and 96 kHz
             tail_k: (-1.0 / (0.25 * sample_rate)).exp(),
+            smooth_k: crate::smoothing::approach(
+                crate::smoothing::KNOB_SMOOTH_S,
+                sample_rate,
+            ),
             wet: 0.0,
             smoothed: 0.0,
         }
@@ -189,7 +196,7 @@ impl SpringReverb {
         let send_left = if send_left.is_finite() { send_left } else { 0.0 };
         let send_right = if send_right.is_finite() { send_right } else { 0.0 };
 
-        self.smoothed += (self.wet - self.smoothed) * 0.001;
+        self.smoothed += (self.wet - self.smoothed) * self.smooth_k;
         let w = self.smoothed;
         let send = (send_left + send_right) * 0.5;
         if w < 0.002 && self.wet < 0.002 && send.abs() < 1e-6 && self.send_tail < 1e-5 {

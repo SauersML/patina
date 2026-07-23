@@ -253,16 +253,24 @@ impl Default for ParamValues {
 struct DcBlocker {
     x1: f32,
     y1: f32,
+    pole: f32,
 }
 
 impl DcBlocker {
-    fn new() -> Self {
-        Self { x1: 0.0, y1: 0.0 }
+    fn new(sample_rate: f32) -> Self {
+        Self {
+            x1: 0.0,
+            y1: 0.0,
+            pole: crate::smoothing::dc_blocker_pole(
+                crate::smoothing::DC_BLOCK_HZ,
+                sample_rate,
+            ),
+        }
     }
 
     #[inline]
     fn process(&mut self, x: f32) -> f32 {
-        let y = x - self.x1 + 0.9955 * self.y1;
+        let y = x - self.x1 + self.pole * self.y1;
         self.x1 = x;
         self.y1 = y;
         y
@@ -389,6 +397,11 @@ pub struct VoiceManager {
     gain: f32, // smoothed master gain
     dc_left: DcBlocker,
     dc_right: DcBlocker,
+    /// Master-volume de-zipper coefficient, derived from the rate so the
+    /// fade lasts the same ~26 ms at 44.1, 48 and 96 kHz.
+    gain_smooth_k: f32,
+    /// The faster de-zipper, for the noise knob and the mixer strips.
+    knob_smooth_k: f32,
 }
 
 impl VoiceManager {
@@ -417,7 +430,7 @@ impl VoiceManager {
             reverb: Reverb::new(sample_rate),
             chorus: Chorus::new(sample_rate),
             tape: Tape::new(sample_rate),
-            fuzz: Fuzz::new(),
+            fuzz: Fuzz::new(sample_rate),
             noise_source: NoiseSource::new(sample_rate),
             noise_gain: 0.0,
             spring: SpringReverb::new(sample_rate),
@@ -442,8 +455,16 @@ impl VoiceManager {
             params,
             scope: VecDeque::with_capacity(SCOPE_LEN),
             gain: params.volume,
-            dc_left: DcBlocker::new(),
-            dc_right: DcBlocker::new(),
+            dc_left: DcBlocker::new(sample_rate),
+            dc_right: DcBlocker::new(sample_rate),
+            gain_smooth_k: crate::smoothing::approach(
+                crate::smoothing::GAIN_SMOOTH_S,
+                sample_rate,
+            ),
+            knob_smooth_k: crate::smoothing::approach(
+                crate::smoothing::KNOB_SMOOTH_S,
+                sample_rate,
+            ),
         }
     }
 
@@ -1113,7 +1134,7 @@ impl VoiceManager {
         // One shared noise generator distributed to every active voice
         // (903A / Juno-106 architecture) — filtered per voice, gated by
         // each voice's envelope, but a single correlated source
-        self.noise_gain += (self.params.noise - self.noise_gain) * 0.001;
+        self.noise_gain += (self.params.noise - self.noise_gain) * self.knob_smooth_k;
         let noise = if self.noise_gain > 1e-4 {
             // ARP spec: noise is ~20 V p-p at full level, twice program
             self.noise_source.next() * self.noise_gain * 0.8 * PROGRAM_V
@@ -1157,9 +1178,10 @@ impl VoiceManager {
         // the hardware, and unlike digital silence
         // Advance every mixer strip once per sample: smoothed gain and
         // pan (no zipper under automation), duck envelopes breathing back
+        let knob_k = self.knob_smooth_k;
         for m in self.channel_mix.values_mut() {
-            m.cur_gain += (m.gain - m.cur_gain) * 0.001;
-            m.cur_pan += (m.pan - m.cur_pan) * 0.001;
+            m.cur_gain += (m.gain - m.cur_gain) * knob_k;
+            m.cur_pan += (m.pan - m.cur_pan) * knob_k;
             m.duck_env *= m.duck_decay;
         }
 
@@ -1264,7 +1286,7 @@ impl VoiceManager {
         // once, at the bus — nowhere else.
         left = self.slew_left.process(left);
         right = self.slew_right.process(right);
-        self.gain += (self.params.volume - self.gain) * 0.0008;
+        self.gain += (self.params.volume - self.gain) * self.gain_smooth_k;
         let g = self.gain * 0.7 / PROGRAM_V;
         left *= g;
         right *= g;

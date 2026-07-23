@@ -47,7 +47,11 @@ editor = ["dep:egui"]
 
 [dependencies]
 parking_lot = "0.12.1"
-rand = "0.8.5"
+# No `rand`. Every random draw in this instrument happens on the audio
+# thread, and `rand::thread_rng()` costs a thread-local lookup plus a
+# ChaCha block state per call — the kind of per-sample overhead that gets a
+# plugin killed by its host. src/rng.rs is the one generator; not depending
+# on `rand` at all is what stops the habit coming back.
 
 cpal = { version = "0.15.2", optional = true }
 # wgpu renderer: custom WGSL paint callbacks drive the animated aurora and

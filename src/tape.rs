@@ -57,7 +57,7 @@
 // rejected). All four knobs at zero leaves the unit transparent, and every
 // parameter is freely automatable.
 
-use rand::Rng;
+use crate::rng::Rng;
 use std::f32::consts::PI;
 
 // --- Transport ---
@@ -103,6 +103,9 @@ const BARKHAUSEN: f32 = 0.0016;
 // --- Playback ---
 /// Playback head gap length, um.
 const GAP_UM: f32 = 1.2;
+/// Whole taps the gap window can span. The transit is 1.2 samples at
+/// 48 kHz and 2.4 at 96 kHz; 16 carries the model past 600 kHz.
+const GAP_MAX_TAPS: usize = 16;
 /// Effective head-to-tape spacing, um: fresh/clean vs worn/dirty.
 const SPACING_NEW_UM: f32 = 0.05;
 const SPACING_WORN_UM: f32 = 1.5;
@@ -110,6 +113,10 @@ const SPACING_WORN_UM: f32 = 1.5;
 const SPACING_DROPOUT_UM: f32 = 8.0;
 /// LF interchannel crosstalk (track fringing), linear gain below ~300 Hz.
 const CROSSTALK: f32 = 0.02;
+/// How fast the tape lifts off the head and settles back: the mechanical
+/// ramp of a dropout, not a filter coefficient. Was a hard-coded
+/// 0.004/sample, which is this at 48 kHz.
+const DROPOUT_RAMP_S: f32 = 0.0052;
 /// Print-through: adjacent-wind echo delay and base level.
 const PRINT_DELAY_S: f32 = 1.35;
 const PRINT_LEVEL: f32 = 0.0035;
@@ -151,7 +158,7 @@ pub struct Tape {
     up3: [Halfband; 2],
     hysteresis: [[JilesAtherton; N_LAYERS]; 2],
     barkhausen_level: f32,
-    noise_rng: XorShift32,
+    noise_rng: Rng,
     wallace_alpha: [[f32; N_LAYERS]; 2],
     wallace_stale: bool,
     wallace_state: [[[f32; 2]; N_LAYERS]; 2],
@@ -160,6 +167,13 @@ pub struct Tape {
     down3: [Halfband; 2],
 
     // The reel
+    /// The reel's own PRNG: dropout schedule and depth. Separate from the
+    /// oxide's so a dropout never perturbs the Barkhausen noise stream.
+    reel_rng: Rng,
+    /// Per-sample ramp coefficient for the tape lifting off / settling back
+    /// onto the head. A real dropout is a mechanical event with a duration;
+    /// derived from the rate so it stays ~5 ms instead of halving at 96 kHz.
+    dropout_k: f32,
     dropout_env: f32,
     dropout_target: f32,
     dropout_remaining: f32,
@@ -172,8 +186,13 @@ pub struct Tape {
     print_level: f32,
 
     // Playback side
+    /// Whole taps of the gap window, and the fractional remainder.
+    gap_taps: usize,
     gap_frac: f32,
-    gap_prev: [f32; 2],
+    /// 1 / gap_samples: the boxcar's normalisation.
+    gap_norm: f32,
+    /// `gap_hist[ch][k]` is the flux `k+1` samples ago.
+    gap_hist: [[f32; GAP_MAX_TAPS]; 2],
     head_bump: [PeakingFilter; 2],
     playback_eq: [Shelf; 2],
     dc_block: [OnePoleHighPass; 2],
@@ -190,11 +209,24 @@ impl Tape {
             *b = BIAS_AMP * (2.0 * PI * i as f32 / OS as f32).sin();
         }
 
-        // Gap loss as flux averaging over the gap transit time. The transit
-        // is ~1.2 samples at 48 kHz, so a fractional two-tap boxcar realizes
-        // the physical integral (and its sinc rolloff) almost exactly.
+        // Gap loss as flux averaging over the gap transit time: the head
+        // reads the MEAN magnetization under a GAP_UM-long window, which at
+        // tape speed spans `gap_samples` samples. A boxcar of that
+        // (non-integer) length is the physical integral, and its sinc
+        // rolloff IS the gap-loss curve — no EQ anywhere.
+        //
+        // The window is 1.11 samples at 44.1 kHz and 1.21 at 48 kHz, which a
+        // two-tap fractional average realizes exactly. It is 2.42 samples at
+        // 96 kHz, where a two-tap average silently stops being the model:
+        // the window saturates, the integral is taken over half the transit
+        // it should be, and the deck keeps a top end the physics says it has
+        // already lost. Averaging over as many whole taps as the window
+        // actually covers plus the remainder is the same filter at every
+        // rate, and collapses back to the two-tap form at 44.1 and 48 kHz.
         let gap_samples = (GAP_UM / TAPE_SPEED_UM_S) * sample_rate;
-        let gap_frac = (gap_samples - 1.0).clamp(0.0, 1.0);
+        let gap_taps = (gap_samples.floor() as usize).clamp(1, GAP_MAX_TAPS - 1);
+        let gap_frac = (gap_samples - gap_taps as f32).clamp(0.0, 1.0);
+        let gap_norm = 1.0 / (gap_taps as f32 + gap_frac);
 
         // Self-alignment, step 1: the deck derives its record EQ from its
         // own fresh-tape layer geometry, exactly like a technician with two
@@ -236,13 +268,15 @@ impl Tape {
             up3: [Halfband::new(); 2],
             hysteresis: [[JilesAtherton::new(); N_LAYERS]; 2],
             barkhausen_level: 0.0,
-            noise_rng: XorShift32::new(0x0DDB_1A5E),
+            noise_rng: Rng::new(0x0DDB_1A5E),
             wallace_alpha: [[1.0; N_LAYERS]; 2],
             wallace_stale: true,
             wallace_state: [[[0.0; 2]; N_LAYERS]; 2],
             down1: [Halfband::new(); 2],
             down2: [Halfband::new(); 2],
             down3: [Halfband::new(); 2],
+            reel_rng: Rng::new(crate::rng::seed(0x2EE1_C0DE)),
+            dropout_k: crate::smoothing::approach(DROPOUT_RAMP_S, sample_rate),
             dropout_env: 1.0,
             dropout_target: 1.0,
             dropout_remaining: 0.0,
@@ -253,8 +287,10 @@ impl Tape {
             print_index: 0,
             print_lp: [OnePole::new(sample_rate, 2500.0); 2],
             print_level: 0.0,
+            gap_taps,
             gap_frac,
-            gap_prev: [0.0; 2],
+            gap_norm,
+            gap_hist: [[0.0; GAP_MAX_TAPS]; 2],
             head_bump: [PeakingFilter::new(); 2],
             playback_eq: [playback_shelf; 2],
             dc_block: [OnePoleHighPass::new(sample_rate, 10.0); 2],
@@ -333,12 +369,14 @@ impl Tape {
     }
 
     /// Poisson arrival time for the next oxide dropout, in samples.
-    fn sample_dropout_interval(&self) -> f32 {
+    /// Drawn from the deck's own reel PRNG: this is reached from `process`
+    /// every time a dropout ends, so it must not touch a thread-local.
+    fn sample_dropout_interval(&mut self) -> f32 {
         let rate_per_second = self.age * self.age * 0.35;
         if rate_per_second < 1e-4 {
             return f32::MAX;
         }
-        let u: f32 = rand::thread_rng().gen_range(1e-6..1.0f32);
+        let u = self.reel_rng.range(1e-6, 1.0);
         -u.ln() * self.sample_rate / rate_per_second
     }
 
@@ -396,12 +434,11 @@ impl Tape {
         } else if self.next_dropout != f32::MAX {
             self.next_dropout -= 1.0;
             if self.next_dropout <= 0.0 {
-                let mut rng = rand::thread_rng();
-                self.dropout_target = 1.0 - rng.gen_range(0.25..0.85);
-                self.dropout_remaining = rng.gen_range(0.002..0.045) * self.sample_rate;
+                self.dropout_target = 1.0 - self.reel_rng.range(0.25, 0.85);
+                self.dropout_remaining = self.reel_rng.range(0.002, 0.045) * self.sample_rate;
             }
         }
-        self.dropout_env += 0.004 * (self.dropout_target - self.dropout_env);
+        self.dropout_env += self.dropout_k * (self.dropout_target - self.dropout_env);
 
         // --- Per-layer Wallace spacing loss, f0 = v / (2 pi d). Dropout lift
         // raises d for every layer while it lasts; the six exp() calls only
@@ -520,12 +557,28 @@ impl Tape {
         let tape_signal = with_echo * self.dropout_env;
 
         // --- Playback head: gap flux averaging, bump; playback amp: EQ, DC ---
-        let gapped =
-            (tape_signal + self.gap_frac * self.gap_prev[ch]) / (1.0 + self.gap_frac);
-        self.gap_prev[ch] = tape_signal;
+        let gapped = self.gap_average(ch, tape_signal);
         let bumped = self.head_bump[ch].process(gapped);
         let de_emphasized = self.playback_eq[ch].process(bumped);
         self.dc_block[ch].process(de_emphasized)
+    }
+
+    /// Fractional-length boxcar over the gap transit (see `Tape::new`).
+    #[inline]
+    fn gap_average(&mut self, ch: usize, x: f32) -> f32 {
+        let taps = self.gap_taps;
+        let hist = &mut self.gap_hist[ch];
+        // x[n], plus the whole taps behind it, plus the fractional one
+        let mut acc = x;
+        for h in hist.iter().take(taps - 1) {
+            acc += *h;
+        }
+        acc += self.gap_frac * hist[taps - 1];
+        for k in (1..taps).rev() {
+            hist[k] = hist[k - 1];
+        }
+        hist[0] = x;
+        acc * self.gap_norm
     }
 
     fn reset_channel(&mut self, ch: usize) {
@@ -537,7 +590,7 @@ impl Tape {
         self.down1[ch] = Halfband::new();
         self.down2[ch] = Halfband::new();
         self.down3[ch] = Halfband::new();
-        self.gap_prev[ch] = 0.0;
+        self.gap_hist[ch] = [0.0; GAP_MAX_TAPS];
         self.head_bump[ch] = {
             let mut f = PeakingFilter::new();
             f.set_peaking(self.sample_rate, 60.0, 1.2, 2.5 * self.drive.sqrt());
@@ -707,33 +760,6 @@ fn bilinear_root(sample_rate: f32, freq: f32) -> f32 {
     (1.0 - t) / (1.0 + t)
 }
 
-/// The same xorshift PRNG the oscillator and filter use: no thread-local
-/// lookups in the audio path.
-#[derive(Clone, Copy)]
-struct XorShift32(u32);
-
-impl XorShift32 {
-    fn new(seed: u32) -> Self {
-        Self(seed | 1)
-    }
-
-    #[inline]
-    fn next_u32(&mut self) -> u32 {
-        let mut x = self.0;
-        x ^= x << 13;
-        x ^= x >> 17;
-        x ^= x << 5;
-        self.0 = x;
-        x
-    }
-
-    /// Uniform in [-1, 1).
-    #[inline]
-    fn bipolar(&mut self) -> f32 {
-        (self.next_u32() >> 8) as f32 * (2.0 / 16_777_216.0) - 1.0
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Jiles-Atherton hysteresis
 // ---------------------------------------------------------------------------
@@ -858,7 +884,7 @@ struct ScrapeOscillator {
     dt: f32,
     w0: f32,
     friction_at_rest: f32,
-    rng: XorShift32,
+    rng: Rng,
 }
 
 const SCRAPE_HZ: f32 = 3400.0;
@@ -875,7 +901,7 @@ impl ScrapeOscillator {
             dt: 1.0 / sample_rate,
             w0: 2.0 * PI * SCRAPE_HZ,
             friction_at_rest: MU_DELTA * (-1.0 / STRIBECK_V).exp(),
-            rng: XorShift32::new(0x5C4A_9E17),
+            rng: Rng::new(0x5C4A_9E17),
         }
     }
 
@@ -1009,7 +1035,7 @@ struct SmoothedNoise {
     stage2: f32,
     alpha: f32,
     gain: f32,
-    rng: XorShift32,
+    rng: Rng,
 }
 
 impl SmoothedNoise {
@@ -1020,7 +1046,7 @@ impl SmoothedNoise {
             stage2: 0.0,
             alpha,
             gain: 1.0 / (0.577 * (alpha / 2.0).sqrt().max(1e-6)),
-            rng: XorShift32::new((cutoff * 1000.0) as u32),
+            rng: Rng::new((cutoff * 1000.0) as u32),
         }
     }
 
@@ -1228,6 +1254,81 @@ mod tests {
                 energy > 1.0,
                 "deck should still be recording (drive={drive} age={age}): {energy}"
             );
+        }
+    }
+
+    /// Regression: gap loss is a boxcar over the gap TRANSIT, and the
+    /// transit is 1.2 samples at 48 kHz but 2.4 at 96 kHz and 4.8 at
+    /// 192 kHz. The two-tap form clamped its window to 2 samples, so above
+    /// ~79 kHz the deck integrated over less of the gap than the physics
+    /// says and kept a top end it should already have lost. Measured at
+    /// 96 kHz before the fix: 13 kHz sat at +0.14 dB against the 1 kHz
+    /// reference where 48 kHz had it at -1.89; after, -0.77.
+    ///
+    /// The window must also still be EXACTLY the old two-tap average at
+    /// 44.1 and 48 kHz, where it was already correct — this generalization
+    /// is not allowed to revoice the deck at the rates people use.
+    #[test]
+    fn gap_loss_tracks_the_transit_at_every_rate() {
+        // The window the model intends, straight from the head geometry
+        let window = |sr: f32| (GAP_UM / TAPE_SPEED_UM_S) * sr;
+        for sr in [44100.0f32, 48000.0, 88200.0, 96000.0, 192000.0] {
+            let tape = Tape::new(sr);
+            let realized = tape.gap_taps as f32 + tape.gap_frac;
+            assert!(
+                (realized - window(sr)).abs() < 1e-4,
+                "at {sr} Hz the gap window is {realized} samples, physics says {}",
+                window(sr)
+            );
+            assert!((tape.gap_norm - 1.0 / realized).abs() < 1e-6);
+        }
+        // ...and at the rates it already handled, it is still literally the
+        // two-tap fractional average it always was
+        for sr in [44100.0f32, 48000.0] {
+            assert_eq!(Tape::new(sr).gap_taps, 1, "{sr} Hz must stay a two-tap average");
+        }
+    }
+
+    /// The deck claims +-3.5 dB across the band (see
+    /// `frequency_response_meets_cassette_spec`, which measures 48 kHz).
+    /// It has to hold that claim at EVERY rate a host might hand it, or the
+    /// model is quietly a different deck at 96 kHz. This pins the spread so
+    /// it cannot silently widen.
+    ///
+    /// Known limitation, measured and deliberate: the residual spread here
+    /// (~1 dB at 13 kHz between 48 and 96 kHz) is the record-EQ alignment.
+    /// `align_record_trim` solves the two trimmer gains from ANALOG
+    /// responses, but `OnePoleHighPass` is a backward-Euler discretization
+    /// whose deviation from that analog target grows with f/fs. Making the
+    /// solver agree with the implementation would flatten the deck at every
+    /// rate — and would also remove the +2.8 dB presence bump at 5 kHz that
+    /// 44.1/48 kHz renders currently have, i.e. it revoices the instrument.
+    /// That is a tone decision, not a bug fix, so it is left alone here.
+    #[test]
+    fn the_deck_holds_its_spec_at_every_sample_rate() {
+        for sr in [44100.0f32, 48000.0, 88200.0, 96000.0] {
+            let gain_at = |freq: f32| {
+                let mut tape = Tape::new(sr);
+                tape.set_drive(0.3);
+                let n = sr as usize;
+                let mut out = Vec::with_capacity(n / 2);
+                for i in 0..n {
+                    let x = (2.0 * PI * freq * i as f32 / sr).sin() * 0.5 * 0.2;
+                    let (l, _) = tape.process(x, x);
+                    if i >= n / 2 {
+                        out.push(l);
+                    }
+                }
+                tone_amplitude(&out, freq, sr) / 0.1
+            };
+            let reference = gain_at(1000.0);
+            for freq in [200.0, 500.0, 2000.0, 5000.0, 8000.0, 11000.0, 13000.0] {
+                let db = 20.0 * (gain_at(freq) / reference).log10();
+                assert!(
+                    db.abs() < 3.5,
+                    "at {sr} Hz, {freq} Hz is {db:+.2} dB against the 1 kHz reference"
+                );
+            }
         }
     }
 
@@ -1486,7 +1587,7 @@ mod tests {
         let mut record = Shelf::high_boost(FS, 1326.0, 8000.0);
         let mut playback = record.inverse();
         let mut worst = 0.0f32;
-        let mut rng = XorShift32::new(12345);
+        let mut rng = Rng::new(12345);
         for i in 0..4096 {
             let x = rng.bipolar();
             let y = playback.process(record.process(x));

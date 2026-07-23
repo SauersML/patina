@@ -23,6 +23,8 @@ pub mod oscillator;
 pub mod patch;
 pub mod render;
 pub mod reverb;
+pub mod rng;
+pub mod smoothing;
 pub mod sampler;
 pub mod song;
 pub mod spectral;

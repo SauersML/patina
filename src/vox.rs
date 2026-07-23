@@ -1333,8 +1333,12 @@ impl VoxBox {
             crate::vocoder::VocoderMode::Spectral => self.spectral.process(m, carrier),
             _ => self.vocoder.process(m, carrier),
         };
-        self.level += (self.level_t - self.level) * 0.001;
-        self.dry += (self.dry_t - self.dry) * 0.001;
+        let k = crate::smoothing::approach(
+            crate::smoothing::KNOB_SMOOTH_S,
+            self.sample_rate,
+        );
+        self.level += (self.level_t - self.level) * k;
+        self.dry += (self.dry_t - self.dry) * k;
         vocoded * self.level + m * self.dry * (0.9 * PROGRAM_V)
     }
 

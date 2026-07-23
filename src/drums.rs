@@ -93,22 +93,13 @@ pub fn note_from_name(s: &str) -> Option<u8> {
     })
 }
 
-#[inline]
-fn xorshift(state: &mut u32) -> u32 {
-    let mut x = *state;
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    *state = x;
-    x
-}
 
 /// White noise in -1..1, full bandwidth. The 909's own noise generator is
 /// digital — cascaded 4006 shift registers XOR-clocked (IC31-33) — so a
 /// modern PRNG is the same instrument, not an approximation of one.
 #[inline]
 fn white(state: &mut u32) -> f32 {
-    (xorshift(state) >> 8) as f32 / (1u32 << 23) as f32 - 1.0
+    crate::rng::bipolar(state)
 }
 
 /// The trigger pulse's accent voltage, 0..1. Velocity arrives unvalidated
@@ -724,6 +715,9 @@ pub struct DrumMachine {
     /// can't zipper the gain.
     drive: f32,
     drive_target: f32,
+    /// Bus drive/tone de-zipper coefficient, derived from the rate so the
+    /// ride lasts the same time at every sample rate.
+    bus_smooth_k: f32,
     bus_shaper_l: AdaaTanh,
     bus_shaper_r: AdaaTanh,
     /// Bus tone: a one-pole lowpass over the whole board — the "blanket
@@ -748,6 +742,10 @@ impl DrumMachine {
             noise_rng: 0x6D2B_79F5,
             drive: 0.0,
             drive_target: 0.0,
+            bus_smooth_k: crate::smoothing::approach(
+                crate::smoothing::GAIN_SMOOTH_S,
+                sample_rate,
+            ),
             bus_shaper_l: AdaaTanh::new(),
             bus_shaper_r: AdaaTanh::new(),
             tone: 1.0,
@@ -823,7 +821,7 @@ impl DrumMachine {
         let mut r = bd + sd + rs * 0.38 + cp * 0.56 + hh * 0.54;
 
         // Bus drive: the mixer channel into the red. Unity when off.
-        self.drive += (self.drive_target - self.drive) * 0.0008;
+        self.drive += (self.drive_target - self.drive) * self.bus_smooth_k;
         if self.drive > 1e-3 {
             let g = 1.0 + 7.0 * self.drive;
             let pv = crate::oscillator::PROGRAM_V;
@@ -837,7 +835,7 @@ impl DrumMachine {
         // Bus tone: one pole over the summed kit, after the drive so a
         // driven kit still darkens like a desk EQ post-insert. At 1.0 the
         // corner sits near 18 kHz — audibly a wire.
-        self.tone += (self.tone_target - self.tone) * 0.0008;
+        self.tone += (self.tone_target - self.tone) * self.bus_smooth_k;
         if self.tone < 0.999 {
             let fc = 900.0 * (18000.0f32 / 900.0).powf(self.tone);
             let k = 1.0 - (-std::f32::consts::TAU * fc / self.sample_rate).exp();

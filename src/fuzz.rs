@@ -20,16 +20,24 @@ const BIAS: f32 = 0.14;
 struct DcBlock {
     x1: f32,
     y1: f32,
+    pole: f32,
 }
 
 impl DcBlock {
-    fn new() -> Self {
-        Self { x1: 0.0, y1: 0.0 }
+    fn new(sample_rate: f32) -> Self {
+        Self {
+            x1: 0.0,
+            y1: 0.0,
+            pole: crate::smoothing::dc_blocker_pole(
+                crate::smoothing::DC_BLOCK_HZ,
+                sample_rate,
+            ),
+        }
     }
 
     #[inline]
     fn process(&mut self, x: f32) -> f32 {
-        let y = x - self.x1 + 0.9955 * self.y1;
+        let y = x - self.x1 + self.pole * self.y1;
         self.x1 = x;
         self.y1 = y;
         y
@@ -39,17 +47,24 @@ impl DcBlock {
 pub struct Fuzz {
     amount: f32,
     smoothed: f32,
+    /// Knob de-zipper coefficient, derived from the rate so the engage
+    /// ramp lasts the same time at 44.1, 48 and 96 kHz.
+    smooth_k: f32,
     adaa: [AdaaTanh; 2],
     dc: [DcBlock; 2],
 }
 
 impl Fuzz {
-    pub fn new() -> Self {
+    pub fn new(sample_rate: f32) -> Self {
         Self {
             amount: 0.0,
             smoothed: 0.0,
+            smooth_k: crate::smoothing::approach(
+                crate::smoothing::KNOB_SMOOTH_S,
+                sample_rate,
+            ),
             adaa: [AdaaTanh::new(), AdaaTanh::new()],
-            dc: [DcBlock::new(), DcBlock::new()],
+            dc: [DcBlock::new(sample_rate), DcBlock::new(sample_rate)],
         }
     }
 
@@ -66,7 +81,7 @@ impl Fuzz {
         let left = if left.is_finite() { left } else { 0.0 };
         let right = if right.is_finite() { right } else { 0.0 };
 
-        self.smoothed += (self.amount - self.smoothed) * 0.001;
+        self.smoothed += (self.amount - self.smoothed) * self.smooth_k;
         let w = self.smoothed;
         if w < 0.002 && self.amount < 0.002 {
             return (left, right);
@@ -98,7 +113,7 @@ mod tests {
 
     #[test]
     fn bypass_at_zero() {
-        let mut fuzz = Fuzz::new();
+        let mut fuzz = Fuzz::new(44100.0);
         fuzz.set_amount(0.0);
         for n in 0..1000 {
             let x = (TAU * 220.0 * n as f32 / 44100.0).sin() * 0.5;
@@ -115,7 +130,7 @@ mod tests {
     /// voice used to take the whole instrument down for good.
     #[test]
     fn a_nan_does_not_kill_the_pedal() {
-        let mut fuzz = Fuzz::new();
+        let mut fuzz = Fuzz::new(44100.0);
         fuzz.set_amount(1.0);
         for _ in 0..8000 {
             fuzz.process(0.0, 0.0);
@@ -135,7 +150,7 @@ mod tests {
 
     #[test]
     fn saturates_and_stays_bounded() {
-        let mut fuzz = Fuzz::new();
+        let mut fuzz = Fuzz::new(44100.0);
         fuzz.set_amount(1.0);
         // Let the engage smoothing settle
         for _ in 0..8000 {

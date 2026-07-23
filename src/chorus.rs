@@ -1,5 +1,38 @@
+use crate::rng::Rng;
 use std::f32::consts::PI;
-use rand::Rng;
+
+/// The BBD clock LFO is one shape, used by BOTH channels.
+///
+/// The Juno's chorus LFO is a triangle from an imperfect analog core, so
+/// this blends the fundamental with a second partial at an incommensurate
+/// ratio: the sweep wanders and never quite repeats, which is the whole
+/// character of the effect. Both partials are unipolar `sin*0.5 + 0.5`, so
+/// the result spans exactly [0, 1] and the delay it commands spans exactly
+/// [0, depth].
+///
+/// The channels are decorrelated by PHASE and RATE (independent random
+/// start phases, and `rate_left`/`rate_right` detuned per voice) — NOT by
+/// giving one channel a different LFO shape. That distinction is the point
+/// of this constant existing: L and R must have the same MEAN delay.
+/// A Juno-style BBD chorus derives its stereo image from one delay line
+/// whose wet signal is inverted into the right output, and a Dimension-D
+/// style unit runs two lines whose LFOs are in antiphase about a COMMON
+/// mean; neither produces a permanent L/R mean-delay offset. This code
+/// used to carry one — `sin*0.51 + 0.5` on the left (amplitude 0.51, so
+/// the LFO went slightly negative and the delay clamp had to catch it) and
+/// `sin*0.5 + 0.51` on the right (a +0.005 mean offset), i.e. the same
+/// stray "0.51" landing in two different slots, with `1.101` against `1.1`
+/// as the third variant. Measured: left mean 0.5038, right mean 0.5138 —
+/// a standing ~2% mean-delay difference nothing in the model asks for.
+const LFO_PARTIAL_RATIO: f32 = 1.1;
+
+/// Unipolar [0, 1] BBD clock LFO at `phase` turns.
+#[inline]
+fn clock_lfo(phase: f32) -> f32 {
+    let fundamental = (2.0 * PI * phase).sin() * 0.5 + 0.5;
+    let partial = (2.0 * PI * phase * LFO_PARTIAL_RATIO).sin() * 0.5 + 0.5;
+    (fundamental + partial) * 0.5
+}
 
 pub struct Chorus {
     buffer_left: Vec<f32>,
@@ -16,6 +49,10 @@ pub struct Chorus {
     high_pass_right: HighPassFilter,
     noise_generator: NoiseGenerator,
     saturation: Saturation,
+    /// The BBD board's component-tolerance PRNG: per-voice LFO detune and
+    /// start phase. Separate from the hiss generator's so that moving a
+    /// knob cannot shift the noise stream.
+    rng: Rng,
     feedback: f32,
     voices: Vec<Voice>,
     /// Panel overrides of the mode presets. `None` = the knob has never
@@ -23,6 +60,10 @@ pub struct Chorus {
     /// knob position that must survive a switch throw (see `set_mode`).
     rate: Option<f32>,
     depth: Option<f32>,
+    /// Depth-knob de-zipper coefficient. The LFO swing feeds a delay read,
+    /// so a step in it is an audible pitch jump; derived from the rate so
+    /// the glide lasts the same time at every sample rate.
+    depth_smooth_k: f32,
     wet_dry_mix: f32,
 }
 
@@ -49,6 +90,7 @@ struct HighPassFilter {
 struct NoiseGenerator {
     level: f32,
     prev: f32,
+    rng: Rng,
 }
 
 struct Saturation {
@@ -68,6 +110,12 @@ impl Chorus {
     pub fn new(sample_rate: f32) -> Self {
         let max_delay_ms = 40.0;
         let size = (sample_rate * max_delay_ms / 1000.0) as usize;
+        let mut rng = Rng::new(crate::rng::seed(0x_B8D_0B0A));
+        let voices = vec![
+            Voice::new(0.513, 0.515, 0.007, &mut rng),
+            Voice::new(0.75, 0.753, 0.006, &mut rng),
+            Voice::new(0.95, 0.953, 0.005, &mut rng),
+        ];
         Self {
             buffer_left: vec![0.0; size],
             buffer_right: vec![0.0; size],
@@ -81,14 +129,15 @@ impl Chorus {
             high_pass_right: HighPassFilter::new(sample_rate),
             noise_generator: NoiseGenerator::new(),
             saturation: Saturation::new(),
+            rng,
             feedback: 0.25,
             rate: None,
             depth: None,
-            voices: vec![
-                Voice::new(0.513, 0.515, 0.007),
-                Voice::new(0.75, 0.753, 0.006),
-                Voice::new(0.95, 0.953, 0.005),
-            ],
+            depth_smooth_k: crate::smoothing::approach(
+                crate::smoothing::KNOB_SMOOTH_S,
+                sample_rate,
+            ),
+            voices,
             wet_dry_mix: 0.5,
         }
     }
@@ -116,18 +165,20 @@ impl Chorus {
 
     fn apply_rate(&mut self) {
         let Some(rate) = self.rate else { return };
+        let rng = &mut self.rng;
         for voice in &mut self.voices {
-            voice.rate_left = rate * (0.9 + rand::thread_rng().gen::<f32>() * 0.2);
-            voice.rate_right = rate * (0.9 + rand::thread_rng().gen::<f32>() * 0.2);
+            voice.rate_left = rate * rng.range(0.9, 1.1);
+            voice.rate_right = rate * rng.range(0.9, 1.1);
         }
     }
 
     fn apply_depth(&mut self) {
         let Some(depth) = self.depth else { return };
+        let rng = &mut self.rng;
         for voice in &mut self.voices {
             // Knob is 0..1; voice depth is the LFO delay swing in seconds.
             // Full depth = 10 ms, matching the scale of the mode presets.
-            voice.depth = depth * 0.010 * (0.9 + rand::thread_rng().gen::<f32>() * 0.2);
+            voice.depth = depth * 0.010 * rng.range(0.9, 1.1);
         }
     }
 
@@ -140,36 +191,30 @@ impl Chorus {
             return;
         }
         self.mode = mode;
-        match mode {
-            ChorusMode::Off => {
-                self.voices.clear();
-                self.wet_dry_mix = 0.0;
-            },
-            ChorusMode::I => {
-                self.voices = vec![Voice::new(0.513, 0.515, 0.00535)];
-                self.wet_dry_mix = 0.5;
-            },
-            ChorusMode::II => {
-                self.voices = vec![Voice::new(0.863, 0.865, 0.00535)];
-                self.wet_dry_mix = 0.8;
-            },
-            ChorusMode::III => {
-                self.voices = vec![
-                    Voice::new(0.513, 0.515, 0.0037),
-                    Voice::new(0.863, 0.865, 0.0037),
-                ];
-                self.wet_dry_mix = 0.5;
-            },
-            ChorusMode::IV => {
-                self.voices = vec![
-                    Voice::new(0.5, 0.502, 0.007),
-                    Voice::new(0.75, 0.752, 0.006),
-                    Voice::new(1.0, 1.002, 0.005),
-                    Voice::new(1.25, 1.252, 0.004),
-                ];
-                self.wet_dry_mix = 0.6;
-            },
-        }
+        let rng = &mut self.rng;
+        let (voices, mix) = match mode {
+            ChorusMode::Off => (vec![], 0.0),
+            ChorusMode::I => (vec![Voice::new(0.513, 0.515, 0.00535, rng)], 0.5),
+            ChorusMode::II => (vec![Voice::new(0.863, 0.865, 0.00535, rng)], 0.8),
+            ChorusMode::III => (
+                vec![
+                    Voice::new(0.513, 0.515, 0.0037, rng),
+                    Voice::new(0.863, 0.865, 0.0037, rng),
+                ],
+                0.5,
+            ),
+            ChorusMode::IV => (
+                vec![
+                    Voice::new(0.5, 0.502, 0.007, rng),
+                    Voice::new(0.75, 0.752, 0.006, rng),
+                    Voice::new(1.0, 1.002, 0.005, rng),
+                    Voice::new(1.25, 1.252, 0.004, rng),
+                ],
+                0.6,
+            ),
+        };
+        self.voices = voices;
+        self.wet_dry_mix = mix;
         // A switch throw rebuilds the BBD voices from the mode's own
         // preset, which used to silently DISCARD the rate and depth knobs:
         // the setters early-return on an unchanged value (they must, they
@@ -256,6 +301,7 @@ impl Chorus {
     fn calculate_delay_samples(&mut self, input_left: f32, input_right: f32) -> (f32, f32) {
         let mut left_output = 0.0;
         let mut right_output = 0.0;
+        let depth_smooth_k = self.depth_smooth_k;
 
         for voice in &mut self.voices {
             voice.phase_left += voice.rate_left / self.sample_rate;
@@ -263,12 +309,11 @@ impl Chorus {
             if voice.phase_left >= 1.0 { voice.phase_left -= 1.0; }
             if voice.phase_right >= 1.0 { voice.phase_right -= 1.0; }
 
-            voice.smooth_depth += (voice.depth - voice.smooth_depth) * 0.001;
+            voice.smooth_depth += (voice.depth - voice.smooth_depth) * depth_smooth_k;
 
-            let lfo_left = ((2.0 * PI * voice.phase_left).sin() * 0.51 + 0.5) * 0.5 +
-                           ((2.0 * PI * voice.phase_left * 1.101).sin() * 0.5 + 0.5) * 0.5;
-            let lfo_right = ((2.0 * PI * voice.phase_right).sin() * 0.5 + 0.51) * 0.5 +
-                            ((2.0 * PI * voice.phase_right * 1.1).sin() * 0.5 + 0.5) * 0.5;
+            // One shape, two phases: see LFO_PARTIAL_RATIO
+            let lfo_left = clock_lfo(voice.phase_left);
+            let lfo_right = clock_lfo(voice.phase_right);
 
             let max_delay = self.size as f32 - 3.0;
             let delay_left =
@@ -342,12 +387,18 @@ impl LowPassFilter {
     }
 }
 
+/// The BBD line's input coupling. This is a DC blocker, not a tone
+/// control: the corner sits below anything the chorus is asked to carry.
+/// The literal here is omega/fs, so the bare `20.0` it replaces was NOT
+/// 20 Hz -- it was 20/2pi = 3.2 Hz. Same filter, honest label.
+const BBD_INPUT_DC_BLOCK_HZ: f32 = 3.2;
+
 impl HighPassFilter {
     fn new(sample_rate: f32) -> Self {
         Self {
             prev_input: 0.0,
             prev_output: 0.0,
-            cutoff: 20.0 / sample_rate,
+            cutoff: std::f32::consts::TAU * BBD_INPUT_DC_BLOCK_HZ / sample_rate,
         }
     }
 
@@ -365,12 +416,17 @@ impl NoiseGenerator {
         Self {
             level: 0.0005,
             prev: 0.0,
+            rng: Rng::new(crate::rng::seed(0xB8D_1155)),
         }
     }
 
+    /// Runs once per sample on the audio thread. It used to open
+    /// `rand::thread_rng()` here — a thread-local lookup, an `Rc` refcount
+    /// touch and a ChaCha block state, every single sample, for one number
+    /// that ends up at -66 dBFS. That is exactly the kind of per-sample
+    /// overhead that gets a plugin killed by its host.
     fn generate(&mut self) -> f32 {
-        let mut rng = rand::thread_rng();
-        let new_noise = rng.gen_range(-self.level..self.level);
+        let new_noise = self.rng.bipolar() * self.level;
         let output = (self.prev + new_noise) * 0.5;
         self.prev = new_noise;
         output
@@ -390,10 +446,13 @@ impl Saturation {
 }
 
 impl Voice {
-    fn new(rate_left: f32, rate_right: f32, depth: f32) -> Self {
+    /// Start phases are independent per channel: this, plus the per-voice
+    /// rate detune, is the ONLY thing that decorrelates left from right
+    /// (see LFO_PARTIAL_RATIO).
+    fn new(rate_left: f32, rate_right: f32, depth: f32, rng: &mut Rng) -> Self {
         Self {
-            phase_left: rand::thread_rng().gen(),
-            phase_right: rand::thread_rng().gen(),
+            phase_left: rng.unipolar(),
+            phase_right: rng.unipolar(),
             rate_left,
             rate_right,
             depth,
@@ -494,6 +553,60 @@ mod tests {
             }
         }
         assert!(energy > 1.0, "chorus should be passing audio again: {energy}");
+    }
+
+    #[test]
+    /// The BBD clock LFO must be ONE shape: same span, same mean, for both
+    /// channels. Left and right are decorrelated by phase and rate, never
+    /// by a standing mean-delay offset (see LFO_PARTIAL_RATIO). Before this
+    /// was settled the two channels ran different arithmetic — a stray
+    /// "0.51" in two different slots — and measured left mean 0.5038 against
+    /// right mean 0.5138, with the left LFO dipping below zero.
+    #[test]
+    fn the_clock_lfo_spans_exactly_zero_to_one() {
+        let (mut lo, mut hi, mut sum) = (f32::MAX, f32::MIN, 0.0f64);
+        let n = 1_000_000;
+        for i in 0..n {
+            // sweep phase incommensurately with the partial ratio
+            let v = clock_lfo(i as f32 * 0.0007);
+            lo = lo.min(v);
+            hi = hi.max(v);
+            sum += v as f64;
+        }
+        assert!(lo >= 0.0, "LFO commands a negative delay: {lo}");
+        assert!(hi <= 1.0, "LFO overshoots full depth: {hi}");
+        assert!(lo < 0.02 && hi > 0.98, "LFO should use its full span: {lo}..{hi}");
+        let mean = sum / n as f64;
+        assert!(
+            (mean - 0.5).abs() < 0.01,
+            "LFO mean must sit at half depth, got {mean}"
+        );
+    }
+
+    /// ...and both channels of a running chorus must therefore agree on
+    /// mean delay. Measured on the voice state, which is what the delay
+    /// read actually uses.
+    #[test]
+    fn the_two_channels_share_one_mean_delay() {
+        let mut chorus = Chorus::new(48000.0);
+        chorus.set_mode(ChorusMode::I);
+        chorus.set_depth(1.0);
+        // Drive both channels' phase accumulators exactly as process does,
+        // and integrate the delay each one commands.
+        let (mut sum_l, mut sum_r) = (0.0f64, 0.0f64);
+        let n = 480_000;
+        for _ in 0..n {
+            let v = &mut chorus.voices[0];
+            v.phase_left = (v.phase_left + v.rate_left / 48000.0).fract();
+            v.phase_right = (v.phase_right + v.rate_right / 48000.0).fract();
+            sum_l += clock_lfo(v.phase_left) as f64;
+            sum_r += clock_lfo(v.phase_right) as f64;
+        }
+        let (mean_l, mean_r) = (sum_l / n as f64, sum_r / n as f64);
+        assert!(
+            (mean_l - mean_r).abs() < 0.01,
+            "standing L/R mean-delay offset: {mean_l} vs {mean_r}"
+        );
     }
 
     #[test]

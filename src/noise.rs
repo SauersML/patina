@@ -29,15 +29,6 @@ pub struct NoiseSource {
     lp_a: f32,
 }
 
-#[inline]
-fn xorshift(state: &mut u32) -> u32 {
-    let mut x = *state;
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    *state = x;
-    x
-}
 
 /// Trapezoidal one-pole coefficient placing the -3 dB corner exactly on
 /// `fc` at `sample_rate`. `fc` is held below Nyquist so `tan` cannot run
@@ -63,7 +54,7 @@ impl NoiseSource {
 
     #[inline]
     pub fn next(&mut self) -> f32 {
-        let white = (xorshift(&mut self.rng) >> 8) as f32 / (1u32 << 23) as f32 - 1.0;
+        let white = crate::rng::bipolar(&mut self.rng);
         // Avalanche-amplifier clipping: soft, slightly hot
         let x = white * 1.6;
         let clipped = x * (27.0 + x * x) / (27.0 + 9.0 * x * x);

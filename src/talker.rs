@@ -212,6 +212,10 @@ pub struct Talker {
     // "cutoff" swings than the speech itself. A wah, played by a mouth.
     bright_lp: f32,
     bright_split_k: f32,
+    /// Brightness-detector time constant, in the ANALYSIS domain (the
+    /// tract runs decimated), so the tracker averages over the same
+    /// milliseconds at every sample rate.
+    bright_k: f32,
     bright_hf: f32,
     bright_total: f32,
     wah_fc_target: f32,
@@ -269,6 +273,7 @@ impl Talker {
             hp_k: 1.0 - (-std::f32::consts::TAU * 280.0 / sample_rate).exp(),
             bright_lp: 0.0,
             bright_split_k: 1.0 - (-std::f32::consts::TAU * 900.0 / ar).exp(),
+            bright_k: crate::smoothing::approach(0.0052, ar),
             bright_hf: 0.0,
             bright_total: 1e-6,
             wah_fc_target: 800.0,
@@ -376,8 +381,8 @@ impl Talker {
         // expanded (^1.5) and mapped onto a log cutoff sweep
         self.bright_lp += self.bright_split_k * (m - self.bright_lp);
         let hf = m - self.bright_lp;
-        self.bright_hf += 0.004 * (hf.abs() - self.bright_hf);
-        self.bright_total += 0.004 * (m.abs() - self.bright_total);
+        self.bright_hf += self.bright_k * (hf.abs() - self.bright_hf);
+        self.bright_total += self.bright_k * (m.abs() - self.bright_total);
         // Calibrated on sung vowels (measured HF ratios ~0.1-0.35), not
         // speech fricatives: typical singing sits mid-open, bright
         // vowels reach the top, and the floor starts at 500 Hz so the

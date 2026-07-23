@@ -133,20 +133,7 @@ pub struct LadderFilter {
     max_iters_seen: usize,
 }
 
-#[inline]
-fn xorshift(state: &mut u32) -> u32 {
-    let mut x = *state;
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    *state = x;
-    x
-}
-
-#[inline]
-fn rand01(state: &mut u32) -> f32 {
-    (xorshift(state) >> 8) as f32 / (1u32 << 24) as f32
-}
+use crate::rng::unipolar as rand01;
 
 impl LadderFilter {
     pub fn new(sample_rate: f32, seed: u32) -> Self {
