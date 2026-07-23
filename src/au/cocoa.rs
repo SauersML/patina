@@ -17,10 +17,11 @@
 //      drive parameters through the AudioUnit proxy API (which bridges
 //      across the process boundary), never touching the engine directly.
 //
-// Two classes are registered with the Objective-C runtime at load (the view
-// service instantiates the factory by name, so it must exist there before
-// any of our other code runs). Class names carry the crate version so two
-// loaded Patina versions can't collide in the runtime's flat namespace.
+// The factory itself is a compiled ObjC class (src/au/factory.m) so the
+// host can resolve it by name through the bundle; the NSView subclass is
+// built at runtime, lazily, the first time a view is actually requested.
+// Nothing here may run from a library initializer: this code has to load
+// AppKit, and dlopen under the dyld lock deadlocks the hosting process.
 
 #![allow(non_snake_case)]
 
@@ -28,7 +29,7 @@ use std::ffi::{c_char, c_void, CString};
 use std::mem::transmute;
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Once};
+use std::sync::Arc;
 use std::time::Instant;
 
 use egui::{pos2, vec2, Event, Modifiers, PointerButton, Pos2, Rect};
@@ -41,20 +42,6 @@ use crate::editor::{EditorState, ParamHost, EDITOR_HEIGHT, EDITOR_WIDTH};
 /// view. Apple reserves IDs below 64000; this sits in the third-party range.
 pub const PROP_PATINA_UNIT: u32 = 64001;
 
-/// Diagnostic trace, append-only to a world-writable file. The audio
-/// hosting service can write here (verified); read with
-///   cat /tmp/patina-au.log
-pub(super) fn trace(msg: &str) {
-    use std::io::Write;
-    for path in ["/tmp/patina-au.log", "/private/tmp/patina-au.log"] {
-        if let Ok(mut f) =
-            std::fs::OpenOptions::new().create(true).append(true).open(path)
-        {
-            let _ = writeln!(f, "[pid {}] {}", std::process::id(), msg);
-            break;
-        }
-    }
-}
 
 /// Editor refresh rate. 30 Hz keeps arcs and hover smooth without burning
 /// CPU on a mostly static panel.
@@ -180,19 +167,6 @@ extern "C" {
     ) -> OSStatus;
 }
 
-/// Register the view + factory classes at dylib load, in whatever process
-/// loads us. The out-of-process view bridge instantiates the factory in the
-/// host's UI process via NSClassFromString, so the class must already exist
-/// there — and nothing else of ours runs in that process first.
-#[used]
-#[cfg_attr(target_os = "macos", link_section = "__DATA,__mod_init_func")]
-static LOAD_CTOR: extern "C" fn() = {
-    extern "C" fn ctor() {
-        trace("LOAD_CTOR: dylib loaded, registering classes");
-        register_classes();
-    }
-    ctor
-};
 
 // msgSend, cast per call site to the concrete signature.
 unsafe fn send0(obj: Id, s: Sel) -> Id {
@@ -365,7 +339,6 @@ impl ViewState {
     /// display cycle — which the out-of-process AU view service pumps, unlike
     /// a private NSTimer or manual layer.contents push.
     unsafe fn draw_current(&mut self) {
-        DREW.call_once(|| trace("draw_current: first drawRect fired"));
         let ppp = self.ppp();
         let raw = egui::RawInput {
             screen_rect: Some(Rect::from_min_size(
@@ -455,7 +428,6 @@ impl ViewState {
 // The two runtime classes: the software-rendered view and the CocoaUI factory
 // ---------------------------------------------------------------------------
 
-static DREW: Once = Once::new();
 static VIEW_CLASS: AtomicUsize = AtomicUsize::new(0);
 static FACTORY_CLASS: AtomicUsize = AtomicUsize::new(0);
 
@@ -478,12 +450,11 @@ extern "C" {
 }
 
 /// Register both Objective-C classes. Safe — and necessary — to call
-/// repeatedly: the first attempt runs from `__mod_init_func` while the
-/// dylib is still loading, and AppKit may not be mapped yet. `NSView` then
-/// doesn't resolve, the view class can't be built, and a one-shot
-/// (`Once`) registration would leave VIEW_CLASS null forever, so
-/// `uiViewForAudioUnit:` would hand the host nil and the panel would never
-/// appear. Each call retries whatever is still missing.
+/// repeatedly, and is only ever called lazily (never from a library
+/// initializer). `NSView` doesn't resolve until AppKit is mapped, so a
+/// one-shot registration that ran too early would leave VIEW_CLASS null
+/// forever and `uiViewForAudioUnit:` could only hand the host nil. Each
+/// call retries whatever is still missing.
 pub fn register_classes() {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     if VIEW_CLASS.load(Ordering::Acquire) != 0 && FACTORY_CLASS.load(Ordering::Acquire) != 0 {
@@ -515,11 +486,11 @@ unsafe fn register_view_class() {
         return;
     }
     // NSView only resolves once AppKit is mapped, and the AU hosting
-    // service does not link it — so during dylib init (and even when the
-    // host asks for the CocoaUI property) the class is simply absent. Pull
-    // AppKit in ourselves rather than hoping somebody else already did;
-    // otherwise the view class never exists and uiViewForAudioUnit: can
-    // only ever hand the host nil.
+    // service does not link it, so we pull AppKit in ourselves. This runs
+    // ONLY lazily, when the host asks us to build a view: dlopen from a
+    // library initializer re-enters the dyld lock and deadlocks the whole
+    // hosting process (which reads to the user as the audio engine dying),
+    // so nothing here may run at load time.
     let mut superclass = cls("NSView");
     if superclass.is_null() {
         let appkit = CString::new("/System/Library/Frameworks/AppKit.framework/AppKit").unwrap();
@@ -527,12 +498,10 @@ unsafe fn register_view_class() {
         superclass = cls("NSView");
     }
     if superclass.is_null() {
-        trace("register_view_class: NSView still unavailable after loading AppKit");
         return;
     }
     let class = objc_allocateClassPair(superclass, name.as_ptr(), 0);
     if class.is_null() {
-        trace("register_view_class: allocateClassPair failed");
         return;
     }
     let ivar = CString::new(STATE_IVAR).unwrap();
@@ -563,10 +532,10 @@ unsafe fn register_view_class() {
     add("mouseDragged:", mouse_dragged as *const c_void, "v@:@");
     add("mouseExited:", mouse_exited as *const c_void, "v@:@");
     add("scrollWheel:", scroll_wheel as *const c_void, "v@:@");
+    add("viewDidMoveToWindow", view_did_move_to_window as *const c_void, "v@:");
     add("dealloc", view_dealloc as *const c_void, "v@:");
     objc_registerClassPair(class);
     VIEW_CLASS.store(class as usize, Ordering::Release);
-    trace("register_view_class: registered OK");
 }
 
 unsafe fn register_factory_class() {
@@ -612,13 +581,48 @@ unsafe fn register_factory_class() {
     }
     objc_registerClassPair(factory);
     FACTORY_CLASS.store(factory as usize, Ordering::Release);
-    trace(&format!("register_factory_class: done, proto_found={}", !proto.is_null()));
 }
 
 unsafe extern "C" fn factory_description(_this: Id, _cmd: Sel) -> Id {
     // A CFString is toll-free bridged to NSString; the host treats it as
     // autoreleased, which matches -description's contract.
     cfstring("Patina") as Id
+}
+
+/// Start the ~30 Hz redraw timer. NSTimer RETAINS its target, so the view
+/// cannot deallocate while this is live — `viewDidMoveToWindow` invalidates
+/// it when the host pulls the view out of its window, otherwise the timer
+/// outlives the plugin and keeps polling an AudioUnit the host has already
+/// disposed (a use-after-free that reads as "the AU made things unstable").
+unsafe fn schedule_redraw_timer(view: Id) -> Id {
+    let sched: unsafe extern "C" fn(Id, Sel, f64, Id, Sel, Id, u8) -> Id =
+        transmute(objc_msgSend as *const c_void);
+    sched(
+        cls("NSTimer"),
+        sel("scheduledTimerWithTimeInterval:target:selector:userInfo:repeats:"),
+        FRAME_INTERVAL,
+        view,
+        sel("drawTick:"),
+        null_mut(),
+        1,
+    )
+}
+
+/// The host adds our view to a window to show the panel and removes it when
+/// the panel closes. Track that to keep the redraw timer alive exactly as
+/// long as the view is actually on screen.
+unsafe extern "C" fn view_did_move_to_window(this: Id, _cmd: Sel) {
+    let on_screen = !send0(this, sel("window")).is_null();
+    if let Some(state) = ViewState::from_view(this) {
+        if on_screen {
+            if state.timer.is_null() {
+                state.timer = schedule_redraw_timer(this);
+            }
+        } else if !state.timer.is_null() {
+            let _: Id = send0(state.timer, sel("invalidate"));
+            state.timer = null_mut();
+        }
+    }
 }
 
 // --- View method implementations --------------------------------------------
@@ -721,8 +725,11 @@ unsafe extern "C" fn view_dealloc(this: Id, _cmd: Sel) {
     if !ptr.is_null() {
         object_setInstanceVariable(this, ivar.as_ptr(), null_mut());
         let state = Box::from_raw(ptr as *mut ViewState);
-        // Stop the timer (it retains the view) before tearing down.
-        let _: Id = send0(state.timer, sel("invalidate"));
+        // Stop the timer if it is still live (it retains the view, so it is
+        // normally already invalidated by viewDidMoveToWindow).
+        if !state.timer.is_null() {
+            let _: Id = send0(state.timer, sel("invalidate"));
+        }
         CGColorSpaceRelease(state.colorspace);
     }
     let sup = ObjcSuper { receiver: this, super_class: cls("NSView") };
@@ -734,7 +741,6 @@ unsafe extern "C" fn view_dealloc(this: Id, _cmd: Sel) {
 // --- Factory method implementations ------------------------------------------
 
 unsafe extern "C" fn interface_version(_this: Id, _cmd: Sel) -> u32 {
-    trace("interface_version called");
     0
 }
 
@@ -742,7 +748,6 @@ unsafe extern "C" fn interface_version(_this: Id, _cmd: Sel) -> u32 {
 /// Returns a +1 NSView; the host releases it, per AUCocoaUIBase.
 #[no_mangle]
 pub unsafe extern "C" fn patina_au_create_view(audio_unit: *mut c_void) -> *mut c_void {
-    trace("patina_au_create_view: called from ObjC factory");
     ui_view_for_audio_unit(
         null_mut(),
         null_mut(),
@@ -757,13 +762,11 @@ unsafe extern "C" fn ui_view_for_audio_unit(
     audio_unit: *mut c_void,
     _size: CGSize,
 ) -> Id {
-    trace(&format!("ui_view_for_audio_unit called: au={:p}", audio_unit));
     // AppKit is certainly up by now, so this picks up the view class even if
     // the load-time attempt ran too early to build it.
     register_classes();
     let view_cls = VIEW_CLASS.load(Ordering::Acquire) as Class;
     if audio_unit.is_null() || view_cls.is_null() {
-        trace("ui_view_for_audio_unit: null au or view_cls -> nil");
         return null_mut();
     }
 
@@ -819,26 +822,13 @@ unsafe extern "C" fn ui_view_for_audio_unit(
     // Repeating timer drives redraws. scheduledTimer... returns an
     // autoreleased, run-loop-retained timer; it retains `view` as its
     // target until invalidated in dealloc.
-    let timer_cls = cls("NSTimer");
-    let sched: unsafe extern "C" fn(Id, Sel, f64, Id, Sel, Id, u8) -> Id =
-        transmute(objc_msgSend as *const c_void);
-    let timer = sched(
-        timer_cls,
-        sel("scheduledTimerWithTimeInterval:target:selector:userInfo:repeats:"),
-        FRAME_INTERVAL,
-        view,
-        sel("drawTick:"),
-        null_mut(),
-        1,
-    );
-    state.timer = timer;
+    state.timer = schedule_redraw_timer(view);
 
     let ivar = CString::new(STATE_IVAR).unwrap();
     object_setInstanceVariable(view, ivar.as_ptr(), Box::into_raw(state) as *mut c_void);
 
     // Ask for the first paint on the next display pass.
     send_void_bool(view, sel("setNeedsDisplay:"), 1);
-    trace("ui_view_for_audio_unit: view built, returning");
     // Returned +1 per AUCocoaUIBase convention; the host releases it.
     view
 }
@@ -848,12 +838,10 @@ unsafe extern "C" fn ui_view_for_audio_unit(
 /// resolved (the host then uses its generic view).
 pub fn cocoa_view_info() -> Option<(*const c_void, CFStringRef)> {
     register_classes();
-    trace("cocoa_view_info: CocoaUI property queried");
     if FACTORY_CLASS.load(Ordering::Acquire) == 0 {
         return None;
     }
     let path = bundle_path()?;
-    trace(&format!("cocoa_view_info: returning class={} bundle={}", factory_class_name(), path));
     unsafe {
         let cf_path = cfstring(&path);
         let url = CFURLCreateWithFileSystemPath(null(), cf_path, 0, 1);
