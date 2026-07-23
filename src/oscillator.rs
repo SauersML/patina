@@ -214,7 +214,12 @@ impl Oscillator {
         let dt = detuned_frequency as f64 / self.sample_rate as f64;
         self.phase += dt;
         if self.phase >= 1.0 {
-            self.phase -= 1.0;
+            // Subtracting a single cycle is not enough once dt >= 1 (a
+            // core driven above the sample rate by exponential FM, a
+            // performance-line CV, or the top of the keyboard): the
+            // leftover accumulates and the phase walks off to infinity,
+            // pinning the output stage at a rail. Drop ALL whole cycles.
+            self.phase -= self.phase.floor();
             self.last_wrap_frac = Some((self.phase / dt.max(1e-12)) as f32);
         } else {
             self.last_wrap_frac = None;
@@ -250,11 +255,18 @@ impl Oscillator {
         // saw's correction is rescaled and a jump-free pulse reset has its
         // spurious correction cancelled. (Tri/sine sync rides the plain
         // reset — mild, and those shapes are rarely synced.)
+        // Each converter needs its OWN correction — the saw's rescaled
+        // blep is meaningless on the pulse and vice versa. Keeping one
+        // shared `sync_fix` keyed off `self.waveform` silently applied the
+        // wrong one whenever the source mixer had both converters up.
         let dtf = (dt as f32).max(1e-9);
-        let sync_fix = match (sync_p_d, self.waveform) {
-            (Some(p_d), Waveform::Sawtooth) => (1.0 - p_d) * self.polyblep(t, dtf),
-            (Some(p_d), Waveform::Square) if p_d < self.duty => {
-                // No physical jump (hi -> hi): cancel the wrap-edge blep
+        let saw_sync_fix = match sync_p_d {
+            Some(p_d) => (1.0 - p_d) * self.polyblep(t, dtf),
+            None => 0.0,
+        };
+        let pulse_sync_fix = match sync_p_d {
+            // No physical jump (hi -> hi): cancel the wrap-edge blep
+            Some(p_d) if p_d < self.duty => {
                 let (hi, lo) = match self.model {
                     CircuitModel::Moog => (1.0f32, -0.92f32),
                     CircuitModel::Arp => (1.0f32, 0.0f32),
@@ -279,14 +291,14 @@ impl Oscillator {
         // phase-locked — one core, parallel converter boards, exactly the
         // hardware topology.
         let saw_out = |o: &Self| {
-            let s = o.polyblep_saw(t, detuned_frequency) + sync_fix;
+            let s = o.polyblep_saw(t, detuned_frequency) + saw_sync_fix;
             // Integrator sag is a 901-era discrete-core trait; the
             // 4027-1 generation rides a cleaner, more linear ramp —
             // scaled by the same trim culture as skew and duty
             amp_saw * (s + o.curvature * o.trim() * (s * s - 1.0 / 3.0))
         };
         let pulse_out =
-            |o: &Self| amp_pulse * (o.polyblep_pulse(t, detuned_frequency) + sync_fix);
+            |o: &Self| amp_pulse * (o.polyblep_pulse(t, detuned_frequency) + pulse_sync_fix);
         let tri_out =
             |o: &Self| amp_tri * o.fold_triangle(o.polyblep_triangle(t, detuned_frequency));
         let sine_out = |o: &Self| {
@@ -763,6 +775,68 @@ mod tests {
         assert!(
             a_narrow < a_center && a_center < a_wide,
             "ARP mean must track duty: {a_narrow} < {a_center} < {a_wide}"
+        );
+    }
+
+    /// A core pushed past the sample rate (exponential FM, a performance
+    /// line CV, the top of the keyboard) advances more than a whole cycle
+    /// per sample. Dropping only ONE cycle per wrap leaves a remainder
+    /// that accumulates: within a second the phase has walked into the
+    /// thousands, the naive ramp overflows the output stage and the core
+    /// sits pinned at a rail — silent. It must keep running (aliased, but
+    /// alive) instead.
+    #[test]
+    fn a_core_driven_above_the_sample_rate_keeps_oscillating() {
+        let sr = 44100.0;
+        let mut osc = Oscillator::new(sr, 60_000.0, 5); // ~1.36 cycles/sample
+        osc.set_waveform(Waveform::Sawtooth);
+        for _ in 0..(sr as usize) {
+            assert!(osc.next_sample(0.0, 1.0, 0.5, None).is_finite());
+            if let Some(f) = osc.wrap_frac() {
+                assert!(
+                    (0.0..=1.0).contains(&f),
+                    "wrap fraction escaped the sample period: {f}"
+                );
+            }
+        }
+        let (mut hi, mut lo) = (f32::MIN, f32::MAX);
+        for _ in 0..(sr as usize) {
+            let y = osc.next_sample(0.0, 1.0, 0.5, None);
+            hi = hi.max(y);
+            lo = lo.min(y);
+        }
+        assert!(
+            hi - lo > 2.0,
+            "core went dead above the sample rate: swing {:.3} V",
+            hi - lo
+        );
+    }
+
+    /// In mixer mode every converter runs in parallel, so each needs its
+    /// OWN hard-sync correction. Keying one shared correction off the
+    /// (unused) selector meant a mixed pulse silently carried the
+    /// sawtooth's rescaled blep, and the mix depended on a control that
+    /// mixer mode ignores.
+    #[test]
+    fn source_mixer_sync_is_independent_of_the_selector() {
+        let sr = 48000.0;
+        let run = |sel: Waveform| -> Vec<f32> {
+            let mut master = Oscillator::new(sr, 441.0, 2);
+            let mut slave = Oscillator::new(sr, 441.0 * 1.37, 9);
+            master.set_waveform(Waveform::Sawtooth);
+            slave.set_waveform(sel);
+            slave.set_mix([0.0, 1.0, 0.0, 0.0]); // the pulse converter alone
+            (0..9600)
+                .map(|_| {
+                    master.next_sample(0.0, 1.0, 0.5, None);
+                    slave.next_sample(0.0, 1.0, 0.5, master.wrap_frac())
+                })
+                .collect()
+        };
+        assert_eq!(
+            run(Waveform::Sawtooth),
+            run(Waveform::Square),
+            "mixer-mode sync must not depend on the waveform selector"
         );
     }
 }

@@ -20,12 +20,27 @@ use crate::oscillator::CircuitModel;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum EnvelopeStage {
+    /// Voice-steal discharge: the assigner grounds the timing cap through
+    /// a saturated transistor before gating the new note's attack. A
+    /// saturated switch is a near-constant-current sink, so this segment
+    /// is LINEAR (unlike every other segment, which is RC) and arrives at
+    /// exactly zero in a bounded number of samples.
+    Steal,
     Attack,
     Decay,
     Sustain,
     Release,
     Idle,
 }
+
+/// How long the discharge gate is held on when a card is reassigned to a
+/// different note. Short enough to be a transient rather than a hole,
+/// long enough that a full-level voice does not step to zero (a step is
+/// the click; a 2.5 ms slope is not).
+const STEAL_SECONDS: f32 = 0.0025;
+/// Below this the cap is empty enough that the attack can start straight
+/// away — no audible discontinuity to smooth over.
+const STEAL_FLOOR: f32 = 1e-3;
 
 pub struct Envelope {
     attack: AtomicU32,
@@ -37,6 +52,8 @@ pub struct Envelope {
     overshoot: AtomicU32,
     stage: EnvelopeStage,
     current_level: f32,
+    /// Per-sample discharge step while in `Steal` (constant current).
+    steal_step: f32,
     sample_rate: f32,
 }
 
@@ -50,6 +67,7 @@ impl Envelope {
             overshoot: AtomicU32::new(1.25f32.to_bits()),
             stage: EnvelopeStage::Idle,
             current_level: 0.0,
+            steal_step: 0.0,
             sample_rate,
         }
     }
@@ -71,6 +89,13 @@ impl Envelope {
 
     pub fn next_sample(&mut self) -> f32 {
         match self.stage {
+            EnvelopeStage::Steal => {
+                self.current_level -= self.steal_step;
+                if self.current_level <= 0.0 {
+                    self.current_level = 0.0;
+                    self.stage = EnvelopeStage::Attack;
+                }
+            }
             EnvelopeStage::Attack => {
                 let attack_time = f32::from_bits(self.attack.load(Ordering::Relaxed));
                 let target = f32::from_bits(self.overshoot.load(Ordering::Relaxed));
@@ -114,9 +139,32 @@ impl Envelope {
         self.current_level
     }
 
-    /// Retriggers from the current level, so restarts are click-free.
+    /// Same-note retrigger on a card that is still gated: the timing cap
+    /// keeps its charge and the attack resumes from there, exactly as a
+    /// hardware ADSR does when the gate is re-struck. Click-free, and the
+    /// partial re-attack is the analog behaviour — but it is ONLY right
+    /// when the card keeps the note it already has. Use `note_on_stolen`
+    /// whenever a card is reassigned.
     pub fn note_on(&mut self) {
         self.stage = EnvelopeStage::Attack;
+    }
+
+    /// A card being handed a DIFFERENT note (voice steal, or a re-press
+    /// on a card still ringing out its release). Restarting from the
+    /// leftover level would skip the attack entirely — a slow-attack
+    /// patch would fire the second note instantly — so the assigner
+    /// discharges the cap first. Zeroing it outright would step the VCA
+    /// and click, so the discharge is a short linear ramp; only when the
+    /// cap is already near-empty does the attack begin immediately.
+    pub fn note_on_stolen(&mut self) {
+        if self.current_level > STEAL_FLOOR {
+            self.steal_step =
+                self.current_level / (STEAL_SECONDS * self.sample_rate).max(1.0);
+            self.stage = EnvelopeStage::Steal;
+        } else {
+            self.current_level = 0.0;
+            self.stage = EnvelopeStage::Attack;
+        }
     }
 
     pub fn note_off(&mut self) {
@@ -222,6 +270,100 @@ mod tests {
         assert!(
             (0.25..=0.5).contains(&level),
             "after one tau the level should be ~1/e, got {level}"
+        );
+    }
+
+    /// A card handed a DIFFERENT note must replay its attack. Restarting
+    /// from the leftover charge made a 500 ms attack fire instantly on
+    /// every stolen/reassigned voice.
+    #[test]
+    fn a_reassigned_card_replays_its_attack() {
+        let sr = 48000.0;
+        let mut env = Envelope::new(sr);
+        env.set_attack(0.5);
+        env.set_decay(2.0);
+        env.set_sustain(1.0);
+        env.note_on();
+        let mut level = 0.0;
+        for _ in 0..sr as usize {
+            level = env.next_sample();
+        }
+        assert!(level > 0.99, "first note should be at full level, got {level}");
+
+        env.note_on_stolen();
+        // The discharge gate empties the cap inside a few milliseconds
+        let mut emptied_at = None;
+        for n in 0..(0.01 * sr) as usize {
+            if env.next_sample() <= 0.0 {
+                emptied_at = Some(n);
+                break;
+            }
+        }
+        let n = emptied_at.expect("steal discharge never reached zero");
+        let ms = n as f32 / sr * 1000.0;
+        assert!(ms < 4.0, "steal discharge took {ms:.2} ms");
+
+        // ...and THEN the 500 ms attack runs in full. Before the fix the
+        // level here was already pinned at 1.0.
+        for _ in 0..(0.05 * sr) as usize {
+            level = env.next_sample();
+        }
+        assert!(
+            level < 0.35,
+            "a reassigned card must replay its slow attack, level {level} 50 ms in"
+        );
+        assert!(level > 0.05, "...but it must be rising, level {level}");
+    }
+
+    /// The discharge is a ramp, not a reset: zeroing a loud voice outright
+    /// is exactly the click the "retrigger from the current level" comment
+    /// was avoiding.
+    #[test]
+    fn the_steal_discharge_slews_instead_of_stepping() {
+        let sr = 48000.0;
+        let mut env = Envelope::new(sr);
+        env.set_attack(0.5);
+        env.set_sustain(1.0);
+        let mut level = 0.0;
+        env.set_attack(0.001);
+        env.note_on();
+        for _ in 0..(0.1 * sr) as usize {
+            level = env.next_sample();
+        }
+        assert!(level > 0.99, "expected a full-level voice, got {level}");
+        env.set_attack(0.5); // slow, so post-discharge steps stay small too
+        env.note_on_stolen();
+        let mut worst = 0.0f32;
+        let mut prev = level;
+        for _ in 0..(0.005 * sr) as usize {
+            let l = env.next_sample();
+            worst = worst.max((l - prev).abs());
+            prev = l;
+        }
+        // 1.0 discharged over 2.5 ms at 48 kHz is 1/120 per sample
+        assert!(worst < 0.01, "steal must slew, not step: worst jump {worst}");
+    }
+
+    /// The deliberate behaviour, pinned: a card that KEEPS its note and is
+    /// still gated re-attacks from the charge already on the cap (the
+    /// hardware retrigger). It must not be "fixed" into a discharge.
+    #[test]
+    fn a_held_retrigger_still_resumes_from_the_cap() {
+        let sr = 48000.0;
+        let mut env = Envelope::new(sr);
+        env.set_attack(0.5);
+        env.set_sustain(1.0);
+        env.note_on();
+        let mut level = 0.0;
+        for _ in 0..(0.2 * sr) as usize {
+            level = env.next_sample();
+        }
+        assert!(level > 0.3, "expected a partly charged cap, got {level}");
+        env.note_on();
+        let after = env.next_sample();
+        assert!(
+            after >= level,
+            "a held retrigger must not discharge the cap: {level} -> {after}"
         );
     }
 }

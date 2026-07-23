@@ -379,11 +379,23 @@ impl Voice {
     /// there and settles exponentially, like the hold capacitor charging
     /// through the glide pot.
     pub fn trigger(&mut self, note: u8, velocity: f32, age: u64, glide_from_cv: Option<f32>) {
+        // A card keeps its charge only when it keeps its note: re-striking
+        // the key of a voice that is still gated is the classic hardware
+        // retrigger. Anything else — a steal, or a re-press on a card
+        // still ringing out — is a REASSIGNMENT, and must attack from
+        // scratch or a slow attack would be skipped entirely.
+        let same_note = self.held && self.note == Some(note);
+
         let new_cv = (note as f32 - 69.0) / 12.0;
         if self.glide_rate < 0.999 {
-            if let Some(prev_cv) = glide_from_cv {
-                self.glide_offset = (prev_cv - new_cv).clamp(-5.0, 5.0);
-            }
+            // No source CV (the first note, or a chord member that must
+            // start in tune): begin AT the target. Leaving the offset
+            // alone would apply a stale distance left over from an
+            // interrupted glide to a note it has nothing to do with.
+            self.glide_offset = match glide_from_cv {
+                Some(prev_cv) => (prev_cv - new_cv).clamp(-5.0, 5.0),
+                None => 0.0,
+            };
         } else {
             self.glide_offset = 0.0;
         }
@@ -400,8 +412,13 @@ impl Voice {
             let f = frequency * scale;
             osc.set_frequency(f / (1.0 + f * RESET_TIME));
         }
-        self.envelope.note_on();
-        self.filter_env.note_on();
+        if same_note {
+            self.envelope.note_on();
+            self.filter_env.note_on();
+        } else {
+            self.envelope.note_on_stolen();
+            self.filter_env.note_on_stolen();
+        }
         self.note = Some(note);
         self.velocity = velocity.clamp(0.0, 1.0);
         self.age = age;
@@ -652,6 +669,79 @@ mod tests {
         assert!(
             cents.abs() < 8.0,
             "FM shifted pitch by {cents:.1} cents (dry {dry:.2} Hz, fm {fm:.2} Hz)"
+        );
+    }
+
+    const NEUTRAL: SubstrateState = SubstrateState {
+        pitch_mult: 1.0,
+        cutoff_oct: 0.0,
+    };
+
+    /// End-to-end: a card still sounding one note, handed a DIFFERENT
+    /// note, must play the new one through its attack. This is the
+    /// reported bug — with a slow attack the second note arrived instantly
+    /// because the card inherited the first note's envelope level.
+    #[test]
+    fn a_stolen_card_replays_its_slow_attack() {
+        let sr = 48000.0;
+        let mut v = Voice::new(sr, 0, 1);
+        v.set_waveform(Waveform::Sawtooth);
+        v.set_filter_cutoff(18000.0);
+        v.set_filter_env_amount(0.0);
+        v.envelope.set_attack(0.5);
+        v.envelope.set_decay(2.0);
+        v.envelope.set_sustain(1.0);
+
+        v.trigger(60, 1.0, 0, None);
+        for _ in 0..sr as usize {
+            v.render_next(0.0, 1.0, 0.0, 0.0, NEUTRAL, 0.0);
+        }
+        let mut sustained = 0.0f32;
+        for _ in 0..(0.05 * sr) as usize {
+            let (l, _) = v.render_next(0.0, 1.0, 0.0, 0.0, NEUTRAL, 0.0);
+            sustained = sustained.max(l.abs());
+        }
+        assert!(sustained > 0.1, "first note never got loud: {sustained}");
+
+        // The same card is now handed a different note
+        v.trigger(67, 1.0, 1, None);
+        // Skip the discharge ramp, then measure the new note's level
+        for _ in 0..(0.005 * sr) as usize {
+            v.render_next(0.0, 1.0, 0.0, 0.0, NEUTRAL, 0.0);
+        }
+        let mut after = 0.0f32;
+        for _ in 0..(0.045 * sr) as usize {
+            let (l, _) = v.render_next(0.0, 1.0, 0.0, 0.0, NEUTRAL, 0.0);
+            after = after.max(l.abs());
+        }
+        assert!(
+            after < 0.4 * sustained,
+            "a stolen card must replay its 500 ms attack: 50 ms in it is at \
+             {after:.4} vs a sustained {sustained:.4}"
+        );
+    }
+
+    /// Glide with no source CV (the first note, or a chord member that
+    /// must start in tune) has to start AT the target. Leaving the offset
+    /// alone let an interrupted glide's leftover distance be applied to an
+    /// unrelated later note, which lands it octaves out.
+    #[test]
+    fn a_card_with_no_source_cv_starts_in_tune() {
+        let sr = 48000.0;
+        let mut v = Voice::new(sr, 0, 1);
+        v.set_glide_rate(1.0 / (2.0 * sr)); // 2 seconds per octave
+        // A glide two octaves long, interrupted well before it arrives
+        v.trigger(48, 1.0, 0, Some((72.0 - 69.0) / 12.0));
+        assert!(
+            v.glide_remaining().abs() > 1.0,
+            "expected a long pending glide, got {}",
+            v.glide_remaining()
+        );
+        v.trigger(60, 1.0, 1, None);
+        assert_eq!(
+            v.glide_remaining(),
+            0.0,
+            "a stale glide distance was carried into an unrelated note"
         );
     }
 }
