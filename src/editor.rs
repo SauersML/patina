@@ -21,8 +21,8 @@ use crate::panel::{
 /// The panel now lays out the full synth surface (oscillators 1-3, the
 /// source mixer, unison, routing, and the extended reverb), so it is taller
 /// than the original four-row layout.
-pub const EDITOR_WIDTH: u32 = 1200;
-pub const EDITOR_HEIGHT: u32 = 810;
+pub const EDITOR_WIDTH: u32 = 1460;
+pub const EDITOR_HEIGHT: u32 = 730;
 
 /// What the editor needs from its host: parameter access by table index
 /// (the index into `host_params::param_defs()`, which is also the AU
@@ -224,7 +224,11 @@ impl EditorState {
         // textures out for the frame.
         let mut tex = self.textures.take();
 
-        // Row 1 — Oscillator 1 (circuit, waveform, core knobs) + LFO
+        // The panel cannot be resized by the host, so it has to fit on a
+        // laptop screen inside Logic's window chrome: rows are packed to fill
+        // the width rather than left half-empty, which keeps it short.
+
+        // Row 1 — the three oscillators
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| card(ui, "Oscillator", tex.as_mut(), None, |ui| {
                 ui.horizontal(|ui| {
@@ -242,20 +246,6 @@ impl EditorState {
                     self.pknob(ui, "glide", Some("Glide"), false);
                 });
             }));
-            ui.vertical(|ui| card(ui, "LFO", tex.as_mut(), None, |ui| {
-                ui.horizontal(|ui| {
-                    self.pknob(ui, "lfo_rate", Some("Rate"), false);
-                    self.pknob(ui, "lfo_shape", Some("Shape"), false);
-                    self.pknob(ui, "lfo_pitch", Some("Pitch"), false);
-                    self.pknob(ui, "lfo_filter", Some("Filter"), false);
-                    self.pknob(ui, "lfo_pwm", Some("PWM"), false);
-                });
-            }));
-        });
-        ui.add_space(8.0);
-
-        // Row 2 — Oscillators 2 & 3 + routing (sync, ring, FM, key track)
-        ui.horizontal_top(|ui| {
             ui.vertical(|ui| card(ui, "Oscillator 2", tex.as_mut(), None, |ui| {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
@@ -276,6 +266,20 @@ impl EditorState {
                     self.pknob(ui, "osc3_level", Some("Level"), false);
                 });
             }));
+        });
+        ui.add_space(6.0);
+
+        // Row 2 — LFO, routing, the osc-1 source mixer, unison
+        ui.horizontal_top(|ui| {
+            ui.vertical(|ui| card(ui, "LFO", tex.as_mut(), None, |ui| {
+                ui.horizontal(|ui| {
+                    self.pknob(ui, "lfo_rate", Some("Rate"), false);
+                    self.pknob(ui, "lfo_shape", Some("Shape"), false);
+                    self.pknob(ui, "lfo_pitch", Some("Pitch"), false);
+                    self.pknob(ui, "lfo_filter", Some("Filter"), false);
+                    self.pknob(ui, "lfo_pwm", Some("PWM"), false);
+                });
+            }));
             ui.vertical(|ui| card(ui, "Routing", tex.as_mut(), None, |ui| {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
@@ -287,16 +291,11 @@ impl EditorState {
                     self.pknob(ui, "key_track", Some("Key Trk"), false);
                 });
             }));
-        });
-        ui.add_space(8.0);
-
-        // Row 3 — Oscillator 1 source mixer + unison
-        ui.horizontal_top(|ui| {
             ui.vertical(|ui| card(ui, "Osc 1 Mixer", tex.as_mut(), None, |ui| {
                 ui.horizontal(|ui| {
-                    self.pknob(ui, "mix_saw", Some("Sawtooth"), false);
+                    self.pknob(ui, "mix_saw", Some("Saw"), false);
                     self.pknob(ui, "mix_pulse", Some("Pulse"), false);
-                    self.pknob(ui, "mix_tri", Some("Triangle"), false);
+                    self.pknob(ui, "mix_tri", Some("Tri"), false);
                     self.pknob(ui, "mix_sine", Some("Sine"), false);
                 });
             }));
@@ -307,9 +306,9 @@ impl EditorState {
                 });
             }));
         });
-        ui.add_space(8.0);
+        ui.add_space(6.0);
 
-        // Row 4 — Amplitude envelope + filter + filter envelope
+        // Row 3 — amplitude envelope + filter + filter envelope
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| card(ui, "Amp Envelope", tex.as_mut(), None, |ui| {
                 ui.horizontal(|ui| {
@@ -322,9 +321,9 @@ impl EditorState {
             ui.vertical(|ui| card(ui, "Filter", tex.as_mut(), None, |ui| {
                 ui.horizontal(|ui| {
                     self.pknob(ui, "cutoff", Some("Cutoff"), false);
-                    self.pknob(ui, "resonance", Some("Resonance"), false);
+                    self.pknob(ui, "resonance", Some("Reso"), false);
                     self.pknob(ui, "drive", Some("Drive"), false);
-                    self.pknob(ui, "saturation", Some("Saturation"), false);
+                    self.pknob(ui, "saturation", Some("Sat"), false);
                     self.pknob(ui, "hpf", Some("High-Pass"), false);
                 });
             }));
@@ -338,9 +337,9 @@ impl EditorState {
                 });
             }));
         });
-        ui.add_space(8.0);
+        ui.add_space(6.0);
 
-        // Row 5 — Space (fuzz/spring/reverb) + chorus + tape
+        // Row 4 — space (fuzz/spring/reverb) + chorus + tape
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| card(ui, "Space", tex.as_mut(), None, |ui| {
                 ui.horizontal(|ui| {
@@ -372,13 +371,10 @@ impl EditorState {
                 });
             }));
         });
-        ui.add_space(8.0);
+        ui.add_space(6.0);
 
-        // Row 6 — the 909 rhythm section
-        card(ui, "Rhythm Section · 909 · MIDI CH 10", tex.as_mut(), None, |ui| {
-            // 23 pads don't fit on one line at panel density — the last of
-            // them used to run off the right edge — so the board wraps onto
-            // two rows the way the hardware splits drums from cymbals.
+        // Row 5 — the 909 board. At this width the whole kit fits one line.
+        card(ui, "Rhythm Section · 909 · C-2 upward, or MIDI CH 10", tex.as_mut(), None, |ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             ui.horizontal(|ui| {
                 self.drum_group(ui, "Kick", &[
@@ -395,9 +391,7 @@ impl EditorState {
                     ("rs_level", "Rim Lvl"), ("rs_tune", "Rim Tune"),
                     ("cp_level", "Clap Lvl"), ("cp_decay", "Clap Dec"),
                 ]);
-            });
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
+                panel::vseparator(ui, 90.0);
                 self.drum_group(ui, "Hats", &[
                     ("hh_level", "Level"), ("hh_tune", "Tune"), ("hh_metal", "Metal"),
                     ("ch_decay", "Closed"), ("oh_decay", "Open"),
