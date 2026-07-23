@@ -165,74 +165,40 @@ use Display::{Fraction, Hertz, Percent, Plain, Seconds};
 /// 909 shorthand is expanded to the instrument's real name.
 #[rustfmt::skip]
 const PRESENTATION: &[Row] = &[
-    // --- Oscillator ------------------------------------------------------
-    sel (Param::CircuitSel, "Circuit",     CIRCUIT_NAMES, 0),
+    // ORDER IS AN ABI. A parameter's position here IS its
+    // AudioUnitParameterID, and hosts record automation against that number,
+    // so reordering silently re-points every automation curve in every saved
+    // project. The first 56 rows are frozen in their original shipped order;
+    // anything new goes on the END, never in the middle.
+
     sel (Param::WaveformSel, "Waveform",   WAVE_NAMES,    2),
     flt (Param::Volume,     "Volume",      Percent,       0.5),
     flt (Param::Detune,     "Detune",      Plain(" ct"),  7.0),
     flt (Param::PulseWidth, "Pulse Width", Fraction,      0.5),
     flt (Param::NoiseLevel, "Noise",       Percent,       0.0),
-    flt (Param::SubLevel,   "Sub Oscillator", Percent,    0.0),
-    flt (Param::Glide,      "Glide",       Plain(" s"),   0.0),
-
-    // --- Oscillator 2 / 3 ------------------------------------------------
-    sel (Param::Osc2Wave,   "Oscillator 2 Waveform", WAVE_NAMES, 2),
-    flt (Param::Osc2Pitch,  "Oscillator 2 Pitch",    Plain(" st"), 0.0),
-    flt (Param::Osc2Level,  "Oscillator 2 Level",    Percent,      0.72),
-    sel (Param::Osc3Wave,   "Oscillator 3 Waveform", WAVE_NAMES, 2),
-    flt (Param::Osc3Pitch,  "Oscillator 3 Pitch",    Plain(" st"), 0.0),
-    flt (Param::Osc3Level,  "Oscillator 3 Level",    Percent,      0.72),
-
-    // --- Modulation / routing --------------------------------------------
-    sel (Param::SyncSel,    "Oscillator Sync", SYNC_NAMES, 0),
-    flt (Param::RingAmount, "Ring Modulation", Percent,    0.0),
-    flt (Param::OscFm,      "Oscillator FM",   Percent,    0.0),
-    flt (Param::KeyTrack,   "Key Tracking",    Percent,    0.4),
-
-    // --- Oscillator 1 source mixer (all zero = classic selector) ---------
-    flt (Param::MixSaw,     "Oscillator 1 Mix Sawtooth", Percent, 0.0),
-    flt (Param::MixPulse,   "Oscillator 1 Mix Pulse",    Percent, 0.0),
-    flt (Param::MixTri,     "Oscillator 1 Mix Triangle", Percent, 0.0),
-    flt (Param::MixSine,    "Oscillator 1 Mix Sine",     Percent, 0.0),
-
-    // --- LFO -------------------------------------------------------------
     flt (Param::LfoRate,    "LFO Rate",           Hertz,        1.0),
     flt (Param::LfoShape,   "LFO Shape",          Percent,      0.5),
     flt (Param::LfoPitch,   "LFO to Pitch",       Plain(" ct"), 0.0),
     flt (Param::LfoFilter,  "LFO to Filter",      Plain(" oct"), 0.0),
     flt (Param::LfoPwm,     "LFO to Pulse Width", Plain(""),    0.0),
-
-    // --- Amplitude envelope ----------------------------------------------
     flt (Param::Attack,     "Amp Attack",  Seconds, 0.1),
     flt (Param::Decay,      "Amp Decay",   Seconds, 0.1),
     flt (Param::Sustain,    "Amp Sustain", Percent, 0.7),
     flt (Param::Release,    "Amp Release", Seconds, 0.2),
-
-    // --- Filter ----------------------------------------------------------
     flt (Param::Cutoff,     "Filter Cutoff",     Hertz,     15000.0),
     flt (Param::Resonance,  "Filter Resonance",  Plain(""), 0.0),
     flt (Param::Drive,      "Filter Drive",      Plain(""), 1.0),
     flt (Param::Saturation, "Filter Saturation", Plain(""), 1.0),
     flt (Param::HpfCutoff,  "High-Pass Filter",  Hertz,     16.0),
-
-    // --- Filter envelope -------------------------------------------------
     flt (Param::FilterEnvAmount, "Filter Envelope Amount", Plain(" oct"), 0.0),
     flt (Param::FilterAttack,    "Filter Attack",  Seconds, 0.005),
     flt (Param::FilterDecay,     "Filter Decay",   Seconds, 0.3),
     flt (Param::FilterSustain,   "Filter Sustain", Percent, 0.0),
     flt (Param::FilterRelease,   "Filter Release", Seconds, 0.3),
-
-    // --- Unison ----------------------------------------------------------
-    flt (Param::Unison,        "Unison Voices", Plain(""),    1.0),
-    flt (Param::UnisonDetune,  "Unison Detune", Plain(" ct"), 12.0),
-
-    // --- Effects ---------------------------------------------------------
     flt (Param::FuzzAmount,  "Fuzz",            Percent,     0.0),
     flt (Param::SpringWet,   "Spring Reverb",   Percent,     0.0),
     flt (Param::ReverbDecay, "Reverb Decay",    Fraction,    0.5),
     flt (Param::ReverbWet,   "Reverb Mix",      Percent,     0.5),
-    flt (Param::ReverbTone,  "Reverb Tone",     Hertz,       5500.0),
-    flt (Param::ReverbPre,   "Reverb Predelay", Plain(" s"), 0.012),
     sel (Param::ChorusModeSel, "Chorus Mode",   CHORUS_NAMES, 0),
     gflt(Param::ChorusRate,  "Chorus Rate",     Hertz,       0.5),
     gflt(Param::ChorusDepth, "Chorus Depth",    Percent,     0.3),
@@ -240,8 +206,6 @@ const PRESENTATION: &[Row] = &[
     flt (Param::TapeFlutter, "Tape Flutter",    Percent,     0.0),
     gflt(Param::TapeDrive,   "Tape Drive",      Percent,     0.0),
     gflt(Param::TapeAge,     "Tape Age",        Percent,     0.0),
-
-    // --- Rhythm section (the 909 board; triggered on MIDI channel 10) ----
     flt (Param::BdLevel,   "Kick Level",      Percent,  0.8),
     flt (Param::BdTune,    "Kick Tune",       Fraction, 0.35),
     flt (Param::BdAttack,  "Kick Attack",     Fraction, 0.5),
@@ -263,6 +227,29 @@ const PRESENTATION: &[Row] = &[
     flt (Param::ChDecay,   "Closed Hat Decay", Fraction, 0.35),
     flt (Param::OhDecay,   "Open Hat Decay",  Fraction, 0.5),
     flt (Param::DrumDrive, "Drum Bus Drive",  Percent,  0.0),
+
+    // --- Appended after the frozen block (new controls) ------------------
+    sel (Param::CircuitSel, "Circuit",     CIRCUIT_NAMES, 0),
+    flt (Param::SubLevel,   "Sub Oscillator", Percent,    0.0),
+    flt (Param::Glide,      "Glide",       Plain(" s"),   0.0),
+    sel (Param::Osc2Wave,   "Oscillator 2 Waveform", WAVE_NAMES, 2),
+    flt (Param::Osc2Pitch,  "Oscillator 2 Pitch",    Plain(" st"), 0.0),
+    flt (Param::Osc2Level,  "Oscillator 2 Level",    Percent,      0.72),
+    sel (Param::Osc3Wave,   "Oscillator 3 Waveform", WAVE_NAMES, 2),
+    flt (Param::Osc3Pitch,  "Oscillator 3 Pitch",    Plain(" st"), 0.0),
+    flt (Param::Osc3Level,  "Oscillator 3 Level",    Percent,      0.72),
+    sel (Param::SyncSel,    "Oscillator Sync", SYNC_NAMES, 0),
+    flt (Param::RingAmount, "Ring Modulation", Percent,    0.0),
+    flt (Param::OscFm,      "Oscillator FM",   Percent,    0.0),
+    flt (Param::KeyTrack,   "Key Tracking",    Percent,    0.4),
+    flt (Param::MixSaw,     "Oscillator 1 Mix Sawtooth", Percent, 0.0),
+    flt (Param::MixPulse,   "Oscillator 1 Mix Pulse",    Percent, 0.0),
+    flt (Param::MixTri,     "Oscillator 1 Mix Triangle", Percent, 0.0),
+    flt (Param::MixSine,    "Oscillator 1 Mix Sine",     Percent, 0.0),
+    flt (Param::Unison,        "Unison Voices", Plain(""),    1.0),
+    flt (Param::UnisonDetune,  "Unison Detune", Plain(" ct"), 12.0),
+    flt (Param::ReverbTone,  "Reverb Tone",     Hertz,       5500.0),
+    flt (Param::ReverbPre,   "Reverb Predelay", Plain(" s"), 0.012),
     flt (Param::DrumTone,  "Drum Bus Tone",   Fraction, 1.0),
 ];
 
@@ -367,6 +354,40 @@ pub fn note_off(vm: &mut VoiceManager, channel: u8, note: u8) {
 
 #[cfg(test)]
 mod tests {
+
+    /// A parameter's position in PRESENTATION IS its AudioUnitParameterID,
+    /// and hosts record automation curves against that number. Reordering the
+    /// shipped block silently re-points every curve in every saved project —
+    /// this pins the original 56 so new parameters can only be appended.
+    #[test]
+    fn shipped_parameter_ids_never_move() {
+        const FROZEN: [Param; 56] = [
+        Param::WaveformSel, Param::Volume, Param::Detune, Param::PulseWidth,
+        Param::NoiseLevel, Param::LfoRate, Param::LfoShape, Param::LfoPitch,
+        Param::LfoFilter, Param::LfoPwm, Param::Attack, Param::Decay,
+        Param::Sustain, Param::Release, Param::Cutoff, Param::Resonance,
+        Param::Drive, Param::Saturation, Param::HpfCutoff, Param::FilterEnvAmount,
+        Param::FilterAttack, Param::FilterDecay, Param::FilterSustain, Param::FilterRelease,
+        Param::FuzzAmount, Param::SpringWet, Param::ReverbDecay, Param::ReverbWet,
+        Param::ChorusModeSel, Param::ChorusRate, Param::ChorusDepth, Param::TapeWow,
+        Param::TapeFlutter, Param::TapeDrive, Param::TapeAge, Param::BdLevel,
+        Param::BdTune, Param::BdAttack, Param::BdDecay, Param::BdSweep,
+        Param::BdDrive, Param::SdLevel, Param::SdTune, Param::SdTone,
+        Param::SdSnappy, Param::SdDecay, Param::RsLevel, Param::RsTune,
+        Param::CpLevel, Param::CpDecay, Param::HhLevel, Param::HhTune,
+        Param::HhMetal, Param::ChDecay, Param::OhDecay, Param::DrumDrive,
+        ];
+        let defs = param_defs();
+        assert!(defs.len() >= FROZEN.len());
+        for (id, expected) in FROZEN.iter().enumerate() {
+            assert_eq!(
+                defs[id].param(),
+                *expected,
+                "parameter id {id} moved: hosts would re-point automation"
+            );
+        }
+    }
+
     use super::*;
     use crate::song::PARAM_DEFS;
 
