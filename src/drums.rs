@@ -57,14 +57,108 @@ use crate::hpf::HighPassLadder;
 /// The reserved song/MIDI channel that routes notes to the drum board.
 pub const DRUM_CHANNEL: u16 = u16::MAX;
 
-/// GM drum map (the relevant rows), so any drum-mode controller or DAW
-/// track speaks to the board without configuration.
-const NOTE_KICK: u8 = 36; // C1  (35 accepted too)
-const NOTE_RIM: u8 = 37; // C#1
-const NOTE_SNARE: u8 = 38; // D1  (40 accepted too)
-const NOTE_CLAP: u8 = 39; // D#1
-const NOTE_CH: u8 = 42; // F#1 (44 pedal hat accepted too)
-const NOTE_OH: u8 = 46; // A#1
+/// The six voices on the board.
+///
+/// EVERYTHING that has to know which voice a note, a name, or a panel pad
+/// refers to answers through this enum. It exists because the board is
+/// reachable by three different routes — the GM map, the reserved bottom
+/// sliver, and the DSL names — and anything downstream that special-cases
+/// one voice (the sidechain listens for the kick; the pad LEDs read one
+/// envelope each) used to re-derive that mapping for itself. It got it
+/// wrong: the duck fired on GM notes 35/36 but not on the sliver's note 0,
+/// so the same kick ducked or didn't depending on how it was played.
+/// Route through `for_note` / `from_name` / `pad_index` and the two
+/// answers cannot drift apart again.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DrumVoice {
+    Kick,
+    Snare,
+    Rim,
+    Clap,
+    ClosedHat,
+    OpenHat,
+}
+
+impl DrumVoice {
+    /// Panel order: the LED row, and the index of `activity()`.
+    pub const ALL: [DrumVoice; 6] = [
+        DrumVoice::Kick,
+        DrumVoice::Snare,
+        DrumVoice::Rim,
+        DrumVoice::Clap,
+        DrumVoice::ClosedHat,
+        DrumVoice::OpenHat,
+    ];
+
+    /// The reserved bottom sliver, chromatically from C-2 (note 0). NOT
+    /// the panel order — the sliver runs kick, rim, snare so the two
+    /// hands fall where a player expects. `LOW_DRUM_LAST` and the low
+    /// half of `for_note` are both read off this array.
+    const LOW_SLIVER: [DrumVoice; 6] = [
+        DrumVoice::Kick,
+        DrumVoice::Rim,
+        DrumVoice::Snare,
+        DrumVoice::Clap,
+        DrumVoice::ClosedHat,
+        DrumVoice::OpenHat,
+    ];
+
+    /// Which voice a note strikes, by either route. `None` = not ours.
+    pub fn for_note(note: u8) -> Option<Self> {
+        if let Some(v) = Self::LOW_SLIVER.get(note as usize) {
+            return Some(*v);
+        }
+        // The GM map, for drum-mode controllers and channel-10 tracks
+        Some(match note {
+            35 | 36 => DrumVoice::Kick,
+            37 => DrumVoice::Rim,
+            38 | 40 => DrumVoice::Snare,
+            39 => DrumVoice::Clap,
+            42 | 44 => DrumVoice::ClosedHat,
+            46 => DrumVoice::OpenHat,
+            _ => return None,
+        })
+    }
+
+    /// Drum names for the song DSL (`track beat kit=909`) and the UI pads.
+    pub fn from_name(s: &str) -> Option<Self> {
+        Some(match s.to_ascii_uppercase().as_str() {
+            "BD" | "KICK" => DrumVoice::Kick,
+            "SD" | "SNARE" => DrumVoice::Snare,
+            "RS" | "RIM" => DrumVoice::Rim,
+            "CP" | "CLAP" => DrumVoice::Clap,
+            "CH" | "HH" => DrumVoice::ClosedHat,
+            "OH" => DrumVoice::OpenHat,
+            _ => return None,
+        })
+    }
+
+    /// The GM note this voice answers to — what a name resolves to when
+    /// something needs a note number to put on the trigger bus.
+    pub fn gm_note(self) -> u8 {
+        match self {
+            DrumVoice::Kick => 36,      // C1  (35 accepted too)
+            DrumVoice::Snare => 38,     // D1  (40 accepted too)
+            DrumVoice::Rim => 37,       // C#1
+            DrumVoice::Clap => 39,      // D#1
+            DrumVoice::ClosedHat => 42, // F#1 (44 pedal hat accepted too)
+            DrumVoice::OpenHat => 46,   // A#1
+        }
+    }
+
+    /// This voice's slot in `activity()` — what a panel pad reads to glow
+    /// with its own VCA rather than whichever one it was hand-numbered to.
+    pub fn pad_index(self) -> usize {
+        match self {
+            DrumVoice::Kick => 0,
+            DrumVoice::Snare => 1,
+            DrumVoice::Rim => 2,
+            DrumVoice::Clap => 3,
+            DrumVoice::ClosedHat => 4,
+            DrumVoice::OpenHat => 5,
+        }
+    }
+}
 
 /// The board also owns a sliver at the very bottom of MIDI: six semitones
 /// from C-2 (note 0) up. Hosts aimed at software instruments — Logic above
@@ -73,7 +167,7 @@ const NOTE_OH: u8 = 46; // A#1
 /// anything playable, so the board stays reachable on ANY channel without
 /// costing the keyboard a single usable key.
 ///     C-2 kick · C#-2 rim · D-2 snare · D#-2 clap · E-2 closed · F-2 open
-pub const LOW_DRUM_LAST: u8 = 5;
+pub const LOW_DRUM_LAST: u8 = (DrumVoice::LOW_SLIVER.len() - 1) as u8;
 
 /// Is this one of the reserved bottom-of-range drum notes?
 pub fn is_low_drum_note(note: u8) -> bool {
@@ -82,15 +176,7 @@ pub fn is_low_drum_note(note: u8) -> bool {
 
 /// Drum names for the song DSL (`track beat kit=909`): BD SD RS CP CH OH.
 pub fn note_from_name(s: &str) -> Option<u8> {
-    Some(match s.to_ascii_uppercase().as_str() {
-        "BD" | "KICK" => NOTE_KICK,
-        "SD" | "SNARE" => NOTE_SNARE,
-        "RS" | "RIM" => NOTE_RIM,
-        "CP" | "CLAP" => NOTE_CLAP,
-        "CH" | "HH" => NOTE_CH,
-        "OH" => NOTE_OH,
-        _ => return None,
-    })
+    DrumVoice::from_name(s).map(DrumVoice::gm_note)
 }
 
 
@@ -755,39 +841,45 @@ impl DrumMachine {
         }
     }
 
-    /// Trigger by (GM) note number; velocity is the accent voltage.
+    /// Trigger by note number, either route; velocity is the accent
+    /// voltage. Notes the board doesn't own are ignored.
     pub fn trigger_note(&mut self, note: u8, velocity: f32) {
-        match note {
-            // The reserved bottom sliver (C-2 up), reachable on any channel
-            0 => self.kick.trigger(velocity),
-            1 => self.rim.trigger(velocity),
-            2 => self.snare.trigger(velocity),
-            3 => self.clap.trigger(velocity),
-            4 => self.hats.trigger_closed(velocity),
-            5 => self.hats.trigger_open(velocity),
-            // The GM map, for drum-mode controllers and channel-10 tracks
-            35 | 36 => self.kick.trigger(velocity),
-            38 | 40 => self.snare.trigger(velocity),
-            37 => self.rim.trigger(velocity),
-            39 => self.clap.trigger(velocity),
-            42 | 44 => self.hats.trigger_closed(velocity),
-            46 => self.hats.trigger_open(velocity),
-            _ => {}
+        if let Some(voice) = DrumVoice::for_note(note) {
+            self.trigger(voice, velocity);
         }
     }
 
-    /// Momentary per-voice envelope levels [BD, SD, RS, CP, CH, OH] for
-    /// the panel pads — they glow with the actual VCA state, the same
-    /// truth the LEDs on a hardware panel report.
+    /// Trigger a named voice directly — the trigger bus itself.
+    pub fn trigger(&mut self, voice: DrumVoice, velocity: f32) {
+        match voice {
+            DrumVoice::Kick => self.kick.trigger(velocity),
+            DrumVoice::Snare => self.snare.trigger(velocity),
+            DrumVoice::Rim => self.rim.trigger(velocity),
+            DrumVoice::Clap => self.clap.trigger(velocity),
+            DrumVoice::ClosedHat => self.hats.trigger_closed(velocity),
+            DrumVoice::OpenHat => self.hats.trigger_open(velocity),
+        }
+    }
+
+    /// This voice's momentary VCA level, 0..1 — the truth behind one pad.
+    pub fn voice_env(&self, voice: DrumVoice) -> f32 {
+        match voice {
+            DrumVoice::Kick => (self.kick.amp + self.kick.click).min(1.0),
+            DrumVoice::Snare => self.snare.amp.max(self.snare.noise_env),
+            DrumVoice::Rim => self.rim.amps[0],
+            DrumVoice::Clap => (self.clap.burst + self.clap.tail).min(1.0),
+            DrumVoice::ClosedHat => self.hats.ch_env,
+            DrumVoice::OpenHat => self.hats.oh_env,
+        }
+    }
+
+    /// Momentary per-voice envelope levels for the panel pads — they glow
+    /// with the actual VCA state, the same truth the LEDs on a hardware
+    /// panel report. Indexed by `DrumVoice::pad_index`, and BUILT from
+    /// `DrumVoice::ALL`, so a caller cannot pair a pad with the wrong
+    /// voice's envelope.
     pub fn activity(&self) -> [f32; 6] {
-        [
-            (self.kick.amp + self.kick.click).min(1.0),
-            self.snare.amp.max(self.snare.noise_env),
-            self.rim.amps[0],
-            (self.clap.burst + self.clap.tail).min(1.0),
-            self.hats.ch_env,
-            self.hats.oh_env,
-        ]
+        DrumVoice::ALL.map(|v| self.voice_env(v))
     }
 
     /// True while any voice is still audibly ringing.
@@ -1292,11 +1384,145 @@ mod tests {
         }
     }
 
+
+    /// The board is modeled at fixed frequencies in Hz (the hat bank's
+    /// 5.2 kHz high-pass, the clap's 1.1 kHz band-pass). Across the whole
+    /// supported rate band every one of them must stay in band and stay
+    /// bounded — a resonator above Nyquist diverges rather than detuning.
+    #[test]
+    fn every_voice_is_stable_across_the_supported_rate_band() {
+        for sr in [
+            crate::MIN_SAMPLE_RATE as f32,
+            11025.0,
+            16000.0,
+            22050.0,
+            44100.0,
+            48000.0,
+            96000.0,
+            192000.0,
+        ] {
+            for note in [36u8, 38, 37, 39, 42, 46] {
+                let mut dm = DrumMachine::new(sr);
+                dm.trigger_note(note, 1.0);
+                let mut peak = 0.0f32;
+                for k in 0..(sr as usize) {
+                    let (l, r) = dm.render_next();
+                    assert!(l.is_finite() && r.is_finite(), "sr {sr} note {note} non-finite at {k}");
+                    peak = peak.max(l.abs()).max(r.abs());
+                }
+                assert!(peak < 1e3, "sr {sr} note {note} blew up, peak {peak}");
+                assert!(peak > 0.05, "sr {sr} note {note} fell silent, peak {peak}");
+            }
+        }
+    }
+
     #[test]
     fn drum_names_map() {
         assert_eq!(note_from_name("BD"), Some(36));
         assert_eq!(note_from_name("sd"), Some(38));
         assert_eq!(note_from_name("Oh"), Some(46));
         assert_eq!(note_from_name("C4"), None);
+    }
+
+    /// The board is reachable by three routes — the GM map, the reserved
+    /// low sliver, and the DSL names — and they must all name the same
+    /// six voices. Every derived table is checked against `DrumVoice`,
+    /// which is the only place the mapping is written down.
+    #[test]
+    fn every_route_to_a_voice_agrees() {
+        use DrumVoice::*;
+        // Both orderings are permutations of the same six voices
+        for v in DrumVoice::ALL {
+            assert_eq!(
+                DrumVoice::ALL.iter().filter(|&&x| x == v).count(),
+                1,
+                "{v:?} appears more than once in the panel order"
+            );
+            assert!(DrumVoice::LOW_SLIVER.contains(&v), "{v:?} has no sliver note");
+            assert_eq!(DrumVoice::ALL[v.pad_index()], v, "{v:?} pad index is wrong");
+            assert_eq!(DrumVoice::for_note(v.gm_note()), Some(v), "{v:?} GM note");
+        }
+        // The low sliver: exactly notes 0..=LOW_DRUM_LAST, in its own
+        // chromatic order, and the constant is read off the array
+        assert_eq!(LOW_DRUM_LAST, 5);
+        for (i, v) in DrumVoice::LOW_SLIVER.iter().enumerate() {
+            let note = i as u8;
+            assert!(is_low_drum_note(note));
+            assert_eq!(DrumVoice::for_note(note), Some(*v), "sliver note {note}");
+        }
+        assert!(!is_low_drum_note(LOW_DRUM_LAST + 1));
+        assert_eq!(DrumVoice::for_note(LOW_DRUM_LAST + 1), None);
+        // The documented sliver layout, spelled out
+        assert_eq!(
+            DrumVoice::LOW_SLIVER,
+            [Kick, Rim, Snare, Clap, ClosedHat, OpenHat],
+            "C-2 kick · C#-2 rim · D-2 snare · D#-2 clap · E-2 closed · F-2 open"
+        );
+        // Names resolve to notes that resolve back to the same voice
+        for (name, want) in [
+            ("BD", Kick), ("KICK", Kick), ("SD", Snare), ("SNARE", Snare),
+            ("RS", Rim), ("RIM", Rim), ("CP", Clap), ("CLAP", Clap),
+            ("CH", ClosedHat), ("HH", ClosedHat), ("OH", OpenHat),
+        ] {
+            assert_eq!(DrumVoice::from_name(name), Some(want), "name {name}");
+            let note = note_from_name(name).unwrap();
+            assert_eq!(DrumVoice::for_note(note), Some(want), "{name} -> {note}");
+        }
+        // The GM aliases the map accepts but no name emits
+        for (note, want) in [(35u8, Kick), (40, Snare), (44, ClosedHat)] {
+            assert_eq!(DrumVoice::for_note(note), Some(want), "GM alias {note}");
+        }
+        // Nothing else on the keyboard belongs to the board
+        for note in 6u8..=127 {
+            let owned = matches!(note, 35 | 36 | 37 | 38 | 39 | 40 | 42 | 44 | 46);
+            assert_eq!(DrumVoice::for_note(note).is_some(), owned, "note {note}");
+        }
+    }
+
+    /// `activity()` is what the panel pads read, and it must be indexed by
+    /// `pad_index` — a pad glowing with another voice's VCA is the same
+    /// class of split-brain bug as the duck missing the sliver kick.
+    #[test]
+    fn activity_is_indexed_by_pad_index() {
+        for v in DrumVoice::ALL {
+            let mut dm = DrumMachine::new(SR);
+            dm.trigger(v, 1.0);
+            dm.render_next();
+            let act = dm.activity();
+            assert!(act[v.pad_index()] > 0.1, "{v:?} pad did not light");
+            for other in DrumVoice::ALL {
+                // The two hats share one source and one envelope pair
+                let hats = |x: DrumVoice| {
+                    matches!(x, DrumVoice::ClosedHat | DrumVoice::OpenHat)
+                };
+                if other != v && !(hats(v) && hats(other)) {
+                    assert!(
+                        act[other.pad_index()] < 0.05,
+                        "triggering {v:?} lit {other:?}'s pad"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Both routes to the kick are the same kick — including for anything
+    /// downstream that listens for one (the mixer's sidechain duck).
+    #[test]
+    fn the_sliver_kick_is_the_gm_kick() {
+        for note in [0u8, 35, 36] {
+            assert_eq!(DrumVoice::for_note(note), Some(DrumVoice::Kick), "note {note}");
+        }
+        // and they sound the same
+        let render_note = |note: u8| -> Vec<f32> {
+            let mut dm = DrumMachine::new(SR);
+            dm.trigger_note(note, 0.9);
+            render(&mut dm, (0.3 * SR) as usize)
+        };
+        let sliver = render_note(0);
+        let gm = render_note(36);
+        assert_eq!(sliver.len(), gm.len());
+        for (a, b) in sliver.iter().zip(&gm) {
+            assert!((a - b).abs() < 1e-6, "sliver kick differs from GM kick");
+        }
     }
 }

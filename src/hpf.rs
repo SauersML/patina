@@ -32,8 +32,18 @@ impl HighPassLadder {
     }
 
     /// At the 16 Hz minimum the filter is effectively transparent.
+    ///
+    /// The ceiling is the panel's 8 kHz OR what the sample rate can
+    /// carry, whichever is lower. `process` takes `tan(PI * fc / sr)`,
+    /// which passes through infinity and turns NEGATIVE once fc reaches
+    /// Nyquist; the integrator coefficient `g / (1 + g)` then exceeds 2
+    /// and the ladder diverges. The host chooses the rate, so a ceiling
+    /// written in absolute Hz is not a ceiling at all. (Measured: the
+    /// 909 hat bank, whose HPF sits at 5.2 kHz, went non-finite within
+    /// 435 samples at an 8 kHz host rate.)
     pub fn set_cutoff(&mut self, cutoff: f32) {
-        self.target_cutoff = cutoff.clamp(16.0, 8000.0);
+        let ceiling = (0.45 * self.sample_rate).clamp(16.0, 8000.0);
+        self.target_cutoff = cutoff.clamp(16.0, ceiling);
     }
 
     #[inline]

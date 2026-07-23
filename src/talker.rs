@@ -124,6 +124,13 @@ impl Lowpass {
 
     /// Recompute coefficients, keeping filter state (for swept filters).
     fn retune(&mut self, fc: f32, q: f32, sample_rate: f32) {
+        // The tube's band edges are fixed in Hz (4.8-6 kHz) and the wah
+        // sweeps to 4.8 kHz, but the host picks the sample rate — those
+        // corners are above Nyquist for anything under ~12 kHz. There
+        // the RBJ form's alpha goes negative and a2 leaves the unit
+        // circle: the filter explodes rather than detuning, and inf/NaN
+        // reaches the host's buffer.
+        let fc = fc.clamp(1.0, 0.45 * sample_rate);
         let w0 = std::f32::consts::TAU * fc / sample_rate;
         let alpha = w0.sin() / (2.0 * q);
         let cw = w0.cos();

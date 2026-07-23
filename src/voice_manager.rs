@@ -1,6 +1,6 @@
 use crate::song::Param;
 use crate::voice::Voice;
-use crate::drums::{DrumMachine, DRUM_CHANNEL};
+use crate::drums::{DrumMachine, DrumVoice, DRUM_CHANNEL};
 use crate::sampler::{slot_for_channel, SamplerBank, SamplerSlot};
 use crate::vox::{Syllable, VoxBox, VOX_CHANNEL};
 use crate::reverb::Reverb;
@@ -567,8 +567,13 @@ impl VoiceManager {
         // riding the accent line
         if channel == DRUM_CHANNEL {
             // The kick is the sidechain source: every BD trigger snaps
-            // the duck envelope of every strip that asked to be ducked
-            if note == 35 || note == 36 {
+            // the duck envelope of every strip that asked to be ducked.
+            // Ask the board which voice this note strikes rather than
+            // re-deriving the GM row here — the hand-written test used to
+            // miss the reserved low sliver's kick (note 0), which is the
+            // ONLY kick a Logic user can play, so ducking silently did
+            // nothing in the host it was most needed in.
+            if DrumVoice::for_note(note) == Some(DrumVoice::Kick) {
                 for m in self.channel_mix.values_mut() {
                     if m.duck > 0.0 {
                         m.duck_env = 1.0;
@@ -1524,6 +1529,77 @@ mod tests {
         let mut vm2 = VoiceManager::new(sr, 16);
         vm2.note_on(69, 0.9);
         assert_eq!(vm2.voices.iter().filter(|v| v.is_held()).count(), 1);
+    }
+
+    /// The sidechain must hear the kick by EITHER route. The reserved low
+    /// sliver (note 0) exists because Logic gives software-instrument
+    /// tracks no MIDI channel control, so in that host it is the only
+    /// kick a user can play — and the duck used to test raw GM note
+    /// numbers, so `duck=` silently did nothing there.
+    #[test]
+    fn the_duck_fires_from_either_kick_route() {
+        let sr = 48000.0;
+        let fired = |note: u8| -> bool {
+            let mut vm = VoiceManager::new(sr, 8);
+            vm.set_channel_param(1, Param::DuckAmount, 0.8);
+            vm.note_on_channel(note, 0.9, crate::drums::DRUM_CHANNEL);
+            vm.channel_mix.get(&1).map_or(false, |m| m.duck_env > 0.5)
+        };
+        assert!(fired(36), "GM kick must duck");
+        assert!(fired(35), "the GM kick's alias must duck");
+        assert!(fired(0), "the reserved low-sliver kick must duck too");
+        // and only the kick
+        for note in [1u8, 2, 3, 4, 5, 37, 38, 39, 42, 46] {
+            assert!(!fired(note), "note {note} is not the kick and must not duck");
+        }
+    }
+
+
+    /// The host picks the sample rate and hosts do probe them. Every
+    /// circuit whose corner frequency is written in Hz has to be pinned
+    /// under Nyquist, or it does not detune — it OSCILLATES, and the
+    /// host gets a diverging buffer from a plugin it already suspects.
+    /// This drives the whole engine, effects included, at every rate in
+    /// the supported band.
+    #[test]
+    fn the_whole_engine_is_stable_across_the_supported_rate_band() {
+        for sr in [
+            crate::MIN_SAMPLE_RATE as f32,
+            11025.0,
+            12000.0,
+            16000.0,
+            22050.0,
+            44100.0,
+            96000.0,
+            192000.0,
+        ] {
+            let mut vm = VoiceManager::new(sr, 8);
+            // every effect on, so nothing hides behind a dry default
+            vm.set_chorus_mix(0.6);
+            for (p, v) in [
+                (Param::ReverbWet, 0.6),
+                (Param::SpringWet, 0.6),
+                (Param::FuzzAmount, 0.7),
+                (Param::TapeDrive, 0.7),
+                (Param::TapeAge, 0.6),
+                (Param::TapeWow, 0.5),
+                (Param::TapeFlutter, 0.5),
+            ] {
+                p.apply(&mut vm, v);
+            }
+            vm.note_on(57, 0.9);
+            vm.note_on(64, 0.8);
+            for note in [36u8, 38, 37, 39, 42, 46] {
+                vm.note_on_channel(note, 0.9, crate::drums::DRUM_CHANNEL);
+            }
+            let mut peak = 0.0f32;
+            for k in 0..(2 * sr as usize) {
+                let (l, r) = vm.render_next();
+                assert!(l.is_finite() && r.is_finite(), "sr {sr} non-finite at {k}");
+                peak = peak.max(l.abs()).max(r.abs());
+            }
+            assert!(peak < 1e3, "sr {sr} blew up, peak {peak}");
+        }
     }
 
     #[test]

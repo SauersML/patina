@@ -35,9 +35,41 @@ const WHITEN_FLOOR: f32 = 0.015;
 /// Per-bin gain ceiling after whitening.
 const MAX_GAIN: f32 = 10.0;
 
+/// Twiddle factors for every radix-2 stage, computed once.
+///
+/// A stage's factors depend only on its length, not on the transform's,
+/// so one flat table serves every power-of-two size up to N: stage `len`
+/// occupies `len/2` entries starting at `len/2 - 1`. N-1 entries total,
+/// ~8 KB.
+///
+/// This replaces recomputing each twiddle inside the butterfly loop by
+/// complex multiplication — four multiplies and two adds of pure
+/// bookkeeping on every one of the ~140 butterflies this circuit runs per
+/// output sample, on the audio thread. It is also more accurate: the
+/// recurrence drifted over the 512 iterations of the widest stage.
+fn twiddles() -> &'static [(f32, f32)] {
+    use std::sync::OnceLock;
+    static TABLE: OnceLock<Vec<(f32, f32)>> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut v = Vec::with_capacity(N - 1);
+        let mut len = 2usize;
+        while len <= N {
+            for k in 0..len / 2 {
+                let a = -std::f32::consts::TAU * k as f32 / len as f32;
+                v.push((a.cos(), a.sin()));
+            }
+            len <<= 1;
+        }
+        v
+    })
+}
+
 /// Radix-2 iterative FFT, in place. `inverse` includes the 1/N scale.
+/// `n` must be a power of two no larger than N (the twiddle table's size).
 fn fft(re: &mut [f32], im: &mut [f32], inverse: bool) {
     let n = re.len();
+    debug_assert!(n.is_power_of_two() && n <= N, "fft size {n}");
+    let tw = twiddles();
     // Bit-reversal permutation
     let mut j = 0usize;
     for i in 0..n {
@@ -52,25 +84,23 @@ fn fft(re: &mut [f32], im: &mut [f32], inverse: bool) {
         }
         j |= m;
     }
-    let sign = if inverse { 1.0 } else { -1.0 };
+    // The inverse transform is the forward one with conjugated twiddles
+    let conj = if inverse { -1.0f32 } else { 1.0 };
     let mut len = 2;
     while len <= n {
-        let ang = sign * std::f32::consts::TAU / len as f32;
-        let (wr, wi) = (ang.cos(), ang.sin());
+        let half = len / 2;
+        let stage = &tw[half - 1..half - 1 + half];
         let mut i = 0;
         while i < n {
-            let (mut cr, mut ci) = (1.0f32, 0.0f32);
-            for k in 0..len / 2 {
+            for (k, &(wr, wi)) in stage.iter().enumerate() {
+                let (cr, ci) = (wr, conj * wi);
                 let (ar, ai) = (re[i + k], im[i + k]);
-                let (br, bi) = (re[i + k + len / 2], im[i + k + len / 2]);
+                let (br, bi) = (re[i + k + half], im[i + k + half]);
                 let (tr, ti) = (br * cr - bi * ci, br * ci + bi * cr);
                 re[i + k] = ar + tr;
                 im[i + k] = ai + ti;
-                re[i + k + len / 2] = ar - tr;
-                im[i + k + len / 2] = ai - ti;
-                let ncr = cr * wr - ci * wi;
-                ci = cr * wi + ci * wr;
-                cr = ncr;
+                re[i + k + half] = ar - tr;
+                im[i + k + half] = ai - ti;
             }
             i += len;
         }
@@ -110,6 +140,17 @@ pub struct Spectral {
     in_m: [f32; N],
     in_c: [f32; N],
     ola: [f32; N],
+    /// Where the next input sample lands — and therefore where the OLDEST
+    /// held sample currently sits, which is where a frame starts reading.
+    ///
+    /// These two buffers used to be shifted left by one every sample
+    /// (`copy_within(1.., 0)`), which is 8 KB of memmove per sample: at
+    /// 48 kHz that is ~390 MB/s of pure copying on the audio thread, for
+    /// a circuit whose actual work happens once every HOP samples. The
+    /// host is entitled to kill a plugin that behaves like that, and this
+    /// one has been reported for exactly that. A write cursor costs one
+    /// store instead.
+    in_pos: usize,
     fill: usize,
     out_pos: usize,
     window: [f32; N],
@@ -137,6 +178,7 @@ impl Spectral {
             in_m: [0.0; N],
             in_c: [0.0; N],
             ola: [0.0; N],
+            in_pos: 0,
             fill: 0,
             out_pos: 0,
             window,
@@ -151,9 +193,20 @@ impl Spectral {
         let mut mi = [0.0f32; N];
         let mut cr = [0.0f32; N];
         let mut ci = [0.0f32; N];
-        for k in 0..N {
-            mr[k] = self.in_m[k] * self.window[k];
-            cr[k] = self.in_c[k] * self.window[k];
+        // Read the rings in time order: oldest sample first. `in_pos` is
+        // both the next write slot and the oldest sample, so the frame is
+        // [in_pos..N] followed by [0..in_pos].
+        let (m_recent, m_oldest) = self.in_m.split_at(self.in_pos);
+        let (c_recent, c_oldest) = self.in_c.split_at(self.in_pos);
+        for (k, ((&m, &c), &w)) in m_oldest
+            .iter()
+            .chain(m_recent)
+            .zip(c_oldest.iter().chain(c_recent))
+            .zip(self.window.iter())
+            .enumerate()
+        {
+            mr[k] = m * w;
+            cr[k] = c * w;
         }
         fft(&mut mr, &mut mi, false);
         fft(&mut cr, &mut ci, false);
@@ -212,11 +265,10 @@ impl Spectral {
     /// One sample in, one sample out (N-sample latency, constant).
     #[inline]
     pub fn process(&mut self, modulator: f32, carrier: f32) -> f32 {
-        // Slide inputs left by one into the frame buffers
-        self.in_m.copy_within(1.., 0);
-        self.in_c.copy_within(1.., 0);
-        self.in_m[N - 1] = modulator;
-        self.in_c[N - 1] = carrier;
+        // One store per input, not a 4 KB shift each (see `in_pos`)
+        self.in_m[self.in_pos] = modulator;
+        self.in_c[self.in_pos] = carrier;
+        self.in_pos = (self.in_pos + 1) % N;
 
         let y = self.ola[self.out_pos];
         self.ola[self.out_pos] = 0.0;
@@ -306,6 +358,80 @@ mod tests {
         assert!(
             held > 0.2,
             "the frozen mouth must keep the held note sounding, got {held}"
+        );
+    }
+
+    /// The transform itself, pinned independently of the vocoder around
+    /// it: the twiddles come from a table now, not from a per-butterfly
+    /// complex-multiply recurrence, and a wrong table would be a subtle
+    /// spectral smear rather than an obvious failure.
+    #[test]
+    fn fft_round_trips_and_lands_on_the_right_bin() {
+        // A pure cosine at bin 37 must put all its energy in bins 37 and
+        // N-37, and nowhere else
+        let bin = 37usize;
+        let mut re = [0.0f32; N];
+        let mut im = [0.0f32; N];
+        for k in 0..N {
+            re[k] = (std::f32::consts::TAU * bin as f32 * k as f32 / N as f32).cos();
+        }
+        let original = re;
+        fft(&mut re, &mut im, false);
+        for k in 0..N {
+            let mag = (re[k] * re[k] + im[k] * im[k]).sqrt();
+            if k == bin || k == N - bin {
+                assert!((mag - N as f32 / 2.0).abs() < 0.5, "bin {k} magnitude {mag}");
+            } else {
+                assert!(mag < 0.05, "bin {k} should be empty, got {mag}");
+            }
+        }
+        // ...and the inverse must give the signal back
+        fft(&mut re, &mut im, true);
+        for k in 0..N {
+            assert!(
+                (re[k] - original[k]).abs() < 1e-4,
+                "round trip drifted at {k}: {} vs {}",
+                re[k],
+                original[k]
+            );
+            assert!(im[k].abs() < 1e-4, "round trip grew an imaginary part at {k}");
+        }
+        // Linearity across a non-trivial signal, at the sizes the
+        // envelope path also uses
+        for n in [16usize, 256, N] {
+            let mut r: Vec<f32> = (0..n).map(|i| ((i * 7919) % 101) as f32 / 50.0 - 1.0).collect();
+            let mut i_ = vec![0.0f32; n];
+            let want = r.clone();
+            fft(&mut r, &mut i_, false);
+            fft(&mut r, &mut i_, true);
+            for k in 0..n {
+                assert!((r[k] - want[k]).abs() < 1e-4, "size {n} round trip at {k}");
+            }
+        }
+    }
+
+    /// Audio-thread cost. This circuit runs per sample inside the host's
+    /// callback, and the AU has already been reported by Logic as
+    /// destabilising the system on CPU. Run by hand:
+    ///   cargo test --release perf_spectral -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn perf_spectral() {
+        let sr = 48000.0;
+        let mut s = Spectral::new(sr);
+        let n = 48000 * 10;
+        let t = std::time::Instant::now();
+        let mut acc = 0.0f32;
+        for k in 0..n {
+            let m = (std::f32::consts::TAU * 220.0 * k as f32 / sr).sin() * 0.4;
+            let c = (((k as f32 * 110.0 / sr) % 1.0) * 2.0 - 1.0) * 5.0;
+            acc += s.process(m, c);
+        }
+        let secs = t.elapsed().as_secs_f64();
+        println!(
+            "spectral: {:.1}x realtime, {:.2}% of one core at 48 kHz (sink {acc})",
+            (n as f64 / 48000.0) / secs,
+            100.0 * secs / (n as f64 / 48000.0)
         );
     }
 }

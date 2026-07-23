@@ -151,7 +151,8 @@
 // 1 = wire, 0 = felt blanket — the dusty-kit knob).
 //
 // The tape deck (per sampler track via `automate <track>.<param>`, or
-// global to all slots): smp_pitch (semitones, -24..24), smp_start (0..1
+// global to all slots): smp_pitch (semitones, -48..48 — four octaves of
+// varispeed, enough for a tape-stop swoop), smp_start (0..1
 // needle-drop point), smp_gain (0..2), smp_pan (-1..1), smp_attack,
 // smp_release (seconds), smp_cutoff (Hz, 20000 = open), smp_res (0..1).
 
@@ -339,7 +340,7 @@ param_table! {
     VoxIntonation:   "vox_intonation", Some(16),  (0.0, 1.0, Lin);
     // The tape deck (sampler.rs): per-slot transport controls, routed to
     // a slot by the track's channel (global automation reaches all slots)
-    SmpPitch:        "smp_pitch",      Some(9),   (-24.0, 24.0, Lin);
+    SmpPitch:        "smp_pitch",      Some(9),   (-48.0, 48.0, Lin);
     SmpStart:        "smp_start",      Some(17),  (0.0, 1.0, Lin);
     SmpGain:         "smp_gain",       Some(8),   (0.0, 2.0, Lin);
     // CC10 is the standard pan, which here pans the sampler
@@ -1469,21 +1470,21 @@ fn parse_sampler_option(
     } else if opt == "mono" || opt == "choke" {
         cfg.mono = true;
     } else if let Some(v) = opt.strip_prefix("gain=") {
-        cfg.gain = secs(v, "gain")?.clamp(0.0, 2.0);
+        cfg.gain = Param::SmpGain.clamp(secs(v, "gain")?);
     } else if let Some(v) = opt.strip_prefix("pan=") {
-        cfg.pan = secs(v, "pan")?.clamp(-1.0, 1.0);
+        cfg.pan = Param::SmpPan.clamp(secs(v, "pan")?);
     } else if let Some(v) = opt.strip_prefix("pitch=") {
-        cfg.pitch_semis = secs(v, "pitch")?.clamp(-48.0, 48.0);
+        cfg.pitch_semis = Param::SmpPitch.clamp(secs(v, "pitch")?);
     } else if let Some(v) = opt.strip_prefix("attack=") {
-        cfg.attack = secs(v, "attack")?.clamp(0.001, 4.0);
+        cfg.attack = Param::SmpAttack.clamp(secs(v, "attack")?);
     } else if let Some(v) = opt.strip_prefix("release=") {
-        cfg.release = secs(v, "release")?.clamp(0.003, 8.0);
+        cfg.release = Param::SmpRelease.clamp(secs(v, "release")?);
     } else if let Some(v) = opt.strip_prefix("vel_amt=") {
         cfg.vel_amt = secs(v, "vel_amt")?.clamp(0.0, 1.0);
     } else if let Some(v) = opt.strip_prefix("cutoff=") {
-        cfg.cutoff = secs(v, "cutoff")?.clamp(60.0, 20000.0);
+        cfg.cutoff = Param::SmpCutoff.clamp(secs(v, "cutoff")?);
     } else if let Some(v) = opt.strip_prefix("res=") {
-        cfg.res = secs(v, "res")?.clamp(0.0, 1.0);
+        cfg.res = Param::SmpRes.clamp(secs(v, "res")?);
     } else {
         return Err(format!("unknown track option '{}'", opt));
     }

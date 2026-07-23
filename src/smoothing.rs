@@ -46,6 +46,12 @@ pub fn dc_blocker_pole(cutoff_hz: f32, sample_rate: f32) -> f32 {
 /// Naming it keeps that exact voicing where it was tuned and makes the
 /// other rates agree with it instead of drifting to 31.7 Hz (44.1 k) or
 /// 69 Hz (96 k).
+///
+/// NOTE: the circuit Moog drawing #1149 specifies (2.5 uF into the ~2 K
+/// following stage) is 1/(2*pi*R*C) = 31.8 Hz, not 34.5. Moving to the
+/// schematic figure would be more faithful but WOULD revoice every
+/// existing render slightly, so it is deliberately left at the tuned
+/// value; `the_named_constants_preserve_the_48k_voicing` enforces that.
 pub const DC_BLOCK_HZ: f32 = 34.5;
 
 /// Knob de-zipper time constant: long enough to kill stepping on a

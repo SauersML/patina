@@ -843,8 +843,11 @@ unsafe extern "C" fn au_set_property(
                 return kAudioUnitErr_InvalidPropertyValue;
             }
             let rate = *(in_data as *const f64);
-            if !(rate.is_finite() && (1.0..=1_000_000.0).contains(&rate)) {
-                return kAudioUnitErr_InvalidPropertyValue;
+            // Refuse rates the engine cannot be built at rather than
+            // running its fixed-Hz resonators above Nyquist, where they
+            // diverge (see crate::MIN_SAMPLE_RATE)
+            if !crate::supported_sample_rate(rate) {
+                return kAudioUnitErr_FormatNotSupported;
             }
             {
                 let mut st = unit.state.lock();
@@ -867,7 +870,7 @@ unsafe extern "C" fn au_set_property(
                 || !float_flag
                 || asbd.mBitsPerChannel != 32
                 || asbd.mChannelsPerFrame != 2
-                || !(asbd.mSampleRate.is_finite() && asbd.mSampleRate > 0.0)
+                || !crate::supported_sample_rate(asbd.mSampleRate)
             {
                 return kAudioUnitErr_FormatNotSupported;
             }
@@ -2068,5 +2071,30 @@ mod tests {
                 kAudio_ParamError
             );
         }
+    }
+
+    /// The rate band the AU advertises must be the band the engine is
+    /// actually stable at — the per-module
+    /// `..._across_the_supported_rate_band` tests sweep exactly this
+    /// range. If the engine's floor moves, this boundary moves with it;
+    /// it is not a second opinion about what a host may ask for.
+    #[test]
+    fn the_accepted_rate_band_is_the_engines_band() {
+        use crate::supported_sample_rate as ok;
+        // Every rate a host actually offers
+        for r in [
+            8000.0, 11025.0, 16000.0, 22050.0, 32000.0, 44100.0, 48000.0, 88200.0,
+            96000.0, 176400.0, 192000.0, 384000.0,
+        ] {
+            assert!(ok(r), "{r} Hz is a standard host rate and must be accepted");
+        }
+        // ...and nothing outside the band the circuits survive
+        for r in [
+            0.0, 1.0, 100.0, 1000.0, 4000.0, 7999.0, 1_000_000.0, f64::NAN,
+            f64::INFINITY, -48000.0,
+        ] {
+            assert!(!ok(r), "{r} Hz must be refused, not rendered as garbage");
+        }
+        assert_eq!(crate::MIN_SAMPLE_RATE, 8000.0);
     }
 }

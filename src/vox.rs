@@ -1980,6 +1980,85 @@ mod tests {
         assert!(rms(&out[out.len() / 2..]) > 0.03, "the voice never recovered");
     }
 
+    /// Audio-thread cost of each vox circuit, per sample, in the host's
+    /// callback. Run by hand:
+    ///   cargo test --release perf_vox -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn perf_vox() {
+        let sr = 48000.0;
+        let n = 48000 * 5;
+        let saw = |k: usize| (((k as f32 * 110.0 / sr) % 1.0) * 2.0 - 1.0) * 5.0;
+        for mode in [
+            crate::vocoder::VocoderMode::TalkBox,
+            crate::vocoder::VocoderMode::Vocoder,
+            crate::vocoder::VocoderMode::Talker,
+            crate::vocoder::VocoderMode::Spectral,
+        ] {
+            let mut vb = VoxBox::new(sr);
+            vb.set_mode(mode);
+            vb.source.set_syllable(parse_lyric("AA").unwrap());
+            vb.note_on(45, 1.0);
+            let t = std::time::Instant::now();
+            let mut acc = 0.0f32;
+            for k in 0..n {
+                acc += vb.process(saw(k));
+            }
+            let secs = t.elapsed().as_secs_f64();
+            println!(
+                "vox {mode:?}: {:.1}x realtime, {:.2}% of one core (sink {acc:.1})",
+                (n as f64 / sr as f64) / secs,
+                100.0 * secs / (n as f64 / sr as f64)
+            );
+        }
+        // The formant voice on its own (the modulator half of the above)
+        let mut v = VoxSource::new(sr);
+        v.set_syllable(parse_lyric("AA").unwrap());
+        v.note_on(45, 1.0);
+        let t = std::time::Instant::now();
+        let mut acc = 0.0f32;
+        for _ in 0..n {
+            acc += v.render();
+        }
+        let secs = t.elapsed().as_secs_f64();
+        println!(
+            "vox source alone: {:.1}x realtime, {:.2}% of one core (sink {acc:.1})",
+            (n as f64 / sr as f64) / secs,
+            100.0 * secs / (n as f64 / sr as f64)
+        );
+    }
+
+
+    /// The vox circuits are full of corners fixed in Hz: the talk box's
+    /// 4.8 kHz tube edge, the vocoder's 120 Hz..7.2 kHz bank, the wah's
+    /// sweep top. Every one is an RBJ biquad, which does not merely
+    /// detune above Nyquist — alpha goes negative, a2 leaves the unit
+    /// circle and it oscillates. Measured before the fix: TalkBox mode
+    /// went non-finite within 700 samples at an 8 kHz host rate.
+    #[test]
+    fn every_mode_is_stable_across_the_supported_rate_band() {
+        for sr in [crate::MIN_SAMPLE_RATE as f32, 11025.0, 16000.0, 22050.0, 44100.0, 96000.0] {
+            for mode in [
+                crate::vocoder::VocoderMode::TalkBox,
+                crate::vocoder::VocoderMode::Vocoder,
+                crate::vocoder::VocoderMode::Talker,
+                crate::vocoder::VocoderMode::Spectral,
+            ] {
+                let mut vb = VoxBox::new(sr);
+                vb.set_mode(mode);
+                vb.source.set_syllable(parse_lyric("AA").unwrap());
+                vb.note_on(45, 1.0);
+                let mut peak = 0.0f32;
+                for k in 0..(sr as usize) {
+                    let y = vb.process((((k as f32 * 110.0 / sr) % 1.0) * 2.0 - 1.0) * 5.0);
+                    assert!(y.is_finite(), "sr {sr} {mode:?} went non-finite at {k}");
+                    peak = peak.max(y.abs());
+                }
+                assert!(peak < 1e3, "sr {sr} {mode:?} blew up, peak {peak}");
+            }
+        }
+    }
+
     /// WAV round trip: write a file with the engine's own writer format
     /// (float32 stereo), read it back mono, use it as the modulator.
     #[test]

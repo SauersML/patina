@@ -755,7 +755,17 @@ impl Shelf {
 }
 
 /// Real-axis z-plane root for a first-order factor at `freq`, prewarped.
+///
+/// The corner is pinned under Nyquist first. `tan` runs to infinity at
+/// Nyquist and comes back NEGATIVE beyond it, which puts the root outside
+/// the unit circle — the record shelf's 8 kHz pole becomes an oscillator
+/// at every host rate below 16 kHz (measured: the tape stage reached
+/// 3e5 within a second at 8 kHz, from a half-scale sine). The host picks
+/// the rate, so a corner written in Hz cannot be trusted to sit in band.
+/// Record and playback shelves are clamped identically, so they still
+/// cancel exactly.
 fn bilinear_root(sample_rate: f32, freq: f32) -> f32 {
+    let freq = freq.clamp(0.0, 0.45 * sample_rate);
     let t = (PI * freq / sample_rate).tan();
     (1.0 - t) / (1.0 + t)
 }
@@ -1737,6 +1747,28 @@ mod tests {
                 elapsed,
                 audio_time
             );
+        }
+    }
+
+    #[test]
+    fn the_deck_is_stable_across_the_supported_rate_band() {
+        // The record shelf's pole sits at 8 kHz — above Nyquist for every
+        // host rate under 16 kHz, where the bilinear root left the unit
+        // circle and the deck became an oscillator (measured: 3e5).
+        for sr in [crate::MIN_SAMPLE_RATE as f32, 11025.0, 12000.0, 16000.0, 22050.0, 44100.0, 96000.0] {
+            let mut t = Tape::new(sr);
+            t.set_drive(0.7);
+            t.set_age(0.5);
+            t.set_wow(0.5);
+            t.set_flutter(0.5);
+            let mut peak = 0.0f32;
+            for k in 0..(sr as usize) {
+                let x = (std::f32::consts::TAU * 220.0 * k as f32 / sr).sin() * 0.5;
+                let (l, r) = t.process(x, x);
+                assert!(l.is_finite() && r.is_finite(), "tape sr {sr} non-finite at {k}");
+                peak = peak.max(l.abs()).max(r.abs());
+            }
+            assert!(peak < 100.0, "tape sr {sr} blew up, peak {peak}");
         }
     }
 }

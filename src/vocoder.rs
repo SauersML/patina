@@ -87,6 +87,15 @@ struct Bandpass {
 
 impl Bandpass {
     fn tuned(fc: f32, q: f32, sample_rate: f32) -> Self {
+        // The band centres are fixed in Hz (120 Hz .. 7.2 kHz) but the
+        // host picks the sample rate, and the top of the bank is above
+        // Nyquist for every rate under ~14.4 kHz. There the RBJ form's
+        // alpha goes negative and a2 leaves the unit circle: the filter
+        // is not detuned, it EXPLODES, and inf/NaN reaches the host's
+        // buffer (measured: TalkBox mode non-finite within 700 samples
+        // at 8 kHz, the lowest rate the engine accepts). Keep every
+        // centre inside the band the rate can actually carry.
+        let fc = fc.clamp(1.0, 0.45 * sample_rate);
         let w0 = std::f32::consts::TAU * fc / sample_rate;
         let alpha = w0.sin() / (2.0 * q);
         let a0 = 1.0 + alpha;

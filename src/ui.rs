@@ -34,21 +34,33 @@ const BLACK_KEY_INDICES: [usize; 5] = [1, 3, 6, 8, 10];
 
 /// The right-hand 909 pad grid on the QWERTY keyboard, mirrored as
 /// clickable pads beside the piano: (drum name, key hint, key, base
-/// velocity, glyph/activity index, ghost). Top row K L ; ' sits over
-/// bottom row , . / — hats and colors above, kick/snare/clap backbone
-/// below. Shift is the accent line; the ' pad is a ghost snare for
-/// rolls. Pads carry pictographic glyphs, not abbreviations.
-const PAD_TOP: [(&str, &str, Key, f32, usize, bool); 4] = [
-    ("CH", "K", Key::K, 0.7, 4, false),
-    ("OH", "L", Key::L, 0.7, 5, false),
-    ("RS", ";", Key::Semicolon, 0.75, 2, false),
-    ("SD", "'", Key::Quote, 0.35, 1, true),
+/// velocity, ghost). Top row K L ; ' sits over bottom row , . / — hats
+/// and colors above, kick/snare/clap backbone below. Shift is the accent
+/// line; the ' pad is a ghost snare for rolls. Pads carry pictographic
+/// glyphs, not abbreviations.
+///
+/// The name is the pad's ONLY identity: which envelope lights it and
+/// which note it puts on the trigger bus both come from
+/// `drums::DrumVoice`. These rows used to carry a hand-written index
+/// into `activity()` as well, which is a second opinion about what "CH"
+/// means — a pad could glow with one voice's VCA while striking another.
+const PAD_TOP: [(&str, &str, Key, f32, bool); 4] = [
+    ("CH", "K", Key::K, 0.7, false),
+    ("OH", "L", Key::L, 0.7, false),
+    ("RS", ";", Key::Semicolon, 0.75, false),
+    ("SD", "'", Key::Quote, 0.35, true),
 ];
-const PAD_BOTTOM: [(&str, &str, Key, f32, usize, bool); 3] = [
-    ("BD", ",", Key::Comma, 0.85, 0, false),
-    ("SD", ".", Key::Period, 0.8, 1, false),
-    ("CP", "/", Key::Slash, 0.8, 3, false),
+const PAD_BOTTOM: [(&str, &str, Key, f32, bool); 3] = [
+    ("BD", ",", Key::Comma, 0.85, false),
+    ("SD", ".", Key::Period, 0.8, false),
+    ("CP", "/", Key::Slash, 0.8, false),
 ];
+
+/// A pad's slot in `DrumMachine::activity()`, from its name. Unknown
+/// names (which the pad tables never hold) fall back to the kick's slot.
+fn pad_activity_index(name: &str) -> usize {
+    crate::drums::DrumVoice::from_name(name).map_or(0, |v| v.pad_index())
+}
 
 pub struct SynthUI {
     current_octave: i32,
@@ -1781,7 +1793,8 @@ impl SynthUI {
             }
         };
 
-        for (i, &(_, hint, _, _, act_idx, ghost)) in PAD_TOP.iter().enumerate() {
+        for (i, &(name, hint, _, _, ghost)) in PAD_TOP.iter().enumerate() {
+            let act_idx = pad_activity_index(name);
             let pad_rect = Rect::from_min_size(
                 pos2(rect.left() + i as f32 * (top_w + gap), rect.top() + 2.0),
                 vec2(top_w, row_h),
@@ -1789,7 +1802,8 @@ impl SynthUI {
             let act = if ghost { self.ghost_flash } else { activity[act_idx] };
             draw_pad(painter, pad_rect, act_idx, ghost, hint, act, i);
         }
-        for (i, &(_, hint, _, _, act_idx, ghost)) in PAD_BOTTOM.iter().enumerate() {
+        for (i, &(name, hint, _, _, ghost)) in PAD_BOTTOM.iter().enumerate() {
+            let act_idx = pad_activity_index(name);
             let pad_rect = Rect::from_min_size(
                 pos2(
                     rect.left() + i as f32 * (bot_w + gap),
@@ -1803,7 +1817,7 @@ impl SynthUI {
         // Strike on press edge; dragging across pads re-strikes, drummily
         match struck {
             Some(idx) if self.mouse_pad_down != Some(idx) => {
-                let (name, _, _, base_vel, _, _) = if idx < 4 {
+                let (name, _, _, base_vel, _) = if idx < 4 {
                     PAD_TOP[idx]
                 } else {
                     PAD_BOTTOM[idx - 4]
@@ -1914,7 +1928,7 @@ impl SynthUI {
         // The right-hand 909 pads: K L ; ' over , . / — one-shots on the
         // drum channel, Shift is the accent line
         let shift = ctx.input(|i| i.modifiers.shift);
-        for &(name, _, key, base_vel, _, _) in PAD_TOP.iter().chain(PAD_BOTTOM.iter()) {
+        for &(name, _, key, base_vel, _) in PAD_TOP.iter().chain(PAD_BOTTOM.iter()) {
             if ctx.input(|i| i.key_pressed(key)) && !chord && !self.pressed_drum_keys.contains(&key)
             {
                 self.pressed_drum_keys.insert(key);

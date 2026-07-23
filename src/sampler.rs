@@ -605,19 +605,31 @@ impl SamplerBank {
         let Some(slot) = self.slots.get_mut(index).and_then(|s| s.as_mut()) else {
             return true;
         };
+        // ONE clamp, from the parameter table row — the same bounds the
+        // host's knob, the DSL's `pitch=`/`gain=`/... options and this
+        // setter all get. Writing the numbers out here again is how
+        // `smp_pitch` came to accept +-48 semitones while the table
+        // advertised +-24 to every host that asked.
+        let value = param.clamp(value);
         let c = &mut slot.cfg;
         match param {
-            Param::SmpPitch => c.pitch_semis = value.clamp(-48.0, 48.0),
-            Param::SmpStart => c.scrub = value.clamp(0.0, 1.0),
-            Param::SmpGain => c.gain = value.clamp(0.0, 2.0),
-            Param::SmpPan => c.pan = value.clamp(-1.0, 1.0),
-            Param::SmpAttack => c.attack = value.clamp(0.001, 4.0),
-            Param::SmpRelease => c.release = value.clamp(0.003, 8.0),
-            Param::SmpCutoff => c.cutoff = value.clamp(60.0, 20000.0),
-            Param::SmpRes => c.res = value.clamp(0.0, 1.0),
+            Param::SmpPitch => c.pitch_semis = value,
+            Param::SmpStart => c.scrub = value,
+            Param::SmpGain => c.gain = value,
+            Param::SmpPan => c.pan = value,
+            Param::SmpAttack => c.attack = value,
+            Param::SmpRelease => c.release = value,
+            Param::SmpCutoff => c.cutoff = value,
+            Param::SmpRes => c.res = value,
             _ => return false,
         }
         true
+    }
+
+    /// A slot's live transport settings (the sweep test reads these back).
+    #[cfg(test)]
+    pub(crate) fn slot_cfg(&self, index: usize) -> Option<SlotConfig> {
+        self.slots.get(index).and_then(|s| s.as_ref()).map(|s| s.cfg)
     }
 
     pub fn note_on(&mut self, slot_idx: usize, note: u8, velocity: f32) {
@@ -1629,6 +1641,72 @@ mod tests {
         for _ in 0..4800 {
             let (l, r) = bank.render_next(1.0);
             assert!(l.is_finite() && r.is_finite(), "NaN slot config poisoned the mix");
+        }
+    }
+
+    /// The deck's own "no silently clamped params" sweep. `song.rs`'s
+    /// table-wide version cannot reach these: they need a loaded slot, so
+    /// its `readback` skips them — which is exactly how `smp_pitch` sat at
+    /// +-48 in both setters while the table told every host +-24 for as
+    /// long as it did. Drive each param to both documented extremes and
+    /// require the slot to hold them EXACTLY.
+    #[test]
+    fn every_sampler_param_reaches_its_documented_range() {
+        let params = [
+            Param::SmpPitch,
+            Param::SmpStart,
+            Param::SmpGain,
+            Param::SmpPan,
+            Param::SmpAttack,
+            Param::SmpRelease,
+            Param::SmpCutoff,
+            Param::SmpRes,
+        ];
+        let read = |cfg: &SlotConfig, p: Param| match p {
+            Param::SmpPitch => cfg.pitch_semis,
+            Param::SmpStart => cfg.scrub,
+            Param::SmpGain => cfg.gain,
+            Param::SmpPan => cfg.pan,
+            Param::SmpAttack => cfg.attack,
+            Param::SmpRelease => cfg.release,
+            Param::SmpCutoff => cfg.cutoff,
+            Param::SmpRes => cfg.res,
+            _ => unreachable!(),
+        };
+        for p in params {
+            assert!(is_sampler_param(p), "{} is missing from the deck's claim list", p.name());
+            let (lo, hi, _) = p.range();
+            for target in [lo, hi] {
+                let mut bank = bank_with(SlotConfig::default());
+                assert!(bank.set_param(0, p, target), "{} was not claimed", p.name());
+                let got = read(&bank.slot_cfg(0).unwrap(), p);
+                assert!(
+                    (got - target).abs() <= target.abs() * 1e-6 + 1e-6,
+                    "'{}' set to {} but the deck recorded {} — a stale clamp?",
+                    p.name(),
+                    target,
+                    got
+                );
+            }
+            // And past the ends it clamps TO the table, not past it
+            let mut bank = bank_with(SlotConfig::default());
+            let span = (hi - lo).abs() + 1.0;
+            bank.set_param(0, p, hi + span);
+            let got = read(&bank.slot_cfg(0).unwrap(), p);
+            assert!((got - hi).abs() < 1e-4, "'{}' overshot its top: {got}", p.name());
+            bank.set_param(0, p, lo - span);
+            let got = read(&bank.slot_cfg(0).unwrap(), p);
+            assert!((got - lo).abs() < 1e-4, "'{}' undershot its floor: {got}", p.name());
+        }
+        // The claim list holds nothing that is not a deck param, and
+        // misses none that is
+        for def in crate::song::PARAM_DEFS {
+            assert_eq!(
+                is_sampler_param(def.param),
+                params.contains(&def.param),
+                "'{}' is on the wrong side of is_sampler_param",
+                def.name
+            );
         }
     }
 

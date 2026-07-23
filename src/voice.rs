@@ -31,13 +31,6 @@ const MIXER_GAIN: f32 = 0.45;
 /// accumulates in cents per octave away from this point.
 const CAL_REF_HZ: f32 = 261.63;
 
-/// Corner of the post-filter output coupling. Moog dwg #1149's 2.5 uF
-/// into the ~2K following stage puts it at 1/(2*pi*R*C) = 31.8 Hz. It is
-/// a component value, so it stays put in HERTZ: a hardcoded pole is a
-/// 44.1 kHz assumption that becomes a 69 Hz high-pass at 96 kHz and guts
-/// the bottom octave of every bass patch.
-const DC_BLOCK_HZ: f32 = 31.8;
-
 /// The mean-tracker that keeps exponential FM pitch-neutral, as a TIME
 /// constant rather than a per-sample coefficient (see render's FM block).
 const FM_MEAN_TAU_S: f32 = 0.09;
