@@ -18,8 +18,11 @@ use crate::panel::{
 };
 
 /// Logical size of the editor window; the backdrop is baked at this size.
+/// The panel now lays out the full synth surface (oscillators 1-3, the
+/// source mixer, unison, routing, and the extended reverb), so it is taller
+/// than the original four-row layout.
 pub const EDITOR_WIDTH: u32 = 1200;
-pub const EDITOR_HEIGHT: u32 = 596;
+pub const EDITOR_HEIGHT: u32 = 900;
 
 /// What the editor needs from its host: parameter access by table index
 /// (the index into `host_params::param_defs()`, which is also the AU
@@ -99,11 +102,11 @@ impl EditorState {
         }
     }
 
-    fn wave_selector(&mut self, ui: &mut egui::Ui) {
-        let (idx, _) = self.choice("waveform");
+    fn wave_selector(&mut self, ui: &mut egui::Ui, id: &str) {
+        let (idx, _) = self.choice(id);
         let current = (self.host.get(idx).round().max(0.0) as usize).min(3);
         let mut selected = host_params::WAVEFORM_VARIANTS[current];
-        if waveform_selector(ui, "editor-wave", &mut selected) {
+        if waveform_selector(ui, id, &mut selected) {
             let new_index = host_params::WAVEFORM_VARIANTS
                 .iter()
                 .position(|w| *w == selected)
@@ -123,18 +126,16 @@ impl EditorState {
         }
     }
 
-    /// One drum voice: a sublegend over its compact knobs.
-    fn drum_group(&mut self, ui: &mut egui::Ui, title: &str, ids: &[&str]) {
+    /// One drum voice: a sublegend over its compact knobs. Each entry is an
+    /// (id, short label) pair — the group header carries the instrument name
+    /// (spelled out in the host list), so the knob shows just the parameter.
+    fn drum_group(&mut self, ui: &mut egui::Ui, title: &str, controls: &[(&str, &str)]) {
         ui.vertical(|ui| {
             ui.add_space(2.0);
             ui.label(sublegend(title));
             ui.horizontal(|ui| {
-                for id in ids {
-                    let (_, fd) = self.float(id);
-                    // "BD Level" -> "Level": the group header carries the voice
-                    let label = fd.name.split_once(' ').map(|(_, l)| l).unwrap_or(fd.name);
-                    let label = label.to_string();
-                    self.pknob(ui, id, Some(&label), true);
+                for (id, label) in controls {
+                    self.pknob(ui, id, Some(label), true);
                 }
             });
         });
@@ -223,105 +224,182 @@ impl EditorState {
         // textures out for the frame.
         let mut tex = self.textures.take();
 
+        // Row 1 — Oscillator 1 (circuit, waveform, core knobs) + LFO
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| card(ui, "Oscillator", tex.as_mut(), None, |ui| {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
-                        ui.add_space(14.0);
-                        self.wave_selector(ui);
+                        ui.add_space(6.0);
+                        self.choice_selector(ui, "circuit");
+                        ui.add_space(6.0);
+                        self.wave_selector(ui, "waveform");
                     });
                     self.pknob(ui, "volume", None, false);
                     self.pknob(ui, "detune", None, false);
-                    self.pknob(ui, "pw", Some("Pulse W"), false);
+                    self.pknob(ui, "pulse_width", Some("Pulse W"), false);
                     self.pknob(ui, "noise", None, false);
+                    self.pknob(ui, "sub", Some("Sub"), false);
+                    self.pknob(ui, "glide", Some("Glide"), false);
                 });
             }));
             ui.vertical(|ui| card(ui, "LFO", tex.as_mut(), None, |ui| {
                 ui.horizontal(|ui| {
-                    self.pknob(ui, "lforate", Some("Rate"), false);
-                    self.pknob(ui, "lfoshape", Some("Shape"), false);
-                    self.pknob(ui, "lfopitch", Some("> Pitch"), false);
-                    self.pknob(ui, "lfofilt", Some("> Filter"), false);
-                    self.pknob(ui, "lfopwm", Some("> PWM"), false);
+                    self.pknob(ui, "lfo_rate", Some("Rate"), false);
+                    self.pknob(ui, "lfo_shape", Some("Shape"), false);
+                    self.pknob(ui, "lfo_pitch", Some("Pitch"), false);
+                    self.pknob(ui, "lfo_filter", Some("Filter"), false);
+                    self.pknob(ui, "lfo_pwm", Some("PWM"), false);
                 });
             }));
         });
         ui.add_space(8.0);
 
+        // Row 2 — Oscillators 2 & 3 + routing (sync, ring, FM, key track)
         ui.horizontal_top(|ui| {
-            ui.vertical(|ui| card(ui, "Envelope", tex.as_mut(), None, |ui| {
+            ui.vertical(|ui| card(ui, "Oscillator 2", tex.as_mut(), None, |ui| {
                 ui.horizontal(|ui| {
-                    self.pknob(ui, "attack", None, false);
-                    self.pknob(ui, "decay", None, false);
-                    self.pknob(ui, "sustain", None, false);
-                    self.pknob(ui, "release", None, false);
+                    ui.vertical(|ui| {
+                        ui.add_space(14.0);
+                        self.wave_selector(ui, "osc2_wave");
+                    });
+                    self.pknob(ui, "osc2_pitch", Some("Pitch"), false);
+                    self.pknob(ui, "osc2_level", Some("Level"), false);
+                });
+            }));
+            ui.vertical(|ui| card(ui, "Oscillator 3", tex.as_mut(), None, |ui| {
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.add_space(14.0);
+                        self.wave_selector(ui, "osc3_wave");
+                    });
+                    self.pknob(ui, "osc3_pitch", Some("Pitch"), false);
+                    self.pknob(ui, "osc3_level", Some("Level"), false);
+                });
+            }));
+            ui.vertical(|ui| card(ui, "Routing", tex.as_mut(), None, |ui| {
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.add_space(14.0);
+                        self.choice_selector(ui, "sync");
+                    });
+                    self.pknob(ui, "ring", Some("Ring"), false);
+                    self.pknob(ui, "osc_fm", Some("FM"), false);
+                    self.pknob(ui, "key_track", Some("Key Trk"), false);
+                });
+            }));
+        });
+        ui.add_space(8.0);
+
+        // Row 3 — Oscillator 1 source mixer + unison
+        ui.horizontal_top(|ui| {
+            ui.vertical(|ui| card(ui, "Osc 1 Mixer", tex.as_mut(), None, |ui| {
+                ui.horizontal(|ui| {
+                    self.pknob(ui, "mix_saw", Some("Sawtooth"), false);
+                    self.pknob(ui, "mix_pulse", Some("Pulse"), false);
+                    self.pknob(ui, "mix_tri", Some("Triangle"), false);
+                    self.pknob(ui, "mix_sine", Some("Sine"), false);
+                });
+            }));
+            ui.vertical(|ui| card(ui, "Unison", tex.as_mut(), None, |ui| {
+                ui.horizontal(|ui| {
+                    self.pknob(ui, "unison", Some("Voices"), false);
+                    self.pknob(ui, "unison_detune", Some("Detune"), false);
+                });
+            }));
+        });
+        ui.add_space(8.0);
+
+        // Row 4 — Amplitude envelope + filter + filter envelope
+        ui.horizontal_top(|ui| {
+            ui.vertical(|ui| card(ui, "Amp Envelope", tex.as_mut(), None, |ui| {
+                ui.horizontal(|ui| {
+                    self.pknob(ui, "attack", Some("Attack"), false);
+                    self.pknob(ui, "decay", Some("Decay"), false);
+                    self.pknob(ui, "sustain", Some("Sustain"), false);
+                    self.pknob(ui, "release", Some("Release"), false);
                 });
             }));
             ui.vertical(|ui| card(ui, "Filter", tex.as_mut(), None, |ui| {
                 ui.horizontal(|ui| {
-                    self.pknob(ui, "cutoff", None, false);
-                    self.pknob(ui, "reso", Some("Reso"), false);
-                    self.pknob(ui, "drive", None, false);
-                    self.pknob(ui, "sat", Some("Sat"), false);
-                    self.pknob(ui, "hpf", Some("HP"), false);
+                    self.pknob(ui, "cutoff", Some("Cutoff"), false);
+                    self.pknob(ui, "resonance", Some("Resonance"), false);
+                    self.pknob(ui, "drive", Some("Drive"), false);
+                    self.pknob(ui, "saturation", Some("Saturation"), false);
+                    self.pknob(ui, "hpf", Some("High-Pass"), false);
                 });
             }));
             ui.vertical(|ui| card(ui, "Filter Envelope", tex.as_mut(), None, |ui| {
                 ui.horizontal(|ui| {
-                    self.pknob(ui, "fenvamt", Some("Amount"), false);
-                    self.pknob(ui, "fenvatk", Some("Attack"), false);
-                    self.pknob(ui, "fenvdec", Some("Decay"), false);
-                    self.pknob(ui, "fenvsus", Some("Sustain"), false);
-                    self.pknob(ui, "fenvrel", Some("Release"), false);
+                    self.pknob(ui, "filter_env", Some("Amount"), false);
+                    self.pknob(ui, "filter_attack", Some("Attack"), false);
+                    self.pknob(ui, "filter_decay", Some("Decay"), false);
+                    self.pknob(ui, "filter_sustain", Some("Sustain"), false);
+                    self.pknob(ui, "filter_release", Some("Release"), false);
                 });
             }));
         });
         ui.add_space(8.0);
 
+        // Row 5 — Space (fuzz/spring/reverb) + chorus + tape
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| card(ui, "Space", tex.as_mut(), None, |ui| {
                 ui.horizontal(|ui| {
-                    self.pknob(ui, "fuzz", None, false);
+                    self.pknob(ui, "fuzz", Some("Fuzz"), false);
                     self.pknob(ui, "spring", Some("Spring"), false);
-                    self.pknob(ui, "rvbdecay", Some("Rvb Dec"), false);
-                    self.pknob(ui, "rvbwet", Some("Rvb Mix"), false);
+                    self.pknob(ui, "reverb_decay", Some("Rvb Decay"), false);
+                    self.pknob(ui, "reverb_wet", Some("Rvb Mix"), false);
+                    self.pknob(ui, "reverb_tone", Some("Rvb Tone"), false);
+                    self.pknob(ui, "reverb_pre", Some("Rvb Pre"), false);
                 });
             }));
             ui.vertical(|ui| card(ui, "Chorus", tex.as_mut(), None, |ui| {
                 ui.vertical(|ui| {
                     ui.add_space(4.0);
-                    self.choice_selector(ui, "chmode");
+                    self.choice_selector(ui, "chorus_mode");
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
-                        self.pknob(ui, "chrate", Some("Rate"), false);
-                        self.pknob(ui, "chdepth", Some("Depth"), false);
+                        self.pknob(ui, "chorus_rate", Some("Rate"), false);
+                        self.pknob(ui, "chorus_depth", Some("Depth"), false);
                     });
                 });
             }));
             ui.vertical(|ui| card(ui, "Tape", tex.as_mut(), None, |ui| {
                 ui.horizontal(|ui| {
-                    self.pknob(ui, "tpwow", Some("Wow"), false);
-                    self.pknob(ui, "tpflut", Some("Flutter"), false);
-                    self.pknob(ui, "tpdrive", Some("Drive"), false);
-                    self.pknob(ui, "tpage", Some("Age"), false);
+                    self.pknob(ui, "tape_wow", Some("Wow"), false);
+                    self.pknob(ui, "tape_flutter", Some("Flutter"), false);
+                    self.pknob(ui, "tape_drive", Some("Drive"), false);
+                    self.pknob(ui, "tape_age", Some("Age"), false);
                 });
             }));
         });
         ui.add_space(8.0);
 
+        // Row 6 — the 909 rhythm section
         card(ui, "Rhythm Section · 909 · MIDI CH 10", tex.as_mut(), None, |ui| {
             ui.horizontal(|ui| {
-                // 21 pads across one row only fit at panel density
+                // The pads only fit across one row at panel density
                 ui.spacing_mut().item_spacing.x = 4.0;
-                self.drum_group(ui, "Kick", &["bdlevel", "bdtune", "bdattack", "bddecay", "bdsweep", "bddrive"]);
+                self.drum_group(ui, "Kick", &[
+                    ("bd_level", "Level"), ("bd_tune", "Tune"), ("bd_attack", "Attack"),
+                    ("bd_decay", "Decay"), ("bd_sweep", "Sweep"), ("bd_drive", "Drive"),
+                ]);
                 panel::vseparator(ui, 90.0);
-                self.drum_group(ui, "Snare", &["sdlevel", "sdtune", "sdtone", "sdsnappy", "sddecay"]);
+                self.drum_group(ui, "Snare", &[
+                    ("sd_level", "Level"), ("sd_tune", "Tune"), ("sd_tone", "Tone"),
+                    ("sd_snappy", "Snappy"), ("sd_decay", "Decay"),
+                ]);
                 panel::vseparator(ui, 90.0);
-                self.drum_group(ui, "Rim · Clap", &["rslevel", "rstune", "cplevel", "cpdecay"]);
+                self.drum_group(ui, "Rim · Clap", &[
+                    ("rs_level", "Rim Lvl"), ("rs_tune", "Rim Tune"),
+                    ("cp_level", "Clap Lvl"), ("cp_decay", "Clap Dec"),
+                ]);
                 panel::vseparator(ui, 90.0);
-                self.drum_group(ui, "Hats", &["hhlevel", "hhtune", "hhmetal", "chdecay", "ohdecay"]);
+                self.drum_group(ui, "Hats", &[
+                    ("hh_level", "Level"), ("hh_tune", "Tune"), ("hh_metal", "Metal"),
+                    ("ch_decay", "Closed"), ("oh_decay", "Open"),
+                ]);
                 panel::vseparator(ui, 90.0);
-                self.drum_group(ui, "Bus", &["drdrive"]);
+                self.drum_group(ui, "Bus", &[("dr_drive", "Drive"), ("dr_tone", "Tone")]);
             });
         });
 

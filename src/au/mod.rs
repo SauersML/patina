@@ -145,14 +145,16 @@ impl AuUnit {
             match def {
                 ParamDef::Float(fd) => {
                     if !fd.guarded || value != engine.applied[i] {
-                        (fd.apply)(&mut engine.vm, value);
+                        fd.param.apply(&mut engine.vm, value);
                         engine.applied[i] = value;
                     }
                 }
-                // Selectors swap voice banks — strictly change-only
+                // Selectors swap voice banks / circuit models — strictly
+                // change-only. Param::apply maps the raw value (the selector
+                // index as an f32) to the engine enum position.
                 ParamDef::Choice(cd) => {
                     if value != engine.applied[i] {
-                        (cd.apply)(&mut engine.vm, value.round().max(0.0) as usize);
+                        cd.param.apply(&mut engine.vm, value);
                         engine.applied[i] = value;
                     }
                 }

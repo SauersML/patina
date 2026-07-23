@@ -750,7 +750,16 @@ impl VoiceManager {
     }
 
     pub fn set_waveform(&mut self, waveform: Waveform) {
+        // `waveform` is the MACRO that sets all three oscillators at once,
+        // exactly like the song/patch path (Param::apply_to_params). The
+        // per-oscillator setters override afterward. This must also write
+        // osc2/osc3 into `self.params`: a channel-0 note-on reconfigures its
+        // voice from `self.params` (apply_params), so if only `params.waveform`
+        // moved here, oscs 2 and 3 would snap back to their snapshot waveforms
+        // on the very next key press and the selector would appear inert.
         self.params.waveform = waveform;
+        self.params.osc2_wave = waveform;
+        self.params.osc3_wave = waveform;
         for voice in &mut self.voices {
             voice.set_waveform(waveform);
         }

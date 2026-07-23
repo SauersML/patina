@@ -4,12 +4,13 @@
 //
 // SINGLE SOURCE OF TRUTH: every parameter this front end exposes comes from
 // the shared table in src/host_params.rs — id, display name, range,
-// default, formatting, and the VoiceManager setter it drives. The host
-// parameter list, default values, state save/restore, and per-block
-// application are all derived from that table, and the Audio Unit front end
-// (src/au/) derives from the very same table. The two selector params,
-// waveform and chorus mode, stay typed enums here so CLAP/VST3 hosts render
-// them as dropdowns; a test pins them to the table.
+// default, formatting, and (via `song::Param`) the VoiceManager setter it
+// drives. The host parameter list, default values, state save/restore, and
+// per-block application are all derived from that table, and the Audio Unit
+// front end (src/au/) derives from the very same table. The selector params
+// (circuit, waveform, oscillator 2/3 waveform, sync, chorus mode) stay typed
+// enums here so CLAP/VST3 hosts render them as dropdowns; a test pins each
+// one's names and default to the table.
 //
 // Bundle with:
 //   cargo xtask bundle patina --release --no-default-features --features plugin
@@ -64,12 +65,28 @@ fn build_float_param(def: &FloatDef) -> FloatParam {
     }
 }
 
+// The four distinct selector shapes. Each variant list mirrors the matching
+// ChoiceDef in the shared table (pinned by `selector_enums_mirror_the_table`),
+// in the engine's own value order so the host index applies as itself.
 #[derive(Enum, PartialEq, Clone, Copy)]
 enum WaveformParam {
     Sine,
-    Triangle,
-    Sawtooth,
     Square,
+    Sawtooth,
+    Triangle,
+}
+
+#[derive(Enum, PartialEq, Clone, Copy)]
+enum CircuitParam {
+    Moog,
+    #[name = "ARP"]
+    Arp,
+}
+
+#[derive(Enum, PartialEq, Clone, Copy)]
+enum SyncParam {
+    Off,
+    On,
 }
 
 #[derive(Enum, PartialEq, Clone, Copy)]
@@ -81,36 +98,95 @@ enum ChorusModeParam {
     IV,
 }
 
+/// A host selector backed by one of the typed EnumParams above. The wrapped
+/// param renders as a named dropdown; `index()` reads back the chosen
+/// position so it can drive the engine through `ChoiceDef::param`.
+enum ChoiceKind {
+    Wave(EnumParam<WaveformParam>),
+    Circuit(EnumParam<CircuitParam>),
+    Sync(EnumParam<SyncParam>),
+    Chorus(EnumParam<ChorusModeParam>),
+}
+
+impl ChoiceKind {
+    /// Build the right typed EnumParam for a table selector, defaulting to
+    /// the table's default index.
+    fn from_def(def: &ChoiceDef) -> Self {
+        let name = def.name;
+        match def.id {
+            "waveform" | "osc2_wave" | "osc3_wave" => {
+                ChoiceKind::Wave(EnumParam::new(name, WaveformParam::from_index(def.default)))
+            }
+            "circuit" => {
+                ChoiceKind::Circuit(EnumParam::new(name, CircuitParam::from_index(def.default)))
+            }
+            "sync" => ChoiceKind::Sync(EnumParam::new(name, SyncParam::from_index(def.default))),
+            "chorus_mode" => {
+                ChoiceKind::Chorus(EnumParam::new(name, ChorusModeParam::from_index(def.default)))
+            }
+            other => panic!("no typed EnumParam for selector `{other}`"),
+        }
+    }
+
+    fn as_ptr(&self) -> ParamPtr {
+        match self {
+            ChoiceKind::Wave(p) => p.as_ptr(),
+            ChoiceKind::Circuit(p) => p.as_ptr(),
+            ChoiceKind::Sync(p) => p.as_ptr(),
+            ChoiceKind::Chorus(p) => p.as_ptr(),
+        }
+    }
+
+    /// The chosen variant index — the value `Param::apply` maps to an enum.
+    fn index(&self) -> usize {
+        match self {
+            ChoiceKind::Wave(p) => p.value().to_index(),
+            ChoiceKind::Circuit(p) => p.value().to_index(),
+            ChoiceKind::Sync(p) => p.value().to_index(),
+            ChoiceKind::Chorus(p) => p.value().to_index(),
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn variants(&self) -> &'static [&'static str] {
+        match self {
+            ChoiceKind::Wave(_) => WaveformParam::variants(),
+            ChoiceKind::Circuit(_) => CircuitParam::variants(),
+            ChoiceKind::Sync(_) => SyncParam::variants(),
+            ChoiceKind::Chorus(_) => ChorusModeParam::variants(),
+        }
+    }
+}
+
+/// One host-facing selector: the shared definition plus its typed control.
+struct ChoiceSlot {
+    def: ChoiceDef,
+    kind: ChoiceKind,
+}
+
 struct PatinaParams {
-    waveform: EnumParam<WaveformParam>,
-    chorus_mode: EnumParam<ChorusModeParam>,
-    /// The table's selector entries; their `apply` drives the engine.
-    waveform_def: ChoiceDef,
-    chorus_def: ChoiceDef,
     floats: Vec<FloatSlot>,
+    choices: Vec<ChoiceSlot>,
 }
 
 impl Default for PatinaParams {
     fn default() -> Self {
-        let mut waveform_def = None;
-        let mut chorus_def = None;
         let mut floats = Vec::new();
+        let mut choices = Vec::new();
+        // Both vecs are filled in table-encounter order, so a per-type
+        // running iterator in `param_map` re-interleaves them correctly.
         for def in host_params::param_defs() {
             match def {
                 ParamDef::Float(fd) => {
                     floats.push(FloatSlot { param: build_float_param(&fd), def: fd })
                 }
-                ParamDef::Choice(cd) if cd.id == "waveform" => waveform_def = Some(cd),
-                ParamDef::Choice(cd) => chorus_def = Some(cd),
+                ParamDef::Choice(cd) => {
+                    let kind = ChoiceKind::from_def(&cd);
+                    choices.push(ChoiceSlot { def: cd, kind });
+                }
             }
         }
-        Self {
-            waveform: EnumParam::new("Waveform", WaveformParam::Sawtooth),
-            chorus_mode: EnumParam::new("Chorus Mode", ChorusModeParam::Off),
-            waveform_def: waveform_def.expect("table has a waveform selector"),
-            chorus_def: chorus_def.expect("table has a chorus mode selector"),
-            floats,
-        }
+        Self { floats, choices }
     }
 }
 
@@ -121,12 +197,14 @@ unsafe impl Params for PatinaParams {
     fn param_map(&self) -> Vec<(String, ParamPtr, String)> {
         // Emit in the table's canonical order so every format agrees.
         let mut floats = self.floats.iter();
+        let mut choices = self.choices.iter();
         host_params::param_defs()
             .iter()
             .map(|def| {
                 let ptr = match def {
-                    ParamDef::Choice(c) if c.id == "waveform" => self.waveform.as_ptr(),
-                    ParamDef::Choice(_) => self.chorus_mode.as_ptr(),
+                    ParamDef::Choice(_) => {
+                        choices.next().expect("one ChoiceSlot per choice def").kind.as_ptr()
+                    }
                     ParamDef::Float(_) => {
                         floats.next().expect("one FloatSlot per float def").param.as_ptr()
                     }
@@ -148,21 +226,21 @@ pub struct PatinaPlugin {
     /// Last value pushed through each guarded setter (indexed like
     /// `params.floats`); NaN forces the first application.
     applied_floats: Vec<f32>,
-    applied_waveform: Option<usize>,
-    applied_chorus_mode: Option<usize>,
+    /// Last index applied for each selector (indexed like `params.choices`).
+    applied_choices: Vec<Option<usize>>,
 }
 
 impl Default for PatinaPlugin {
     fn default() -> Self {
         let params = Arc::new(PatinaParams::default());
         let applied_floats = vec![f32::NAN; params.floats.len()];
+        let applied_choices = vec![None; params.choices.len()];
         Self {
             params,
             vm: VoiceManager::new(44100.0, NUM_VOICES),
             sample_rate: 44100.0,
             applied_floats,
-            applied_waveform: None,
-            applied_chorus_mode: None,
+            applied_choices,
         }
     }
 }
@@ -171,8 +249,7 @@ impl PatinaPlugin {
     fn rebuild_engine(&mut self) {
         self.vm = VoiceManager::new(self.sample_rate, NUM_VOICES);
         self.applied_floats.fill(f32::NAN);
-        self.applied_waveform = None;
-        self.applied_chorus_mode = None;
+        self.applied_choices.iter_mut().for_each(|c| *c = None);
         self.apply_params();
     }
 
@@ -183,22 +260,20 @@ impl PatinaPlugin {
         for (slot, last) in params.floats.iter().zip(self.applied_floats.iter_mut()) {
             let value = slot.param.value();
             if !slot.def.guarded || value != *last {
-                (slot.def.apply)(&mut self.vm, value);
+                slot.def.param.apply(&mut self.vm, value);
                 *last = value;
             }
         }
 
-        // The selectors swap voice banks — strictly change-only
-        let waveform = params.waveform.value() as usize;
-        if self.applied_waveform != Some(waveform) {
-            (params.waveform_def.apply)(&mut self.vm, waveform);
-            self.applied_waveform = Some(waveform);
-        }
-
-        let chorus_mode = params.chorus_mode.value() as usize;
-        if self.applied_chorus_mode != Some(chorus_mode) {
-            (params.chorus_def.apply)(&mut self.vm, chorus_mode);
-            self.applied_chorus_mode = Some(chorus_mode);
+        // The selectors swap voice banks / circuit models — strictly
+        // change-only. The index feeds Param::apply, which maps it to the
+        // engine enum position.
+        for (slot, last) in params.choices.iter().zip(self.applied_choices.iter_mut()) {
+            let index = slot.kind.index();
+            if *last != Some(index) {
+                slot.def.param.apply(&mut self.vm, index as f32);
+                *last = Some(index);
+            }
         }
     }
 }
@@ -331,16 +406,23 @@ mod tests {
     #[test]
     fn selector_enums_mirror_the_table() {
         let params = PatinaParams::default();
-        assert_eq!(WaveformParam::variants(), params.waveform_def.variants);
-        assert_eq!(ChorusModeParam::variants(), params.chorus_def.variants);
-        assert_eq!(
-            params.waveform.default_plain_value() as usize,
-            params.waveform_def.default
-        );
-        assert_eq!(
-            params.chorus_mode.default_plain_value() as usize,
-            params.chorus_def.default
-        );
+        // Every table selector got a typed EnumParam whose variant names and
+        // default index match the shared definition exactly.
+        for slot in &params.choices {
+            assert_eq!(
+                slot.kind.variants(),
+                slot.def.variants,
+                "variants for `{}`",
+                slot.def.id
+            );
+            assert_eq!(slot.kind.index(), slot.def.default, "default for `{}`", slot.def.id);
+        }
+        // And the plugin backs every selector the table declares.
+        let table_choices = host_params::param_defs()
+            .into_iter()
+            .filter(|d| matches!(d, ParamDef::Choice(_)))
+            .count();
+        assert_eq!(params.choices.len(), table_choices);
     }
 
     #[test]
