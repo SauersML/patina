@@ -134,6 +134,7 @@ extern "C" {
         bitmap_info: u32,
     ) -> CGContextRef;
     fn CGBitmapContextCreateImage(ctx: CGContextRef) -> CGImageRef;
+    fn CGBitmapContextGetData(ctx: CGContextRef) -> *mut c_void;
     fn CGContextRelease(ctx: CGContextRef);
     fn CGImageRelease(img: CGImageRef);
     fn CGContextDrawImage(ctx: CGContextRef, rect: CGRect, image: CGImageRef);
@@ -303,6 +304,13 @@ struct ViewState {
     editor: EditorState,
     raster: Raster,
     colorspace: CGColorSpaceRef,
+    /// Bitmap context whose pixels CoreGraphics OWNS. The framebuffer is
+    /// copied into it each frame; a CGImage must never be built directly
+    /// over Rust-owned memory, because CoreGraphics' copy-on-write only
+    /// fires for writes made through the context, and our Vec can be
+    /// reallocated by a resize while an image still references it.
+    bitmap: CGContextRef,
+    bitmap_size: (usize, usize),
     start: Instant,
     mouse: Pos2,
     pending: Vec<Event>,
@@ -365,20 +373,31 @@ impl ViewState {
         self.raster.clear([0x0a, 0x11, 0x14]);
         self.raster.paint(&prims, ppp);
 
-        let bitmap = CGBitmapContextCreate(
-            self.raster.fb.as_mut_ptr() as *mut c_void,
-            pw,
-            ph,
-            8,
-            pw * 4,
-            self.colorspace,
-            kCGImageAlphaPremultipliedLast,
-        );
-        if bitmap.is_null() {
+        // (Re)build the CG-owned bitmap only when the size changes.
+        if self.bitmap.is_null() || self.bitmap_size != (pw, ph) {
+            if !self.bitmap.is_null() {
+                CGContextRelease(self.bitmap);
+            }
+            self.bitmap = CGBitmapContextCreate(
+                null_mut(),                       // CoreGraphics allocates
+                pw,
+                ph,
+                8,
+                pw * 4,
+                self.colorspace,
+                kCGImageAlphaPremultipliedLast,
+            );
+            self.bitmap_size = (pw, ph);
+        }
+        if self.bitmap.is_null() {
             return;
         }
-        let image = CGBitmapContextCreateImage(bitmap);
-        CGContextRelease(bitmap);
+        let dst = CGBitmapContextGetData(self.bitmap);
+        if dst.is_null() {
+            return;
+        }
+        std::ptr::copy_nonoverlapping(self.raster.fb.as_ptr(), dst as *mut u8, pw * ph * 4);
+        let image = CGBitmapContextCreateImage(self.bitmap);
         if image.is_null() {
             return;
         }
@@ -612,6 +631,7 @@ unsafe fn schedule_redraw_timer(view: Id) -> Id {
 /// the panel closes. Track that to keep the redraw timer alive exactly as
 /// long as the view is actually on screen.
 unsafe extern "C" fn view_did_move_to_window(this: Id, _cmd: Sel) {
+    guard((), || {
     let on_screen = !send0(this, sel("window")).is_null();
     if let Some(state) = ViewState::from_view(this) {
         if on_screen {
@@ -622,6 +642,19 @@ unsafe extern "C" fn view_did_move_to_window(this: Id, _cmd: Sel) {
             let _: Id = send0(state.timer, sel("invalidate"));
             state.timer = null_mut();
         }
+    }
+    })
+}
+
+
+/// Run a body at an Objective-C entry point, swallowing any Rust panic.
+/// Unwinding across the FFI boundary into AppKit is undefined behaviour and
+/// takes the whole hosting process (and the audio engine) with it, so every
+/// callback the host can invoke goes through here.
+fn guard<F: FnOnce() -> R, R>(default: R, f: F) -> R {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(v) => v,
+        Err(_) => default,
     }
 }
 
@@ -640,20 +673,25 @@ unsafe extern "C" fn accepts_first_mouse(_this: Id, _cmd: Sel, _event: Id) -> u8
 }
 
 unsafe extern "C" fn draw_rect(this: Id, _cmd: Sel, _dirty: CGRect) {
+    guard((), || {
     if let Some(state) = ViewState::from_view(this) {
         state.draw_current();
     }
+    })
 }
 
 /// Timer only marks the view dirty; the actual paint happens in drawRect:
 /// on AppKit's display pass, so it works even where our timer wouldn't.
 unsafe extern "C" fn draw_tick(this: Id, _cmd: Sel, _timer: Id) {
+    guard((), || {
     if let Some(state) = ViewState::from_view(this) {
         state.set_needs_display();
     }
+    })
 }
 
 unsafe fn push_button(this: Id, event: Id, button: PointerButton, pressed: bool) {
+    guard((), || {
     if let Some(state) = ViewState::from_view(this) {
         let pos = state.event_pos(event);
         state.mouse = pos;
@@ -666,6 +704,7 @@ unsafe fn push_button(this: Id, event: Id, button: PointerButton, pressed: bool)
         });
         state.set_needs_display();
     }
+    })
 }
 
 unsafe extern "C" fn mouse_down(this: Id, _cmd: Sel, event: Id) {
@@ -682,30 +721,37 @@ unsafe extern "C" fn right_mouse_up(this: Id, _cmd: Sel, event: Id) {
 }
 
 unsafe extern "C" fn mouse_moved(this: Id, _cmd: Sel, event: Id) {
+    guard((), || {
     if let Some(state) = ViewState::from_view(this) {
         let pos = state.event_pos(event);
         state.mouse = pos;
         state.pending.push(Event::PointerMoved(pos));
         state.set_needs_display();
     }
+    })
 }
 
 unsafe extern "C" fn mouse_dragged(this: Id, _cmd: Sel, event: Id) {
+    guard((), || {
     if let Some(state) = ViewState::from_view(this) {
         let pos = state.event_pos(event);
         state.mouse = pos;
         state.pending.push(Event::PointerMoved(pos));
         state.set_needs_display();
     }
+    })
 }
 
 unsafe extern "C" fn mouse_exited(this: Id, _cmd: Sel, _event: Id) {
+    guard((), || {
     if let Some(state) = ViewState::from_view(this) {
         state.pending.push(Event::PointerGone);
     }
+    })
 }
 
 unsafe extern "C" fn scroll_wheel(this: Id, _cmd: Sel, event: Id) {
+    guard((), || {
     if let Some(state) = ViewState::from_view(this) {
         let dx = send0_f64(event, sel("scrollingDeltaX")) as f32;
         let dy = send0_f64(event, sel("scrollingDeltaY")) as f32;
@@ -716,6 +762,7 @@ unsafe extern "C" fn scroll_wheel(this: Id, _cmd: Sel, event: Id) {
         });
         state.set_needs_display();
     }
+    })
 }
 
 unsafe extern "C" fn view_dealloc(this: Id, _cmd: Sel) {
@@ -729,6 +776,9 @@ unsafe extern "C" fn view_dealloc(this: Id, _cmd: Sel) {
         // normally already invalidated by viewDidMoveToWindow).
         if !state.timer.is_null() {
             let _: Id = send0(state.timer, sel("invalidate"));
+        }
+        if !state.bitmap.is_null() {
+            CGContextRelease(state.bitmap);
         }
         CGColorSpaceRelease(state.colorspace);
     }
@@ -748,12 +798,12 @@ unsafe extern "C" fn interface_version(_this: Id, _cmd: Sel) -> u32 {
 /// Returns a +1 NSView; the host releases it, per AUCocoaUIBase.
 #[no_mangle]
 pub unsafe extern "C" fn patina_au_create_view(audio_unit: *mut c_void) -> *mut c_void {
-    ui_view_for_audio_unit(
+    guard(null_mut(), || ui_view_for_audio_unit(
         null_mut(),
         null_mut(),
         audio_unit,
         CGSize { width: EDITOR_WIDTH as f64, height: EDITOR_HEIGHT as f64 },
-    )
+    ))
 }
 
 unsafe extern "C" fn ui_view_for_audio_unit(
@@ -813,6 +863,8 @@ unsafe extern "C" fn ui_view_for_audio_unit(
         editor: EditorState::new(host),
         raster: Raster::new(),
         colorspace: CGColorSpaceCreateDeviceRGB(),
+        bitmap: null_mut(),
+        bitmap_size: (0, 0),
         start: Instant::now(),
         mouse: pos2(-1.0, -1.0),
         pending: Vec::new(),
@@ -829,7 +881,9 @@ unsafe extern "C" fn ui_view_for_audio_unit(
 
     // Ask for the first paint on the next display pass.
     send_void_bool(view, sel("setNeedsDisplay:"), 1);
-    // Returned +1 per AUCocoaUIBase convention; the host releases it.
+    // Hand back an AUTORELEASED view: that is what AUCocoaUIBase hosts
+    // expect, and returning +1 instead leaves the retain count unbalanced.
+    let _: Id = send0(view, sel("autorelease"));
     view
 }
 
