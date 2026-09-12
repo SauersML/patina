@@ -1,4 +1,64 @@
-# Engine and bounce performance
+# Synth performance
+
+## Live window
+
+The standalone panel schedules animation and meter refreshes every 33 ms
+while playing in the foreground, or every 100 ms while idle/unfocused.
+Keyboard and mouse events still request immediate frames. A minimized
+window skips textures, shaders and panel layout, checking once a second.
+Held window keys are released on minimize.
+
+One nonblocking engine snapshot supplies parameters, keyboard lights, drum
+meters and the scope. Waveform drawing and RMS calculation run after the
+lock is released. The snapshot reuses an 8 KiB scope array, and glass-panel
+rectangle storage retains its capacity between frames. Visual smoothing
+uses elapsed time so reducing repaint frequency does not stretch fades.
+
+MIDI connects with the engine already assigned and delivers notes directly.
+The old alternate event queue and its unused dependency are removed: an
+auto-connected port could capture `None` before engine assignment, fill the
+undrained queue, and stall after 128 messages. Each open input now has a
+fixed 128-note table. Rescans compare port identities, including identically
+named keyboards, and fetch names only for newly connected inputs. Removed
+ports close before their held notes are released.
+
+In the audio engine, the high-pass ladder reuses its exact coefficient once
+the smoothed cutoff stops changing. Drive makeup and voice-box gain slew
+coefficients are calculated when configured, instead of per sample. Newton
+iteration counters exist only in test builds.
+
+Run the live heap regression independently of the desktop/audio device:
+
+```sh
+cargo run --release --no-default-features -j 1 --example live_budget
+```
+
+This includes the first callback and key press, voice stealing, sustain,
+drums, pitch bend, filter automation, both ladder circuits and release tails.
+On this Mac, the 10-voice engine retained **683,916 heap bytes at 48 kHz**
+(668 KiB), or **1,338,768 bytes at 96 kHz** (1.28 MiB). Both workloads made
+**zero playback allocations and zero heap growth**, before and after this
+change. Before/after audio fingerprints matched at both rates. These are
+engine heap figures, not total desktop memory or measured device latency;
+window, graphics-driver and MIDI-backend costs are excluded. The example's
+startup timer measures engine construction only.
+
+A release-app launch smoke check opened the 48 kHz stereo headphone output
+and detected the connected Hammer 88. A two-second macOS `top` sample while
+idle reported about **124 MiB app memory and 7.4% of one CPU core**. Other
+work heavily loaded the machine, so this is an observed footprint, not a
+controlled before/after desktop comparison. The temporary test instance was
+closed afterward. End-to-end key-to-speaker latency was not measured.
+
+A separate two-run CPU comparison against `de90092`, in opposite run orders,
+used the same optimization settings described below. Sparse playback fell
+from 2,677 to 2,357 CPU ns/frame (12% lower); the live chord was effectively
+unchanged (4,330 to 4,351). Idle measurements varied from 683 to 867 ns/frame,
+so they do not establish an improvement. The main live-window saving comes
+from less frequent scheduled UI work, which this headless CPU benchmark
+does not measure.
+
+## Offline bounces
 
 WAV and stem rendering stream frames directly from the engine into a 64 KiB
 write buffer. Normalization scales that same file in 64 KiB chunks after its
@@ -66,7 +126,7 @@ one short note and a long tail, isolating the cost of retaining the bounce.
 
 ## Validation
 
-The final core test run completed with **222 passed, 3 failed, 3 ignored**.
+The earlier full core run completed with **222 passed, 3 failed, 3 ignored**.
 The same three failures occurred in the unchanged baseline:
 
 - `oscillator::tests::moog_tracking_error_is_additive_hertz`
@@ -78,4 +138,17 @@ existing filter, tape, and whole-engine stability checks. To keep local
 resource use bounded, the engine and tests were compiled directly with
 cached dependencies, one codegen worker, and low process priority. The final
 test build peaked near 202 MiB resident memory; the serial test run near
-11 MiB. App/GUI and native plugin feature builds were not rerun.
+11 MiB. That validation round did not rerun desktop or native plugin builds.
+
+The live DSP follow-up passed **41 targeted tests, with 1 ignored**. This
+includes bit-for-bit high-pass output comparisons through sweeps and settled
+controls at 8, 44.1, 96 and 192 kHz. The default desktop `cargo check` passed,
+and passed again with the final manifest/lockfile. Its compiler process group
+peaked at 212 MiB resident memory under the task's resource guard. Checks
+ran offline, with one low-priority build job and incremental/debug output
+disabled.
+
+Both native MIDI regressions passed in the app crate: malformed/drum input
+does not hold keyboard notes, and 3,072 repeated note messages reach the
+engine without queueing or stalling. The app test build reused the compiled
+release dependencies and peaked at 222 MiB resident memory.
