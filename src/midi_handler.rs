@@ -20,6 +20,20 @@ use std::sync::Arc;
 
 use crate::voice_manager::VoiceManager;
 
+struct PortState {
+    keys: [bool; 128],
+    pedal_down: bool,
+}
+
+impl Default for PortState {
+    fn default() -> Self {
+        Self {
+            keys: [false; 128],
+            pedal_down: false,
+        }
+    }
+}
+
 /// A live connection keyed by the backend's port identity. Two keyboards
 /// with the same display name are still independent connections.
 struct OpenPort {
@@ -27,8 +41,8 @@ struct OpenPort {
     port: midir::MidiInputPort,
     // Dropping the connection closes the port.
     _connection: MidiInputConnection<()>,
-    /// Notes currently held on this port, so unplugging it can release them.
-    held: Arc<Mutex<[bool; 128]>>,
+    /// Key and pedal state needed to release this input on unplug.
+    state: Arc<Mutex<PortState>>,
 }
 
 /// Opens every MIDI input port and routes its messages into the synth.
@@ -74,15 +88,7 @@ impl MidiHandler {
             let gone = self.ports.remove(i);
             // Close first, so no callback can start a note after we release it.
             drop(gone._connection);
-            let held = *gone.held.lock();
-            if held.iter().any(|&down| down) {
-                let mut vm = self.voice_manager.lock();
-                for (note, down) in held.into_iter().enumerate() {
-                    if down {
-                        vm.note_off(note as u8);
-                    }
-                }
-            }
+            release_port(&mut self.voice_manager.lock(), &mut gone.state.lock());
             println!("MIDI input removed: {}", gone.name);
         }
 
@@ -112,25 +118,39 @@ impl MidiHandler {
         let mut midi_in = MidiInput::new("patina_midi_input")?;
         midi_in.ignore(Ignore::None);
         let vm = Arc::clone(&self.voice_manager);
-        let held = Arc::new(Mutex::new([false; 128]));
-        let held_in_callback = Arc::clone(&held);
+        let state = Arc::new(Mutex::new(PortState::default()));
+        let state_in_callback = Arc::clone(&state);
         let connection = midi_in.connect(
             port,
             "patina",
-            move |_timestamp, message, _| handle_message(&vm, &held_in_callback, message),
+            move |_timestamp, message, _| handle_message(&vm, &state_in_callback, message),
             (),
         )?;
         Ok(OpenPort {
             name: name.to_string(),
             port: port.clone(),
             _connection: connection,
-            held,
+            state,
         })
     }
 }
 
+/// Disconnect is also the last pedal-up event for that input. Keys already
+/// released under sustain are absent from the key table but still sound.
+fn release_port(vm: &mut VoiceManager, state: &mut PortState) {
+    if state.pedal_down {
+        vm.set_sustain_pedal(false);
+    }
+    for (note, down) in state.keys.iter().copied().enumerate() {
+        if down {
+            vm.note_off_channel(note as u8, 0);
+        }
+    }
+    *state = PortState::default();
+}
+
 /// One raw MIDI message from any port, applied to the synth.
-fn handle_message(vm: &Arc<Mutex<VoiceManager>>, held: &Arc<Mutex<[bool; 128]>>, message: &[u8]) {
+fn handle_message(vm: &Arc<Mutex<VoiceManager>>, state: &Arc<Mutex<PortState>>, message: &[u8]) {
     let Ok(LiveEvent::Midi { channel, message }) = LiveEvent::parse(message) else {
         return;
     };
@@ -144,7 +164,7 @@ fn handle_message(vm: &Arc<Mutex<VoiceManager>>, held: &Arc<Mutex<[bool; 128]>>,
             // MIDI spec: Note On with velocity 0 is a Note Off.
             if velocity == 0 {
                 if !drums {
-                    held.lock()[note as usize] = false;
+                    state.lock().keys[note as usize] = false;
                     vm.lock().note_off(note);
                 }
                 return;
@@ -154,7 +174,7 @@ fn handle_message(vm: &Arc<Mutex<VoiceManager>>, held: &Arc<Mutex<[bool; 128]>>,
                 vm.lock()
                     .note_on_channel(note, velocity, crate::drums::DRUM_CHANNEL);
             } else {
-                held.lock()[note as usize] = true;
+                state.lock().keys[note as usize] = true;
                 vm.lock().note_on(note, velocity);
             }
         }
@@ -162,7 +182,7 @@ fn handle_message(vm: &Arc<Mutex<VoiceManager>>, held: &Arc<Mutex<[bool; 128]>>,
             // Drum voices are one-shots; the 909 trigger has no falling edge.
             if !drums {
                 let note = key.as_int();
-                held.lock()[note as usize] = false;
+                state.lock().keys[note as usize] = false;
                 vm.lock().note_off(note);
             }
         }
@@ -171,6 +191,9 @@ fn handle_message(vm: &Arc<Mutex<VoiceManager>>, held: &Arc<Mutex<[bool; 128]>>,
             vm.lock().set_pitch_bend(bend.as_f32() * 2.0);
         }
         MidiMessage::Controller { controller, value } => {
+            if controller.as_int() == 64 {
+                state.lock().pedal_down = value.as_int() >= 64;
+            }
             // The full chart lives in Param::from_cc — every automatable
             // parameter answers to a controller, scaled like its knob.
             if let Some(param) = crate::song::Param::from_cc(controller.as_int()) {
@@ -198,31 +221,72 @@ mod tests {
     use super::*;
 
     #[test]
+    fn disconnect_releases_notes_already_lifted_under_sustain() {
+        let vm = Arc::new(Mutex::new(VoiceManager::new(48000.0, 10)));
+        let state = Arc::new(Mutex::new(PortState::default()));
+        vm.lock().set_release(0.005);
+        handle_message(&vm, &state, &[0x90, 60, 100]);
+        handle_message(&vm, &state, &[0xb0, 64, 127]);
+        for _ in 0..128 {
+            vm.lock().render_next();
+        }
+        handle_message(&vm, &state, &[0x80, 60, 0]);
+        assert!(!state.lock().keys[60]);
+        assert!(vm.lock().held_note_states()[60]);
+
+        release_port(&mut vm.lock(), &mut state.lock());
+        assert!(!vm.lock().held_note_states()[60]);
+        assert!(!state.lock().pedal_down);
+        let mut vm = vm.lock();
+        for _ in 0..2048 {
+            vm.render_next();
+        }
+        assert!(vm.voices.iter().all(|v| !v.is_active()));
+        // A new keyboard must not inherit a latched pedal either.
+        vm.note_on(64, 0.8);
+        vm.note_off(64);
+        assert!(!vm.held_note_states()[64]);
+    }
+
+    #[test]
+    fn ordinary_pedal_up_releases_deferred_notes() {
+        let vm = Arc::new(Mutex::new(VoiceManager::new(48000.0, 10)));
+        let state = Arc::new(Mutex::new(PortState::default()));
+        handle_message(&vm, &state, &[0xb0, 64, 127]);
+        handle_message(&vm, &state, &[0x90, 60, 100]);
+        handle_message(&vm, &state, &[0x90, 60, 0]);
+        assert!(vm.lock().held_note_states()[60]);
+        handle_message(&vm, &state, &[0xb0, 64, 0]);
+        assert!(!vm.lock().held_note_states()[60]);
+        assert!(!state.lock().pedal_down);
+    }
+
+    #[test]
     fn repeated_live_notes_reach_engine_without_a_queue() {
         let vm = Arc::new(Mutex::new(VoiceManager::new(48000.0, 10)));
-        let held = Arc::new(Mutex::new([false; 128]));
+        let state = Arc::new(Mutex::new(PortState::default()));
         // Exceed the old undrained queue's 128-message capacity repeatedly.
         for i in 0..1024 {
             let note = 48 + (i % 24) as u8;
-            handle_message(&vm, &held, &[0x90, note, 100]);
-            handle_message(&vm, &held, &[0x90, note, 100]);
+            handle_message(&vm, &state, &[0x90, note, 100]);
+            handle_message(&vm, &state, &[0x90, note, 100]);
             assert!(vm.lock().held_note_states()[note as usize]);
-            assert_eq!(held.lock().iter().filter(|&&down| down).count(), 1);
+            assert_eq!(state.lock().keys.iter().filter(|&&down| down).count(), 1);
             let status = if i % 2 == 0 { 0x80 } else { 0x90 };
-            handle_message(&vm, &held, &[status, note, 0]);
+            handle_message(&vm, &state, &[status, note, 0]);
             assert!(!vm.lock().held_note_states()[note as usize]);
-            assert!(!held.lock().iter().any(|&down| down));
+            assert!(!state.lock().keys.iter().any(|&down| down));
         }
     }
 
     #[test]
     fn drum_and_malformed_messages_do_not_hold_keyboard_notes() {
         let vm = Arc::new(Mutex::new(VoiceManager::new(48000.0, 10)));
-        let held = Arc::new(Mutex::new([false; 128]));
-        handle_message(&vm, &held, &[]);
-        handle_message(&vm, &held, &[0x90, 60]);
-        handle_message(&vm, &held, &[0x99, 36, 100]);
-        assert!(!held.lock().iter().any(|&down| down));
+        let state = Arc::new(Mutex::new(PortState::default()));
+        handle_message(&vm, &state, &[]);
+        handle_message(&vm, &state, &[0x90, 60]);
+        handle_message(&vm, &state, &[0x99, 36, 100]);
+        assert!(!state.lock().keys.iter().any(|&down| down));
         assert!(!vm.lock().held_note_states().iter().any(|&down| down));
         let mut vm = vm.lock();
         for _ in 0..128 {

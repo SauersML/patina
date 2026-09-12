@@ -514,19 +514,7 @@ impl SynthUI {
         // Input on restore causes a new frame immediately.
         if ctx.input(|i| i.viewport().minimized == Some(true)) {
             ctx.request_repaint_after(std::time::Duration::from_secs(1));
-            // Release held window keys once; subsequent minimized ticks
-            // do not need the engine lock at all.
-            if !self.pressed_keys.is_empty() || self.active_mouse_note.is_some() {
-                let mut vm = self.voice_manager.lock();
-                for (_, note) in self.pressed_keys.drain() {
-                    vm.note_off(note);
-                }
-                if let Some(note) = self.active_mouse_note.take() {
-                    vm.note_off(note);
-                }
-            }
-            self.pressed_drum_keys.clear();
-            self.mouse_pad_down = None;
+            self.release_window_notes();
             return;
         }
         self.ensure_textures(ctx);
@@ -1882,7 +1870,8 @@ impl SynthUI {
         let bot_w = (rect.width() - 2.0 * gap) / 3.0;
 
         let pointer = ui.input(|i| i.pointer.interact_pos());
-        let down = response.is_pointer_button_down_on();
+        let down = ui.input(|i| i.focused && i.pointer.primary_down())
+            && response.is_pointer_button_down_on();
         let mut struck: Option<usize> = None;
 
         let mut draw_pad = |painter: &egui::Painter,
@@ -2059,7 +2048,27 @@ impl SynthUI {
         None
     }
 
+    fn release_window_notes(&mut self) {
+        if !self.pressed_keys.is_empty() || self.active_mouse_note.is_some() {
+            let mut vm = self.voice_manager.lock();
+            for (_, note) in self.pressed_keys.drain() {
+                vm.note_off_channel(note, 0);
+            }
+            if let Some(note) = self.active_mouse_note.take() {
+                vm.note_off_channel(note, 0);
+            }
+        }
+        self.pressed_drum_keys.clear();
+        self.mouse_pad_down = None;
+    }
+
     fn handle_keyboard_input(&mut self, ctx: &egui::Context) {
+        // A focus-lost event need not carry key-up or pointer-up events.
+        // egui can retain keys_down, so checking that set alone is insufficient.
+        if !ctx.input(|i| i.focused) {
+            self.release_window_notes();
+            return;
+        }
         // The two manuals: Z row + home-row sharps (one octave), Q row +
         // number-row sharps (an octave and a fifth, one octave up)
         const KEYS: [Key; 32] = [
@@ -2213,7 +2222,9 @@ impl SynthUI {
     fn handle_mouse_input(&mut self, ui: &egui::Ui, rect: Rect, response: &egui::Response) {
         // Hold the note for as long as the mouse button is down on the keyboard,
         // gliding to a new note when the pointer drags across key boundaries
-        if response.is_pointer_button_down_on() || response.dragged() {
+        if ui.input(|i| i.focused && i.pointer.primary_down())
+            && (response.is_pointer_button_down_on() || response.dragged())
+        {
             if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
                 if let Some(note) = self.get_note_from_pointer(pos, rect) {
                     if Some(note) != self.active_mouse_note {
@@ -2292,5 +2303,58 @@ impl SynthUI {
 
     fn stop_note(&mut self, note: u8) {
         self.voice_manager.lock().note_off(note);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn focus_loss_releases_window_notes_without_key_up_events() {
+        let vm = Arc::new(Mutex::new(VoiceManager::new(48000.0, 10)));
+        let mut synth = SynthUI::new(Arc::clone(&vm));
+        let ctx = egui::Context::default();
+        ctx.begin_pass(egui::RawInput {
+            focused: true,
+            events: vec![egui::Event::Key {
+                key: Key::Z,
+                physical_key: Some(Key::Z),
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        });
+        synth.handle_keyboard_input(&ctx);
+        let key_note = synth.pressed_keys[&Key::Z];
+        vm.lock().note_on(61, 0.8);
+        synth.active_mouse_note = Some(61);
+        vm.lock().note_on(72, 0.8); // a separate MIDI key stays held
+        let _ = ctx.end_pass();
+
+        ctx.begin_pass(egui::RawInput {
+            focused: false,
+            events: vec![egui::Event::WindowFocused(false)],
+            ..Default::default()
+        });
+        assert!(ctx.input(|i| i.keys_down.contains(&Key::Z)));
+        synth.handle_keyboard_input(&ctx);
+        let notes = vm.lock().held_note_states();
+        assert!(!notes[key_note as usize]);
+        assert!(!notes[61]);
+        assert!(notes[72]);
+        assert!(synth.pressed_keys.is_empty());
+        assert!(synth.active_mouse_note.is_none());
+        let _ = ctx.end_pass();
+
+        // Restoring focus with stale keys_down must not re-trigger the note.
+        ctx.begin_pass(egui::RawInput {
+            focused: true,
+            ..Default::default()
+        });
+        synth.handle_keyboard_input(&ctx);
+        assert!(!vm.lock().held_note_states()[key_note as usize]);
+        let _ = ctx.end_pass();
     }
 }
