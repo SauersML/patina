@@ -128,8 +128,7 @@ impl Envelope {
             EnvelopeStage::Sustain => {
                 // Track the sustain control smoothly so live tweaks don't step
                 let sustain_level = f32::from_bits(self.sustain.load(Ordering::Relaxed));
-                self.current_level +=
-                    (sustain_level - self.current_level) * self.sustain_track_k;
+                self.current_level += (sustain_level - self.current_level) * self.sustain_track_k;
             }
             EnvelopeStage::Release => {
                 let release_time = f32::from_bits(self.release.load(Ordering::Relaxed));
@@ -166,8 +165,7 @@ impl Envelope {
     /// cap is already near-empty does the attack begin immediately.
     pub fn note_on_stolen(&mut self) {
         if self.current_level > STEAL_FLOOR {
-            self.steal_step =
-                self.current_level / (STEAL_SECONDS * self.sample_rate).max(1.0);
+            self.steal_step = self.current_level / (STEAL_SECONDS * self.sample_rate).max(1.0);
             self.stage = EnvelopeStage::Steal;
         } else {
             self.current_level = 0.0;
@@ -296,7 +294,10 @@ mod tests {
         for _ in 0..sr as usize {
             level = env.next_sample();
         }
-        assert!(level > 0.99, "first note should be at full level, got {level}");
+        assert!(
+            level > 0.99,
+            "first note should be at full level, got {level}"
+        );
 
         env.note_on_stolen();
         // The discharge gate empties the cap inside a few milliseconds
@@ -349,7 +350,10 @@ mod tests {
             prev = l;
         }
         // 1.0 discharged over 2.5 ms at 48 kHz is 1/120 per sample
-        assert!(worst < 0.01, "steal must slew, not step: worst jump {worst}");
+        assert!(
+            worst < 0.01,
+            "steal must slew, not step: worst jump {worst}"
+        );
     }
 
     /// The deliberate behaviour, pinned: a card that KEEPS its note and is
@@ -401,8 +405,7 @@ mod tests {
         let a = tau_ms(44100.0);
         let b = tau_ms(96000.0);
         assert!(
-            (a / (SUSTAIN_TRACK_TAU_S * 1000.0) - 1.0).abs() < 0.05
-                && (a / b - 1.0).abs() < 0.05,
+            (a / (SUSTAIN_TRACK_TAU_S * 1000.0) - 1.0).abs() < 0.05 && (a / b - 1.0).abs() < 0.05,
             "sustain tracking took {a:.2} ms at 44.1 kHz and {b:.2} ms at \
              96 kHz, expected {:.2} ms at both",
             SUSTAIN_TRACK_TAU_S * 1000.0

@@ -159,13 +159,11 @@ pub struct Reverb {
     out_hp_l: OnePoleLp,
     out_hp_r: OnePoleLp,
     wet: f32,
-    dry: f32,
 }
 
 impl Reverb {
     pub fn new(sample_rate: f32) -> Self {
-        let line_len =
-            core::array::from_fn(|i| (LINE_MS[i] * 1e-3 * sample_rate).max(8.0));
+        let line_len = core::array::from_fn(|i| (LINE_MS[i] * 1e-3 * sample_rate).max(8.0));
         let lines = core::array::from_fn(|i| {
             DelayLine::new(line_len[i] as usize + (MOD_DEPTH_MS * 1e-3 * sample_rate) as usize + 8)
         });
@@ -186,7 +184,6 @@ impl Reverb {
             out_hp_l: OnePoleLp::new(60.0, sample_rate),
             out_hp_r: OnePoleLp::new(60.0, sample_rate),
             wet: 0.3,
-            dry: 0.7,
         };
         r.set_decay(0.55);
         r
@@ -204,16 +201,14 @@ impl Reverb {
 
     pub fn set_wet(&mut self, wet: f32) {
         self.wet = wet.clamp(0.0, 1.0);
-        self.dry = 1.0 - self.wet;
     }
 
     /// Pre-delay in seconds (0..80 ms). Separating the dry hit from the
     /// tail's onset is most of what "size" and "clarity" mean in a mix:
     /// a 40-60 ms gap keeps transients legible inside a dark room.
     pub fn set_pre(&mut self, seconds: f32) {
-        self.pre_delay_samples =
-            ((seconds.clamp(0.0, 0.08) * self.sample_rate) as usize)
-                .min(self.pre_delay.buffer.len() - 2);
+        self.pre_delay_samples = ((seconds.clamp(0.0, 0.08) * self.sample_rate) as usize)
+            .min(self.pre_delay.buffer.len() - 2);
     }
 
     /// Tail damping cutoff, Hz. The in-loop lowpass is the tail's COLOR:
@@ -230,10 +225,9 @@ impl Reverb {
         self.process_with_send(input_left, input_right, 0.0, 0.0)
     }
 
-    /// The tank is linear, so the wet knob can live on the INPUT side:
-    /// tank(in * wet) == tank(in) * wet, bit-for-bit the legacy mix — and
-    /// a per-channel send bus becomes just another input into the same
-    /// tank, heard at unity regardless of the global wet knob.
+    /// The tank is linear, so the wet knob lives on the input side and the
+    /// dry path remains at unity. Per-channel sends join the same parallel
+    /// tank independently of the master wet amount.
     pub fn process_with_send(
         &mut self,
         input_left: f32,
@@ -247,15 +241,30 @@ impl Reverb {
         // -- is dead until the plugin is reloaded. Screening the input is
         // O(1) and turns a permanent kill into a one-sample dropout.
         // (tape.rs takes the same position on its own magnetic state.)
-        let input_left = if input_left.is_finite() { input_left } else { 0.0 };
-        let input_right = if input_right.is_finite() { input_right } else { 0.0 };
-        let send_left = if send_left.is_finite() { send_left } else { 0.0 };
-        let send_right = if send_right.is_finite() { send_right } else { 0.0 };
+        let input_left = if input_left.is_finite() {
+            input_left
+        } else {
+            0.0
+        };
+        let input_right = if input_right.is_finite() {
+            input_right
+        } else {
+            0.0
+        };
+        let send_left = if send_left.is_finite() {
+            send_left
+        } else {
+            0.0
+        };
+        let send_right = if send_right.is_finite() {
+            send_right
+        } else {
+            0.0
+        };
 
         // Feed: mono sum through pre-delay and band limits into the
         // diffusion chain
-        let mono = (input_left + input_right) * 0.5 * self.wet
-            + (send_left + send_right) * 0.5;
+        let mono = (input_left + input_right) * 0.5 * self.wet + (send_left + send_right) * 0.5;
         self.pre_delay.push(mono);
         let fed = self.pre_delay.read_int(self.pre_delay_samples);
         let fed = self.in_lp.process(fed);
@@ -295,10 +304,7 @@ impl Reverb {
         let wet_l = wet_l - self.out_hp_l.process(wet_l);
         let wet_r = wet_r - self.out_hp_r.process(wet_r);
 
-        (
-            input_left * self.dry + wet_l,
-            input_right * self.dry + wet_r,
-        )
+        (input_left + wet_l, input_right + wet_r)
     }
 }
 
@@ -474,6 +480,9 @@ mod tests {
                 energy += l * l;
             }
         }
-        assert!(energy > 1.0, "reverb should be passing audio again: {energy}");
+        assert!(
+            energy > 1.0,
+            "reverb should be passing audio again: {energy}"
+        );
     }
 }

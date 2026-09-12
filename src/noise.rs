@@ -29,7 +29,6 @@ pub struct NoiseSource {
     lp_a: f32,
 }
 
-
 /// Trapezoidal one-pole coefficient placing the -3 dB corner exactly on
 /// `fc` at `sample_rate`. `fc` is held below Nyquist so `tan` cannot run
 /// off to infinity at absurd rates.

@@ -32,9 +32,7 @@ use std::ffi::c_void;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use crate::host_params::{
-    self, ChoiceDef, Display, ParamDef, NUM_VOICES, PITCH_BEND_SEMITONES,
-};
+use crate::host_params::{self, ChoiceDef, Display, ParamDef, NUM_VOICES, PITCH_BEND_SEMITONES};
 use crate::voice_manager::VoiceManager;
 
 pub const AU_TYPE: u32 = fourcc(b"aumu");
@@ -113,8 +111,10 @@ unsafe impl Sync for AuUnit {}
 impl AuUnit {
     fn new(comp_instance: AudioComponentInstance) -> Self {
         let defs = host_params::param_defs();
-        let values =
-            defs.iter().map(|d| AtomicU32::new(d.default_value().to_bits())).collect();
+        let values = defs
+            .iter()
+            .map(|d| AtomicU32::new(d.default_value().to_bits()))
+            .collect();
         Self {
             comp_instance: comp_instance as usize,
             defs,
@@ -196,7 +196,13 @@ impl AuUnit {
             .collect();
         for (proc_, data) in procs {
             unsafe {
-                proc_(data as *mut c_void, self.comp_instance as *mut c_void, prop, scope, elem)
+                proc_(
+                    data as *mut c_void,
+                    self.comp_instance as *mut c_void,
+                    prop,
+                    scope,
+                    elem,
+                )
             };
         }
     }
@@ -268,9 +274,7 @@ impl AuUnit {
                 CFRelease(k);
                 v
             };
-            let matches = |key: &str, expect: u32| {
-                cfnumber_to_i32(get(key)) == Some(expect as i32)
-            };
+            let matches = |key: &str, expect: u32| cfnumber_to_i32(get(key)) == Some(expect as i32);
             if !matches("type", AU_TYPE)
                 || !matches("subtype", AU_SUBTYPE)
                 || !matches("manufacturer", AU_MANUFACTURER)
@@ -300,7 +304,9 @@ impl AuUnit {
                         let (Some(id), Some(raw)) = (parts.next(), parts.next()) else {
                             continue;
                         };
-                        let Ok(v) = raw.trim().parse::<f32>() else { continue };
+                        let Ok(v) = raw.trim().parse::<f32>() else {
+                            continue;
+                        };
                         if let Some(idx) = self.defs.iter().position(|d| d.id() == id) {
                             self.set_value(idx, v);
                         }
@@ -349,18 +355,21 @@ fn param_unit_and_flags(def: &ParamDef) -> (u32, u32) {
         | kAudioUnitParameterFlag_HasCFNameString
         | kAudioUnitParameterFlag_CFNameRelease;
     match def {
-        ParamDef::Choice(_) => {
-            (kAudioUnitParameterUnit_Indexed, base | kAudioUnitParameterFlag_ValuesHaveStrings)
-        }
+        ParamDef::Choice(_) => (
+            kAudioUnitParameterUnit_Indexed,
+            base | kAudioUnitParameterFlag_ValuesHaveStrings,
+        ),
         ParamDef::Float(fd) => match fd.display {
             Display::Percent => (kAudioUnitParameterUnit_Percent, base),
             Display::Fraction => (kAudioUnitParameterUnit_Generic, base),
-            Display::Seconds => {
-                (kAudioUnitParameterUnit_Seconds, base | kAudioUnitParameterFlag_DisplayLogarithmic)
-            }
-            Display::Hertz => {
-                (kAudioUnitParameterUnit_Hertz, base | kAudioUnitParameterFlag_DisplayLogarithmic)
-            }
+            Display::Seconds => (
+                kAudioUnitParameterUnit_Seconds,
+                base | kAudioUnitParameterFlag_DisplayLogarithmic,
+            ),
+            Display::Hertz => (
+                kAudioUnitParameterUnit_Hertz,
+                base | kAudioUnitParameterFlag_DisplayLogarithmic,
+            ),
             Display::Plain(unit) => match unit.trim() {
                 "ct" => (kAudioUnitParameterUnit_Cents, base),
                 "oct" => (kAudioUnitParameterUnit_Octaves, base),
@@ -437,14 +446,12 @@ fn property_info(
                 Err(kAudioUnitErr_InvalidParameter)
             }
         }
-        kAudioUnitProperty_ParameterValueStrings => {
-            match unit.defs.get(elem as usize) {
-                Some(ParamDef::Choice(_)) if scope == kAudioUnitScope_Global => {
-                    Ok((size_of::<CFArrayRef>(), false))
-                }
-                _ => Err(kAudioUnitErr_InvalidProperty),
+        kAudioUnitProperty_ParameterValueStrings => match unit.defs.get(elem as usize) {
+            Some(ParamDef::Choice(_)) if scope == kAudioUnitScope_Global => {
+                Ok((size_of::<CFArrayRef>(), false))
             }
-        }
+            _ => Err(kAudioUnitErr_InvalidProperty),
+        },
         kAudioUnitProperty_ParameterStringFromValue => {
             global_only(size_of::<AudioUnitParameterStringFromValue>(), false)
         }
@@ -457,9 +464,7 @@ fn property_info(
         },
         kAudioUnitProperty_ElementCount => Ok((4, false)),
         kAudioUnitProperty_Latency => global_only(size_of::<f64>(), false),
-        kAudioUnitProperty_SupportedNumChannels => {
-            global_only(size_of::<AUChannelInfo>(), false)
-        }
+        kAudioUnitProperty_SupportedNumChannels => global_only(size_of::<AUChannelInfo>(), false),
         kAudioUnitProperty_MaximumFramesPerSlice => global_only(4, true),
         kAudioUnitProperty_TailTime => global_only(size_of::<f64>(), false),
         kAudioUnitProperty_LastRenderError => global_only(4, false),
@@ -486,11 +491,7 @@ fn property_info(
 
 /// Copy `value` out to the host, honoring the size-query convention
 /// (null outData) and truncating writes like AUBase does.
-unsafe fn write_out<T: Copy>(
-    value: T,
-    out_data: *mut c_void,
-    io_size: *mut u32,
-) -> OSStatus {
+unsafe fn write_out<T: Copy>(value: T, out_data: *mut c_void, io_size: *mut u32) -> OSStatus {
     write_out_bytes(
         std::slice::from_raw_parts(&value as *const T as *const u8, size_of::<T>()),
         out_data,
@@ -561,7 +562,10 @@ unsafe fn wrapper<'a>(this: *mut c_void) -> &'a mut Wrapper {
 
 /// The unit, or the "open never happened" error.
 unsafe fn unit<'a>(this: *mut c_void) -> Result<&'a AuUnit, OSStatus> {
-    wrapper(this).unit.as_deref().ok_or(kAudioUnitErr_Uninitialized)
+    wrapper(this)
+        .unit
+        .as_deref()
+        .ok_or(kAudioUnitErr_Uninitialized)
 }
 
 unsafe extern "C" fn au_open(this: *mut c_void, instance: AudioComponentInstance) -> OSStatus {
@@ -575,7 +579,9 @@ unsafe extern "C" fn au_close(this: *mut c_void) -> OSStatus {
 }
 
 unsafe extern "C" fn au_initialize(this: *mut c_void) -> OSStatus {
-    let Ok(unit) = unit(this) else { return kAudioUnitErr_FailedInitialization };
+    let Ok(unit) = unit(this) else {
+        return kAudioUnitErr_FailedInitialization;
+    };
     let mut st = unit.state.lock();
     if st.engine.is_some() {
         return noErr;
@@ -680,8 +686,7 @@ unsafe extern "C" fn au_get_property(
         }
         kAudioUnitProperty_ParameterValueStrings => {
             gate!(CFArrayRef);
-            let ParamDef::Choice(ChoiceDef { variants, .. }) = &unit.defs[elem as usize]
-            else {
+            let ParamDef::Choice(ChoiceDef { variants, .. }) = &unit.defs[elem as usize] else {
                 return kAudioUnitErr_InvalidProperty;
             };
             let strings: Vec<CFTypeRef> = variants.iter().map(|v| cfstring(v)).collect();
@@ -698,7 +703,11 @@ unsafe extern "C" fn au_get_property(
         }
         kAudioUnitProperty_StreamFormat => {
             let sr = unit.state.lock().sample_rate;
-            write_out(AudioStreamBasicDescription::non_interleaved_f32(sr, 2), out_data, io_size)
+            write_out(
+                AudioStreamBasicDescription::non_interleaved_f32(sr, 2),
+                out_data,
+                io_size,
+            )
         }
         kAudioUnitProperty_ElementCount => {
             let count: u32 = match scope {
@@ -708,9 +717,14 @@ unsafe extern "C" fn au_get_property(
             write_out(count, out_data, io_size)
         }
         kAudioUnitProperty_Latency => write_out(0.0f64, out_data, io_size),
-        kAudioUnitProperty_SupportedNumChannels => {
-            write_out(AUChannelInfo { inChannels: 0, outChannels: 2 }, out_data, io_size)
-        }
+        kAudioUnitProperty_SupportedNumChannels => write_out(
+            AUChannelInfo {
+                inChannels: 0,
+                outChannels: 2,
+            },
+            out_data,
+            io_size,
+        ),
         kAudioUnitProperty_MaximumFramesPerSlice => {
             write_out(unit.state.lock().max_frames, out_data, io_size)
         }
@@ -731,7 +745,10 @@ unsafe extern "C" fn au_get_property(
             };
             // The host owns (and releases) the returned name.
             write_out(
-                AUPreset { presetNumber: number, presetName: cfstring(&name) },
+                AUPreset {
+                    presetNumber: number,
+                    presetName: cfstring(&name),
+                },
                 out_data,
                 io_size,
             )
@@ -830,11 +847,7 @@ unsafe extern "C" fn au_set_property(
             }
             let status = unit.restore_state(*(in_data as *const CFPropertyListRef));
             if status == noErr {
-                unit.notify_property(
-                    kAudioUnitProperty_PresentPreset,
-                    kAudioUnitScope_Global,
-                    0,
-                );
+                unit.notify_property(kAudioUnitProperty_PresentPreset, kAudioUnitScope_Global, 0);
             }
             status
         }
@@ -985,9 +998,9 @@ unsafe extern "C" fn au_remove_property_listener_with_user_data(
         Ok(u) => u,
         Err(e) => return e,
     };
-    unit.listeners.lock().retain(|l| {
-        !(l.prop == prop && l.proc_ as usize == proc_ as usize && l.data == data)
-    });
+    unit.listeners
+        .lock()
+        .retain(|l| !(l.prop == prop && l.proc_ as usize == proc_ as usize && l.data == data));
     noErr
 }
 
@@ -1075,9 +1088,7 @@ unsafe extern "C" fn au_schedule_parameters(
         return kAudio_ParamError;
     }
     for event in std::slice::from_raw_parts(events, num_events as usize) {
-        if event.scope != kAudioUnitScope_Global
-            || (event.parameter as usize) >= unit.defs.len()
-        {
+        if event.scope != kAudioUnitScope_Global || (event.parameter as usize) >= unit.defs.len() {
             return kAudioUnitErr_InvalidParameter;
         }
         // Ramps land on their end value; the engine's own smoothing covers
@@ -1133,8 +1144,11 @@ unsafe extern "C" fn au_render(
 
     // ioActionFlags is optional; the notify callbacks each get their own
     // copy so a host cannot have one of them rewrite what the next sees.
-    let base_flags: AudioUnitRenderActionFlags =
-        if io_action_flags.is_null() { 0 } else { *io_action_flags };
+    let base_flags: AudioUnitRenderActionFlags = if io_action_flags.is_null() {
+        0
+    } else {
+        *io_action_flags
+    };
     for_each_render_notify(unit, |proc_, data| {
         let mut f = base_flags | kAudioUnitRenderAction_PreRender;
         proc_(data, &mut f, in_time_stamp, in_bus, in_frames, io_data);
@@ -1226,7 +1240,11 @@ unsafe extern "C" fn au_render(
     for_each_render_notify(unit, |proc_, data| {
         let mut f = base_flags
             | kAudioUnitRenderAction_PostRender
-            | if result != noErr { kAudioUnitRenderAction_PostRenderError } else { 0 };
+            | if result != noErr {
+                kAudioUnitRenderAction_PostRenderError
+            } else {
+                0
+            };
         proc_(data, &mut f, in_time_stamp, in_bus, in_frames, io_data);
     });
     result
@@ -1241,10 +1259,7 @@ unsafe extern "C" fn au_render(
 /// that registers a notify — Logic does). So the list is copied out through
 /// a fixed stack window, in as many passes as it takes; nothing is dropped
 /// and nothing is heap-allocated.
-unsafe fn for_each_render_notify(
-    unit: &AuUnit,
-    mut f: impl FnMut(AURenderCallback, *mut c_void),
-) {
+unsafe fn for_each_render_notify(unit: &AuUnit, mut f: impl FnMut(AURenderCallback, *mut c_void)) {
     const WINDOW: usize = 8;
     let mut start = 0usize;
     loop {
@@ -1285,15 +1300,15 @@ unsafe extern "C" fn au_midi_event(
         Err(e) => return e,
     };
     let mut st = unit.state.lock();
-    let Some(engine) = st.engine.as_mut() else { return noErr };
+    let Some(engine) = st.engine.as_mut() else {
+        return noErr;
+    };
     let vm = &mut engine.vm;
 
     let channel = (status & 0x0F) as u8;
     let note = (data1 & 0x7F) as u8;
     match status & 0xF0 {
-        0x90 if data2 > 0 => {
-            host_params::note_on(vm, channel, note, (data2 & 0x7F) as f32 / 127.0)
-        }
+        0x90 if data2 > 0 => host_params::note_on(vm, channel, note, (data2 & 0x7F) as f32 / 127.0),
         0x80 | 0x90 => host_params::note_off(vm, channel, note),
         0xB0 => match data1 {
             // Mod wheel
@@ -1379,7 +1394,11 @@ unsafe extern "C" fn au_stop_note(
     };
     let mut st = unit.state.lock();
     if let Some(engine) = st.engine.as_mut() {
-        host_params::note_off(&mut engine.vm, (group & 0x0F) as u8, (note_instance & 0x7F) as u8);
+        host_params::note_off(
+            &mut engine.vm,
+            (group & 0x0F) as u8,
+            (note_instance & 0x7F) as u8,
+        );
     }
     noErr
 }
@@ -1390,7 +1409,9 @@ unsafe extern "C" fn au_stop_note(
 
 macro_rules! method {
     ($f:expr) => {
-        Some(std::mem::transmute::<*const (), unsafe extern "C" fn()>($f as *const ()))
+        Some(std::mem::transmute::<*const (), unsafe extern "C" fn()>(
+            $f as *const (),
+        ))
     };
 }
 
@@ -1510,7 +1531,10 @@ mod tests {
                         mData: scratch.as_mut_ptr() as *mut c_void,
                     }],
                 };
-                assert_eq!(au_render(u.0, ptr::null_mut(), &ts, 0, FRAMES, &mut abl), noErr);
+                assert_eq!(
+                    au_render(u.0, ptr::null_mut(), &ts, 0, FRAMES, &mut abl),
+                    noErr
+                );
             }
 
             let mut abl = AudioBufferList {
@@ -1521,10 +1545,16 @@ mod tests {
                     mData: ptr::null_mut(),
                 }],
             };
-            assert_eq!(au_render(u.0, ptr::null_mut(), &ts, 0, FRAMES, &mut abl), noErr);
+            assert_eq!(
+                au_render(u.0, ptr::null_mut(), &ts, 0, FRAMES, &mut abl),
+                noErr
+            );
 
             let out = abl.mBuffers[0].mData as *const f32;
-            assert!(!out.is_null(), "the unit must supply storage for a null mData buffer");
+            assert!(
+                !out.is_null(),
+                "the unit must supply storage for a null mData buffer"
+            );
             assert_eq!(abl.mBuffers[0].mDataByteSize, FRAMES * 2 * 4);
 
             let st = u.unit().state.lock();
@@ -1554,8 +1584,7 @@ mod tests {
         unsafe {
             // A two-buffer AudioBufferList is a flexible array member; build
             // the real variable-length layout by hand.
-            let mut storage =
-                vec![0u8; size_of::<AudioBufferList>() + size_of::<AudioBuffer>()];
+            let mut storage = vec![0u8; size_of::<AudioBufferList>() + size_of::<AudioBuffer>()];
             let list = storage.as_mut_ptr() as *mut AudioBufferList;
             (*list).mNumberBuffers = 2;
             for buf in (*list).buffers_mut() {
@@ -1586,9 +1615,21 @@ mod tests {
     fn owned_properties_survive_size_queries_and_short_buffers() {
         let u = TestUnit::open();
         let owned: [(u32, u32, usize); 5] = [
-            (kAudioUnitProperty_ClassInfo, 0, size_of::<CFPropertyListRef>()),
-            (kAudioUnitProperty_ParameterInfo, 0, size_of::<AudioUnitParameterInfo>()),
-            (kAudioUnitProperty_ParameterValueStrings, 0, size_of::<CFArrayRef>()),
+            (
+                kAudioUnitProperty_ClassInfo,
+                0,
+                size_of::<CFPropertyListRef>(),
+            ),
+            (
+                kAudioUnitProperty_ParameterInfo,
+                0,
+                size_of::<AudioUnitParameterInfo>(),
+            ),
+            (
+                kAudioUnitProperty_ParameterValueStrings,
+                0,
+                size_of::<CFArrayRef>(),
+            ),
             (kAudioUnitProperty_PresentPreset, 0, size_of::<AUPreset>()),
             (
                 kAudioUnitProperty_ParameterStringFromValue,
@@ -1627,7 +1668,10 @@ mod tests {
                     kAudio_ParamError,
                     "short buffer for property {prop}"
                 );
-                assert!(buf.iter().all(|b| *b == 0), "property {prop} half-wrote a value");
+                assert!(
+                    buf.iter().all(|b| *b == 0),
+                    "property {prop} half-wrote a value"
+                );
             }
         }
     }
@@ -1686,7 +1730,10 @@ mod tests {
                     eventType: kParameterEvent_Immediate,
                     eventValues: [0, 0.5f32.to_bits(), 0, 0],
                 };
-                assert_eq!(au_schedule_parameters(u.0, &event, 1), kAudioUnitErr_InvalidParameter);
+                assert_eq!(
+                    au_schedule_parameters(u.0, &event, 1),
+                    kAudioUnitErr_InvalidParameter
+                );
                 // The string conversions take the id from host-supplied
                 // struct fields, not from the element.
                 let mut query = AudioUnitParameterStringFromValue {
@@ -1765,7 +1812,12 @@ mod tests {
             }
             assert_eq!(unit.restore_state(saved), noErr);
             for (i, want) in expected.iter().enumerate() {
-                assert_eq!(unit.value(i), *want, "`{}` did not round-trip", unit.defs[i].id());
+                assert_eq!(
+                    unit.value(i),
+                    *want,
+                    "`{}` did not round-trip",
+                    unit.defs[i].id()
+                );
             }
             CFRelease(saved);
 
@@ -1775,9 +1827,15 @@ mod tests {
                 &kCFTypeDictionaryKeyCallBacks as *const c_void,
                 &kCFTypeDictionaryValueCallBacks as *const c_void,
             );
-            assert_eq!(unit.restore_state(alien), kAudioUnitErr_InvalidPropertyValue);
+            assert_eq!(
+                unit.restore_state(alien),
+                kAudioUnitErr_InvalidPropertyValue
+            );
             CFRelease(alien);
-            assert_eq!(unit.restore_state(ptr::null()), kAudioUnitErr_InvalidPropertyValue);
+            assert_eq!(
+                unit.restore_state(ptr::null()),
+                kAudioUnitErr_InvalidPropertyValue
+            );
         }
     }
 
@@ -1820,7 +1878,11 @@ mod tests {
             for (i, def) in unit.defs.iter().enumerate() {
                 let (min, max) = param_range(def);
                 let v = unit.value(i);
-                assert!(v.is_finite() && v >= min && v <= max, "`{}` -> {v}", def.id());
+                assert!(
+                    v.is_finite() && v >= min && v <= max,
+                    "`{}` -> {v}",
+                    def.id()
+                );
             }
             CFRelease(dict);
         }
@@ -1852,11 +1914,24 @@ mod tests {
                 kAudioUnitErr_InvalidElement
             );
             assert_eq!(
-                au_render(u.0, ptr::null_mut(), &ts, 0, DEFAULT_MAX_FRAMES + 1, &mut abl),
+                au_render(
+                    u.0,
+                    ptr::null_mut(),
+                    &ts,
+                    0,
+                    DEFAULT_MAX_FRAMES + 1,
+                    &mut abl
+                ),
                 kAudioUnitErr_TooManyFramesToProcess
             );
-            assert!(samples.iter().all(|s| *s == 1.0), "a refused render wrote samples");
-            assert_eq!(au_render(u.0, ptr::null_mut(), &ts, 0, 16, ptr::null_mut()), kAudio_ParamError);
+            assert!(
+                samples.iter().all(|s| *s == 1.0),
+                "a refused render wrote samples"
+            );
+            assert_eq!(
+                au_render(u.0, ptr::null_mut(), &ts, 0, 16, ptr::null_mut()),
+                kAudio_ParamError
+            );
 
             let mut err: OSStatus = 0;
             let mut size = 4u32;
@@ -1898,7 +1973,10 @@ mod tests {
                     noErr,
                     "parameter {id}"
                 );
-                assert!(info.name.iter().any(|c| *c == 0), "parameter {id} name not terminated");
+                assert!(
+                    info.name.iter().any(|c| *c == 0),
+                    "parameter {id} name not terminated"
+                );
                 assert!(!info.cfNameString.is_null());
                 CFRelease(info.cfNameString);
                 assert!(info.minValue.is_finite() && info.maxValue.is_finite());
@@ -2061,8 +2139,11 @@ mod tests {
             }
             assert_eq!(au_sysex(u.0, ptr::null(), 0), noErr);
 
-            let params =
-                MusicDeviceNoteParams { argCount: 2, mPitch: f32::NAN, mVelocity: 1e30 };
+            let params = MusicDeviceNoteParams {
+                argCount: 2,
+                mPitch: f32::NAN,
+                mVelocity: 1e30,
+            };
             let mut note: NoteInstanceID = 0;
             assert_eq!(au_start_note(u.0, 0, 0, &mut note, 0, &params), noErr);
             assert_eq!(au_stop_note(u.0, 0, u32::MAX, 0), noErr);
@@ -2083,15 +2164,23 @@ mod tests {
         use crate::supported_sample_rate as ok;
         // Every rate a host actually offers
         for r in [
-            8000.0, 11025.0, 16000.0, 22050.0, 32000.0, 44100.0, 48000.0, 88200.0,
-            96000.0, 176400.0, 192000.0, 384000.0,
+            8000.0, 11025.0, 16000.0, 22050.0, 32000.0, 44100.0, 48000.0, 88200.0, 96000.0,
+            176400.0, 192000.0, 384000.0,
         ] {
             assert!(ok(r), "{r} Hz is a standard host rate and must be accepted");
         }
         // ...and nothing outside the band the circuits survive
         for r in [
-            0.0, 1.0, 100.0, 1000.0, 4000.0, 7999.0, 1_000_000.0, f64::NAN,
-            f64::INFINITY, -48000.0,
+            0.0,
+            1.0,
+            100.0,
+            1000.0,
+            4000.0,
+            7999.0,
+            1_000_000.0,
+            f64::NAN,
+            f64::INFINITY,
+            -48000.0,
         ] {
             assert!(!ok(r), "{r} Hz must be refused, not rendered as garbage");
         }

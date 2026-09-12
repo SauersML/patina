@@ -227,7 +227,6 @@ impl Chorus {
         self.apply_depth();
     }
 
-
     /// Override the insert mix set by the mode switch: `0` keeps the bus
     /// completely dry while the BBD still runs, so per-channel sends can
     /// be chorused alone. Selecting a mode afterwards re-derives its
@@ -256,10 +255,26 @@ impl Chorus {
         // The BBD line feeds back on itself, so one non-finite sample
         // circulates forever and the chorus never produces audio again.
         // Screening the input is O(1) and makes it a one-sample dropout.
-        let input_left = if input_left.is_finite() { input_left } else { 0.0 };
-        let input_right = if input_right.is_finite() { input_right } else { 0.0 };
-        let send_left = if send_left.is_finite() { send_left } else { 0.0 };
-        let send_right = if send_right.is_finite() { send_right } else { 0.0 };
+        let input_left = if input_left.is_finite() {
+            input_left
+        } else {
+            0.0
+        };
+        let input_right = if input_right.is_finite() {
+            input_right
+        } else {
+            0.0
+        };
+        let send_left = if send_left.is_finite() {
+            send_left
+        } else {
+            0.0
+        };
+        let send_right = if send_right.is_finite() {
+            send_right
+        } else {
+            0.0
+        };
 
         let m = self.wet_dry_mix.clamp(0.0, 1.0);
         let fed_left = input_left * m + send_left;
@@ -273,17 +288,24 @@ impl Chorus {
         let feedback_left = self.buffer_left[self.index];
         let feedback_right = self.buffer_right[self.index];
         let feedback = (feedback_left + feedback_right) * 0.5;
-        let input_with_feedback_left = filtered_input_left + (self.feedback * feedback).clamp(-1.0, 1.0);
-        let input_with_feedback_right = filtered_input_right + (self.feedback * feedback).clamp(-1.0, 1.0);
+        let input_with_feedback_left =
+            filtered_input_left + (self.feedback * feedback).clamp(-1.0, 1.0);
+        let input_with_feedback_right =
+            filtered_input_right + (self.feedback * feedback).clamp(-1.0, 1.0);
 
         self.buffer_left[self.index] = input_with_feedback_left;
         self.buffer_right[self.index] = input_with_feedback_right;
         self.index = (self.index + 1) % self.size;
 
-        let (left_output, right_output) = self.calculate_delay_samples(input_with_feedback_left, input_with_feedback_right);
+        let (left_output, right_output) =
+            self.calculate_delay_samples(input_with_feedback_left, input_with_feedback_right);
 
         // BBD hiss rides the line at the level the line is actually fed
-        let n_gain = if send_left != 0.0 || send_right != 0.0 { m.max(0.25) } else { m };
+        let n_gain = if send_left != 0.0 || send_right != 0.0 {
+            m.max(0.25)
+        } else {
+            m
+        };
         let noise = self.noise_generator.generate() * n_gain;
         let left_output = left_output + noise;
         let right_output = right_output + noise;
@@ -297,7 +319,6 @@ impl Chorus {
         (left.clamp(-1.0, 1.0), right.clamp(-1.0, 1.0))
     }
 
-
     fn calculate_delay_samples(&mut self, input_left: f32, input_right: f32) -> (f32, f32) {
         let mut left_output = 0.0;
         let mut right_output = 0.0;
@@ -306,8 +327,12 @@ impl Chorus {
         for voice in &mut self.voices {
             voice.phase_left += voice.rate_left / self.sample_rate;
             voice.phase_right += voice.rate_right / self.sample_rate;
-            if voice.phase_left >= 1.0 { voice.phase_left -= 1.0; }
-            if voice.phase_right >= 1.0 { voice.phase_right -= 1.0; }
+            if voice.phase_left >= 1.0 {
+                voice.phase_left -= 1.0;
+            }
+            if voice.phase_right >= 1.0 {
+                voice.phase_right -= 1.0;
+            }
 
             voice.smooth_depth += (voice.depth - voice.smooth_depth) * depth_smooth_k;
 
@@ -333,19 +358,25 @@ impl Chorus {
             let frac_left = pos_left.fract();
             let frac_right = pos_right.fract();
 
-            let sample_left = cubic_interpolate(&[
-                self.buffer_left[(index_left + self.size - 1) % self.size],
-                self.buffer_left[index_left],
-                self.buffer_left[(index_left + 1) % self.size],
-                self.buffer_left[(index_left + 2) % self.size],
-            ], frac_left);
+            let sample_left = cubic_interpolate(
+                &[
+                    self.buffer_left[(index_left + self.size - 1) % self.size],
+                    self.buffer_left[index_left],
+                    self.buffer_left[(index_left + 1) % self.size],
+                    self.buffer_left[(index_left + 2) % self.size],
+                ],
+                frac_left,
+            );
 
-            let sample_right = cubic_interpolate(&[
-                self.buffer_right[(index_right + self.size - 1) % self.size],
-                self.buffer_right[index_right],
-                self.buffer_right[(index_right + 1) % self.size],
-                self.buffer_right[(index_right + 2) % self.size],
-            ], frac_right);
+            let sample_right = cubic_interpolate(
+                &[
+                    self.buffer_right[(index_right + self.size - 1) % self.size],
+                    self.buffer_right[index_right],
+                    self.buffer_right[(index_right + 1) % self.size],
+                    self.buffer_right[(index_right + 2) % self.size],
+                ],
+                frac_right,
+            );
 
             left_output += sample_left;
             right_output += sample_right;
@@ -435,9 +466,7 @@ impl NoiseGenerator {
 
 impl Saturation {
     fn new() -> Self {
-        Self {
-            drive: 1.2,
-        }
+        Self { drive: 1.2 }
     }
 
     fn process(&self, input: f32) -> f32 {
@@ -481,7 +510,10 @@ mod tests {
         let phase_before = chorus.voices[0].phase_left;
         chorus.set_mode(ChorusMode::II);
         assert_eq!(chorus.wet_dry_mix, 0.12, "mix override must survive");
-        assert_eq!(chorus.voices[0].phase_left, phase_before, "voices must not rebuild");
+        assert_eq!(
+            chorus.voices[0].phase_left, phase_before,
+            "voices must not rebuild"
+        );
     }
 
     /// Regression: a mode switch rebuilds the voices from the mode preset,
@@ -552,7 +584,10 @@ mod tests {
                 energy += l * l;
             }
         }
-        assert!(energy > 1.0, "chorus should be passing audio again: {energy}");
+        assert!(
+            energy > 1.0,
+            "chorus should be passing audio again: {energy}"
+        );
     }
 
     #[test]
@@ -575,7 +610,10 @@ mod tests {
         }
         assert!(lo >= 0.0, "LFO commands a negative delay: {lo}");
         assert!(hi <= 1.0, "LFO overshoots full depth: {hi}");
-        assert!(lo < 0.02 && hi > 0.98, "LFO should use its full span: {lo}..{hi}");
+        assert!(
+            lo < 0.02 && hi > 0.98,
+            "LFO should use its full span: {lo}..{hi}"
+        );
         let mean = sum / n as f64;
         assert!(
             (mean - 0.5).abs() < 0.01,

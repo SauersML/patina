@@ -115,8 +115,12 @@ impl ParamDef {
 /// selector index is therefore the exact value `Param::apply` expects, and
 /// the variant NAMES below sit in this same order. Nothing maps between two
 /// orderings, so a "picked Triangle, got Square" mismatch cannot occur.
-pub const WAVEFORM_VARIANTS: [Waveform; 4] =
-    [Waveform::Sine, Waveform::Square, Waveform::Sawtooth, Waveform::Triangle];
+pub const WAVEFORM_VARIANTS: [Waveform; 4] = [
+    Waveform::Sine,
+    Waveform::Square,
+    Waveform::Sawtooth,
+    Waveform::Triangle,
+];
 
 const WAVE_NAMES: &[&str] = &["Sine", "Square", "Sawtooth", "Triangle"];
 const CIRCUIT_NAMES: &[&str] = &["Moog", "ARP"];
@@ -131,16 +135,39 @@ struct Row {
 }
 
 enum Kind {
-    Float { display: Display, default: f32, guarded: bool },
-    Choice { variants: &'static [&'static str], default: usize },
+    Float {
+        display: Display,
+        default: f32,
+        guarded: bool,
+    },
+    Choice {
+        variants: &'static [&'static str],
+        default: usize,
+    },
 }
 
 const fn flt(param: Param, name: &'static str, display: Display, default: f32) -> Row {
-    Row { param, name, kind: Kind::Float { display, default, guarded: false } }
+    Row {
+        param,
+        name,
+        kind: Kind::Float {
+            display,
+            default,
+            guarded: false,
+        },
+    }
 }
 
 const fn gflt(param: Param, name: &'static str, display: Display, default: f32) -> Row {
-    Row { param, name, kind: Kind::Float { display, default, guarded: true } }
+    Row {
+        param,
+        name,
+        kind: Kind::Float {
+            display,
+            default,
+            guarded: true,
+        },
+    }
 }
 
 const fn sel(
@@ -149,7 +176,11 @@ const fn sel(
     variants: &'static [&'static str],
     default: usize,
 ) -> Row {
-    Row { param, name, kind: Kind::Choice { variants, default } }
+    Row {
+        param,
+        name,
+        kind: Kind::Choice { variants, default },
+    }
 }
 
 use Display::{Fraction, Hertz, Percent, Plain, Seconds};
@@ -314,7 +345,11 @@ pub fn param_defs() -> Vec<ParamDef> {
             let (min, max, _curve) = row.param.range();
             let id = row.param.name();
             match row.kind {
-                Kind::Float { display, default, guarded } => ParamDef::Float(FloatDef {
+                Kind::Float {
+                    display,
+                    default,
+                    guarded,
+                } => ParamDef::Float(FloatDef {
                     id,
                     name: row.name,
                     param: row.param,
@@ -370,13 +405,20 @@ mod tests {
     #[test]
     fn bottom_sliver_always_reaches_the_drums() {
         for note in 0..=crate::drums::LOW_DRUM_LAST {
-            assert!(crate::drums::is_low_drum_note(note), "note {note} should be a drum");
+            assert!(
+                crate::drums::is_low_drum_note(note),
+                "note {note} should be a drum"
+            );
         }
-        assert!(!crate::drums::is_low_drum_note(crate::drums::LOW_DRUM_LAST + 1));
+        assert!(!crate::drums::is_low_drum_note(
+            crate::drums::LOW_DRUM_LAST + 1
+        ));
         // The sliver sits below any playable key, so nothing musical is lost.
-        assert!(crate::drums::LOW_DRUM_LAST < 21, "sliver must stay below A0");
+        assert!(
+            crate::drums::LOW_DRUM_LAST < 21,
+            "sliver must stay below A0"
+        );
     }
-
 
     /// A parameter's position in PRESENTATION IS its AudioUnitParameterID,
     /// and hosts record automation curves against that number. Reordering the
@@ -385,20 +427,62 @@ mod tests {
     #[test]
     fn shipped_parameter_ids_never_move() {
         const FROZEN: [Param; 56] = [
-        Param::WaveformSel, Param::Volume, Param::Detune, Param::PulseWidth,
-        Param::NoiseLevel, Param::LfoRate, Param::LfoShape, Param::LfoPitch,
-        Param::LfoFilter, Param::LfoPwm, Param::Attack, Param::Decay,
-        Param::Sustain, Param::Release, Param::Cutoff, Param::Resonance,
-        Param::Drive, Param::Saturation, Param::HpfCutoff, Param::FilterEnvAmount,
-        Param::FilterAttack, Param::FilterDecay, Param::FilterSustain, Param::FilterRelease,
-        Param::FuzzAmount, Param::SpringWet, Param::ReverbDecay, Param::ReverbWet,
-        Param::ChorusModeSel, Param::ChorusRate, Param::ChorusDepth, Param::TapeWow,
-        Param::TapeFlutter, Param::TapeDrive, Param::TapeAge, Param::BdLevel,
-        Param::BdTune, Param::BdAttack, Param::BdDecay, Param::BdSweep,
-        Param::BdDrive, Param::SdLevel, Param::SdTune, Param::SdTone,
-        Param::SdSnappy, Param::SdDecay, Param::RsLevel, Param::RsTune,
-        Param::CpLevel, Param::CpDecay, Param::HhLevel, Param::HhTune,
-        Param::HhMetal, Param::ChDecay, Param::OhDecay, Param::DrumDrive,
+            Param::WaveformSel,
+            Param::Volume,
+            Param::Detune,
+            Param::PulseWidth,
+            Param::NoiseLevel,
+            Param::LfoRate,
+            Param::LfoShape,
+            Param::LfoPitch,
+            Param::LfoFilter,
+            Param::LfoPwm,
+            Param::Attack,
+            Param::Decay,
+            Param::Sustain,
+            Param::Release,
+            Param::Cutoff,
+            Param::Resonance,
+            Param::Drive,
+            Param::Saturation,
+            Param::HpfCutoff,
+            Param::FilterEnvAmount,
+            Param::FilterAttack,
+            Param::FilterDecay,
+            Param::FilterSustain,
+            Param::FilterRelease,
+            Param::FuzzAmount,
+            Param::SpringWet,
+            Param::ReverbDecay,
+            Param::ReverbWet,
+            Param::ChorusModeSel,
+            Param::ChorusRate,
+            Param::ChorusDepth,
+            Param::TapeWow,
+            Param::TapeFlutter,
+            Param::TapeDrive,
+            Param::TapeAge,
+            Param::BdLevel,
+            Param::BdTune,
+            Param::BdAttack,
+            Param::BdDecay,
+            Param::BdSweep,
+            Param::BdDrive,
+            Param::SdLevel,
+            Param::SdTune,
+            Param::SdTone,
+            Param::SdSnappy,
+            Param::SdDecay,
+            Param::RsLevel,
+            Param::RsTune,
+            Param::CpLevel,
+            Param::CpDecay,
+            Param::HhLevel,
+            Param::HhTune,
+            Param::HhMetal,
+            Param::ChDecay,
+            Param::OhDecay,
+            Param::DrumDrive,
         ];
         let defs = param_defs();
         assert!(defs.len() >= FROZEN.len());

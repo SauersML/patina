@@ -118,11 +118,14 @@ pub fn init(rs: &RenderState) {
         cache: None,
     });
 
-    rs.renderer.write().callback_resources.insert(AuroraPipeline {
-        pipeline,
-        bind_group,
-        buffer,
-    });
+    rs.renderer
+        .write()
+        .callback_resources
+        .insert(AuroraPipeline {
+            pipeline,
+            bind_group,
+            buffer,
+        });
 }
 
 struct AuroraCallback {

@@ -28,10 +28,7 @@ impl DcBlock {
         Self {
             x1: 0.0,
             y1: 0.0,
-            pole: crate::smoothing::dc_blocker_pole(
-                crate::smoothing::DC_BLOCK_HZ,
-                sample_rate,
-            ),
+            pole: crate::smoothing::dc_blocker_pole(crate::smoothing::DC_BLOCK_HZ, sample_rate),
         }
     }
 
@@ -59,10 +56,7 @@ impl Fuzz {
         Self {
             amount: 0.0,
             smoothed: 0.0,
-            smooth_k: crate::smoothing::approach(
-                crate::smoothing::KNOB_SMOOTH_S,
-                sample_rate,
-            ),
+            smooth_k: crate::smoothing::approach(crate::smoothing::KNOB_SMOOTH_S, sample_rate),
             adaa: [AdaaTanh::new(), AdaaTanh::new()],
             dc: [DcBlock::new(sample_rate), DcBlock::new(sample_rate)],
         }

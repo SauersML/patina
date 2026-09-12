@@ -280,7 +280,11 @@ pub fn analyze_epochs(data: &SampleData) -> Vec<(f64, f64, bool)> {
     let hop = (rate * 0.010) as usize;
     let lo = (rate / 500.0) as usize;
     let hi = ((rate / 70.0) as usize).min(frame.saturating_sub(1));
-    let nf = if n > frame { (n - frame) / hop.max(1) } else { 0 };
+    let nf = if n > frame {
+        (n - frame) / hop.max(1)
+    } else {
+        0
+    };
     let mut f0 = vec![0.0f32; nf.max(1)];
     for j in 0..nf {
         let seg = &mono[j * hop..j * hop + frame];
@@ -367,7 +371,15 @@ struct FiltCoeffs {
 
 impl FiltCoeffs {
     fn stale() -> Self {
-        Self { cutoff: -1.0, res: -1.0, a1: 0.0, a2: 0.0, a3: 0.0, k: 0.0, bypass: true }
+        Self {
+            cutoff: -1.0,
+            res: -1.0,
+            a1: 0.0,
+            a2: 0.0,
+            a3: 0.0,
+            k: 0.0,
+            bypass: true,
+        }
     }
 
     fn update(&mut self, cutoff: f32, res: f32, sample_rate: f32) {
@@ -541,7 +553,11 @@ pub fn crunch(data: &SampleData, bits: Option<u32>, rate: Option<u32>) -> Sample
         left.iter_mut().for_each(&q);
         right.iter_mut().for_each(&q);
     }
-    SampleData { left, right, rate: out_rate }
+    SampleData {
+        left,
+        right,
+        rate: out_rate,
+    }
 }
 
 pub struct SamplerBank {
@@ -629,7 +645,10 @@ impl SamplerBank {
     /// A slot's live transport settings (the sweep test reads these back).
     #[cfg(test)]
     pub(crate) fn slot_cfg(&self, index: usize) -> Option<SlotConfig> {
-        self.slots.get(index).and_then(|s| s.as_ref()).map(|s| s.cfg)
+        self.slots
+            .get(index)
+            .and_then(|s| s.as_ref())
+            .map(|s| s.cfg)
     }
 
     pub fn note_on(&mut self, slot_idx: usize, note: u8, velocity: f32) {
@@ -666,7 +685,11 @@ impl SamplerBank {
         // region — from the far end when the transport runs backwards
         let len = r1 - r0;
         let scrub = (cfg.scrub as f64).clamp(0.0, 0.98) * len;
-        let start = if cfg.reverse { r1 - 1.0 - scrub } else { r0 + scrub };
+        let start = if cfg.reverse {
+            r1 - 1.0 - scrub
+        } else {
+            r0 + scrub
+        };
 
         // Latch the sustain loop, clamped into the region; a degenerate
         // loop disables itself. `chop` can slice the region below one
@@ -720,7 +743,11 @@ impl SamplerBank {
         // is a legal token). f32::clamp passes NaN through, and a NaN
         // vel_gain would multiply into the slot bus for the life of the
         // plugin — every later note on any slot included.
-        let vel = if velocity.is_nan() { 0.0 } else { velocity.clamp(0.0, 1.0) };
+        let vel = if velocity.is_nan() {
+            0.0
+        } else {
+            velocity.clamp(0.0, 1.0)
+        };
         self.heads[idx] = Head {
             stage: Stage::Attack,
             slot: slot_idx,
@@ -780,11 +807,7 @@ impl SamplerBank {
     /// mixer can give every sample track a REAL strip. (The old single
     /// summed output meant one strip governed the whole deck — per-track
     /// gain/pan/sends/duck on all but the first slot were silently dead.)
-    pub fn render_next_slots(
-        &mut self,
-        pitch_mult: f32,
-        out: &mut [(f32, f32); MAX_SLOTS],
-    ) {
+    pub fn render_next_slots(&mut self, pitch_mult: f32, out: &mut [(f32, f32); MAX_SLOTS]) {
         let out_rate = self.sample_rate as f64;
 
         for h in self.heads.iter_mut() {
@@ -830,7 +853,11 @@ impl SamplerBank {
                     }
                 }
                 Stage::Release => {
-                    let secs = if h.choke { CHOKE_RELEASE_SECS } else { cfg.release };
+                    let secs = if h.choke {
+                        CHOKE_RELEASE_SECS
+                    } else {
+                        cfg.release
+                    };
                     h.env *= (-1.0 / (secs.max(0.003) * self.sample_rate)).exp();
                     if h.env < 1e-3 {
                         h.stage = Stage::Off;
@@ -868,15 +895,13 @@ impl SamplerBank {
                     // launch a grain when its time comes
                     if h.ps_n >= h.ps_next {
                         // nearest epoch to the cursor
-                        let mut eix = match ep.binary_search_by(|e| {
-                            e.0.partial_cmp(&h.ps_cursor).unwrap()
-                        }) {
-                            Ok(i) => i,
-                            Err(i) => i.min(ep.len() - 1),
-                        };
+                        let mut eix =
+                            match ep.binary_search_by(|e| e.0.partial_cmp(&h.ps_cursor).unwrap()) {
+                                Ok(i) => i,
+                                Err(i) => i.min(ep.len() - 1),
+                            };
                         if eix > 0
-                            && (ep[eix].0 - h.ps_cursor).abs()
-                                > (ep[eix - 1].0 - h.ps_cursor).abs()
+                            && (ep[eix].0 - h.ps_cursor).abs() > (ep[eix - 1].0 - h.ps_cursor).abs()
                         {
                             eix -= 1;
                         }
@@ -906,18 +931,14 @@ impl SamplerBank {
                         }
                         let src_pos = center - half + gpos;
                         if src_pos >= 0.0 && src_pos < r1 {
-                            let w = 0.5
-                                - 0.5 * (std::f64::consts::TAU * gpos / width).cos();
-                            let (a, b) = sinc_read(
-                                &data.left, &data.right, src_pos, 1.0,
-                            );
+                            let w = 0.5 - 0.5 * (std::f64::consts::TAU * gpos / width).cos();
+                            let (a, b) = sinc_read(&data.left, &data.right, src_pos, 1.0);
                             l += a * w as f32;
                             r += b * w as f32;
                         }
                         h.ps_grains[g].1 = gpos + rate_ratio;
                     }
-                    h.ps_cursor +=
-                        rate_ratio * cfg.speed.clamp(0.03, 32.0) as f64;
+                    h.ps_cursor += rate_ratio * cfg.speed.clamp(0.03, 32.0) as f64;
                     h.ps_n += 1.0;
                     if h.ps_cursor >= r1 {
                         if h.held {
@@ -942,8 +963,7 @@ impl SamplerBank {
                         r = fc.tick(r, &mut i1r, &mut i2r);
                         h.svf = [i1l, i2l, i1r, i2r];
                     }
-                    let ph = (cfg.pan.clamp(-1.0, 1.0) + 1.0)
-                        * std::f32::consts::FRAC_PI_4;
+                    let ph = (cfg.pan.clamp(-1.0, 1.0) + 1.0) * std::f32::consts::FRAC_PI_4;
                     let g = h.env * h.vel_gain * cfg.gain * PROGRAM_V;
                     out[h.slot].0 += l * g * ph.cos() * std::f32::consts::SQRT_2;
                     out[h.slot].1 += r * g * ph.sin() * std::f32::consts::SQRT_2;
@@ -960,7 +980,9 @@ impl SamplerBank {
                 r += b * g;
             };
             match h.looping {
-                Some((la, lb)) if !h.reverse && h.xfade_frames > 0.0 && h.pos >= lb - h.xfade_frames => {
+                Some((la, lb))
+                    if !h.reverse && h.xfade_frames > 0.0 && h.pos >= lb - h.xfade_frames =>
+                {
                     let t = ((h.pos - (lb - h.xfade_frames)) / h.xfade_frames) as f32;
                     let ph = t * std::f32::consts::FRAC_PI_2;
                     read(h.pos, ph.cos());
@@ -1021,7 +1043,11 @@ impl SamplerBank {
                 }
                 None => {}
             }
-            let out_of_tape = if h.reverse { h.pos <= r0 } else { h.pos >= r1 - 1.0 };
+            let out_of_tape = if h.reverse {
+                h.pos <= r0
+            } else {
+                h.pos >= r1 - 1.0
+            };
             if out_of_tape && h.looping.is_none() {
                 h.stage = Stage::Off;
             }
@@ -1080,9 +1106,9 @@ pub fn load_wav_stereo(path: &str) -> Result<SampleData, String> {
                     (1, 32) | (3, 32) => 4,
                     (f, b) => {
                         return Err(format!(
-                            "wav '{}': unsupported format {} / {} bits (use PCM 16/24/32 or float32)",
-                            path, f, b
-                        ))
+                        "wav '{}': unsupported format {} / {} bits (use PCM 16/24/32 or float32)",
+                        path, f, b
+                    ))
                     }
                 };
                 let decode = |b: &[u8]| -> f32 {
@@ -1100,7 +1126,11 @@ pub fn load_wav_stereo(path: &str) -> Result<SampleData, String> {
                 let mut right = Vec::with_capacity(frames);
                 for fr in raw.chunks_exact(bytes * ch) {
                     let l = decode(&fr[0..bytes]);
-                    let r = if ch > 1 { decode(&fr[bytes..2 * bytes]) } else { l };
+                    let r = if ch > 1 {
+                        decode(&fr[bytes..2 * bytes])
+                    } else {
+                        l
+                    };
                     left.push(l);
                     right.push(r);
                 }
@@ -1131,12 +1161,22 @@ mod tests {
         let n = (rate as f32 * secs) as usize;
         let w = std::f32::consts::TAU * hz / rate as f32;
         let s: Vec<f32> = (0..n).map(|i| (i as f32 * w).sin() * 0.5).collect();
-        Arc::new(SampleData { left: s.clone(), right: s, rate })
+        Arc::new(SampleData {
+            left: s.clone(),
+            right: s,
+            rate,
+        })
     }
 
     fn bank_with(cfg: SlotConfig) -> SamplerBank {
         let mut bank = SamplerBank::new(48000.0);
-        bank.set_slot(0, SamplerSlot { data: sine_reel(48000, 1.0, 440.0), cfg });
+        bank.set_slot(
+            0,
+            SamplerSlot {
+                data: sine_reel(48000, 1.0, 440.0),
+                cfg,
+            },
+        );
         bank
     }
 
@@ -1157,19 +1197,34 @@ mod tests {
     #[test]
     fn keytrack_repitches() {
         // Root at 60 → playing 72 doubles the frequency: ~880 crossings/s
-        let mut bank = bank_with(SlotConfig { attack: 0.001, ..Default::default() });
+        let mut bank = bank_with(SlotConfig {
+            attack: 0.001,
+            ..Default::default()
+        });
         bank.note_on(0, 72, 1.0);
         let c = crossings(&mut bank, 24000); // half a second
-        assert!((410..470).contains(&c), "expected ~440 crossings, got {}", c);
+        assert!(
+            (410..470).contains(&c),
+            "expected ~440 crossings, got {}",
+            c
+        );
     }
 
     #[test]
     fn fixed_mode_ignores_the_key() {
-        let cfg = SlotConfig { keytrack: false, attack: 0.001, ..Default::default() };
+        let cfg = SlotConfig {
+            keytrack: false,
+            attack: 0.001,
+            ..Default::default()
+        };
         let mut bank = bank_with(cfg);
         bank.note_on(0, 72, 1.0);
         let c = crossings(&mut bank, 24000);
-        assert!((200..240).contains(&c), "expected ~220 crossings, got {}", c);
+        assert!(
+            (200..240).contains(&c),
+            "expected ~220 crossings, got {}",
+            c
+        );
     }
 
     #[test]
@@ -1192,7 +1247,10 @@ mod tests {
 
     #[test]
     fn oneshot_runs_out_of_tape_and_gate_releases() {
-        let mut bank = bank_with(SlotConfig { mode: PlayMode::OneShot, ..Default::default() });
+        let mut bank = bank_with(SlotConfig {
+            mode: PlayMode::OneShot,
+            ..Default::default()
+        });
         bank.note_on(0, 60, 1.0);
         bank.note_off(0, 60); // ignored: one-shots don't gate
         for _ in 0..24000 {
@@ -1204,7 +1262,10 @@ mod tests {
         }
         assert!(!bank.any_active(), "one-shot outlived the reel");
 
-        let mut bank = bank_with(SlotConfig { release: 0.02, ..Default::default() });
+        let mut bank = bank_with(SlotConfig {
+            release: 0.02,
+            ..Default::default()
+        });
         bank.note_on(0, 60, 1.0);
         for _ in 0..4800 {
             bank.render_next(1.0);
@@ -1222,9 +1283,18 @@ mod tests {
         // the first sample read identifies the slice.
         let n = 48000usize;
         let ramp: Vec<f32> = (0..n).map(|i| i as f32 / n as f32).collect();
-        let data = Arc::new(SampleData { left: ramp.clone(), right: ramp, rate: 48000 });
+        let data = Arc::new(SampleData {
+            left: ramp.clone(),
+            right: ramp,
+            rate: 48000,
+        });
         let mut bank = SamplerBank::new(48000.0);
-        let cfg = SlotConfig { chop: 8, attack: 0.001, mode: PlayMode::OneShot, ..Default::default() };
+        let cfg = SlotConfig {
+            chop: 8,
+            attack: 0.001,
+            mode: PlayMode::OneShot,
+            ..Default::default()
+        };
         bank.set_slot(0, SamplerSlot { data, cfg });
 
         for (key, slice) in [(60u8, 0.0f32), (63, 3.0 / 8.0), (72, 4.0 / 8.0)] {
@@ -1251,7 +1321,10 @@ mod tests {
 
     #[test]
     fn mono_chokes_the_previous_note() {
-        let mut bank = bank_with(SlotConfig { mono: true, ..Default::default() });
+        let mut bank = bank_with(SlotConfig {
+            mono: true,
+            ..Default::default()
+        });
         bank.note_on(0, 60, 1.0);
         for _ in 0..4800 {
             bank.render_next(1.0);
@@ -1270,10 +1343,16 @@ mod tests {
     fn varispeed_automation_bends_a_held_note() {
         // A long reel: both measurements must stay on tape at 2x speed
         let mut bank = SamplerBank::new(48000.0);
-        bank.set_slot(0, SamplerSlot {
-            data: sine_reel(48000, 4.0, 440.0),
-            cfg: SlotConfig { attack: 0.001, ..Default::default() },
-        });
+        bank.set_slot(
+            0,
+            SamplerSlot {
+                data: sine_reel(48000, 4.0, 440.0),
+                cfg: SlotConfig {
+                    attack: 0.001,
+                    ..Default::default()
+                },
+            },
+        );
         bank.note_on(0, 60, 1.0);
         let base = crossings(&mut bank, 24000);
         assert!(bank.set_param(0, Param::SmpPitch, 12.0));
@@ -1290,9 +1369,17 @@ mod tests {
     fn reverse_plays_backwards() {
         let n = 48000usize;
         let ramp: Vec<f32> = (0..n).map(|i| i as f32 / n as f32).collect();
-        let data = Arc::new(SampleData { left: ramp.clone(), right: ramp, rate: 48000 });
+        let data = Arc::new(SampleData {
+            left: ramp.clone(),
+            right: ramp,
+            rate: 48000,
+        });
         let mut bank = SamplerBank::new(48000.0);
-        let cfg = SlotConfig { reverse: true, attack: 0.001, ..Default::default() };
+        let cfg = SlotConfig {
+            reverse: true,
+            attack: 0.001,
+            ..Default::default()
+        };
         bank.set_slot(0, SamplerSlot { data, cfg });
         bank.note_on(0, 60, 1.0);
         let mut a = 0.0;
@@ -1330,18 +1417,33 @@ mod tests {
         };
         // Re-tune the reel to 15 kHz
         let mut bank = SamplerBank::new(48000.0);
-        bank.set_slot(0, SamplerSlot {
-            data: sine_reel(48000, 1.0, 15000.0),
-            cfg: SlotConfig { attack: 0.001, ..Default::default() },
-        });
+        bank.set_slot(
+            0,
+            SamplerSlot {
+                data: sine_reel(48000, 1.0, 15000.0),
+                cfg: SlotConfig {
+                    attack: 0.001,
+                    ..Default::default()
+                },
+            },
+        );
         let natural = hot(&mut bank, 60);
         let mut bank2 = SamplerBank::new(48000.0);
-        bank2.set_slot(0, SamplerSlot {
-            data: sine_reel(48000, 1.0, 15000.0),
-            cfg: SlotConfig { attack: 0.001, ..Default::default() },
-        });
+        bank2.set_slot(
+            0,
+            SamplerSlot {
+                data: sine_reel(48000, 1.0, 15000.0),
+                cfg: SlotConfig {
+                    attack: 0.001,
+                    ..Default::default()
+                },
+            },
+        );
         let shifted = hot(&mut bank2, 72);
-        assert!(natural > 0.1, "natural read lost the partial, rms={natural}");
+        assert!(
+            natural > 0.1,
+            "natural read lost the partial, rms={natural}"
+        );
         assert!(
             shifted < natural * 0.05,
             "aliasable content must be filtered when pitching up: {natural} -> {shifted}"
@@ -1368,7 +1470,10 @@ mod tests {
         assert!((c.frames() as i64 - 24000).abs() <= 2);
         // The 440 Hz tone survives decimation at full level
         let peak = c.left.iter().fold(0.0f32, |a, &s| a.max(s.abs()));
-        assert!((peak - 0.5).abs() < 0.05, "tone lost in resample, peak={peak}");
+        assert!(
+            (peak - 0.5).abs() < 0.05,
+            "tone lost in resample, peak={peak}"
+        );
     }
 
     /// The slot filter: an 8 kHz partial through a 500 Hz lowpass.
@@ -1376,19 +1481,32 @@ mod tests {
     fn slot_filter_darkens() {
         let open = {
             let mut bank = SamplerBank::new(48000.0);
-            bank.set_slot(0, SamplerSlot {
-                data: sine_reel(48000, 1.0, 8000.0),
-                cfg: SlotConfig { attack: 0.001, ..Default::default() },
-            });
+            bank.set_slot(
+                0,
+                SamplerSlot {
+                    data: sine_reel(48000, 1.0, 8000.0),
+                    cfg: SlotConfig {
+                        attack: 0.001,
+                        ..Default::default()
+                    },
+                },
+            );
             bank.note_on(0, 60, 1.0);
             rms(&mut bank, 9600)
         };
         let dark = {
             let mut bank = SamplerBank::new(48000.0);
-            bank.set_slot(0, SamplerSlot {
-                data: sine_reel(48000, 1.0, 8000.0),
-                cfg: SlotConfig { attack: 0.001, cutoff: 500.0, ..Default::default() },
-            });
+            bank.set_slot(
+                0,
+                SamplerSlot {
+                    data: sine_reel(48000, 1.0, 8000.0),
+                    cfg: SlotConfig {
+                        attack: 0.001,
+                        cutoff: 500.0,
+                        ..Default::default()
+                    },
+                },
+            );
             bank.note_on(0, 60, 1.0);
             rms(&mut bank, 9600)
         };
@@ -1412,11 +1530,17 @@ mod tests {
         for _ in 0..(48000 + 24000) {
             bank.render_next(1.0);
         }
-        assert!(bank.any_active(), "half-speed one-shot ended a reel-length early");
+        assert!(
+            bank.any_active(),
+            "half-speed one-shot ended a reel-length early"
+        );
         for _ in 0..48000 {
             bank.render_next(1.0);
         }
-        assert!(!bank.any_active(), "half-speed one-shot should end by 2 reel-lengths");
+        assert!(
+            !bank.any_active(),
+            "half-speed one-shot should end by 2 reel-lengths"
+        );
     }
 
     /// Reverse honors the needle-drop scrub: scrub 0.5 on a rising ramp
@@ -1425,9 +1549,18 @@ mod tests {
     fn reverse_scrub_starts_midway() {
         let n = 48000usize;
         let ramp: Vec<f32> = (0..n).map(|i| i as f32 / n as f32).collect();
-        let data = Arc::new(SampleData { left: ramp.clone(), right: ramp, rate: 48000 });
+        let data = Arc::new(SampleData {
+            left: ramp.clone(),
+            right: ramp,
+            rate: 48000,
+        });
         let mut bank = SamplerBank::new(48000.0);
-        let cfg = SlotConfig { reverse: true, scrub: 0.5, attack: 0.001, ..Default::default() };
+        let cfg = SlotConfig {
+            reverse: true,
+            scrub: 0.5,
+            attack: 0.001,
+            ..Default::default()
+        };
         bank.set_slot(0, SamplerSlot { data, cfg });
         bank.note_on(0, 60, 1.0);
         let mut v = 0.0;
@@ -1462,7 +1595,9 @@ mod tests {
         d.extend_from_slice(&16u16.to_le_bytes()); // valid bits
         d.extend_from_slice(&0u32.to_le_bytes()); // channel mask
         d.extend_from_slice(&1u16.to_le_bytes()); // SubFormat: PCM
-        d.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71]);
+        d.extend_from_slice(&[
+            0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71,
+        ]);
         d.extend_from_slice(b"data");
         d.extend_from_slice(&(n as u32 * 2).to_le_bytes());
         for i in 0..n {
@@ -1483,16 +1618,19 @@ mod tests {
     #[ignore]
     fn perf_worst_case() {
         let mut bank = SamplerBank::new(48000.0);
-        bank.set_slot(0, SamplerSlot {
-            data: sine_reel(48000, 30.0, 440.0),
-            cfg: SlotConfig {
-                loop_pts: Some((0.5, 29.0)),
-                xfade: 0.2,
-                cutoff: 2000.0,
-                res: 0.3,
-                ..Default::default()
+        bank.set_slot(
+            0,
+            SamplerSlot {
+                data: sine_reel(48000, 30.0, 440.0),
+                cfg: SlotConfig {
+                    loop_pts: Some((0.5, 29.0)),
+                    xfade: 0.2,
+                    cutoff: 2000.0,
+                    res: 0.3,
+                    ..Default::default()
+                },
             },
-        });
+        );
         for i in 0..24 {
             bank.note_on(0, 84 + (i % 3) as u8, 1.0); // +24..+26: full stretch
         }
@@ -1518,7 +1656,11 @@ mod tests {
     fn a_loop_narrower_than_the_step_still_loops() {
         let n = 48000usize;
         let ramp: Vec<f32> = (0..n).map(|i| i as f32 / n as f32).collect();
-        let data = Arc::new(SampleData { left: ramp.clone(), right: ramp, rate: 48000 });
+        let data = Arc::new(SampleData {
+            left: ramp.clone(),
+            right: ramp,
+            rate: 48000,
+        });
         let mut bank = SamplerBank::new(48000.0);
         // ~9.6-frame loop at the middle of the reel, read 32 frames a step
         // (no crossfade, so the probe reads the ramp itself)
@@ -1551,7 +1693,11 @@ mod tests {
     fn sub_frame_chop_slices_survive_a_loop() {
         let n = 64usize; // 64 frames / 128 pads = half a frame per pad
         let s = vec![0.5f32; n];
-        let data = Arc::new(SampleData { left: s.clone(), right: s, rate: 48000 });
+        let data = Arc::new(SampleData {
+            left: s.clone(),
+            right: s,
+            rate: 48000,
+        });
         let mut bank = SamplerBank::new(48000.0);
         let cfg = SlotConfig {
             chop: 128,
@@ -1578,10 +1724,16 @@ mod tests {
             rate: 48000,
         });
         let mut bank = SamplerBank::new(48000.0);
-        bank.set_slot(0, SamplerSlot {
-            data,
-            cfg: SlotConfig { psola: true, ..Default::default() },
-        });
+        bank.set_slot(
+            0,
+            SamplerSlot {
+                data,
+                cfg: SlotConfig {
+                    psola: true,
+                    ..Default::default()
+                },
+            },
+        );
         bank.note_on(0, 67, 1.0);
         for _ in 0..1000 {
             let (l, r) = bank.render_next(1.0);
@@ -1619,28 +1771,46 @@ mod tests {
     /// the life of the plugin — every later note mixes into NaN too.
     #[test]
     fn non_finite_input_cannot_poison_the_deck() {
-        let mut bank = bank_with(SlotConfig { attack: 0.001, ..Default::default() });
+        let mut bank = bank_with(SlotConfig {
+            attack: 0.001,
+            ..Default::default()
+        });
         bank.note_on(0, 60, f32::NAN);
         for _ in 0..4800 {
             let (l, r) = bank.render_next(1.0);
-            assert!(l.is_finite() && r.is_finite(), "NaN velocity poisoned the mix");
+            assert!(
+                l.is_finite() && r.is_finite(),
+                "NaN velocity poisoned the mix"
+            );
         }
 
-        let mut bank = bank_with(SlotConfig { attack: 0.001, ..Default::default() });
+        let mut bank = bank_with(SlotConfig {
+            attack: 0.001,
+            ..Default::default()
+        });
         bank.note_on(0, 60, 1.0);
         bank.set_param(0, Param::SmpPitch, f32::NAN);
         bank.set_param(0, Param::SmpStart, f32::NAN);
         for _ in 0..4800 {
             let (l, r) = bank.render_next(1.0);
-            assert!(l.is_finite() && r.is_finite(), "NaN automation poisoned the mix");
+            assert!(
+                l.is_finite() && r.is_finite(),
+                "NaN automation poisoned the mix"
+            );
         }
         // And a head that somehow already holds a non-finite transport
         // must die instead of sounding forever
-        let mut bank = bank_with(SlotConfig { pitch_semis: f32::NAN, ..Default::default() });
+        let mut bank = bank_with(SlotConfig {
+            pitch_semis: f32::NAN,
+            ..Default::default()
+        });
         bank.note_on(0, 60, 1.0);
         for _ in 0..4800 {
             let (l, r) = bank.render_next(1.0);
-            assert!(l.is_finite() && r.is_finite(), "NaN slot config poisoned the mix");
+            assert!(
+                l.is_finite() && r.is_finite(),
+                "NaN slot config poisoned the mix"
+            );
         }
     }
 
@@ -1674,7 +1844,11 @@ mod tests {
             _ => unreachable!(),
         };
         for p in params {
-            assert!(is_sampler_param(p), "{} is missing from the deck's claim list", p.name());
+            assert!(
+                is_sampler_param(p),
+                "{} is missing from the deck's claim list",
+                p.name()
+            );
             let (lo, hi, _) = p.range();
             for target in [lo, hi] {
                 let mut bank = bank_with(SlotConfig::default());
@@ -1693,10 +1867,18 @@ mod tests {
             let span = (hi - lo).abs() + 1.0;
             bank.set_param(0, p, hi + span);
             let got = read(&bank.slot_cfg(0).unwrap(), p);
-            assert!((got - hi).abs() < 1e-4, "'{}' overshot its top: {got}", p.name());
+            assert!(
+                (got - hi).abs() < 1e-4,
+                "'{}' overshot its top: {got}",
+                p.name()
+            );
             bank.set_param(0, p, lo - span);
             let got = read(&bank.slot_cfg(0).unwrap(), p);
-            assert!((got - lo).abs() < 1e-4, "'{}' undershot its floor: {got}", p.name());
+            assert!(
+                (got - lo).abs() < 1e-4,
+                "'{}' undershot its floor: {got}",
+                p.name()
+            );
         }
         // The claim list holds nothing that is not a deck param, and
         // misses none that is
@@ -1762,7 +1944,10 @@ mod tests {
         // duration: energy must persist to ~90% of natural length
         let tail = &out[(n as f32 * 0.85) as usize..(n as f32 * 0.95) as usize];
         let tail_rms = (tail.iter().map(|s| s * s).sum::<f32>() / tail.len() as f32).sqrt();
-        assert!(tail_rms > 1e-4, "psola must preserve duration, tail rms {tail_rms}");
+        assert!(
+            tail_rms > 1e-4,
+            "psola must preserve duration, tail rms {tail_rms}"
+        );
         // pitch: autocorrelation over the middle
         let seg = &out[rate / 5..rate / 5 + 4096];
         let mean = seg.iter().sum::<f32>() / seg.len() as f32;

@@ -84,10 +84,10 @@ pub struct Oscillator {
     /// 901-B residual tuning error, ADDITIVE IN HERTZ: the tracking
     /// resistors "lower the oscillator frequency by a given number of
     /// cycles, REGARDLESS of the magnitude of the control voltage"
-    /// (service manual, retracking procedure), trimmed until banks beat
-    /// no faster than one every two seconds. So a Moog bank beats slowly
-    /// on high notes and howls on low ones. The 4027-1's V/oct trim is
-    /// multiplicative instead, so this offset applies to Moog only.
+    /// (service manual, retracking procedure). This instrument models a
+    /// closely serviced bank: enough residue for a slow beat, not enough
+    /// for low stacked notes to lose their center. The 4027-1's V/oct trim
+    /// is multiplicative instead, so this offset applies to Moog only.
     hz_offset: f32,
     /// If this core wrapped during the last step: fraction of the sample
     /// period elapsed SINCE the wrap (for slaving another core to it).
@@ -105,9 +105,11 @@ impl Oscillator {
         let duty_error = (rand01(&mut rng) - 0.5) * 0.02; // within +/-1%
         let skew = (rand01(&mut rng) - 0.5) * 0.06;
         let curvature = 0.02 + rand01(&mut rng) * 0.05;
-        // Within the 901B acceptance: bank beat rate <= 0.5 Hz means
-        // each unit sits within ~+/-0.25 Hz of true after trimming
-        let hz_offset = (rand01(&mut rng) - 0.5) * 0.5;
+        // A musically serviced bank: slow additive-Hz residue remains, but
+        // adjacent oscillators take several seconds to complete a beat.
+        // The wider factory acceptance made bass stacks audibly wander and
+        // turned large automated chord glides into unrelated pitch smears.
+        let hz_offset = (rand01(&mut rng) - 0.5) * 0.12;
         Self {
             phase,
             frequency: AtomicU32::new(frequency.to_bits()),
@@ -192,10 +194,9 @@ impl Oscillator {
             CircuitModel::Moog => self.hz_offset,
             CircuitModel::Arp => 0.0,
         };
-        let detuned_frequency = (frequency * self.freq_mult * (1.0 + self.drift + common_drift)
-            * pitch_mult
-            + f_off)
-            .max(0.01);
+        let detuned_frequency =
+            (frequency * self.freq_mult * (1.0 + self.drift + common_drift) * pitch_mult + f_off)
+                .max(0.01);
         self.duty = (pulse_width + self.duty_error * self.trim()).clamp(0.03, 0.97);
 
         let dt = detuned_frequency as f64 / self.sample_rate as f64;
@@ -232,8 +233,8 @@ impl Oscillator {
             let ts = self.sub_phase as f32;
             let dts = (dt * 0.5) as f32;
             let naive = if ts < 0.5 { 1.0 } else { -1.0 };
-            self.last_sub = PROGRAM_V
-                * (naive - self.polyblep(ts, dts) + self.polyblep((ts + 0.5) % 1.0, dts));
+            self.last_sub =
+                PROGRAM_V * (naive - self.polyblep(ts, dts) + self.polyblep((ts + 0.5) % 1.0, dts));
         }
 
         let t = self.phase as f32;
@@ -394,8 +395,7 @@ impl Oscillator {
         let edge = (hi - lo) * 0.5;
         let dt = frequency / self.sample_rate;
         let naive = if t < self.duty { hi } else { lo };
-        naive - edge * self.polyblep(t, dt)
-            + edge * self.polyblep((t + 1.0 - self.duty) % 1.0, dt)
+        naive - edge * self.polyblep(t, dt) + edge * self.polyblep((t + 1.0 - self.duty) % 1.0, dt)
     }
 
     fn polyblep_saw(&self, t: f32, frequency: f32) -> f32 {
@@ -502,9 +502,18 @@ mod tests {
         let tri = peak(Waveform::Triangle);
         let sine = peak(Waveform::Sine);
         let pulse = peak(Waveform::Square);
-        assert!(tri > saw * 1.1, "triangle should run hot: {tri} vs saw {saw}");
-        assert!(pulse > saw * 1.2, "pulse should run hot: {pulse} vs saw {saw}");
-        assert!(sine < saw, "sine should be slightly quieter: {sine} vs {saw}");
+        assert!(
+            tri > saw * 1.1,
+            "triangle should run hot: {tri} vs saw {saw}"
+        );
+        assert!(
+            pulse > saw * 1.2,
+            "pulse should run hot: {pulse} vs saw {saw}"
+        );
+        assert!(
+            sine < saw,
+            "sine should be slightly quieter: {sine} vs {saw}"
+        );
     }
 
     /// The derived sine is a rounded triangle, not sin(): it must carry a
@@ -532,7 +541,9 @@ mod tests {
         let fundamental = 2.0 * (re * re + im * im).sqrt() / n;
         let total_rms = (period.iter().map(|s| s * s).sum::<f32>() / n).sqrt();
         let fund_rms = fundamental / std::f32::consts::SQRT_2;
-        let residue = (total_rms * total_rms - fund_rms * fund_rms).max(0.0).sqrt();
+        let residue = (total_rms * total_rms - fund_rms * fund_rms)
+            .max(0.0)
+            .sqrt();
         let thd = residue / fund_rms;
         assert!(
             thd > 0.005 && thd < 0.12,
@@ -564,10 +575,7 @@ mod tests {
         }
         // 441 Hz core; the sub must sit at 220.5 Hz -> ~220 rising edges
         // in one second
-        assert!(
-            (430..=452).contains(&core_wraps),
-            "core wraps {core_wraps}"
-        );
+        assert!((430..=452).contains(&core_wraps), "core wraps {core_wraps}");
         assert!(
             (210..=231).contains(&sub_rises),
             "sub should run at ~220 Hz: got {sub_rises} rises"
@@ -665,7 +673,9 @@ mod tests {
         let run = |mix: [f32; 4]| -> Vec<f32> {
             let mut o = Oscillator::new(sr, 220.0, 5);
             o.set_mix(mix);
-            (0..9600).map(|_| o.next_sample(0.0, 1.0, 0.5, None)).collect()
+            (0..9600)
+                .map(|_| o.next_sample(0.0, 1.0, 0.5, None))
+                .collect()
         };
         // Low levels keep the output stage in its linear region
         let mixed = run([0.3, 0.2, 0.0, 0.0]);
@@ -683,13 +693,17 @@ mod tests {
         let sel = {
             let mut o = Oscillator::new(sr, 220.0, 5);
             o.set_waveform(Waveform::Sawtooth);
-            (0..960).map(|_| o.next_sample(0.0, 1.0, 0.5, None)).collect::<Vec<_>>()
+            (0..960)
+                .map(|_| o.next_sample(0.0, 1.0, 0.5, None))
+                .collect::<Vec<_>>()
         };
         let mix_off = {
             let mut o = Oscillator::new(sr, 220.0, 5);
             o.set_waveform(Waveform::Sawtooth);
             o.set_mix([0.0; 4]);
-            (0..960).map(|_| o.next_sample(0.0, 1.0, 0.5, None)).collect::<Vec<_>>()
+            (0..960)
+                .map(|_| o.next_sample(0.0, 1.0, 0.5, None))
+                .collect::<Vec<_>>()
         };
         assert_eq!(sel, mix_off);
     }
@@ -753,12 +767,18 @@ mod tests {
         // Moog: mean crosses zero around center width
         let m_narrow = measure(0.2, CircuitModel::Moog);
         let m_wide = measure(0.8, CircuitModel::Moog);
-        assert!(m_narrow < -0.4 && m_wide > 0.4, "Moog: {m_narrow}..{m_wide}");
+        assert!(
+            m_narrow < -0.4 && m_wide > 0.4,
+            "Moog: {m_narrow}..{m_wide}"
+        );
         // ARP: strictly positive, monotone in duty
         let a_narrow = measure(0.2, CircuitModel::Arp);
         let a_center = measure(0.5, CircuitModel::Arp);
         let a_wide = measure(0.8, CircuitModel::Arp);
-        assert!(a_narrow > 0.0, "ARP pulse mean must be positive: {a_narrow}");
+        assert!(
+            a_narrow > 0.0,
+            "ARP pulse mean must be positive: {a_narrow}"
+        );
         assert!(
             a_narrow < a_center && a_center < a_wide,
             "ARP mean must track duty: {a_narrow} < {a_center} < {a_wide}"

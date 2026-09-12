@@ -245,9 +245,18 @@ impl Talker {
         let ar = sample_rate / DECIM as f32; // analysis/tract rate
         Self {
             sr: sample_rate,
-            in_m: [Lowpass::tuned(4800.0, 0.6, sample_rate), Lowpass::tuned(4800.0, 1.0, sample_rate)],
-            in_c: [Lowpass::tuned(4800.0, 0.6, sample_rate), Lowpass::tuned(4800.0, 1.0, sample_rate)],
-            out: [Lowpass::tuned(4800.0, 0.6, sample_rate), Lowpass::tuned(4800.0, 1.0, sample_rate)],
+            in_m: [
+                Lowpass::tuned(4800.0, 0.6, sample_rate),
+                Lowpass::tuned(4800.0, 1.0, sample_rate),
+            ],
+            in_c: [
+                Lowpass::tuned(4800.0, 0.6, sample_rate),
+                Lowpass::tuned(4800.0, 1.0, sample_rate),
+            ],
+            out: [
+                Lowpass::tuned(4800.0, 0.6, sample_rate),
+                Lowpass::tuned(4800.0, 1.0, sample_rate),
+            ],
             decim: 0,
             held: 0.0,
             ring: vec![0.0; (WINDOW_S * ar) as usize + 1],
@@ -331,8 +340,7 @@ impl Talker {
             let x = self.ring[(self.write + i) % n];
             let pe = x - 0.97 * prev;
             prev = x;
-            let w = 0.5
-                - 0.5 * (std::f32::consts::TAU * i as f32 / (n - 1) as f32).cos();
+            let w = 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / (n - 1) as f32).cos();
             frame[i] = pe * w;
         }
 
@@ -413,7 +421,11 @@ impl Talker {
         for i in 0..ORDER {
             self.k[i] += (self.k_target[i] - self.k[i]) * self.k_slew;
         }
-        let ke = if self.env_target > self.env { self.attack } else { self.release };
+        let ke = if self.env_target > self.env {
+            self.attack
+        } else {
+            self.release
+        };
         self.env += (self.env_target - self.env) * ke;
 
         // Consonants are breath: swap the carrier for noise on fricatives
@@ -470,7 +482,11 @@ impl Talker {
         let hf = modulator - self.m_lp;
         self.hf_env += 0.002 * (hf.abs() - self.hf_env);
         self.lf_env += 0.002 * (modulator.abs() - self.lf_env);
-        let target = if self.hf_env > 0.55 * self.lf_env.max(1e-6) { 0.85 } else { 0.0 };
+        let target = if self.hf_env > 0.55 * self.lf_env.max(1e-6) {
+            0.85
+        } else {
+            0.0
+        };
         self.unvoiced += (target - self.unvoiced) * self.unvoiced_k;
 
         let mut m = modulator;
@@ -540,8 +556,14 @@ mod tests {
         let car = Voicing::at(0.0);
         let leg = Voicing::at(1.0);
         assert!(car.caricature > 0.9 && leg.caricature < 0.05);
-        assert!(car.drive > 3.0 * leg.drive, "grit belongs to the caricature");
-        assert!(leg.vca_exp > car.vca_exp, "clarity restores the voice's dynamics");
+        assert!(
+            car.drive > 3.0 * leg.drive,
+            "grit belongs to the caricature"
+        );
+        assert!(
+            leg.vca_exp > car.vca_exp,
+            "clarity restores the voice's dynamics"
+        );
         assert!(leg.gate_floor < car.gate_floor);
         assert!(leg.out_fc > car.out_fc && leg.air > car.air);
         for c in [0.0, 0.3, 0.7, 1.0] {
@@ -571,7 +593,8 @@ mod tests {
         // Modulator: noise through a strong 900 Hz two-pole "mouth"
         let (mut y1, mut y2) = (0.0f32, 0.0f32);
         let c = -(-std::f32::consts::TAU * 120.0 / sr).exp();
-        let bcoef = 2.0 * (-std::f32::consts::PI * 120.0 / sr).exp()
+        let bcoef = 2.0
+            * (-std::f32::consts::PI * 120.0 / sr).exp()
             * (std::f32::consts::TAU * 900.0 / sr).cos();
         let a = 1.0 - bcoef - c;
         let mut noise = NoiseSource::new(sr);
@@ -587,7 +610,10 @@ mod tests {
             let cwave = (((n as f32 * 110.0 / sr) % 1.0) * 2.0 - 1.0) * 5.0;
             out.push(t.process(m, cwave));
         }
-        assert!(out.iter().all(|s| s.is_finite()), "lattice must stay stable");
+        assert!(
+            out.iter().all(|s| s.is_finite()),
+            "lattice must stay stable"
+        );
         let goertzel = |freq: f32| -> f32 {
             let (mut re, mut im) = (0.0f32, 0.0f32);
             for (i, &s) in out[out.len() / 2..].iter().enumerate() {
@@ -616,7 +642,10 @@ mod tests {
                 quiet = quiet.max(s);
             }
         }
-        assert!(quiet < 0.05, "silent mouth must mute the carrier, got {quiet}");
+        assert!(
+            quiet < 0.05,
+            "silent mouth must mute the carrier, got {quiet}"
+        );
     }
 
     /// The reason the Talker decimates: a HIGH-pitched modulator (220 Hz
@@ -629,13 +658,18 @@ mod tests {
         let mut t = Talker::new(sr);
         let (mut y1, mut y2) = (0.0f32, 0.0f32);
         let cc = -(-std::f32::consts::TAU * 120.0 / sr).exp();
-        let bcoef = 2.0 * (-std::f32::consts::PI * 120.0 / sr).exp()
+        let bcoef = 2.0
+            * (-std::f32::consts::PI * 120.0 / sr).exp()
             * (std::f32::consts::TAU * 900.0 / sr).cos();
         let a = 1.0 - bcoef - cc;
         let mut out = Vec::with_capacity(sr as usize);
         for n in 0..(sr as usize) {
             // Modulator: 220 Hz pulse train (a high voice) through the mouth
-            let src = if (n as f32 * 220.0 / sr) % 1.0 < 0.1 { 1.0 } else { -0.02 };
+            let src = if (n as f32 * 220.0 / sr) % 1.0 < 0.1 {
+                1.0
+            } else {
+                -0.02
+            };
             let m = {
                 let y = a * src + bcoef * y1 + cc * y2;
                 y2 = y1;

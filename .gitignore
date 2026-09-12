@@ -1,3 +1,7 @@
 /target
 /renders
 .venv-voice/
+
+.DS_Store
+.claude/
+/experiments/drone_sae/outputs/

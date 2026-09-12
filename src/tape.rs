@@ -350,8 +350,7 @@ impl Tape {
     }
 
     fn update_age(&mut self) {
-        self.spacing_age_um =
-            SPACING_NEW_UM + (SPACING_WORN_UM - SPACING_NEW_UM) * self.age;
+        self.spacing_age_um = SPACING_NEW_UM + (SPACING_WORN_UM - SPACING_NEW_UM) * self.age;
         // Azimuth error: worse effective spacing on the outer track...
         self.azimuth_spacing_factor = 1.0 + 0.5 * self.age;
         // ...and an interchannel timing skew, up to ~0.1 ms
@@ -384,8 +383,16 @@ impl Tape {
         // Nothing non-finite gets onto the tape. The transport delay would
         // otherwise hold it for ~12 ms and the print-through wind for 1.35 s
         // (see `process_channel`), long after the fault that produced it.
-        let input_left = if input_left.is_finite() { input_left } else { 0.0 };
-        let input_right = if input_right.is_finite() { input_right } else { 0.0 };
+        let input_left = if input_left.is_finite() {
+            input_left
+        } else {
+            0.0
+        };
+        let input_right = if input_right.is_finite() {
+            input_right
+        } else {
+            0.0
+        };
 
         // Keep the transport rolling even when idle so turning a knob up
         // never reads stale audio out of the delay line
@@ -447,7 +454,11 @@ impl Tape {
         if self.wallace_stale || lift > 1e-4 {
             let os_rate = self.sample_rate * OS as f32;
             for ch in 0..2 {
-                let az = if ch == 1 { self.azimuth_spacing_factor } else { 1.0 };
+                let az = if ch == 1 {
+                    self.azimuth_spacing_factor
+                } else {
+                    1.0
+                };
                 for l in 0..N_LAYERS {
                     let d = (self.spacing_age_um + LAYER_DEPTH_UM[l] + lift) * az;
                     let f0 = TAPE_SPEED_UM_S / (2.0 * PI * d);
@@ -552,8 +563,7 @@ impl Tape {
         if ch == 1 {
             self.print_index = (self.print_index + 1) % self.print_buffer[0].len();
         }
-        let with_echo =
-            recorded + self.print_lp[ch].process(echo) * self.print_level;
+        let with_echo = recorded + self.print_lp[ch].process(echo) * self.print_level;
         let tape_signal = with_echo * self.dropout_env;
 
         // --- Playback head: gap flux averaging, bump; playback amp: EQ, DC ---
@@ -652,7 +662,10 @@ fn align_record_trim() -> (f32, f32) {
         }
         fn div(self, o: C) -> C {
             let d = o.0 * o.0 + o.1 * o.1;
-            C((self.0 * o.0 + self.1 * o.1) / d, (self.1 * o.0 - self.0 * o.1) / d)
+            C(
+                (self.0 * o.0 + self.1 * o.1) / d,
+                (self.1 * o.0 - self.0 * o.1) / d,
+            )
         }
         fn add(self, o: C) -> C {
             C(self.0 + o.0, self.1 + o.1)
@@ -703,12 +716,18 @@ fn align_record_trim() -> (f32, f32) {
         };
         let reference = system(g_low, g_high, 1000.0);
         let needed = reference
-            / one.add(hp(fa, TRIM_HIGH_HZ).scale(g_high)).mul(layers(fa)).norm();
+            / one
+                .add(hp(fa, TRIM_HIGH_HZ).scale(g_high))
+                .mul(layers(fa))
+                .norm();
         g_low = solve_gain(needed, hp(fa, TRIM_LOW_HZ));
 
         let reference = system(g_low, g_high, 1000.0);
         let needed = reference
-            / one.add(hp(fb, TRIM_LOW_HZ).scale(g_low)).mul(layers(fb)).norm();
+            / one
+                .add(hp(fb, TRIM_LOW_HZ).scale(g_low))
+                .mul(layers(fb))
+                .norm();
         g_high = solve_gain(needed, hp(fb, TRIM_HIGH_HZ));
     }
     (g_low.clamp(0.0, 6.0), g_high.clamp(0.0, 10.0))
@@ -732,7 +751,13 @@ impl Shelf {
         let z0 = bilinear_root(sample_rate, f_zero);
         let p0 = bilinear_root(sample_rate, f_pole);
         let g = (1.0 - p0) / (1.0 - z0); // unity gain at DC
-        Self { b0: g, b1: -g * z0, a1: -p0, x1: 0.0, y1: 0.0 }
+        Self {
+            b0: g,
+            b1: -g * z0,
+            a1: -p0,
+            x1: 0.0,
+            y1: 0.0,
+        }
     }
 
     fn inverse(&self) -> Self {
@@ -922,8 +947,7 @@ impl ScrapeOscillator {
         let seed = self.rng.bipolar() * 1e-3;
         // Semi-implicit Euler in normalized coordinates (u' = w0*w,
         // w' = -w0*u - ...): stable for a ~3.4 kHz resonance at audio rates
-        self.w += self.dt
-            * (-self.w0 * self.u - SCRAPE_FORCE * friction - SCRAPE_DAMPING * self.w)
+        self.w += self.dt * (-self.w0 * self.u - SCRAPE_FORCE * friction - SCRAPE_DAMPING * self.w)
             + seed;
         self.w = self.w.clamp(-0.9, 0.9);
         self.u = (self.u + self.dt * self.w0 * self.w).clamp(-3.0, 3.0);
@@ -964,7 +988,11 @@ impl AllpassSection {
 
 impl Halfband {
     fn new() -> Self {
-        let mk = |c: f32| AllpassSection { c, x1: 0.0, y1: 0.0 };
+        let mk = |c: f32| AllpassSection {
+            c,
+            x1: 0.0,
+            y1: 0.0,
+        };
         Self {
             a: [mk(0.079_866_43), mk(0.545_353_65)],
             b: [mk(0.283_829_34), mk(0.834_411_89)],
@@ -1132,7 +1160,17 @@ struct PeakingFilter {
 
 impl PeakingFilter {
     fn new() -> Self {
-        Self { b0: 1.0, b1: 0.0, b2: 0.0, a1: 0.0, a2: 0.0, x1: 0.0, x2: 0.0, y1: 0.0, y2: 0.0 }
+        Self {
+            b0: 1.0,
+            b1: 0.0,
+            b2: 0.0,
+            a1: 0.0,
+            a2: 0.0,
+            x1: 0.0,
+            x2: 0.0,
+            y1: 0.0,
+            y2: 0.0,
+        }
     }
 
     fn set_peaking(&mut self, sample_rate: f32, freq: f32, q: f32, gain_db: f32) {
@@ -1205,8 +1243,7 @@ mod tests {
     }
 
     fn rms(signal: &[f32]) -> f32 {
-        (signal.iter().map(|x| (x * x) as f64).sum::<f64>() / signal.len() as f64).sqrt()
-            as f32
+        (signal.iter().map(|x| (x * x) as f64).sum::<f64>() / signal.len() as f64).sqrt() as f32
     }
 
     /// Correlate `signal` against a sine at `freq` (rate `fs`) and return
@@ -1295,7 +1332,11 @@ mod tests {
         // ...and at the rates it already handled, it is still literally the
         // two-tap fractional average it always was
         for sr in [44100.0f32, 48000.0] {
-            assert_eq!(Tape::new(sr).gap_taps, 1, "{sr} Hz must stay a two-tap average");
+            assert_eq!(
+                Tape::new(sr).gap_taps,
+                1,
+                "{sr} Hz must stay a two-tap average"
+            );
         }
     }
 
@@ -1427,7 +1468,11 @@ mod tests {
         };
         let clean = thd_at(0.3, 0.5);
         let slammed = thd_at(1.0, 0.9);
-        assert!(clean < 0.2, "biased recording should be clean, THD+N {}", clean);
+        assert!(
+            clean < 0.2,
+            "biased recording should be clean, THD+N {}",
+            clean
+        );
         assert!(
             slammed > clean * 1.5,
             "drive must saturate: clean {} slammed {}",
@@ -1496,7 +1541,10 @@ mod tests {
         };
         let silent_floor = residual(false);
         let modulated = residual(true);
-        assert!(silent_floor > 1e-6, "bias cycling must produce a hiss floor");
+        assert!(
+            silent_floor > 1e-6,
+            "bias cycling must produce a hiss floor"
+        );
         assert!(
             modulated > silent_floor * 1.3,
             "noise must ride the signal: silent {} modulated {}",
@@ -1552,8 +1600,17 @@ mod tests {
         };
         let fresh = hf_ratio(0.0);
         let worn = hf_ratio(1.0);
-        assert!(fresh > 0.25, "fresh tape should keep its top end: {}", fresh);
-        assert!(worn < fresh * 0.5, "worn tape must dull: fresh {} worn {}", fresh, worn);
+        assert!(
+            fresh > 0.25,
+            "fresh tape should keep its top end: {}",
+            fresh
+        );
+        assert!(
+            worn < fresh * 0.5,
+            "worn tape must dull: fresh {} worn {}",
+            fresh,
+            worn
+        );
     }
 
     #[test]
@@ -1628,8 +1685,8 @@ mod tests {
                 prev = l;
             }
             let mean = periods.iter().sum::<f32>() / periods.len() as f32;
-            let var = periods.iter().map(|p| (p - mean).powi(2)).sum::<f32>()
-                / periods.len() as f32;
+            let var =
+                periods.iter().map(|p| (p - mean).powi(2)).sum::<f32>() / periods.len() as f32;
             var.sqrt()
         };
         let s1 = period_spread(1.0);
@@ -1755,7 +1812,15 @@ mod tests {
         // The record shelf's pole sits at 8 kHz — above Nyquist for every
         // host rate under 16 kHz, where the bilinear root left the unit
         // circle and the deck became an oscillator (measured: 3e5).
-        for sr in [crate::MIN_SAMPLE_RATE as f32, 11025.0, 12000.0, 16000.0, 22050.0, 44100.0, 96000.0] {
+        for sr in [
+            crate::MIN_SAMPLE_RATE as f32,
+            11025.0,
+            12000.0,
+            16000.0,
+            22050.0,
+            44100.0,
+            96000.0,
+        ] {
             let mut t = Tape::new(sr);
             t.set_drive(0.7);
             t.set_age(0.5);
@@ -1765,7 +1830,10 @@ mod tests {
             for k in 0..(sr as usize) {
                 let x = (std::f32::consts::TAU * 220.0 * k as f32 / sr).sin() * 0.5;
                 let (l, r) = t.process(x, x);
-                assert!(l.is_finite() && r.is_finite(), "tape sr {sr} non-finite at {k}");
+                assert!(
+                    l.is_finite() && r.is_finite(),
+                    "tape sr {sr} non-finite at {k}"
+                );
                 peak = peak.max(l.abs()).max(r.abs());
             }
             assert!(peak < 100.0, "tape sr {sr} blew up, peak {peak}");

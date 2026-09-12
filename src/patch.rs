@@ -6,10 +6,10 @@
 // calls the live setters — the UI follows automatically, and you can click
 // through presets while holding a chord to morph the sound underneath it.
 
-use crate::song::Param;
-use crate::voice_manager::{ParamValues, VoiceManager};
 use crate::chorus::ChorusMode;
 use crate::oscillator::Waveform;
+use crate::song::Param;
+use crate::voice_manager::{ParamValues, VoiceManager};
 
 /// The factory bank, embedded so the binary is self-contained.
 pub const FACTORY: &[(&str, &str)] = &[
@@ -17,7 +17,10 @@ pub const FACTORY: &[(&str, &str)] = &[
     ("Glasswing", include_str!("../patches/glasswing.patch")),
     ("Rust Engine", include_str!("../patches/rust-engine.patch")),
     ("Peppermint", include_str!("../patches/peppermint.patch")),
-    ("Sea of Dials", include_str!("../patches/sea-of-dials.patch")),
+    (
+        "Sea of Dials",
+        include_str!("../patches/sea-of-dials.patch"),
+    ),
     ("Fathom", include_str!("../patches/fathom.patch")),
     ("Tears", include_str!("../patches/tears.patch")),
     ("Moths", include_str!("../patches/moths.patch")),
@@ -96,24 +99,83 @@ pub fn serialize(p: &ParamValues) -> String {
          sd_level {}\nsd_tune {}\nsd_tone {}\nsd_snappy {}\nsd_decay {}\n\
          rs_level {}\nrs_tune {}\ncp_level {}\ncp_decay {}\n\
          hh_level {}\nhh_tune {}\nhh_metal {}\nch_decay {}\noh_decay {}\ndr_drive {}\n",
-        p.volume, waveform, osc2_wave, p.osc2_pitch, p.osc2_level,
-        osc3_wave, p.osc3_pitch, p.osc3_level,
-        if p.circuit == crate::oscillator::CircuitModel::Arp { 1 } else { 0 },
-        p.key_track, p.osc_fm,
-        if p.sync { 1 } else { 0 }, p.ring,
-        p.detune, p.noise, p.glide, p.sub, p.pulse_width,
-        p.mix_saw, p.mix_pulse, p.mix_tri, p.mix_sine,
-        p.lfo_rate, p.lfo_shape, p.lfo_pitch, p.lfo_filter, p.lfo_pwm,
-        p.cutoff, p.resonance, p.drive, p.saturation, p.hpf_cutoff,
-        p.filter_env_amount, p.filter_attack, p.filter_decay, p.filter_sustain, p.filter_release,
-        p.attack, p.decay, p.sustain, p.release,
-        p.fuzz, p.spring, p.reverb_decay, p.reverb_wet,
-        chorus_mode, p.chorus_rate, p.chorus_depth,
-        p.tape_wow, p.tape_flutter, p.tape_drive, p.tape_age,
-        p.bd_level, p.bd_tune, p.bd_attack, p.bd_decay, p.bd_sweep, p.bd_drive,
-        p.sd_level, p.sd_tune, p.sd_tone, p.sd_snappy, p.sd_decay,
-        p.rs_level, p.rs_tune, p.cp_level, p.cp_decay,
-        p.hh_level, p.hh_tune, p.hh_metal, p.ch_decay, p.oh_decay, p.dr_drive,
+        p.volume,
+        waveform,
+        osc2_wave,
+        p.osc2_pitch,
+        p.osc2_level,
+        osc3_wave,
+        p.osc3_pitch,
+        p.osc3_level,
+        if p.circuit == crate::oscillator::CircuitModel::Arp {
+            1
+        } else {
+            0
+        },
+        p.key_track,
+        p.osc_fm,
+        if p.sync { 1 } else { 0 },
+        p.ring,
+        p.detune,
+        p.noise,
+        p.glide,
+        p.sub,
+        p.pulse_width,
+        p.mix_saw,
+        p.mix_pulse,
+        p.mix_tri,
+        p.mix_sine,
+        p.lfo_rate,
+        p.lfo_shape,
+        p.lfo_pitch,
+        p.lfo_filter,
+        p.lfo_pwm,
+        p.cutoff,
+        p.resonance,
+        p.drive,
+        p.saturation,
+        p.hpf_cutoff,
+        p.filter_env_amount,
+        p.filter_attack,
+        p.filter_decay,
+        p.filter_sustain,
+        p.filter_release,
+        p.attack,
+        p.decay,
+        p.sustain,
+        p.release,
+        p.fuzz,
+        p.spring,
+        p.reverb_decay,
+        p.reverb_wet,
+        chorus_mode,
+        p.chorus_rate,
+        p.chorus_depth,
+        p.tape_wow,
+        p.tape_flutter,
+        p.tape_drive,
+        p.tape_age,
+        p.bd_level,
+        p.bd_tune,
+        p.bd_attack,
+        p.bd_decay,
+        p.bd_sweep,
+        p.bd_drive,
+        p.sd_level,
+        p.sd_tune,
+        p.sd_tone,
+        p.sd_snappy,
+        p.sd_decay,
+        p.rs_level,
+        p.rs_tune,
+        p.cp_level,
+        p.cp_decay,
+        p.hh_level,
+        p.hh_tune,
+        p.hh_metal,
+        p.ch_decay,
+        p.oh_decay,
+        p.dr_drive,
     )
 }
 

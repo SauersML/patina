@@ -15,7 +15,7 @@ use std::sync::Arc;
 use crate::voice_manager::VoiceManager;
 
 /// Represents the types of MIDI events our synthesizer will process.
-/// 
+///
 /// Currently we're handling the basic note events, but this enum can be extended
 /// in the future to handle control changes, pitch bend, etc.
 #[derive(Debug, Clone)]
@@ -23,11 +23,10 @@ use crate::voice_manager::VoiceManager;
 pub enum MidiEvent {
     /// Note On event with note number (0-127) and velocity (0-127)
     NoteOn { note: u8, velocity: u8 },
-    
+
     /// Note Off event with note number (0-127) and velocity (0-127)
     /// Note: Most MIDI keyboards send velocity with Note Off, but we don't use it currently
     NoteOff { note: u8, velocity: u8 },
-    
     // Future expansion possibilities:
     // ControlChange { controller: u8, value: u8 },
     // PitchBend { value: i16 },
@@ -73,7 +72,7 @@ impl MidiHandler {
     /// for MIDI events.
     ///
     /// # Returns
-    /// 
+    ///
     /// A tuple containing:
     /// - The MidiHandler instance
     /// - A Receiver<MidiEvent> that can be used to receive MIDI events in another thread
@@ -90,7 +89,7 @@ impl MidiHandler {
     pub fn new() -> Result<(Self, Receiver<MidiEvent>), Box<dyn Error>> {
         let (sender, receiver) = bounded(128);
         let receiver_clone = receiver.clone();
-    
+
         let midi_in = MidiInput::new("patina_midi_input")?;
 
         let mut handler = Self {
@@ -104,7 +103,7 @@ impl MidiHandler {
 
         // Scan for devices immediately
         handler.scan_devices()?;
-        
+
         // Attempt to auto-connect to IAC Driver if available
         let iac_index = handler.find_iac_driver();
         if let Some(idx) = iac_index {
@@ -116,10 +115,10 @@ impl MidiHandler {
         } else {
             println!("No IAC Driver found for auto-connection");
         }
-        
+
         Ok((handler, receiver_clone))
     }
-    
+
     /// Finds the index of the IAC Driver in the available ports list
     fn find_iac_driver(&self) -> Option<usize> {
         for (idx, (_, name, _)) in self.available_ports.iter().enumerate() {
@@ -150,11 +149,11 @@ impl MidiHandler {
     pub fn set_voice_manager(&mut self, voice_manager: Arc<Mutex<VoiceManager>>) {
         // Store the reference to the voice manager for use in the MIDI callback
         self.voice_manager = Some(voice_manager);
-        
+
         // Note: This works because our voice_manager is already designed to be
         // accessed safely from multiple threads via Arc<Mutex<>>
     }
-    
+
     /// Scans for available MIDI input devices and updates the internal list.
     ///
     /// This method queries the operating system's MIDI system to find all available
@@ -179,28 +178,28 @@ impl MidiHandler {
         if self.midi_in.is_none() {
             self.midi_in = Some(MidiInput::new("patina_midi_input")?);
         }
-        
+
         let midi_in = self.midi_in.as_ref().unwrap();
         self.available_ports.clear();
-        
+
         println!("Available MIDI input devices:");
-        
+
         // Collect all available ports
         for (i, port) in midi_in.ports().into_iter().enumerate() {
             match midi_in.port_name(&port) {
                 Ok(name) => {
                     println!("  {}: {}", i, name);
                     self.available_ports.push((i, name, port));
-                },
+                }
                 Err(err) => {
                     eprintln!("Error getting port name: {}", err);
                 }
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Returns a list of available MIDI devices for display in the UI.
     ///
     /// This method converts the internal port information into a simpler format
@@ -226,7 +225,7 @@ impl MidiHandler {
             .map(|(idx, name, _)| (*idx, name.clone()))
             .collect()
     }
-    
+
     /// Connects to a MIDI input device by its index in the available devices list.
     ///
     /// This method establishes a connection to the selected MIDI device and sets up
@@ -262,34 +261,37 @@ impl MidiHandler {
     fn connect_to_device(&mut self, index: usize) -> Result<(), Box<dyn Error>> {
         // Disconnect any existing connection first
         self.disconnect();
-        
+
         // Verify the index is valid
         if index >= self.available_ports.len() {
             return Err("Invalid MIDI device index".into());
         }
-        
+
         // Clone the port and name for the selected device
         let (idx, name, port) = &self.available_ports[index];
         let port = port.clone();
         let port_name = name.clone();
-        
-        println!("Attempting to connect to MIDI device #{}: {}", idx, port_name);
-        
+
+        println!(
+            "Attempting to connect to MIDI device #{}: {}",
+            idx, port_name
+        );
+
         // We need to create a new MidiInput for the connection
         let mut midi_in = MidiInput::new("patina_midi_connection")?;
         midi_in.ignore(Ignore::None);
-        
+
         // Clone sender and voice_manager for the closure
         let sender = self.sender.clone();
         let voice_manager = self.voice_manager.clone();
-        
+
         // Add debug print in the callback to confirm we're receiving MIDI messages
         let connection = midi_in.connect(
             &port,
             "patina",
             move |_timestamp, message, _| {
                 // This closure is called for each incoming MIDI message
-                
+
                 // Try to parse the raw MIDI bytes using midly
                 if let Ok(event) = LiveEvent::parse(message) {
                     // Process standard MIDI channel messages
@@ -320,10 +322,7 @@ impl MidiHandler {
                                         }
                                     } else {
                                         // Channel approach: send a NoteOn event through the channel
-                                        let _ = sender.send(MidiEvent::NoteOn {
-                                            note,
-                                            velocity
-                                        });
+                                        let _ = sender.send(MidiEvent::NoteOn { note, velocity });
                                     }
                                 } else {
                                     // This is a Note Off message disguised as Note On with velocity 0
@@ -332,13 +331,11 @@ impl MidiHandler {
                                             vm.lock().note_off(note);
                                         }
                                     } else {
-                                        let _ = sender.send(MidiEvent::NoteOff {
-                                            note,
-                                            velocity: 0
-                                        });
+                                        let _ =
+                                            sender.send(MidiEvent::NoteOff { note, velocity: 0 });
                                     }
                                 }
-                            },
+                            }
                             // Handle explicit Note Off messages
                             MidiMessage::NoteOff { key, vel: _ } => {
                                 let note = key.as_int();
@@ -352,27 +349,29 @@ impl MidiHandler {
                                 } else {
                                     let _ = sender.send(MidiEvent::NoteOff {
                                         note,
-                                        velocity: 0 // We don't currently use Note Off velocity
+                                        velocity: 0, // We don't currently use Note Off velocity
                                     });
                                 }
-                            },
+                            }
                             // Pitch wheel: midly gives -1..1, standard range +/-2 semitones
                             MidiMessage::PitchBend { bend } => {
                                 if let Some(vm) = &voice_manager {
                                     vm.lock().set_pitch_bend(bend.as_f32() * 2.0);
                                 }
-                            },
+                            }
                             MidiMessage::Controller { controller, value } => {
                                 if let Some(vm) = &voice_manager {
                                     // The full chart lives in Param::from_cc —
                                     // every automatable parameter answers to a
                                     // controller, scaled like its knob
-                                    if let Some(param) = crate::song::Param::from_cc(controller.as_int()) {
+                                    if let Some(param) =
+                                        crate::song::Param::from_cc(controller.as_int())
+                                    {
                                         let t = value.as_int() as f32 / 127.0;
                                         param.apply(&mut vm.lock(), param.midi_value(t));
                                     }
                                 }
-                            },
+                            }
                             // Program change flips the whole instrument to a
                             // factory patch, keyboard register included
                             MidiMessage::ProgramChange { program } => {
@@ -387,7 +386,7 @@ impl MidiHandler {
                                         }
                                     }
                                 }
-                            },
+                            }
                             _ => {} // Ignore other message types for now
                         }
                     }
@@ -395,13 +394,13 @@ impl MidiHandler {
             },
             (),
         )?;
-        
+
         println!("Connected to MIDI device: {}", port_name);
         self.connection = Some(connection);
-        
+
         Ok(())
     }
-    
+
     /// Disconnects from the current MIDI device if connected.
     ///
     /// This method safely closes the current MIDI connection and releases resources.
@@ -422,7 +421,7 @@ impl MidiHandler {
         }
         // If there was no connection, this method does nothing
     }
-    
+
     /// Processes pending MIDI events from the channel.
     ///
     /// This method should be called regularly (e.g., from the audio thread) if
@@ -454,17 +453,16 @@ impl MidiHandler {
             match event {
                 MidiEvent::NoteOn { note, velocity } => {
                     voice_manager.note_on(note, velocity as f32 / 127.0);
-                },
+                }
                 MidiEvent::NoteOff { note, velocity: _ } => {
                     voice_manager.note_off(note);
-                },
-                // Handle other event types here as they're added
+                } // Handle other event types here as they're added
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Checks if currently connected to a MIDI device.
     ///
     /// # Returns

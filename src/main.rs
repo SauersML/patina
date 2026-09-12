@@ -1,9 +1,12 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Sample, SampleFormat, SizedSample};
 use dasp_sample::FromSample;
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
-use parking_lot::Mutex;
 use eframe::egui;
+use parking_lot::Mutex;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use patina::midi_handler::MidiHandler;
 use patina::song;
@@ -26,7 +29,11 @@ struct SynthApp {
     running: Arc<AtomicBool>,
 }
 
-fn run<T>(device: &cpal::Device, config: &cpal::StreamConfig, song_path: Option<&str>) -> Result<(), Box<dyn std::error::Error>>
+fn run<T>(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    song_path: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>>
 where
     T: Sample + SizedSample + FromSample<f32>,
 {
@@ -41,9 +48,7 @@ where
 
     let stream = device.build_output_stream(
         config,
-        move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
-            write_data(data, channels, &vm_clone)
-        },
+        move |data: &mut [T], _: &cpal::OutputCallbackInfo| write_data(data, channels, &vm_clone),
         |err| eprintln!("an error occurred on stream: {}", err),
         None,
     )?;
@@ -78,9 +83,14 @@ where
                 patina::aurora_gpu::init(rs);
                 ui.set_gpu_available(true);
             }
-            Ok(Box::new(SynthApp { ui, _stream: stream, running }))
+            Ok(Box::new(SynthApp {
+                ui,
+                _stream: stream,
+                running,
+            }))
         }),
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -97,7 +107,11 @@ where
         let right_sample = T::from_sample(right);
 
         for (i, sample) in frame.iter_mut().enumerate() {
-            *sample = if i % 2 == 0 { left_sample } else { right_sample };
+            *sample = if i % 2 == 0 {
+                left_sample
+            } else {
+                right_sample
+            };
         }
     }
 }
@@ -145,7 +159,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // the single source of truth (song::PARAM_DEFS + Param::range) — the
     // same rows the parser, the CC map, and the sweep test read
     if args.iter().any(|a| a == "--params") {
-        println!("{:<16} {:>10} {:>10}  {:<5} {}", "name", "min", "max", "curve", "cc");
+        println!(
+            "{:<16} {:>10} {:>10}  {:<5} {}",
+            "name", "min", "max", "curve", "cc"
+        );
         for def in song::PARAM_DEFS {
             let (lo, hi, curve) = def.param.range();
             let curve = match curve {
@@ -154,7 +171,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 song::Curve::Step => "step",
             };
             let cc = def.cc.map(|c| c.to_string()).unwrap_or_default();
-            println!("{:<16} {:>10} {:>10}  {:<5} {}", def.name, lo, hi, curve, cc);
+            println!(
+                "{:<16} {:>10} {:>10}  {:<5} {}",
+                def.name, lo, hi, curve, cc
+            );
         }
         return Ok(());
     }
@@ -228,12 +248,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let host = cpal::default_host();
-    let device = host.default_output_device().expect("no output device available");
+    let device = host
+        .default_output_device()
+        .expect("no output device available");
 
     println!("Output device: {}", device.name()?);
 
     // Get all supported configs and find the best one to use
-    
+
     // Preferred formats in order (most preferred first)
     let preferred_formats = [
         (SampleFormat::F32, 48000),
@@ -241,12 +263,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (SampleFormat::F32, 44100),
         (SampleFormat::I16, 44100),
     ];
-    
+
     // Walk the preference list in order (outer loop) so the MOST preferred
     // format wins, not just the first device config that matches any of them
     let mut selected_config = None;
     'search: for &(preferred_format, preferred_rate) in &preferred_formats {
-        for supported_config in device.supported_output_configs().expect("error querying configs") {
+        for supported_config in device
+            .supported_output_configs()
+            .expect("error querying configs")
+        {
             if supported_config.sample_format() == preferred_format
                 && supported_config.min_sample_rate().0 <= preferred_rate
                 && supported_config.max_sample_rate().0 >= preferred_rate
@@ -267,9 +292,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .expect("no supported config found")
             .with_max_sample_rate()
     });
-    
+
     println!("Selected output config: {:?}", supported_config);
-    
+
     let sample_format = supported_config.sample_format();
     let config: cpal::StreamConfig = supported_config.into();
 
@@ -280,20 +305,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         SampleFormat::U8 => run::<u8>(&device, &config, song_path)?,
         SampleFormat::I8 => run::<i8>(&device, &config, song_path)?,
         _ => {
-            println!("Unsupported sample format: {:?}, trying to use a different format...", sample_format);
-            
+            println!(
+                "Unsupported sample format: {:?}, trying to use a different format...",
+                sample_format
+            );
+
             // Try to find a supported format
-            let mut configs = device.supported_output_configs()
+            let mut configs = device
+                .supported_output_configs()
                 .expect("error while querying configs");
-            
+
             while let Some(config) = configs.next() {
                 let format = config.sample_format();
-                if format == SampleFormat::F32 || format == SampleFormat::I16 || 
-                   format == SampleFormat::U16 || format == SampleFormat::U8 || 
-                   format == SampleFormat::I8 {
+                if format == SampleFormat::F32
+                    || format == SampleFormat::I16
+                    || format == SampleFormat::U16
+                    || format == SampleFormat::U8
+                    || format == SampleFormat::I8
+                {
                     let stream_config = config.with_max_sample_rate().into();
                     println!("Trying alternative config: {:?}", config);
-                    
+
                     match format {
                         SampleFormat::F32 => return run::<f32>(&device, &stream_config, song_path),
                         SampleFormat::I16 => return run::<i16>(&device, &stream_config, song_path),
@@ -304,7 +336,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            
+
             panic!("Could not find any usable audio configuration");
         }
     }

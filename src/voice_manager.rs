@@ -1,17 +1,17 @@
-use crate::song::Param;
-use crate::voice::Voice;
-use crate::drums::{DrumMachine, DrumVoice, DRUM_CHANNEL};
-use crate::sampler::{slot_for_channel, SamplerBank, SamplerSlot};
-use crate::vox::{Syllable, VoxBox, VOX_CHANNEL};
-use crate::reverb::Reverb;
 use crate::chorus::{Chorus, ChorusMode};
-use crate::oscillator::{CircuitModel, Waveform, PROGRAM_V};
-use crate::tape::Tape;
+use crate::drums::{DrumMachine, DrumVoice, DRUM_CHANNEL};
 use crate::fuzz::Fuzz;
-use crate::noise::NoiseSource;
-use crate::spring::SpringReverb;
 use crate::lfo::Lfo;
+use crate::noise::NoiseSource;
+use crate::oscillator::{CircuitModel, Waveform, PROGRAM_V};
+use crate::reverb::Reverb;
+use crate::sampler::{slot_for_channel, SamplerBank, SamplerSlot};
+use crate::song::Param;
+use crate::spring::SpringReverb;
 use crate::substrate::{SlewLimiter, Substrate};
+use crate::tape::Tape;
+use crate::voice::Voice;
+use crate::vox::{Syllable, VoxBox, VOX_CHANNEL};
 use std::collections::{HashMap, VecDeque};
 
 /// Capacitive trace-to-trace coupling between adjacent voice cards. The
@@ -28,6 +28,9 @@ const SCOPE_LEN: usize = 2048;
 #[derive(Clone, Copy)]
 pub struct ParamValues {
     pub volume: f32,
+    /// Post-effects output trim. Unlike volume, this also closes the
+    /// reverb, chorus, and tape returns for a decisive arrangement stop.
+    pub output: f32,
     pub waveform: Waveform,
     pub detune: f32,
     pub cutoff: f32,
@@ -39,7 +42,10 @@ pub struct ParamValues {
     pub noise: f32,
     pub spring: f32,
     pub glide: f32, // portamento time in seconds, 0 = off
-    pub sub: f32,   // sub-oscillator level, 0..1
+    /// Channel-local pitch shift in semitones. Giving each chord voice its
+    /// own track allows independent glides to exact destination notes.
+    pub pitch_shift: f32,
+    pub sub: f32, // sub-oscillator level, 0..1
     // The three-oscillator voice: osc 1 is the reference; 2 and 3 have
     // their own waveform, interval (semitones), and mix level
     pub osc2_wave: Waveform,
@@ -158,6 +164,7 @@ impl Default for ParamValues {
     fn default() -> Self {
         Self {
             volume: 0.5,
+            output: 1.0,
             waveform: Waveform::Sawtooth,
             detune: 7.0,
             cutoff: 15000.0,
@@ -169,6 +176,7 @@ impl Default for ParamValues {
             noise: 0.0,
             spring: 0.0,
             glide: 0.0,
+            pitch_shift: 0.0,
             sub: 0.0,
             osc2_wave: Waveform::Sawtooth,
             osc2_pitch: 0.0,
@@ -261,10 +269,7 @@ impl DcBlocker {
         Self {
             x1: 0.0,
             y1: 0.0,
-            pole: crate::smoothing::dc_blocker_pole(
-                crate::smoothing::DC_BLOCK_HZ,
-                sample_rate,
-            ),
+            pole: crate::smoothing::dc_blocker_pole(crate::smoothing::DC_BLOCK_HZ, sample_rate),
         }
     }
 
@@ -294,6 +299,31 @@ pub struct ChannelMix {
     cur_gain: f32,
     cur_pan: f32,
     duck_env: f32,
+}
+
+/// A song track owns its modulation oscillator. Live panel voices still
+/// share the instrument LFO, while independently patched tracks no longer
+/// discard the LFO values written in their patch files.
+struct ChannelLfo {
+    generator: Lfo,
+    sample: f32,
+}
+
+impl ChannelLfo {
+    fn new(sample_rate: f32, params: &ParamValues) -> Self {
+        let mut generator = Lfo::new(sample_rate);
+        generator.set_rate(params.lfo_rate);
+        generator.set_shape(params.lfo_shape);
+        Self {
+            generator,
+            sample: 0.0,
+        }
+    }
+
+    fn configure(&mut self, params: &ParamValues) {
+        self.generator.set_rate(params.lfo_rate);
+        self.generator.set_shape(params.lfo_shape);
+    }
 }
 
 impl ChannelMix {
@@ -328,7 +358,9 @@ fn strip(
     rev: &mut (f32, f32),
     cho: &mut (f32, f32),
 ) -> (f32, f32) {
-    let Some(m) = mixes.get(&ch) else { return (l, r) };
+    let Some(m) = mixes.get(&ch) else {
+        return (l, r);
+    };
     let g = m.cur_gain * (1.0 - m.duck * m.duck_env);
     let (mut l, mut r) = (l * g, r * g);
     if m.cur_pan > 0.0 {
@@ -386,6 +418,7 @@ pub struct VoiceManager {
     last_note_on_sample: u64,
     /// Per-song-channel parameter snapshots (the per-track patches).
     channel_params: HashMap<u16, ParamValues>,
+    channel_lfos: HashMap<u16, ChannelLfo>,
     /// Per-track mixer strip: gain, pan, effect sends, sidechain duck.
     /// Channels absent from the map pass through untouched.
     channel_mix: HashMap<u16, ChannelMix>,
@@ -395,6 +428,8 @@ pub struct VoiceManager {
     pub params: ParamValues,
     pub scope: VecDeque<f32>,
     gain: f32, // smoothed master gain
+    output_gain: f32,
+    output_smooth_k: f32,
     dc_left: DcBlocker,
     dc_right: DcBlocker,
     /// Master-volume de-zipper coefficient, derived from the rate so the
@@ -420,9 +455,11 @@ impl VoiceManager {
         carrier.sub = 0.3;
         let mut channel_params = HashMap::new();
         channel_params.insert(VOX_CHANNEL, carrier);
+        let mut channel_lfos = HashMap::new();
+        channel_lfos.insert(VOX_CHANNEL, ChannelLfo::new(sample_rate, &carrier));
         Self {
             voices: (0..num_voices)
-                .map(|i| Voice::new(sample_rate, i, num_voices))
+                .map(|i| Voice::new(sample_rate, i))
                 .collect(),
             drums: DrumMachine::new(sample_rate),
             vox: VoxBox::new(sample_rate),
@@ -450,21 +487,18 @@ impl VoiceManager {
             samples_rendered: 0,
             last_note_on_sample: u64::MAX,
             channel_params,
+            channel_lfos,
             channel_mix: HashMap::new(),
             solo: None,
             params,
             scope: VecDeque::with_capacity(SCOPE_LEN),
             gain: params.volume,
+            output_gain: params.output,
+            output_smooth_k: crate::smoothing::approach(0.002, sample_rate),
             dc_left: DcBlocker::new(sample_rate),
             dc_right: DcBlocker::new(sample_rate),
-            gain_smooth_k: crate::smoothing::approach(
-                crate::smoothing::GAIN_SMOOTH_S,
-                sample_rate,
-            ),
-            knob_smooth_k: crate::smoothing::approach(
-                crate::smoothing::KNOB_SMOOTH_S,
-                sample_rate,
-            ),
+            gain_smooth_k: crate::smoothing::approach(crate::smoothing::GAIN_SMOOTH_S, sample_rate),
+            knob_smooth_k: crate::smoothing::approach(crate::smoothing::KNOB_SMOOTH_S, sample_rate),
         }
     }
 
@@ -499,11 +533,16 @@ impl VoiceManager {
     /// channel are configured from it (the song engine's per-track patches).
     pub fn set_channel_params(&mut self, channel: u16, p: ParamValues) {
         self.channel_params.insert(channel, p);
+        self.channel_lfos
+            .entry(channel)
+            .and_modify(|lfo| lfo.configure(&p))
+            .or_insert_with(|| ChannelLfo::new(self.sample_rate, &p));
+        self.update_channel_pitch_shift(channel, p.pitch_shift);
     }
 
     /// Update one parameter on a channel and re-assert it on that
-    /// channel's sounding voices — per-track automation. Bus-level
-    /// parameters (effects, LFO, noise) fall through to the global path.
+    /// channel's sounding voices — per-track automation. Master effects
+    /// and noise fall through to the global path; LFO routing is local.
     /// Solo one channel for a stem bounce (None restores the full mix).
     pub fn set_solo(&mut self, channel: Option<u16>) {
         self.solo = channel;
@@ -534,8 +573,13 @@ impl VoiceManager {
         use crate::song::Param as P;
         if matches!(
             param,
-            P::TrackGain | P::TrackPan | P::ReverbSend | P::SpringSend
-                | P::ChorusSend | P::DuckAmount | P::DuckRelease
+            P::TrackGain
+                | P::TrackPan
+                | P::ReverbSend
+                | P::SpringSend
+                | P::ChorusSend
+                | P::DuckAmount
+                | P::DuckRelease
         ) {
             self.set_track_mix(channel, param, value);
             return;
@@ -550,11 +594,22 @@ impl VoiceManager {
                 return;
             }
         }
-        let mut p = self.channel_params.get(&channel).copied().unwrap_or(self.params);
+        let mut p = self
+            .channel_params
+            .get(&channel)
+            .copied()
+            .unwrap_or(self.params);
         if param.apply_to_params(&mut p, value) {
             self.channel_params.insert(channel, p);
+            self.channel_lfos
+                .entry(channel)
+                .and_modify(|lfo| lfo.configure(&p))
+                .or_insert_with(|| ChannelLfo::new(self.sample_rate, &p));
             for voice in self.voices.iter_mut().filter(|v| v.channel() == channel) {
                 voice.apply_params(&p);
+            }
+            if matches!(param, P::PitchShift) {
+                self.update_channel_pitch_shift(channel, p.pitch_shift);
             }
         } else {
             param.apply(self, value);
@@ -644,6 +699,10 @@ impl VoiceManager {
             }
         }
         if retriggered {
+            let shift = chan_params
+                .as_ref()
+                .map_or(self.params.pitch_shift, |p| p.pitch_shift);
+            self.update_channel_pitch_shift(channel, shift);
             return;
         }
 
@@ -655,6 +714,17 @@ impl VoiceManager {
             } else {
                 0.0
             };
+            let mut stack_position = if count > 1 {
+                k as f32 / (count - 1) as f32 * 2.0 - 1.0
+            } else {
+                0.0
+            };
+            // Swap the outer cards on alternate notes. A fixed component
+            // tolerance can then color the stack, but cannot pull an entire
+            // performance persistently toward one speaker.
+            if age & 1 == 0 {
+                stack_position = -stack_position;
+            }
             // Prefer a fully idle voice, then the longest-releasing voice,
             // then steal the oldest held voice.
             let index = self
@@ -688,8 +758,26 @@ impl VoiceManager {
                     self.voices[i].apply_params(&p);
                 }
                 self.voices[i].set_unison_cents(offset);
+                self.voices[i].set_unison_stack_position(stack_position, count);
                 self.voices[i].trigger(note, velocity, age, glide_from);
             }
+        }
+        let shift = chan_params
+            .as_ref()
+            .map_or(self.params.pitch_shift, |p| p.pitch_shift);
+        self.update_channel_pitch_shift(channel, shift);
+    }
+
+    /// Apply one pitch target to a song channel. A chord voice gets its own
+    /// channel, so its glide is independent and can land on an exact tone.
+    fn update_channel_pitch_shift(&mut self, channel: u16, semitones: f32) {
+        let shift = crate::song::Param::PitchShift.clamp(semitones);
+        for voice in self
+            .voices
+            .iter_mut()
+            .filter(|v| v.is_held() && v.channel() == channel)
+        {
+            voice.set_pitch_shift_semitones(shift);
         }
     }
 
@@ -730,7 +818,11 @@ impl VoiceManager {
         // While the sustain pedal is down, released keys keep ringing; the
         // release is deferred until the pedal lifts
         if self.pedal_down {
-            if self.voices.iter().any(|v| v.is_held() && v.note == Some(note)) {
+            if self
+                .voices
+                .iter()
+                .any(|v| v.is_held() && v.note == Some(note))
+            {
                 self.sustained[note as usize] = true;
             }
             return;
@@ -746,6 +838,11 @@ impl VoiceManager {
     /// render_next so stepped MIDI bend values never zipper.
     pub fn set_pitch_bend(&mut self, semitones: f32) {
         self.bend_target = (semitones.clamp(-24.0, 24.0) / 12.0).exp2();
+    }
+
+    pub fn set_pitch_shift(&mut self, semitones: f32) {
+        self.params.pitch_shift = Param::PitchShift.clamp(semitones);
+        self.update_channel_pitch_shift(0, self.params.pitch_shift);
     }
 
     /// Mod wheel (CC1, 0..1): performance vibrato on top of the LFO>Pitch
@@ -773,6 +870,10 @@ impl VoiceManager {
     pub fn set_volume(&mut self, volume: f32) {
         // Applied as a smoothed master gain in render_next
         self.params.volume = Param::Volume.clamp(volume);
+    }
+
+    pub fn set_output(&mut self, output: f32) {
+        self.params.output = Param::Output.clamp(output);
     }
 
     pub fn set_waveform(&mut self, waveform: Waveform) {
@@ -1126,7 +1227,9 @@ impl VoiceManager {
         // (A hand-written clamp here once stopped at 1.0, silently
         // rerouting circuits 2 and 3 — bounds now come from the table.)
         self.params.vox_mode = Param::VoxModeSel.clamp(v);
-        self.vox.set_mode(crate::vocoder::VocoderMode::from_value(self.params.vox_mode));
+        self.vox.set_mode(crate::vocoder::VocoderMode::from_value(
+            self.params.vox_mode,
+        ));
     }
 
     pub fn set_vox_intonation(&mut self, v: f32) {
@@ -1151,11 +1254,14 @@ impl VoiceManager {
         // (an exponential frequency ratio), filter in octaves, PWM on the
         // pulse comparator threshold
         let lfo = self.lfo.next();
+        for modulation in self.channel_lfos.values_mut() {
+            modulation.sample = modulation.generator.next();
+        }
         // Pitch bend slews (~ms scale) toward its target; mod wheel adds
         // performance vibrato on top of the patch's own LFO>Pitch depth
         self.bend_ratio += (self.bend_target - self.bend_ratio) * 0.002;
         let vibrato_cents = self.params.lfo_pitch + self.mod_wheel * 75.0;
-        let pitch_mult = if vibrato_cents > 0.01 {
+        let panel_pitch_mult = if vibrato_cents > 0.01 {
             (lfo * vibrato_cents / 1200.0).exp2() * self.bend_ratio
         } else {
             self.bend_ratio
@@ -1208,21 +1314,39 @@ impl VoiceManager {
             if voice.channel() == VOX_CHANNEL {
                 voice.set_cv_override(vox_cv);
             }
-            let (l, r) = voice.render_next(
-                noise,
-                pitch_mult,
-                lfo_cutoff_oct,
-                pw_offset,
-                substrate,
-                bleed,
-            );
             let ch = voice.channel();
+            let (pitch_mult, cutoff_mod, pwm_mod) = self
+                .channel_params
+                .get(&ch)
+                .and_then(|params| {
+                    self.channel_lfos
+                        .get(&ch)
+                        .map(|modulation| (params, modulation.sample))
+                })
+                .map_or(
+                    (panel_pitch_mult, lfo_cutoff_oct, pw_offset),
+                    |(params, lfo)| {
+                        let cents = params.lfo_pitch + self.mod_wheel * 75.0;
+                        (
+                            (lfo * cents / 1200.0).exp2() * self.bend_ratio,
+                            lfo * params.lfo_filter,
+                            lfo * params.lfo_pwm,
+                        )
+                    },
+                );
+            let (l, r) =
+                voice.render_next(noise, pitch_mult, cutoff_mod, pwm_mod, substrate, bleed);
             if ch == VOX_CHANNEL {
                 carrier += l + r;
             } else if self.solo.map_or(true, |s| s == ch) {
                 let (l, r) = strip(
-                    &self.channel_mix, ch, l, r,
-                    &mut send_spr, &mut send_rev, &mut send_cho,
+                    &self.channel_mix,
+                    ch,
+                    l,
+                    r,
+                    &mut send_spr,
+                    &mut send_rev,
+                    &mut send_cho,
                 );
                 left += l;
                 right += r;
@@ -1235,8 +1359,13 @@ impl VoiceManager {
         let vox_out = self.vox.process(carrier);
         if self.solo.map_or(true, |s| s == VOX_CHANNEL) {
             let (vl, vr) = strip(
-                &self.channel_mix, VOX_CHANNEL, vox_out, vox_out,
-                &mut send_spr, &mut send_rev, &mut send_cho,
+                &self.channel_mix,
+                VOX_CHANNEL,
+                vox_out,
+                vox_out,
+                &mut send_spr,
+                &mut send_rev,
+                &mut send_cho,
             );
             left += vl;
             right += vr;
@@ -1250,8 +1379,13 @@ impl VoiceManager {
         let (dl, dr) = self.drums.render_next();
         if self.solo.map_or(true, |s| s == DRUM_CHANNEL) {
             let (dl, dr) = strip(
-                &self.channel_mix, DRUM_CHANNEL, dl, dr,
-                &mut send_spr, &mut send_rev, &mut send_cho,
+                &self.channel_mix,
+                DRUM_CHANNEL,
+                dl,
+                dr,
+                &mut send_spr,
+                &mut send_rev,
+                &mut send_cho,
             );
             left += dl;
             right += dr;
@@ -1264,7 +1398,8 @@ impl VoiceManager {
         // Every sample track gets a REAL strip: per-slot buckets, each
         // through its own channel's gain/pan/sends/duck.
         let mut slot_out = [(0.0f32, 0.0f32); crate::sampler::MAX_SLOTS];
-        self.sampler.render_next_slots(pitch_mult, &mut slot_out);
+        self.sampler
+            .render_next_slots(panel_pitch_mult, &mut slot_out);
         for (i, &(sl, sr)) in slot_out.iter().enumerate() {
             if sl == 0.0 && sr == 0.0 {
                 continue;
@@ -1272,8 +1407,13 @@ impl VoiceManager {
             let ch = crate::sampler::SAMPLER_CHANNEL_BASE + i as u16;
             if self.solo.map_or(true, |s| s == ch) {
                 let (sl, sr) = strip(
-                    &self.channel_mix, ch, sl, sr,
-                    &mut send_spr, &mut send_rev, &mut send_cho,
+                    &self.channel_mix,
+                    ch,
+                    sl,
+                    sr,
+                    &mut send_spr,
+                    &mut send_rev,
+                    &mut send_cho,
                 );
                 left += sl;
                 right += sr;
@@ -1296,8 +1436,8 @@ impl VoiceManager {
         left *= g;
         right *= g;
 
-        // Fuzz first (a pedal in front of everything), then reverb and
-        // chorus with their own internal dry/wet — each fed its per-track
+        // Fuzz first (a pedal in front of everything), then parallel reverb
+        // and chorus — each fed its per-track
         // send bus at unity alongside the global knob; tape sits last, as
         // if the whole mix were bounced to cassette
         let (left, right) = self.fuzz.process(left, right);
@@ -1311,6 +1451,13 @@ impl VoiceManager {
             self.chorus
                 .process_with_send(left, right, send_cho.0 * g, send_cho.1 * g);
         let (left, right) = self.tape.process(left, right);
+
+        // Arrangement output sits after every effect return. Its short
+        // de-clicking slew permits a decisive stop without leaving the
+        // reverb tank audible or hard-truncating a non-zero sample.
+        self.output_gain += (self.params.output - self.output_gain) * self.output_smooth_k;
+        let left = left * self.output_gain;
+        let right = right * self.output_gain;
 
         let left = soft_limit(self.dc_left.process(left));
         let right = soft_limit(self.dc_right.process(right));
@@ -1523,12 +1670,72 @@ mod tests {
         p.unison_detune = 20.0;
         vm.set_channel_params(1, p);
         vm.note_on_channel(69, 0.9, 1); // A4 on channel 1
-        let held = vm.voices.iter().filter(|v| v.is_held()).count();
-        assert_eq!(held, 3, "unison 3 should claim 3 cards, got {held}");
+        let mut offsets: Vec<_> = vm
+            .voices
+            .iter()
+            .filter(|v| v.is_held())
+            .map(|v| v.unison_cents_for_test())
+            .collect();
+        offsets.sort_by(f32::total_cmp);
+        assert_eq!(offsets.len(), 3, "unison 3 should claim three cards");
+        assert_eq!(offsets, [-10.0, 0.0, 10.0]);
         // A plain note claims exactly one.
         let mut vm2 = VoiceManager::new(sr, 16);
         vm2.note_on(69, 0.9);
         assert_eq!(vm2.voices.iter().filter(|v| v.is_held()).count(), 1);
+    }
+
+    #[test]
+    fn pitch_shift_is_independent_and_lands_on_exact_semitones() {
+        let mut vm = VoiceManager::new(48000.0, 8);
+        vm.set_channel_params(1, ParamValues::neutral());
+        vm.set_channel_params(2, ParamValues::neutral());
+        vm.note_on_channel(60, 0.8, 1);
+        vm.note_on_channel(64, 0.8, 2);
+        vm.set_channel_param(1, Param::PitchShift, -12.0);
+        vm.set_channel_param(2, Param::PitchShift, 7.0);
+
+        let low = vm
+            .voices
+            .iter()
+            .find(|v| v.is_held() && v.channel() == 1)
+            .unwrap()
+            .pitch_shift_target_for_test();
+        let high = vm
+            .voices
+            .iter()
+            .find(|v| v.is_held() && v.channel() == 2)
+            .unwrap()
+            .pitch_shift_target_for_test();
+        assert!(
+            (low - 0.5).abs() < 1e-6,
+            "-12 semitones must land one octave down"
+        );
+        assert!((high - (7.0f32 / 12.0).exp2()).abs() < 1e-6);
+    }
+
+    #[test]
+    fn output_trim_closes_voice_and_effect_returns() {
+        let sr = 48000.0;
+        let mut vm = VoiceManager::new(sr, 8);
+        vm.set_reverb_wet(0.8);
+        vm.set_reverb_decay(0.98);
+        vm.note_on(57, 0.9);
+        for _ in 0..(sr as usize / 2) {
+            vm.render_next();
+        }
+        vm.set_output(0.0);
+        let mut final_peak = 0.0f32;
+        for i in 0..(sr as usize / 20) {
+            let (l, r) = vm.render_next();
+            if i > sr as usize / 25 {
+                final_peak = final_peak.max(l.abs()).max(r.abs());
+            }
+        }
+        assert!(
+            final_peak < 1e-3,
+            "post-effects output must close a held voice and its hall, peak={final_peak}"
+        );
     }
 
     /// The sidechain must hear the kick by EITHER route. The reserved low
@@ -1550,10 +1757,12 @@ mod tests {
         assert!(fired(0), "the reserved low-sliver kick must duck too");
         // and only the kick
         for note in [1u8, 2, 3, 4, 5, 37, 38, 39, 42, 46] {
-            assert!(!fired(note), "note {note} is not the kick and must not duck");
+            assert!(
+                !fired(note),
+                "note {note} is not the kick and must not duck"
+            );
         }
     }
-
 
     /// The host picks the sample rate and hosts do probe them. Every
     /// circuit whose corner frequency is written in Hz has to be pinned
@@ -1629,7 +1838,11 @@ mod tests {
                 tail = tail.max(l.abs()).max(r.abs());
             }
         }
-        assert!(tail < 0.02, "output should decay after release, tail={}", tail);
+        assert!(
+            tail < 0.02,
+            "output should decay after release, tail={}",
+            tail
+        );
     }
 
     /// US 3,991,645: glide lags the CV before the expo converter, so a new
@@ -1945,4 +2158,3 @@ mod tests {
         );
     }
 }
-

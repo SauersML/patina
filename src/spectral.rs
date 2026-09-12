@@ -305,12 +305,16 @@ mod tests {
                 virgin = virgin.max(v);
             }
         }
-        assert!(virgin < 0.05, "no shape yet: carrier must stay shut, got {virgin}");
+        assert!(
+            virgin < 0.05,
+            "no shape yet: carrier must stay shut, got {virgin}"
+        );
 
         let mut noise = crate::noise::NoiseSource::new(sr);
         let (mut y1, mut y2) = (0.0f32, 0.0f32);
         let c = -(-std::f32::consts::TAU * 100.0 / sr).exp();
-        let b = 2.0 * (-std::f32::consts::PI * 100.0 / sr).exp()
+        let b = 2.0
+            * (-std::f32::consts::PI * 100.0 / sr).exp()
             * (std::f32::consts::TAU * 1000.0 / sr).cos();
         let a = 1.0 - b - c;
         let mut out = Vec::with_capacity(sr as usize);
@@ -380,7 +384,10 @@ mod tests {
         for k in 0..N {
             let mag = (re[k] * re[k] + im[k] * im[k]).sqrt();
             if k == bin || k == N - bin {
-                assert!((mag - N as f32 / 2.0).abs() < 0.5, "bin {k} magnitude {mag}");
+                assert!(
+                    (mag - N as f32 / 2.0).abs() < 0.5,
+                    "bin {k} magnitude {mag}"
+                );
             } else {
                 assert!(mag < 0.05, "bin {k} should be empty, got {mag}");
             }
@@ -394,12 +401,17 @@ mod tests {
                 re[k],
                 original[k]
             );
-            assert!(im[k].abs() < 1e-4, "round trip grew an imaginary part at {k}");
+            assert!(
+                im[k].abs() < 1e-4,
+                "round trip grew an imaginary part at {k}"
+            );
         }
         // Linearity across a non-trivial signal, at the sizes the
         // envelope path also uses
         for n in [16usize, 256, N] {
-            let mut r: Vec<f32> = (0..n).map(|i| ((i * 7919) % 101) as f32 / 50.0 - 1.0).collect();
+            let mut r: Vec<f32> = (0..n)
+                .map(|i| ((i * 7919) % 101) as f32 / 50.0 - 1.0)
+                .collect();
             let mut i_ = vec![0.0f32; n];
             let want = r.clone();
             fft(&mut r, &mut i_, false);

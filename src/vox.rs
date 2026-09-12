@@ -158,15 +158,45 @@ impl Phoneme {
     pub fn from_name(name: &str) -> Option<Self> {
         use Phoneme::*;
         Some(match name.to_ascii_uppercase().as_str() {
-            "AA" => AA, "AE" => AE, "AH" => AH, "AO" => AO, "EH" => EH,
-            "ER" => ER, "IH" => IH, "IY" => IY, "UH" => UH, "UW" => UW,
-            "AY" => AY, "AW" => AW, "EY" => EY, "OW" => OW, "OY" => OY,
-            "W" => W, "Y" => Y, "L" => L, "R" => R,
-            "M" => M, "N" => N, "NG" => NG,
-            "F" => F, "TH" => TH, "S" => S, "SH" => SH, "HH" => HH,
-            "V" => V, "DH" => DH, "Z" => Z, "ZH" => ZH,
-            "P" => P, "B" => B, "T" => T, "D" => D, "K" => K, "G" => G,
-            "CH" => CH, "JH" => JH,
+            "AA" => AA,
+            "AE" => AE,
+            "AH" => AH,
+            "AO" => AO,
+            "EH" => EH,
+            "ER" => ER,
+            "IH" => IH,
+            "IY" => IY,
+            "UH" => UH,
+            "UW" => UW,
+            "AY" => AY,
+            "AW" => AW,
+            "EY" => EY,
+            "OW" => OW,
+            "OY" => OY,
+            "W" => W,
+            "Y" => Y,
+            "L" => L,
+            "R" => R,
+            "M" => M,
+            "N" => N,
+            "NG" => NG,
+            "F" => F,
+            "TH" => TH,
+            "S" => S,
+            "SH" => SH,
+            "HH" => HH,
+            "V" => V,
+            "DH" => DH,
+            "Z" => Z,
+            "ZH" => ZH,
+            "P" => P,
+            "B" => B,
+            "T" => T,
+            "D" => D,
+            "K" => K,
+            "G" => G,
+            "CH" => CH,
+            "JH" => JH,
             _ => return None,
         })
     }
@@ -174,8 +204,10 @@ impl Phoneme {
     /// Does this phoneme carry the syllable (sustain under a held note)?
     pub fn is_vowel(self) -> bool {
         use Phoneme::*;
-        matches!(self, AA | AE | AH | AO | EH | ER | IH | IY | UH | UW
-            | AY | AW | EY | OW | OY)
+        matches!(
+            self,
+            AA | AE | AH | AO | EH | ER | IH | IY | UH | UW | AY | AW | EY | OW | OY
+        )
     }
 
     /// Diphthongs glide from their Spec targets to a second vowel's.
@@ -325,12 +357,20 @@ pub fn parse_lyric(s: &str) -> Result<Syllable, String> {
         if stress.is_some() && !ph.is_vowel() {
             return Err(format!("lyric '{}': stress digits go on vowels", raw));
         }
-        out.push(LyricPhone { ph, ms, amp: amp.clamp(0.0, 2.0), stress });
+        out.push(LyricPhone {
+            ph,
+            ms,
+            amp: amp.clamp(0.0, 2.0),
+            stress,
+        });
     }
     if out.is_empty() {
         return Err("empty lyric".into());
     }
-    Ok(Syllable { phones: out, boundary })
+    Ok(Syllable {
+        phones: out,
+        boundary,
+    })
 }
 
 /// Milliseconds of onset material before the sustaining nucleus. The
@@ -582,15 +622,18 @@ impl VoxSource {
             } else {
                 self.syl_index += 1;
             }
-            self.decl_st =
-                (0.8 - 0.35 * self.syl_index as f32).max(-2.2) * self.intonation;
+            self.decl_st = (0.8 - 0.35 * self.syl_index as f32).max(-2.2) * self.intonation;
             self.boundary = syl.boundary;
 
             // Velocity is a parsed float straight off the lyric line and
             // f32::clamp returns NaN unchanged. The tract is recursive —
             // one NaN sample makes every later sample NaN, forever, on
             // every later syllable — so a bad velocity must not reach it.
-            let vel = if velocity.is_nan() { 0.0 } else { velocity.clamp(0.0, 1.0) };
+            let vel = if velocity.is_nan() {
+                0.0
+            } else {
+                velocity.clamp(0.0, 1.0)
+            };
             let gain = 0.4 + 0.6 * vel;
             let (main, coda) = self.build_syllable(&syl.phones, gain);
             // A new syllable interrupts whatever was still queued (fast
@@ -660,7 +703,11 @@ impl VoxSource {
                 // Diphthong tail: the nucleus was held the whole note;
                 // the offglide speaks now, as its own short segment
                 if let Some(g) = cur.glide_to.take() {
-                    let ms = if has_coda { OFFGLIDE_CODA_MS } else { OFFGLIDE_MS };
+                    let ms = if has_coda {
+                        OFFGLIDE_CODA_MS
+                    } else {
+                        OFFGLIDE_MS
+                    };
                     let off = Seg {
                         f: g,
                         glide_to: None,
@@ -730,8 +777,16 @@ impl VoxSource {
             accent: 0.0,
         };
         match ph {
-            B | D | G | JH => Some(Seg { voiced: 0.3 * amp, dur: ms_to(60.0), ..base }),
-            P | T | K | CH => Some(Seg { asp: 0.4 * amp, dur: ms_to(45.0), ..base }),
+            B | D | G | JH => Some(Seg {
+                voiced: 0.3 * amp,
+                dur: ms_to(60.0),
+                ..base
+            }),
+            P | T | K | CH => Some(Seg {
+                asp: 0.4 * amp,
+                dur: ms_to(45.0),
+                ..base
+            }),
             _ => None,
         }
     }
@@ -843,7 +898,11 @@ impl VoxSource {
                 } else {
                     lp.stress
                 };
-                LyricPhone { amp: lp.amp * gain, stress, ..*lp }
+                LyricPhone {
+                    amp: lp.amp * gain,
+                    stress,
+                    ..*lp
+                }
             })
             .collect();
         let last_vowel = scaled.iter().rposition(|p| p.ph.is_vowel());
@@ -892,7 +951,10 @@ impl VoxSource {
     /// One mono sample of speech, unit-level (roughly ±1).
     pub fn render(&mut self) -> f32 {
         // Advance the score
-        if self.cur.map_or(false, |s| s.dur != SUSTAIN && self.pos >= s.dur) {
+        if self
+            .cur
+            .map_or(false, |s| s.dur != SUSTAIN && self.pos >= s.dur)
+        {
             self.cur = None;
         }
         if self.cur.is_none() {
@@ -921,8 +983,8 @@ impl VoxSource {
                     // segment of its own, so "I" held four beats stays
                     // "aaa" and turns "i" only at the release.
                     if s.dur != SUSTAIN {
-                        let off = ((OFFGLIDE_MS * 0.001 * self.sample_rate) as usize)
-                            .min(s.dur / 2);
+                        let off =
+                            ((OFFGLIDE_MS * 0.001 * self.sample_rate) as usize).min(s.dur / 2);
                         if self.pos + off >= s.dur {
                             tf = g;
                             slew = 60.0;
@@ -931,7 +993,16 @@ impl VoxSource {
                 }
                 (tf, s.bw, s.voiced, s.fric, s.fric_f, s.fric_bw, s.asp, slew)
             }
-            None => (self.f, self.bw, 0.0, 0.0, self.fric_f, self.fric_bw, 0.0, 25.0),
+            None => (
+                self.f,
+                self.bw,
+                0.0,
+                0.0,
+                self.fric_f,
+                self.fric_bw,
+                0.0,
+                25.0,
+            ),
         };
         // Breath pressure eases over a long-held note — a sustained vowel
         // settles instead of holding organ-flat
@@ -963,8 +1034,8 @@ impl VoxSource {
         let target = self.f0_target * (self.decl_st / 12.0).exp2();
         self.f0 += (target - self.f0) * (1.0 - (-1000.0 / (35.0 * self.sample_rate)).exp());
         self.accent_st *= 1.0 - 1.0 / (0.2 * self.sample_rate); // ~200 ms decay
-        self.fall_st +=
-            (self.fall_target - self.fall_st) * (1.0 - (-1000.0 / (150.0 * self.sample_rate)).exp());
+        self.fall_st += (self.fall_target - self.fall_st)
+            * (1.0 - (-1000.0 / (150.0 * self.sample_rate)).exp());
         self.vib_phase = (self.vib_phase + 5.3 / self.sample_rate).fract();
         let vib_cents = self.vibrato * 40.0 * (TAU * self.vib_phase).sin();
         let f0 = self.f0
@@ -987,8 +1058,8 @@ impl VoxSource {
         let kt = 1.0 - (-TAU * tilt_fc / self.sample_rate).exp();
         self.tilt_lp += kt * (dg - self.tilt_lp);
         let shimmer = 1.0 + self.shimmer_lp * 0.35;
-        let source = self.tilt_lp * self.voiced * shimmer
-            + n * (self.asp + self.breath * self.voiced * 0.5);
+        let source =
+            self.tilt_lp * self.voiced * shimmer + n * (self.asp + self.breath * self.voiced * 0.5);
 
         // The tract: cascade resonators F1-F3 moving, F4 fixed
         let mut x = source;
@@ -1000,7 +1071,8 @@ impl VoxSource {
         x = self.res[3].tick(x);
 
         // Frication: noise through its own place-of-articulation resonator
-        self.fric_res.set(self.fric_f, self.fric_bw, self.sample_rate);
+        self.fric_res
+            .set(self.fric_f, self.fric_bw, self.sample_rate);
         let hiss = self.fric_res.tick(n) * self.fric;
 
         // Voiced tract vs frication balance: vowels lead, but the
@@ -1090,8 +1162,7 @@ fn load_wav_mono_fmt(path: &str) -> Result<(Vec<f32>, u32, u16, u16), String> {
                         .map(|fr| {
                             fr.chunks_exact(3)
                                 .map(|b| {
-                                    i32::from_le_bytes([0, b[0], b[1], b[2]]) as f32
-                                        / 2147483648.0
+                                    i32::from_le_bytes([0, b[0], b[1], b[2]]) as f32 / 2147483648.0
                                 })
                                 .sum::<f32>()
                                 / ch as f32
@@ -1108,9 +1179,9 @@ fn load_wav_mono_fmt(path: &str) -> Result<(Vec<f32>, u32, u16, u16), String> {
                         .collect(),
                     (f, b) => {
                         return Err(format!(
-                            "wav '{}': unsupported format {} / {} bits (use PCM16, PCM24, or float32)",
-                            path, f, b
-                        ))
+                        "wav '{}': unsupported format {} / {} bits (use PCM16, PCM24, or float32)",
+                        path, f, b
+                    ))
                     }
                 };
                 samples = Some(mono);
@@ -1333,10 +1404,7 @@ impl VoxBox {
             crate::vocoder::VocoderMode::Spectral => self.spectral.process(m, carrier),
             _ => self.vocoder.process(m, carrier),
         };
-        let k = crate::smoothing::approach(
-            crate::smoothing::KNOB_SMOOTH_S,
-            self.sample_rate,
-        );
+        let k = crate::smoothing::approach(crate::smoothing::KNOB_SMOOTH_S, self.sample_rate);
         self.level += (self.level_t - self.level) * k;
         self.dry += (self.dry_t - self.dry) * k;
         vocoded * self.level + m * self.dry * (0.9 * PROGRAM_V)
@@ -1359,7 +1427,12 @@ mod tests {
         assert_eq!(l.phones.len(), 4);
         assert_eq!(
             l.phones[0],
-            LyricPhone { ph: Phoneme::HH, ms: None, amp: 1.0, stress: None }
+            LyricPhone {
+                ph: Phoneme::HH,
+                ms: None,
+                amp: 1.0,
+                stress: None
+            }
         );
         assert_eq!(l.phones[1].ph, Phoneme::EH);
         assert_eq!(l.phones[1].ms, Some(180.0));
@@ -1432,7 +1505,11 @@ mod tests {
     /// RMS in consecutive windows — the closure-dip / murmur-length probe.
     fn rms_windows(samples: &[f32], sr: f32, win_s: f32) -> Vec<f32> {
         let w = (win_s * sr) as usize;
-        samples.chunks(w).filter(|c| c.len() == w).map(rms).collect()
+        samples
+            .chunks(w)
+            .filter(|c| c.len() == w)
+            .map(rms)
+            .collect()
     }
 
     /// Goertzel energy at one frequency.
@@ -1471,9 +1548,9 @@ mod tests {
                 i += hop;
             }
             let mean = f0s.iter().sum::<f32>() / f0s.len() as f32;
-            let spread = f0s.iter().fold((f32::MAX, f32::MIN), |(lo, hi), &f| {
-                (lo.min(f), hi.max(f))
-            });
+            let spread = f0s
+                .iter()
+                .fold((f32::MAX, f32::MIN), |(lo, hi), &f| (lo.min(f), hi.max(f)));
             (mean, cents(spread.1, spread.0))
         };
         let (mean, flat_spread) = spread_of(0.0);
@@ -1482,7 +1559,10 @@ mod tests {
             "held AA at A2 must sit on 110 Hz: got {mean} Hz ({} cents off)",
             cents(mean, 110.0)
         );
-        assert!(flat_spread < 25.0, "vibrato off must be steady, spread {flat_spread} cents");
+        assert!(
+            flat_spread < 25.0,
+            "vibrato off must be steady, spread {flat_spread} cents"
+        );
         let (_, vib_spread) = spread_of(1.0);
         assert!(
             vib_spread > 45.0,
@@ -1513,7 +1593,10 @@ mod tests {
         let t = dip_of("AA:220-T-AA:220");
         assert!(b < -8.0, "B needs a real closure dip, got {b:.1} dB");
         assert!(t < -18.0, "T closure is silence, got {t:.1} dB");
-        assert!(t < b, "unvoiced T must dip deeper than B's voiced bar ({t:.1} vs {b:.1})");
+        assert!(
+            t < b,
+            "unvoiced T must dip deeper than B's voiced bar ({t:.1} vs {b:.1})"
+        );
     }
 
     /// A held diphthong keeps its nucleus for the whole note and turns
@@ -1589,7 +1672,10 @@ mod tests {
         let win = |t: &Vec<f32>| rms(&t[(0.11 * sr) as usize..(0.16 * sr) as usize]);
         let (m, p) = (win(&marked), win(&plain));
         assert!(m > 1e-3, "the released schwa must actually sound, rms={m}");
-        assert!(m > 4.0 * p, "release only at the phrase edge: marked {m} vs plain {p}");
+        assert!(
+            m > 4.0 * p,
+            "release only at the phrase edge: marked {m} vs plain {p}"
+        );
     }
 
     /// The vowel owns the beat: with speak-ahead, "S-T-R-AA"'s nucleus
@@ -1618,7 +1704,10 @@ mod tests {
         };
         let led = vowel_arrival(true);
         let unled = vowel_arrival(false);
-        assert!(led < 0.05, "speak-ahead must land the vowel on the beat, arrived {led:.3} s late");
+        assert!(
+            led < 0.05,
+            "speak-ahead must land the vowel on the beat, arrived {led:.3} s late"
+        );
         assert!(
             unled > led + 0.1,
             "the un-led vowel should be late by the onset cluster: {unled:.3} vs {led:.3}"
@@ -1692,14 +1781,23 @@ mod tests {
         let n = sr as usize;
         let hiss = &out[n / 100..n / 12]; // ~10-83 ms: inside the S
         let vowel = &out[n / 2..n * 3 / 4]; // deep in the sustained AA
-        assert!(zcr(hiss) > 2.0 * zcr(vowel), "S should hiss: {} vs {}", zcr(hiss), zcr(vowel));
+        assert!(
+            zcr(hiss) > 2.0 * zcr(vowel),
+            "S should hiss: {} vs {}",
+            zcr(hiss),
+            zcr(vowel)
+        );
         assert!(
             rms(vowel) > 1.5 * rms(hiss),
             "AA should be louder than S: vowel rms={}, hiss rms={}",
             rms(vowel),
             rms(hiss)
         );
-        assert!(rms(vowel) > 0.03, "vowel must actually sound, rms={}", rms(vowel));
+        assert!(
+            rms(vowel) > 0.03,
+            "vowel must actually sound, rms={}",
+            rms(vowel)
+        );
         assert!(out.iter().all(|s| s.is_finite() && s.abs() < 4.0));
 
         // Release: the voice must fall silent shortly after note-off
@@ -1709,7 +1807,11 @@ mod tests {
             tail.push(v.render());
         }
         let quiet = &tail[tail.len() - 4800..];
-        assert!(rms(quiet) < 0.01, "voice should stop after release, rms={}", rms(quiet));
+        assert!(
+            rms(quiet) < 0.01,
+            "voice should stop after release, rms={}",
+            rms(quiet)
+        );
     }
 
     /// Vowel identity: AA and IY must differ where F2 lives.
@@ -1739,8 +1841,14 @@ mod tests {
         let aa_hi = energy_at("AA", 2310.0);
         let aa_lo = energy_at("AA", 1100.0);
         let iy_lo = energy_at("IY", 1100.0);
-        assert!(iy_hi > 3.0 * aa_hi, "IY needs F2 energy at 2.3k: {iy_hi} vs {aa_hi}");
-        assert!(aa_lo > 3.0 * iy_lo, "AA needs F2 energy at 1.1k: {aa_lo} vs {iy_lo}");
+        assert!(
+            iy_hi > 3.0 * aa_hi,
+            "IY needs F2 energy at 2.3k: {iy_hi} vs {aa_hi}"
+        );
+        assert!(
+            aa_lo > 3.0 * iy_lo,
+            "AA needs F2 energy at 1.1k: {aa_lo} vs {iy_lo}"
+        );
     }
 
     /// An explicit `:ms` on the vowel overrides sustain: the phoneme ends
@@ -1889,7 +1997,10 @@ mod tests {
         for n in 0..(sr as usize / 2) {
             loud = loud.max(vb.process(saw(n)).abs());
         }
-        assert!(loud > 10.0 * quiet.max(0.02), "speech must open the vocoder: {loud} vs {quiet}");
+        assert!(
+            loud > 10.0 * quiet.max(0.02),
+            "speech must open the vocoder: {loud} vs {quiet}"
+        );
     }
 
     /// Every voice-box knob is an automation lane, and automation values
@@ -1969,7 +2080,10 @@ mod tests {
         v.set_syllable(parse_lyric("AA").unwrap());
         v.note_on(45, f32::NAN);
         let out = render_secs(&mut v, 0.3, sr);
-        assert!(out.iter().all(|s| s.is_finite()), "NaN velocity poisoned the tract");
+        assert!(
+            out.iter().all(|s| s.is_finite()),
+            "NaN velocity poisoned the tract"
+        );
         v.note_off(45);
         render_secs(&mut v, 0.2, sr);
         // The next syllable must still speak
@@ -1977,7 +2091,10 @@ mod tests {
         v.note_on(45, 0.9);
         let out = render_secs(&mut v, 0.4, sr);
         assert!(out.iter().all(|s| s.is_finite()));
-        assert!(rms(&out[out.len() / 2..]) > 0.03, "the voice never recovered");
+        assert!(
+            rms(&out[out.len() / 2..]) > 0.03,
+            "the voice never recovered"
+        );
     }
 
     /// Audio-thread cost of each vox circuit, per sample, in the host's
@@ -2028,7 +2145,6 @@ mod tests {
         );
     }
 
-
     /// The vox circuits are full of corners fixed in Hz: the talk box's
     /// 4.8 kHz tube edge, the vocoder's 120 Hz..7.2 kHz bank, the wah's
     /// sweep top. Every one is an RBJ biquad, which does not merely
@@ -2037,7 +2153,14 @@ mod tests {
     /// went non-finite within 700 samples at an 8 kHz host rate.
     #[test]
     fn every_mode_is_stable_across_the_supported_rate_band() {
-        for sr in [crate::MIN_SAMPLE_RATE as f32, 11025.0, 16000.0, 22050.0, 44100.0, 96000.0] {
+        for sr in [
+            crate::MIN_SAMPLE_RATE as f32,
+            11025.0,
+            16000.0,
+            22050.0,
+            44100.0,
+            96000.0,
+        ] {
             for mode in [
                 crate::vocoder::VocoderMode::TalkBox,
                 crate::vocoder::VocoderMode::Vocoder,
@@ -2084,7 +2207,11 @@ mod tests {
         bytes.extend_from_slice(b"data");
         bytes.extend_from_slice(&(n as u32 * 2).to_le_bytes());
         for i in 0..n {
-            let v = if (i as f32 * 200.0 / rate as f32) % 1.0 < 0.5 { 12000i16 } else { -12000 };
+            let v = if (i as f32 * 200.0 / rate as f32) % 1.0 < 0.5 {
+                12000i16
+            } else {
+                -12000
+            };
             bytes.extend_from_slice(&v.to_le_bytes());
         }
         std::fs::write(&path, &bytes).unwrap();
@@ -2102,7 +2229,10 @@ mod tests {
         for k in 0..(sr as usize / 4) {
             peak = peak.max(vb.process(saw(k)).abs());
         }
-        assert!(peak > 0.3, "recorded modulator should articulate the carrier, peak={peak}");
+        assert!(
+            peak > 0.3,
+            "recorded modulator should articulate the carrier, peak={peak}"
+        );
         // After the wav runs out, the box goes quiet (no fallback buzz)
         for _ in 0..(sr as usize / 2) {
             vb.process(saw(0));
@@ -2111,6 +2241,9 @@ mod tests {
         for k in 0..4800 {
             tail = tail.max(vb.process(saw(k)).abs());
         }
-        assert!(tail < 0.05, "spent wav must leave the carrier shut, tail={tail}");
+        assert!(
+            tail < 0.05,
+            "spent wav must leave the carrier shut, tail={tail}"
+        );
     }
 }

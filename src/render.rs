@@ -62,12 +62,19 @@ fn lufs_integrated(frames: &[(f32, f32)]) -> f32 {
     let blocks: Vec<f64> = (0..=(sq.len() - block) / hop)
         .map(|k| sq[k * hop..k * hop + block].iter().sum::<f64>() / block as f64)
         .collect();
-    let gated: Vec<f64> = blocks.iter().copied().filter(|&m| loudness(m) > -70.0).collect();
+    let gated: Vec<f64> = blocks
+        .iter()
+        .copied()
+        .filter(|&m| loudness(m) > -70.0)
+        .collect();
     if gated.is_empty() {
         return -70.0;
     }
     let thresh = loudness(gated.iter().sum::<f64>() / gated.len() as f64) - 10.0;
-    let final_set: Vec<f64> = gated.into_iter().filter(|&m| loudness(m) > thresh).collect();
+    let final_set: Vec<f64> = gated
+        .into_iter()
+        .filter(|&m| loudness(m) > thresh)
+        .collect();
     if final_set.is_empty() {
         return -70.0;
     }
@@ -102,10 +109,18 @@ pub fn render_stems(song: &crate::song::Song, dir: &str) -> Result<()> {
         let path = format!("{}/{}.wav", dir.trim_end_matches('/'), name);
         println!("stem: {} (channel {})", path, key);
         let frames = crate::song::render_offline_solo(song, 48000.0, Some(key));
-        table.push((name.clone(), peak_db(&frames), rms_db(&frames), lufs_integrated(&frames)));
+        table.push((
+            name.clone(),
+            peak_db(&frames),
+            rms_db(&frames),
+            lufs_integrated(&frames),
+        ));
         write_wav(&path, &frames, 48000)?;
     }
-    println!("\n{:<16} {:>10} {:>10} {:>10}", "stem", "peak dBFS", "rms dBFS", "LUFS");
+    println!(
+        "\n{:<16} {:>10} {:>10} {:>10}",
+        "stem", "peak dBFS", "rms dBFS", "LUFS"
+    );
     for (name, peak, rms, lufs) in &table {
         println!("{:<16} {:>10.1} {:>10.1} {:>10.1}", name, peak, rms, lufs);
     }
@@ -129,14 +144,22 @@ pub fn export_events(song: &crate::song::Song, path: &str) -> Result<()> {
     let n = song.events.len();
     for (i, e) in song.events.iter().enumerate() {
         let body = match &e.kind {
-            crate::song::EventKind::NoteOn { note, velocity, channel } => format!(
+            crate::song::EventKind::NoteOn {
+                note,
+                velocity,
+                channel,
+            } => format!(
                 "\"type\":\"on\",\"note\":{},\"vel\":{:.4},\"ch\":{}",
                 note, velocity, channel
             ),
             crate::song::EventKind::NoteOff { note, channel } => {
                 format!("\"type\":\"off\",\"note\":{},\"ch\":{}", note, channel)
             }
-            crate::song::EventKind::Param { param, value, channel } => format!(
+            crate::song::EventKind::Param {
+                param,
+                value,
+                channel,
+            } => format!(
                 "\"type\":\"param\",\"param\":\"{:?}\",\"value\":{:.6},\"ch\":{}",
                 param, value, channel
             ),
@@ -172,7 +195,11 @@ pub fn render_to_wav(song: &crate::song::Song, path: &str, normalize: bool) -> R
             *l *= gain;
             *r *= gain;
         }
-        println!("Normalized: peak {:.3} -> -1 dBFS ({:+.1} dB)", peak, 20.0 * gain.log10());
+        println!(
+            "Normalized: peak {:.3} -> -1 dBFS ({:+.1} dB)",
+            peak,
+            20.0 * gain.log10()
+        );
     }
     println!(
         "Levels: peak {:.1} dBFS, rms {:.1} dBFS, {:.1} LUFS",
@@ -212,7 +239,10 @@ mod tests {
         let l = lufs_integrated(&frames);
         assert!((l - (-18.0)).abs() < 0.1, "reference tone read {l} LUFS");
         assert!((peak_db(&frames) - (-18.0)).abs() < 0.1);
-        assert!((rms_db(&frames) - (-21.0)).abs() < 0.1, "sine rms is peak - 3 dB");
+        assert!(
+            (rms_db(&frames) - (-21.0)).abs() < 0.1,
+            "sine rms is peak - 3 dB"
+        );
         // and silence gates out instead of returning garbage
         assert_eq!(lufs_integrated(&vec![(0.0, 0.0); 96000]), -70.0);
     }

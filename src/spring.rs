@@ -41,7 +41,11 @@ struct Allpass {
 
 impl Allpass {
     fn new(a: f32) -> Self {
-        Self { a, x1: 0.0, y1: 0.0 }
+        Self {
+            a,
+            x1: 0.0,
+            y1: 0.0,
+        }
     }
 
     #[inline]
@@ -79,7 +83,9 @@ struct OnePoleHp {
 
 impl OnePoleHp {
     fn new(cutoff: f32, sample_rate: f32) -> Self {
-        Self { lp: OnePoleLp::new(cutoff, sample_rate) }
+        Self {
+            lp: OnePoleLp::new(cutoff, sample_rate),
+        }
     }
 
     #[inline]
@@ -99,7 +105,14 @@ struct Spring {
 }
 
 impl Spring {
-    fn new(sample_rate: f32, delay_s: f32, stages: usize, ap_coef: f32, damp_hz: f32, feedback: f32) -> Self {
+    fn new(
+        sample_rate: f32,
+        delay_s: f32,
+        stages: usize,
+        ap_coef: f32,
+        damp_hz: f32,
+        feedback: f32,
+    ) -> Self {
         let len = ((delay_s * sample_rate) as usize).max(8);
         Self {
             delay: vec![0.0; len],
@@ -158,10 +171,7 @@ impl SpringReverb {
             // 250 ms release, expressed in seconds so it means the same
             // thing at 44.1, 48 and 96 kHz
             tail_k: (-1.0 / (0.25 * sample_rate)).exp(),
-            smooth_k: crate::smoothing::approach(
-                crate::smoothing::KNOB_SMOOTH_S,
-                sample_rate,
-            ),
+            smooth_k: crate::smoothing::approach(crate::smoothing::KNOB_SMOOTH_S, sample_rate),
             wet: 0.0,
             smoothed: 0.0,
         }
@@ -193,8 +203,16 @@ impl SpringReverb {
         // is O(1) and turns a permanent kill into a one-sample dropout.
         let left = if left.is_finite() { left } else { 0.0 };
         let right = if right.is_finite() { right } else { 0.0 };
-        let send_left = if send_left.is_finite() { send_left } else { 0.0 };
-        let send_right = if send_right.is_finite() { send_right } else { 0.0 };
+        let send_left = if send_left.is_finite() {
+            send_left
+        } else {
+            0.0
+        };
+        let send_right = if send_right.is_finite() {
+            send_right
+        } else {
+            0.0
+        };
 
         self.smoothed += (self.wet - self.smoothed) * self.smooth_k;
         let w = self.smoothed;
@@ -233,10 +251,7 @@ impl SpringReverb {
         let ring = wet_l.abs().max(wet_r.abs()).max(send.abs());
         self.send_tail = ring.max(self.send_tail * self.tail_k);
 
-        (
-            left * (1.0 - w) + wet_l,
-            right * (1.0 - w) + wet_r,
-        )
+        (left * (1.0 - w) + wet_l, right * (1.0 - w) + wet_r)
     }
 }
 
@@ -277,7 +292,10 @@ mod tests {
                 late = late.max(l.abs());
             }
         }
-        assert!(early > 0.01, "spring should ring after the impulse, got {early}");
+        assert!(
+            early > 0.01,
+            "spring should ring after the impulse, got {early}"
+        );
         assert!(
             late < early * 0.2,
             "spring should decay: early={early}, late={late}"
@@ -404,6 +422,9 @@ mod tests {
                 energy += l * l;
             }
         }
-        assert!(energy > 1.0, "spring should be passing audio again: {energy}");
+        assert!(
+            energy > 1.0,
+            "spring should be passing audio again: {energy}"
+        );
     }
 }

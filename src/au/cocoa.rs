@@ -42,7 +42,6 @@ use crate::editor::{EditorState, ParamHost, EDITOR_HEIGHT, EDITOR_WIDTH};
 /// view. Apple reserves IDs below 64000; this sits in the third-party range.
 pub const PROP_PATINA_UNIT: u32 = 64001;
 
-
 /// Editor refresh rate. 30 Hz keeps arcs and hover smooth without burning
 /// CPU on a mostly static panel.
 const FRAME_INTERVAL: f64 = 1.0 / 30.0;
@@ -168,7 +167,6 @@ extern "C" {
     ) -> OSStatus;
 }
 
-
 // msgSend, cast per call site to the concrete signature.
 unsafe fn send0(obj: Id, s: Sel) -> Id {
     let f: unsafe extern "C" fn(Id, Sel) -> Id = transmute(objc_msgSend as *const c_void);
@@ -239,9 +237,17 @@ fn bundle_path() -> Option<String> {
         if dladdr(bundle_path as *const c_void, &mut info) == 0 || info.dli_fname.is_null() {
             return None;
         }
-        let dylib = std::ffi::CStr::from_ptr(info.dli_fname).to_string_lossy().into_owned();
+        let dylib = std::ffi::CStr::from_ptr(info.dli_fname)
+            .to_string_lossy()
+            .into_owned();
         let p = std::path::Path::new(&dylib);
-        Some(p.parent()?.parent()?.parent()?.to_string_lossy().into_owned())
+        Some(
+            p.parent()?
+                .parent()?
+                .parent()?
+                .to_string_lossy()
+                .into_owned(),
+        )
     }
 }
 
@@ -405,7 +411,7 @@ impl ViewState {
                 CGContextRelease(self.bitmap);
             }
             self.bitmap = CGBitmapContextCreate(
-                null_mut(),                       // CoreGraphics allocates
+                null_mut(), // CoreGraphics allocates
                 pw,
                 ph,
                 8,
@@ -438,7 +444,10 @@ impl ViewState {
                 let h = EDITOR_HEIGHT as f64;
                 let bounds = CGRect {
                     origin: CGPoint { x: 0.0, y: 0.0 },
-                    size: CGSize { width: EDITOR_WIDTH as f64, height: h },
+                    size: CGSize {
+                        width: EDITOR_WIDTH as f64,
+                        height: h,
+                    },
                 };
                 // Our framebuffer is top-to-bottom; the view is flipped, so
                 // flip the y-axis to cancel CGContextDrawImage's bottom-up
@@ -559,14 +568,31 @@ unsafe fn register_view_class() {
     );
 
     let add = |sel_name: &str, imp: *const c_void, types: &str| {
-        class_addMethod(class, sel(sel_name), imp, CString::new(types).unwrap().as_ptr());
+        class_addMethod(
+            class,
+            sel(sel_name),
+            imp,
+            CString::new(types).unwrap().as_ptr(),
+        );
     };
     add("isFlipped", view_is_flipped as *const c_void, "B@:");
     // The out-of-process view bridge sizes the remote container from Auto
     // Layout, which reads this; without it the container collapses to 1×1.
-    add("intrinsicContentSize", intrinsic_content_size as *const c_void, "{CGSize=dd}@:");
-    add("acceptsFirstMouse:", accepts_first_mouse as *const c_void, "B@:@");
-    add("drawRect:", draw_rect as *const c_void, "v@:{CGRect={CGPoint=dd}{CGSize=dd}}");
+    add(
+        "intrinsicContentSize",
+        intrinsic_content_size as *const c_void,
+        "{CGSize=dd}@:",
+    );
+    add(
+        "acceptsFirstMouse:",
+        accepts_first_mouse as *const c_void,
+        "B@:@",
+    );
+    add(
+        "drawRect:",
+        draw_rect as *const c_void,
+        "v@:{CGRect={CGPoint=dd}{CGSize=dd}}",
+    );
     add("drawTick:", draw_tick as *const c_void, "v@:@");
     add("mouseDown:", mouse_down as *const c_void, "v@:@");
     add("mouseDragged:", mouse_dragged as *const c_void, "v@:@");
@@ -577,7 +603,11 @@ unsafe fn register_view_class() {
     add("mouseDragged:", mouse_dragged as *const c_void, "v@:@");
     add("mouseExited:", mouse_exited as *const c_void, "v@:@");
     add("scrollWheel:", scroll_wheel as *const c_void, "v@:@");
-    add("viewDidMoveToWindow", view_did_move_to_window as *const c_void, "v@:");
+    add(
+        "viewDidMoveToWindow",
+        view_did_move_to_window as *const c_void,
+        "v@:",
+    );
     add("dealloc", view_dealloc as *const c_void, "v@:");
     objc_registerClassPair(class);
     VIEW_CLASS.store(class as usize, Ordering::Release);
@@ -661,20 +691,19 @@ unsafe fn schedule_redraw_timer(view: Id) -> Id {
 /// long as the view is actually on screen.
 unsafe extern "C" fn view_did_move_to_window(this: Id, _cmd: Sel) {
     guard((), || {
-    let on_screen = !send0(this, sel("window")).is_null();
-    ViewState::with(this, |state| {
-        if on_screen {
-            if state.timer.is_null() {
-                state.timer = schedule_redraw_timer(this);
+        let on_screen = !send0(this, sel("window")).is_null();
+        ViewState::with(this, |state| {
+            if on_screen {
+                if state.timer.is_null() {
+                    state.timer = schedule_redraw_timer(this);
+                }
+            } else if !state.timer.is_null() {
+                let _: Id = send0(state.timer, sel("invalidate"));
+                state.timer = null_mut();
             }
-        } else if !state.timer.is_null() {
-            let _: Id = send0(state.timer, sel("invalidate"));
-            state.timer = null_mut();
-        }
-    });
+        });
     })
 }
-
 
 /// Run a body at an Objective-C entry point, swallowing any Rust panic.
 /// Unwinding across the FFI boundary into AppKit is undefined behaviour and
@@ -694,7 +723,10 @@ unsafe extern "C" fn view_is_flipped(_this: Id, _cmd: Sel) -> u8 {
 }
 
 unsafe extern "C" fn intrinsic_content_size(_this: Id, _cmd: Sel) -> CGSize {
-    CGSize { width: EDITOR_WIDTH as f64, height: EDITOR_HEIGHT as f64 }
+    CGSize {
+        width: EDITOR_WIDTH as f64,
+        height: EDITOR_HEIGHT as f64,
+    }
 }
 
 unsafe extern "C" fn accepts_first_mouse(_this: Id, _cmd: Sel, _event: Id) -> u8 {
@@ -703,9 +735,9 @@ unsafe extern "C" fn accepts_first_mouse(_this: Id, _cmd: Sel, _event: Id) -> u8
 
 unsafe extern "C" fn draw_rect(this: Id, _cmd: Sel, _dirty: CGRect) {
     guard((), || {
-    ViewState::with(this, |state| {
-        state.draw_current();
-    });
+        ViewState::with(this, |state| {
+            state.draw_current();
+        });
     })
 }
 
@@ -735,18 +767,18 @@ unsafe extern "C" fn draw_tick(this: Id, _cmd: Sel, _timer: Id) {
 
 unsafe fn push_button(this: Id, event: Id, button: PointerButton, pressed: bool) {
     guard((), || {
-    ViewState::with(this, |state| {
-        let pos = state.event_pos(event);
-        state.mouse = pos;
-        state.pending.push(Event::PointerMoved(pos));
-        state.pending.push(Event::PointerButton {
-            pos,
-            button,
-            pressed,
-            modifiers: Modifiers::default(),
+        ViewState::with(this, |state| {
+            let pos = state.event_pos(event);
+            state.mouse = pos;
+            state.pending.push(Event::PointerMoved(pos));
+            state.pending.push(Event::PointerButton {
+                pos,
+                button,
+                pressed,
+                modifiers: Modifiers::default(),
+            });
+            state.set_needs_display();
         });
-        state.set_needs_display();
-    });
     })
 }
 
@@ -765,46 +797,46 @@ unsafe extern "C" fn right_mouse_up(this: Id, _cmd: Sel, event: Id) {
 
 unsafe extern "C" fn mouse_moved(this: Id, _cmd: Sel, event: Id) {
     guard((), || {
-    ViewState::with(this, |state| {
-        let pos = state.event_pos(event);
-        state.mouse = pos;
-        state.pending.push(Event::PointerMoved(pos));
-        state.set_needs_display();
-    });
+        ViewState::with(this, |state| {
+            let pos = state.event_pos(event);
+            state.mouse = pos;
+            state.pending.push(Event::PointerMoved(pos));
+            state.set_needs_display();
+        });
     })
 }
 
 unsafe extern "C" fn mouse_dragged(this: Id, _cmd: Sel, event: Id) {
     guard((), || {
-    ViewState::with(this, |state| {
-        let pos = state.event_pos(event);
-        state.mouse = pos;
-        state.pending.push(Event::PointerMoved(pos));
-        state.set_needs_display();
-    });
+        ViewState::with(this, |state| {
+            let pos = state.event_pos(event);
+            state.mouse = pos;
+            state.pending.push(Event::PointerMoved(pos));
+            state.set_needs_display();
+        });
     })
 }
 
 unsafe extern "C" fn mouse_exited(this: Id, _cmd: Sel, _event: Id) {
     guard((), || {
-    ViewState::with(this, |state| {
-        state.pending.push(Event::PointerGone);
-    });
+        ViewState::with(this, |state| {
+            state.pending.push(Event::PointerGone);
+        });
     })
 }
 
 unsafe extern "C" fn scroll_wheel(this: Id, _cmd: Sel, event: Id) {
     guard((), || {
-    ViewState::with(this, |state| {
-        let dx = send0_f64(event, sel("scrollingDeltaX")) as f32;
-        let dy = send0_f64(event, sel("scrollingDeltaY")) as f32;
-        state.pending.push(Event::MouseWheel {
-            unit: egui::MouseWheelUnit::Point,
-            delta: vec2(dx, dy),
-            modifiers: Modifiers::default(),
+        ViewState::with(this, |state| {
+            let dx = send0_f64(event, sel("scrollingDeltaX")) as f32;
+            let dy = send0_f64(event, sel("scrollingDeltaY")) as f32;
+            state.pending.push(Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: vec2(dx, dy),
+                modifiers: Modifiers::default(),
+            });
+            state.set_needs_display();
         });
-        state.set_needs_display();
-    });
     })
 }
 
@@ -825,7 +857,10 @@ unsafe extern "C" fn view_dealloc(this: Id, _cmd: Sel) {
         }
         CGColorSpaceRelease(state.colorspace);
     }
-    let sup = ObjcSuper { receiver: this, super_class: cls("NSView") };
+    let sup = ObjcSuper {
+        receiver: this,
+        super_class: cls("NSView"),
+    };
     let send: unsafe extern "C" fn(*const ObjcSuper, Sel) =
         transmute(objc_msgSendSuper as *const c_void);
     send(&sup, sel("dealloc"));
@@ -845,12 +880,17 @@ unsafe extern "C" fn interface_version(_this: Id, _cmd: Sel) -> u32 {
 /// view when it's no longer needed."
 #[no_mangle]
 pub unsafe extern "C" fn patina_au_create_view(audio_unit: *mut c_void) -> *mut c_void {
-    guard(null_mut(), || ui_view_for_audio_unit(
-        null_mut(),
-        null_mut(),
-        audio_unit,
-        CGSize { width: EDITOR_WIDTH as f64, height: EDITOR_HEIGHT as f64 },
-    ))
+    guard(null_mut(), || {
+        ui_view_for_audio_unit(
+            null_mut(),
+            null_mut(),
+            audio_unit,
+            CGSize {
+                width: EDITOR_WIDTH as f64,
+                height: EDITOR_HEIGHT as f64,
+            },
+        )
+    })
 }
 
 unsafe extern "C" fn ui_view_for_audio_unit(
@@ -869,7 +909,10 @@ unsafe extern "C" fn ui_view_for_audio_unit(
 
     let frame = CGRect {
         origin: CGPoint { x: 0.0, y: 0.0 },
-        size: CGSize { width: EDITOR_WIDTH as f64, height: EDITOR_HEIGHT as f64 },
+        size: CGSize {
+            width: EDITOR_WIDTH as f64,
+            height: EDITOR_HEIGHT as f64,
+        },
     };
     let view = send0(view_cls, sel("alloc"));
     let init: unsafe extern "C" fn(Id, Sel, CGRect) -> Id =
@@ -889,7 +932,13 @@ unsafe extern "C" fn ui_view_for_audio_unit(
     let ta_alloc = send0(tracking_cls, sel("alloc"));
     let ta_init: unsafe extern "C" fn(Id, Sel, CGRect, u64, Id, Id) -> Id =
         transmute(objc_msgSend as *const c_void);
-    let zero = CGRect { origin: CGPoint { x: 0.0, y: 0.0 }, size: CGSize { width: 0.0, height: 0.0 } };
+    let zero = CGRect {
+        origin: CGPoint { x: 0.0, y: 0.0 },
+        size: CGSize {
+            width: 0.0,
+            height: 0.0,
+        },
+    };
     let tracking = ta_init(
         ta_alloc,
         sel("initWithRect:options:owner:userInfo:"),

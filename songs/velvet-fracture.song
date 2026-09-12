@@ -1,0 +1,115 @@
+# Velvet Fracture — one five-note motif becoming its own chord
+#
+# There is no arp-to-pad transition. One physical patch plays one continuous
+# stream of ascending notes. Seven compact harmonies climb into Amaj9; the last
+# slow Amaj9 cycle and every accelerated cycle are literally the same five note
+# sequence. One exponential clock passes through that boundary without a kink.
+
+bpm 69
+gate 0.72
+tail 0.14
+
+section REACH   0..20
+section RUSH    20..90
+section SETTLE  90..140
+section CHORD   140..343.6
+
+# One exponential accelerando lasts 17.32 seconds: there is no tempo breakpoint
+# where the composed phrase becomes the repeated motif. Half-beat notes contract
+# from 432 ms to 5 ms. The five-note Amaj9 therefore reaches 40 complete cycles
+# per second before its final twenty cycles settle into the held chord.
+automate bpm
+  69 6000:90@exp R:253.6
+
+# The late space is a dark algorithmic reverb. Spring, chorus, tape, fuzz, and
+# noise remain defeated; none of them participates in the chord illusion.
+automate noise
+  0
+automate fuzz
+  0
+automate spring
+  0
+automate reverb_wet
+  0.06 R:15 0.54:125@smooth R:203.6
+automate reverb_decay
+  0.55 R:15 0.93:125@smooth R:203.6
+automate reverb_pre
+  0.008 R:15 0.026:125@smooth R:203.6
+automate reverb_tone
+  6200 R:15 4700:125@smooth R:203.6
+automate chorus_mode
+  0
+automate chorus_mix
+  0
+automate chorus_rate
+  0.1
+automate chorus_depth
+  0
+automate tape_wow
+  0
+automate tape_flutter
+  0
+automate tape_drive
+  0
+automate tape_age
+  0
+automate bend
+  0
+automate mod_wheel
+  0
+automate pedal
+  0 R:17.5 1 R:326.1 1
+
+# Eight compact five-note cells form one melodic climb. Amaj9 and Gmaj9 each
+# receive a one-tone 6/9 variation; F#m9 and C#m9 provide the serene minor
+# middle; E13sus adds restrained dominant tension. Sustain begins with cell
+# eight, the first slow statement of the exact Amaj9 motif that follows. By beat
+# 20 those same five cards are already held, so the score contains no handoff.
+track arp patch=velvet-fracture-voice len=0.5 vel=0.76 gain=0.78 reverb_send=0 spring_send=0 chorus_send=0 pan=0
+  A0@0.94 C#1@0.74 E1@0.80 G#1@0.68 B1@0.73
+  A0@0.90 C#1@0.73 E1@0.79 F#1@0.69 B1@0.74
+  G1@0.91 B1@0.73 D2@0.80 F#2@0.69 A2@0.76
+  G1@0.88 B1@0.72 D2@0.78 E2@0.70 A2@0.75
+  F#2@0.90 A2@0.74 C#3@0.81 E3@0.69 G#3@0.76
+  C#3@0.88 E3@0.73 G#3@0.80 B3@0.69 D#4@0.75
+  E3@0.90 A3@0.72 B3@0.79 C#4@0.69 D4@0.75
+  A3@0.90 C#4@0.74 E4@0.78 G#4@0.68 B4@0.72
+  ((A3@0.90 C#4@0.74 E4@0.78 G#4@0.68 B4@0.72)x2)x24
+
+# VCA: strong, long bass articulation gives way continuously to overlap. By the
+# plateau, a same-note retrigger changes almost nothing; fifty beats at full
+# speed settle sustain to unity before events stop.
+automate arp.attack
+  0.012 0.006:20@smooth 0.160:70@smooth 0.450:50@smooth R:203.6
+automate arp.decay
+  0.90 0.28:20@smooth 1.40:70@smooth 1.80:50@smooth R:203.6
+automate arp.sustain
+  0.42 0.38:20@smooth 0.90:70@smooth 1.00:50@smooth R:203.6
+automate arp.release
+  0.40 0.18:20@smooth 0.10:70@smooth 0.07:50@smooth R:203.6
+automate arp.gain
+  0.76 0.64:17.5@smooth 0.40:2.5@log
+  0.4203:1.517@smooth 0.4061:3.658@smooth 0.3595:4.471@smooth
+  0.3101:5.755@smooth 0.2489:8.086@smooth 0.2034:13.714@smooth
+  0.1668:32.800@smooth 0.1752:117.552@smooth
+  0.1773:100@smooth R:36.048
+
+# VCF follows the same continuous arc. Cutoff opens with register while envelope
+# amount recedes; over SETTLE, sustain reaches unity and modulation reaches zero,
+# so ending the triggers cannot expose one last filter attack.
+automate arp.filter_attack
+  0.004 0.005:20@smooth 0.180:70@smooth 0.500:50@smooth R:203.6
+automate arp.filter_decay
+  0.72 0.30:20@smooth 1.25:70@smooth 1.70:50@smooth R:203.6
+automate arp.filter_sustain
+  0.56 0.44:20@smooth 0.88:70@smooth 1.00:50@smooth R:203.6
+automate arp.filter_release
+  0.32 0.17:20@smooth 0.09:70@smooth 0.065:50@smooth R:203.6
+automate arp.filter_env
+  2.80 1.60:20@smooth 0.34:70@smooth 0.00:50@smooth R:203.6
+automate arp.cutoff
+  560 1900:20@exp 3200:70@exp 3400:50@smooth R:203.6
+automate arp.resonance
+  0.26 0.20:20@smooth 0.15:70@smooth 0.13:50@smooth R:203.6
+automate arp.drive
+  3.55 3.25:20@smooth 3.05:70@smooth 3.00:50@smooth R:203.6

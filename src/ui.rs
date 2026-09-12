@@ -1,8 +1,8 @@
+use eframe::egui::epaint::Mesh;
 use eframe::egui::{
     self, pos2, vec2, Align2, Color32, CornerRadius, CursorIcon, FontId, Key, Rect, RichText,
     Sense, Shape, Stroke, TextureOptions, Vec2,
 };
-use eframe::egui::epaint::Mesh;
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
@@ -606,15 +606,12 @@ impl SynthUI {
         self.handle_keyboard_input(ctx);
 
         egui::TopBottomPanel::top("header")
-            .frame(
-                egui::Frame::NONE
-                    .inner_margin(egui::Margin {
-                        left: 86,
-                        right: 20,
-                        top: 12,
-                        bottom: 10,
-                    }),
-            )
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin {
+                left: 86,
+                right: 20,
+                top: 12,
+                bottom: 10,
+            }))
             .show(ctx, |ui| self.draw_header(ui));
 
         egui::TopBottomPanel::bottom("keyboard")
@@ -675,8 +672,7 @@ impl SynthUI {
     /// Patches apply live, so you can morph a held chord between them.
     fn draw_preset_strip(&mut self, ui: &mut egui::Ui) {
         let height = 26.0;
-        let (bar, _) =
-            ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+        let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
         let painter = ui.painter();
         painter.rect_filled(bar, CornerRadius::same(8), INSET);
 
@@ -772,14 +768,22 @@ impl SynthUI {
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                if step_button(ui, "+").on_hover_text("octave up · arrow-up or +").clicked() {
+                if step_button(ui, "+")
+                    .on_hover_text("octave up · arrow-up or +")
+                    .clicked()
+                {
                     self.shift_octave(1);
                 }
                 let (chip, chip_resp) = ui.allocate_exact_size(vec2(58.0, 24.0), Sense::hover());
                 chip_resp.on_hover_text("octave · arrow keys or + / -");
                 let painter = ui.painter();
                 painter.rect_filled(chip, CornerRadius::same(6), INSET);
-                painter.rect_stroke(chip, CornerRadius::same(6), Stroke::new(1.0, WELL_LINE), egui::StrokeKind::Inside);
+                painter.rect_stroke(
+                    chip,
+                    CornerRadius::same(6),
+                    Stroke::new(1.0, WELL_LINE),
+                    egui::StrokeKind::Inside,
+                );
                 painter.text(
                     chip.center(),
                     Align2::CENTER_CENTER,
@@ -787,7 +791,10 @@ impl SynthUI {
                     FontId::monospace(10.5),
                     CYAN,
                 );
-                if step_button(ui, "-").on_hover_text("octave down · arrow-down or -").clicked() {
+                if step_button(ui, "-")
+                    .on_hover_text("octave down · arrow-down or -")
+                    .clicked()
+                {
                     self.shift_octave(-1);
                 }
             });
@@ -804,7 +811,12 @@ impl SynthUI {
             .set(bg_idx, Shape::Vec(rail_shapes(rail)));
     }
 
-    fn draw_oscillator_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>, fill: Option<f32>) {
+    fn draw_oscillator_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        tex: Option<&mut Textures>,
+        fill: Option<f32>,
+    ) {
         card(ui, "Oscillator", tex, fill, |ui| {
             ui.horizontal(|ui| {
                 ui.label(legend("osc 1"));
@@ -831,9 +843,7 @@ impl SynthUI {
                     Param::Detune,
                     &mut self.detune,
                     7.0,
-                    |v| {
-                    format!("{:.0} ct", v)
-                },
+                    |v| format!("{:.0} ct", v),
                 );
                 param_knob(
                     ui,
@@ -870,12 +880,12 @@ impl SynthUI {
                     &mut self.glide,
                     0.0,
                     |v| {
-                    if v < 0.001 {
-                        "off".into()
-                    } else {
-                        fmt_time(v)
-                    }
-                },
+                        if v < 0.001 {
+                            "off".into()
+                        } else {
+                            fmt_time(v)
+                        }
+                    },
                 );
             });
             // The other two oscillator sections: a voice is three
@@ -886,15 +896,27 @@ impl SynthUI {
                 for which in 1..=2usize {
                     ui.label(legend(if which == 1 { "osc 2" } else { "osc 3" }));
                     let (wave, pitch, level) = if which == 1 {
-                        (&mut self.osc2_wave, &mut self.osc2_pitch, &mut self.osc2_level)
+                        (
+                            &mut self.osc2_wave,
+                            &mut self.osc2_pitch,
+                            &mut self.osc2_level,
+                        )
                     } else {
-                        (&mut self.osc3_wave, &mut self.osc3_pitch, &mut self.osc3_level)
+                        (
+                            &mut self.osc3_wave,
+                            &mut self.osc3_pitch,
+                            &mut self.osc3_level,
+                        )
                     };
                     let id = if which == 1 { "osc2wave" } else { "osc3wave" };
                     ui.vertical(|ui| {
                         ui.add_space(10.0);
                         if waveform_selector(ui, id, wave) {
-                            let p = if which == 1 { Param::Osc2Wave } else { Param::Osc3Wave };
+                            let p = if which == 1 {
+                                Param::Osc2Wave
+                            } else {
+                                Param::Osc3Wave
+                            };
                             p.apply(&mut self.voice_manager.lock(), *wave as u8 as f32);
                         }
                     });
@@ -903,7 +925,15 @@ impl SynthUI {
                     } else {
                         (Param::Osc3Level, Param::Osc3Pitch)
                     };
-                    param_knob(ui, &self.voice_manager, "Level", p_level, level, 0.72, fmt_pct);
+                    param_knob(
+                        ui,
+                        &self.voice_manager,
+                        "Level",
+                        p_level,
+                        level,
+                        0.72,
+                        fmt_pct,
+                    );
                     param_knob(
                         ui,
                         &self.voice_manager,
@@ -919,12 +949,28 @@ impl SynthUI {
                 }
                 ui.add_space(10.0);
                 ui.label(legend("circuit"));
-                let circ_sel = if self.circuit == CircuitModel::Arp { 1 } else { 0 };
+                let circ_sel = if self.circuit == CircuitModel::Arp {
+                    1
+                } else {
+                    0
+                };
                 if let Some(i) = segmented(ui, "circuit", &["MOOG", "ARP"], circ_sel) {
-                    self.circuit = if i == 1 { CircuitModel::Arp } else { CircuitModel::Moog };
+                    self.circuit = if i == 1 {
+                        CircuitModel::Arp
+                    } else {
+                        CircuitModel::Moog
+                    };
                     Param::CircuitSel.apply(&mut self.voice_manager.lock(), i as f32);
                 }
-                param_knob(ui, &self.voice_manager, "FM", Param::OscFm, &mut self.osc_fm, 0.0, fmt_pct);
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "FM",
+                    Param::OscFm,
+                    &mut self.osc_fm,
+                    0.0,
+                    fmt_pct,
+                );
                 param_knob(
                     ui,
                     &self.voice_manager,
@@ -944,7 +990,12 @@ impl SynthUI {
         });
     }
 
-    fn draw_envelope_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>, fill: Option<f32>) {
+    fn draw_envelope_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        tex: Option<&mut Textures>,
+        fill: Option<f32>,
+    ) {
         card(ui, "Envelope", tex, fill, |ui| {
             ui.horizontal(|ui| {
                 param_knob(
@@ -987,7 +1038,12 @@ impl SynthUI {
         });
     }
 
-    fn draw_filter_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>, fill: Option<f32>) {
+    fn draw_filter_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        tex: Option<&mut Textures>,
+        fill: Option<f32>,
+    ) {
         card(ui, "Filter", tex, fill, |ui| {
             ui.horizontal(|ui| {
                 param_knob(
@@ -1048,7 +1104,12 @@ impl SynthUI {
         });
     }
 
-    fn draw_filter_env_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>, fill: Option<f32>) {
+    fn draw_filter_env_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        tex: Option<&mut Textures>,
+        fill: Option<f32>,
+    ) {
         card(ui, "Filter Env", tex, fill, |ui| {
             ui.horizontal(|ui| {
                 param_knob(
@@ -1058,9 +1119,7 @@ impl SynthUI {
                     Param::FilterEnvAmount,
                     &mut self.fenv_amount,
                     0.0,
-                    |v| {
-                    format!("{:+.1} oct", v)
-                },
+                    |v| format!("{:+.1} oct", v),
                 );
                 param_knob(
                     ui,
@@ -1112,9 +1171,7 @@ impl SynthUI {
                     Param::LfoRate,
                     &mut self.lfo_rate,
                     1.0,
-                    |v| {
-                    format!("{:.2} Hz", v)
-                },
+                    |v| format!("{:.2} Hz", v),
                 );
                 param_knob(
                     ui,
@@ -1124,16 +1181,16 @@ impl SynthUI {
                     &mut self.lfo_shape,
                     0.5,
                     |v| {
-                    if v < 0.15 {
-                        "saw".into()
-                    } else if v > 0.85 {
-                        "ramp".into()
-                    } else if (0.4..=0.6).contains(&v) {
-                        "tri".into()
-                    } else {
-                        format!("{:.2}", v)
-                    }
-                },
+                        if v < 0.15 {
+                            "saw".into()
+                        } else if v > 0.85 {
+                            "ramp".into()
+                        } else if (0.4..=0.6).contains(&v) {
+                            "tri".into()
+                        } else {
+                            format!("{:.2}", v)
+                        }
+                    },
                 );
                 param_knob(
                     ui,
@@ -1142,9 +1199,7 @@ impl SynthUI {
                     Param::LfoPitch,
                     &mut self.lfo_pitch,
                     0.0,
-                    |v| {
-                    format!("{:.0} ct", v)
-                },
+                    |v| format!("{:.0} ct", v),
                 );
                 param_knob(
                     ui,
@@ -1153,9 +1208,7 @@ impl SynthUI {
                     Param::LfoFilter,
                     &mut self.lfo_filter,
                     0.0,
-                    |v| {
-                    format!("{:.2} oct", v)
-                },
+                    |v| format!("{:.2} oct", v),
                 );
                 param_knob(
                     ui,
@@ -1170,7 +1223,12 @@ impl SynthUI {
         });
     }
 
-    fn draw_effects_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>, fill: Option<f32>) {
+    fn draw_effects_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        tex: Option<&mut Textures>,
+        fill: Option<f32>,
+    ) {
         card(ui, "Effects", tex, fill, |ui| {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
@@ -1203,9 +1261,7 @@ impl SynthUI {
                             Param::ChorusRate,
                             &mut self.chorus_rate,
                             0.5,
-                            |v| {
-                            format!("{:.1} Hz", v)
-                        },
+                            |v| format!("{:.1} Hz", v),
                         );
                         param_knob(
                             ui,
@@ -1316,7 +1372,12 @@ impl SynthUI {
     /// The rhythm section: the 909 board's 21 knobs in one dense row
     /// (voice names ride the knob labels; the pads live on the keyboard
     /// shelf, under the right hand where the QWERTY cluster is).
-    fn draw_rhythm_card(&mut self, ui: &mut egui::Ui, tex: Option<&mut Textures>, fill: Option<f32>) {
+    fn draw_rhythm_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        tex: Option<&mut Textures>,
+        fill: Option<f32>,
+    ) {
         card(ui, "Rhythm 909", tex, fill, |ui| {
             ui.spacing_mut().item_spacing.x = 3.0;
             // Full-word group headers; the pictographic glyphs live only
@@ -1389,7 +1450,12 @@ impl SynthUI {
         let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
         let painter = ui.painter();
         painter.rect_filled(rect, CornerRadius::same(10), INSET);
-        painter.rect_stroke(rect, CornerRadius::same(10), Stroke::new(1.0, HAIRLINE), egui::StrokeKind::Inside);
+        painter.rect_stroke(
+            rect,
+            CornerRadius::same(10),
+            Stroke::new(1.0, HAIRLINE),
+            egui::StrokeKind::Inside,
+        );
 
         let inner = rect.shrink2(vec2(14.0, 10.0));
         painter.line_segment(
@@ -1452,7 +1518,11 @@ impl SynthUI {
             mean_pts.push(pos2(x, y_of(sum / (s1 - s0) as f32)));
             // Envelope must cover at least one pixel so silence stays visible
             let (top_y, bot_y) = (y_of(hi), y_of(lo));
-            let bot_y = if bot_y - top_y < 1.0 { top_y + 1.0 } else { bot_y };
+            let bot_y = if bot_y - top_y < 1.0 {
+                top_y + 1.0
+            } else {
+                bot_y
+            };
             band.push((x, bot_y));
         }
         // Filled min/max envelope as a translucent band
@@ -1490,8 +1560,18 @@ impl SynthUI {
         const LOWER: [&str; 12] = ["Z", "S", "X", "D", "C", "V", "G", "B", "H", "N", "J", "M"];
         const UPPER1: [&str; 12] = ["Q", "2", "W", "3", "E", "R", "5", "T", "6", "Y", "7", "U"];
         const UPPER2: [Option<&str>; 12] = [
-            Some("I"), Some("9"), Some("O"), Some("0"), Some("P"), Some("["),
-            Some("="), Some("]"), None, None, None, None,
+            Some("I"),
+            Some("9"),
+            Some("O"),
+            Some("0"),
+            Some("P"),
+            Some("["),
+            Some("="),
+            Some("]"),
+            None,
+            None,
+            None,
+            None,
         ];
         match visual_octave {
             0 => Some(LOWER[key_index]),
@@ -1521,10 +1601,8 @@ impl SynthUI {
         // ring and keeps arrow keys free for octave shifting
         response.surrender_focus();
         let rect = Rect::from_min_size(full_rect.min, Vec2::new(piano_width, white_key_height));
-        let pads_rect = Rect::from_min_max(
-            pos2(rect.right() + gap, full_rect.top()),
-            full_rect.max,
-        );
+        let pads_rect =
+            Rect::from_min_max(pos2(rect.right() + gap, full_rect.top()), full_rect.max);
         self.handle_mouse_input(ui, rect, &response);
         self.draw_drum_pads(ui, pads_rect, &response);
 
@@ -1690,7 +1768,12 @@ impl SynthUI {
                         );
                         painter.rect_filled(edge, rounding, EBONY_EDGE);
                     }
-                    painter.rect_stroke(key_rect, rounding, Stroke::new(1.0, INSET), egui::StrokeKind::Inside);
+                    painter.rect_stroke(
+                        key_rect,
+                        rounding,
+                        Stroke::new(1.0, INSET),
+                        egui::StrokeKind::Inside,
+                    );
 
                     if let Some(hint) = self.key_hint(visual_octave, key_index) {
                         painter.text(
@@ -1756,7 +1839,10 @@ impl SynthUI {
             }
             // Lit top face, like the ebony keys
             painter.add(gradient_quad(
-                Rect::from_min_max(r.min + vec2(1.0, 0.0), pos2(r.right() - 1.0, r.top() + 12.0)),
+                Rect::from_min_max(
+                    r.min + vec2(1.0, 0.0),
+                    pos2(r.right() - 1.0, r.top() + 12.0),
+                ),
                 Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 26),
                 Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 0),
             ));
@@ -1799,7 +1885,11 @@ impl SynthUI {
                 pos2(rect.left() + i as f32 * (top_w + gap), rect.top() + 2.0),
                 vec2(top_w, row_h),
             );
-            let act = if ghost { self.ghost_flash } else { activity[act_idx] };
+            let act = if ghost {
+                self.ghost_flash
+            } else {
+                activity[act_idx]
+            };
             draw_pad(painter, pad_rect, act_idx, ghost, hint, act, i);
         }
         for (i, &(name, hint, _, _, ghost)) in PAD_BOTTOM.iter().enumerate() {
@@ -1811,7 +1901,15 @@ impl SynthUI {
                 ),
                 vec2(bot_w, row_h),
             );
-            draw_pad(painter, pad_rect, act_idx, ghost, hint, activity[act_idx], 4 + i);
+            draw_pad(
+                painter,
+                pad_rect,
+                act_idx,
+                ghost,
+                hint,
+                activity[act_idx],
+                4 + i,
+            );
         }
 
         // Strike on press edge; dragging across pads re-strikes, drummily
@@ -1827,9 +1925,11 @@ impl SynthUI {
                     .unwrap_or(0.7);
                 let vel = (base_vel * (0.6 + 0.6 * depth)).clamp(0.1, 1.0);
                 if let Some(note) = crate::drums::note_from_name(name) {
-                    self.voice_manager
-                        .lock()
-                        .note_on_channel(note, vel, crate::drums::DRUM_CHANNEL);
+                    self.voice_manager.lock().note_on_channel(
+                        note,
+                        vel,
+                        crate::drums::DRUM_CHANNEL,
+                    );
                     if idx == 3 {
                         self.ghost_flash = 1.0;
                     }
@@ -1888,9 +1988,38 @@ impl SynthUI {
         // The two manuals: Z row + home-row sharps (one octave), Q row +
         // number-row sharps (an octave and a fifth, one octave up)
         const KEYS: [Key; 32] = [
-            Key::Z, Key::S, Key::X, Key::D, Key::C, Key::V, Key::G, Key::B, Key::H, Key::N, Key::J, Key::M,
-            Key::Q, Key::Num2, Key::W, Key::Num3, Key::E, Key::R, Key::Num5, Key::T, Key::Num6, Key::Y, Key::Num7, Key::U,
-            Key::I, Key::Num9, Key::O, Key::Num0, Key::P, Key::OpenBracket, Key::Equals, Key::CloseBracket,
+            Key::Z,
+            Key::S,
+            Key::X,
+            Key::D,
+            Key::C,
+            Key::V,
+            Key::G,
+            Key::B,
+            Key::H,
+            Key::N,
+            Key::J,
+            Key::M,
+            Key::Q,
+            Key::Num2,
+            Key::W,
+            Key::Num3,
+            Key::E,
+            Key::R,
+            Key::Num5,
+            Key::T,
+            Key::Num6,
+            Key::Y,
+            Key::Num7,
+            Key::U,
+            Key::I,
+            Key::Num9,
+            Key::O,
+            Key::Num0,
+            Key::P,
+            Key::OpenBracket,
+            Key::Equals,
+            Key::CloseBracket,
         ];
 
         // Octave switching lives on the arrows alone now — every other
@@ -1907,9 +2036,7 @@ impl SynthUI {
         let chord = ctx.input(|i| i.modifiers.command || i.modifiers.alt);
 
         for &key in KEYS.iter() {
-            if ctx.input(|i| i.key_pressed(key))
-                && !chord
-                && !self.pressed_keys.contains_key(&key)
+            if ctx.input(|i| i.key_pressed(key)) && !chord && !self.pressed_keys.contains_key(&key)
             {
                 if let Some(note) = self.key_to_note(key) {
                     self.play_note(note, 0.85);
@@ -1933,10 +2060,16 @@ impl SynthUI {
             {
                 self.pressed_drum_keys.insert(key);
                 if let Some(note) = crate::drums::note_from_name(name) {
-                    let vel = if shift { (base_vel + 0.3).min(1.0) } else { base_vel };
-                    self.voice_manager
-                        .lock()
-                        .note_on_channel(note, vel, crate::drums::DRUM_CHANNEL);
+                    let vel = if shift {
+                        (base_vel + 0.3).min(1.0)
+                    } else {
+                        base_vel
+                    };
+                    self.voice_manager.lock().note_on_channel(
+                        note,
+                        vel,
+                        crate::drums::DRUM_CHANNEL,
+                    );
                     if key == Key::Quote {
                         self.ghost_flash = 1.0;
                     }
@@ -2029,12 +2162,38 @@ impl SynthUI {
 
     fn key_to_note(&self, key: Key) -> Option<u8> {
         let base_index = match key {
-            Key::Z => 0, Key::S => 1, Key::X => 2, Key::D => 3, Key::C => 4, Key::V => 5,
-            Key::G => 6, Key::B => 7, Key::H => 8, Key::N => 9, Key::J => 10, Key::M => 11,
-            Key::Q => 12, Key::Num2 => 13, Key::W => 14, Key::Num3 => 15, Key::E => 16, Key::R => 17,
-            Key::Num5 => 18, Key::T => 19, Key::Num6 => 20, Key::Y => 21, Key::Num7 => 22, Key::U => 23,
-            Key::I => 24, Key::Num9 => 25, Key::O => 26, Key::Num0 => 27, Key::P => 28,
-            Key::OpenBracket => 29, Key::Equals => 30, Key::CloseBracket => 31,
+            Key::Z => 0,
+            Key::S => 1,
+            Key::X => 2,
+            Key::D => 3,
+            Key::C => 4,
+            Key::V => 5,
+            Key::G => 6,
+            Key::B => 7,
+            Key::H => 8,
+            Key::N => 9,
+            Key::J => 10,
+            Key::M => 11,
+            Key::Q => 12,
+            Key::Num2 => 13,
+            Key::W => 14,
+            Key::Num3 => 15,
+            Key::E => 16,
+            Key::R => 17,
+            Key::Num5 => 18,
+            Key::T => 19,
+            Key::Num6 => 20,
+            Key::Y => 21,
+            Key::Num7 => 22,
+            Key::U => 23,
+            Key::I => 24,
+            Key::Num9 => 25,
+            Key::O => 26,
+            Key::Num0 => 27,
+            Key::P => 28,
+            Key::OpenBracket => 29,
+            Key::Equals => 30,
+            Key::CloseBracket => 31,
             _ => return None,
         };
 

@@ -42,7 +42,10 @@ fn build_float_param(def: &FloatDef) -> FloatParam {
             max: def.max,
             factor: FloatRange::skew_factor(-2.0),
         },
-        _ => FloatRange::Linear { min: def.min, max: def.max },
+        _ => FloatRange::Linear {
+            min: def.min,
+            max: def.max,
+        },
     };
     let param = FloatParam::new(def.name, def.default, range);
     match def.display {
@@ -121,9 +124,10 @@ impl ChoiceKind {
                 ChoiceKind::Circuit(EnumParam::new(name, CircuitParam::from_index(def.default)))
             }
             "sync" => ChoiceKind::Sync(EnumParam::new(name, SyncParam::from_index(def.default))),
-            "chorus_mode" => {
-                ChoiceKind::Chorus(EnumParam::new(name, ChorusModeParam::from_index(def.default)))
-            }
+            "chorus_mode" => ChoiceKind::Chorus(EnumParam::new(
+                name,
+                ChorusModeParam::from_index(def.default),
+            )),
             other => panic!("no typed EnumParam for selector `{other}`"),
         }
     }
@@ -177,9 +181,10 @@ impl Default for PatinaParams {
         // running iterator in `param_map` re-interleaves them correctly.
         for def in host_params::param_defs() {
             match def {
-                ParamDef::Float(fd) => {
-                    floats.push(FloatSlot { param: build_float_param(&fd), def: fd })
-                }
+                ParamDef::Float(fd) => floats.push(FloatSlot {
+                    param: build_float_param(&fd),
+                    def: fd,
+                }),
                 ParamDef::Choice(cd) => {
                     let kind = ChoiceKind::from_def(&cd);
                     choices.push(ChoiceSlot { def: cd, kind });
@@ -202,12 +207,16 @@ unsafe impl Params for PatinaParams {
             .iter()
             .map(|def| {
                 let ptr = match def {
-                    ParamDef::Choice(_) => {
-                        choices.next().expect("one ChoiceSlot per choice def").kind.as_ptr()
-                    }
-                    ParamDef::Float(_) => {
-                        floats.next().expect("one FloatSlot per float def").param.as_ptr()
-                    }
+                    ParamDef::Choice(_) => choices
+                        .next()
+                        .expect("one ChoiceSlot per choice def")
+                        .kind
+                        .as_ptr(),
+                    ParamDef::Float(_) => floats
+                        .next()
+                        .expect("one FloatSlot per float def")
+                        .param
+                        .as_ptr(),
                 };
                 (def.id().to_string(), ptr, String::new())
             })
@@ -335,7 +344,12 @@ impl Plugin for PatinaPlugin {
                     break;
                 }
                 match event {
-                    NoteEvent::NoteOn { note, velocity, channel, .. } => {
+                    NoteEvent::NoteOn {
+                        note,
+                        velocity,
+                        channel,
+                        ..
+                    } => {
                         host_params::note_on(&mut self.vm, channel, note, velocity);
                     }
                     NoteEvent::NoteOff { note, channel, .. }
@@ -344,13 +358,12 @@ impl Plugin for PatinaPlugin {
                     }
                     // 0.5 is center; a standard wheel spans +/-2 semitones
                     NoteEvent::MidiPitchBend { value, .. } => {
-                        self.vm.set_pitch_bend((value - 0.5) * 2.0 * PITCH_BEND_SEMITONES);
+                        self.vm
+                            .set_pitch_bend((value - 0.5) * 2.0 * PITCH_BEND_SEMITONES);
                     }
                     NoteEvent::MidiCC { cc, value, .. } => match cc {
                         control_change::MODULATION_MSB => self.vm.set_mod_wheel(value),
-                        control_change::DAMPER_PEDAL => {
-                            self.vm.set_sustain_pedal(value >= 0.5)
-                        }
+                        control_change::DAMPER_PEDAL => self.vm.set_sustain_pedal(value >= 0.5),
                         _ => (),
                     },
                     _ => (),
@@ -415,7 +428,12 @@ mod tests {
                 "variants for `{}`",
                 slot.def.id
             );
-            assert_eq!(slot.kind.index(), slot.def.default, "default for `{}`", slot.def.id);
+            assert_eq!(
+                slot.kind.index(),
+                slot.def.default,
+                "default for `{}`",
+                slot.def.id
+            );
         }
         // And the plugin backs every selector the table declares.
         let table_choices = host_params::param_defs()
@@ -428,10 +446,15 @@ mod tests {
     #[test]
     fn param_map_follows_table_order() {
         let params = PatinaParams::default();
-        let ids: Vec<String> =
-            params.param_map().into_iter().map(|(id, _, _)| id).collect();
-        let table_ids: Vec<String> =
-            host_params::param_defs().iter().map(|d| d.id().to_string()).collect();
+        let ids: Vec<String> = params
+            .param_map()
+            .into_iter()
+            .map(|(id, _, _)| id)
+            .collect();
+        let table_ids: Vec<String> = host_params::param_defs()
+            .iter()
+            .map(|d| d.id().to_string())
+            .collect();
         assert_eq!(ids, table_ids);
     }
 }

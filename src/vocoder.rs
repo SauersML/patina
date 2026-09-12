@@ -253,7 +253,11 @@ impl Vocoder {
             }
             // Full-wave rectifier into the RC lag
             let rect = m.abs();
-            let k = if rect > ch.env { self.attack } else { self.release };
+            let k = if rect > ch.env {
+                self.attack
+            } else {
+                self.release
+            };
             ch.env += (rect - ch.env) * k;
 
             let nm = ch.noise_mix.max(self.unvoiced_mix);
@@ -306,11 +310,21 @@ mod tests {
         // Phase 2: modulator = 150 Hz buzz (a voiced "speech" stand-in)
         let mut loud = 0.0f32;
         for n in 0..(sr as usize / 2) {
-            let m = if (n as f32 * 150.0 / sr) % 1.0 < 0.5 { 0.5 } else { -0.5 };
+            let m = if (n as f32 * 150.0 / sr) % 1.0 < 0.5 {
+                0.5
+            } else {
+                -0.5
+            };
             loud = loud.max(v.process(m, saw(n)).abs());
         }
-        assert!(quiet < 0.05, "silent modulator must mute the carrier, got {quiet}");
-        assert!(loud > 20.0 * quiet.max(1e-6), "speech should open the VCAs: {loud} vs {quiet}");
+        assert!(
+            quiet < 0.05,
+            "silent modulator must mute the carrier, got {quiet}"
+        );
+        assert!(
+            loud > 20.0 * quiet.max(1e-6),
+            "speech should open the VCAs: {loud} vs {quiet}"
+        );
         assert!(loud.is_finite());
     }
 
@@ -382,7 +396,10 @@ mod tests {
             db < 3.0,
             "per-band tanh must cap the level: +6 dB carrier moved output {db:+.2} dB"
         );
-        assert!(unity > 0.05, "the board should still pass signal, rms={unity}");
+        assert!(
+            unity > 0.05,
+            "the board should still pass signal, rms={unity}"
+        );
     }
 
     /// TalkBox mode is the tube: compared to the studio vocoder, the

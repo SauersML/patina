@@ -1,7 +1,7 @@
-use crate::oscillator::{CircuitModel, Oscillator, Waveform, PROGRAM_V};
 use crate::envelope::Envelope;
 use crate::filter::LadderFilter;
 use crate::hpf::HighPassLadder;
+use crate::oscillator::{CircuitModel, Oscillator, Waveform, PROGRAM_V};
 use crate::substrate::SubstrateState;
 
 /// How much velocity opens the filter, in octaves at full velocity swing.
@@ -55,8 +55,12 @@ pub struct Voice {
     velocity: f32,
     age: u64,
     held: bool,
+    /// Position and energy compensation assigned by the unison stack.
+    /// Card index is deliberately irrelevant: allocation order must never
+    /// collapse a stack onto one side of the stereo field.
     pan_l: f32,
     pan_r: f32,
+    unison_gain: f32,
     filter_env_amount: f32, // octaves, -5..+5
     /// Per-oscillator V/octave scaling tolerance in cents per octave —
     /// the matched-transistor expo converters are never perfectly trimmed,
@@ -77,6 +81,12 @@ pub struct Voice {
     /// per-sample slew step (1.0 = effectively instant).
     glide_offset: f32,
     glide_rate: f32,
+    /// Channel-local pitch automation. Separate song tracks can therefore
+    /// glide chord voices to different exact notes without a global bend.
+    /// The ratio is slewed here so automation never steps.
+    pitch_shift_ratio: f32,
+    pitch_shift_target: f32,
+    pitch_shift_k: f32,
     /// External pitch CV (octaves from A440) — the voice box's
     /// performance line. While present it replaces note pitch and
     /// glide: the curve carries its own portamento, scoops and vibrato.
@@ -130,10 +140,6 @@ pub struct Voice {
     /// This card's sensitivity to the shared chassis state (rail and heat):
     /// every board reacts to the same environment, each by its own amount.
     substrate_sens: f32,
-    /// 902-style VCA control feedthrough, post-trim residue: the envelope's
-    /// edge couples into the audio — the "thump" of a fast hardware attack.
-    vca_feedthrough: f32,
-    prev_env: f32,
     /// Pre-filter node history, exposed so the neighbor card can pick up
     /// its capacitively-coupled (differentiated) bleed.
     prev_prefilter: f32,
@@ -147,17 +153,8 @@ pub struct Voice {
 }
 
 impl Voice {
-    pub fn new(sample_rate: f32, index: usize, total: usize) -> Self {
+    pub fn new(sample_rate: f32, index: usize) -> Self {
         let seed = (index as u32).wrapping_add(1);
-
-        // Spread voices across a modest stereo field, equal-power panned
-        let spread = if total > 1 {
-            index as f32 / (total - 1) as f32 - 0.5
-        } else {
-            0.0
-        };
-        let pan = spread * 0.5; // -0.25 .. +0.25
-        let theta = (pan + 1.0) * std::f32::consts::FRAC_PI_4;
 
         let filter_env = Envelope::new(sample_rate);
         filter_env.set_attack(0.005);
@@ -179,7 +176,6 @@ impl Voice {
             (rand01() - 0.5) * 3.0,
         ];
         let substrate_sens = 0.8 + rand01() * 0.4;
-        let vca_feedthrough = rand01() * 0.35;
         // Ring-mod null trim residue: < 10 mV at 5 V program level
         let ring_leak = (rand01() * 0.002, rand01() * 0.002);
 
@@ -201,14 +197,18 @@ impl Voice {
             velocity: 0.0,
             age: 0,
             held: false,
-            pan_l: theta.cos(),
-            pan_r: theta.sin(),
+            pan_l: std::f32::consts::FRAC_1_SQRT_2,
+            pan_r: std::f32::consts::FRAC_1_SQRT_2,
+            unison_gain: 1.0,
             filter_env_amount: 0.0,
             voct_error,
             common_drift: 0.0,
             drift_rng: seed.wrapping_mul(0x27D4_EB2F) | 1,
             glide_offset: 0.0,
             glide_rate: 1.0,
+            pitch_shift_ratio: 1.0,
+            pitch_shift_target: 1.0,
+            pitch_shift_k: smoothing_coef(0.025, sample_rate),
             cv_override: None,
             sub_level: 0.0,
             osc_pitch_semi: [0.0, 0.0],
@@ -225,13 +225,8 @@ impl Voice {
             ring_leak,
             dc_x1: 0.0,
             dc_y1: 0.0,
-            dc_pole: crate::smoothing::dc_blocker_pole(
-                crate::smoothing::DC_BLOCK_HZ,
-                sample_rate,
-            ),
+            dc_pole: crate::smoothing::dc_blocker_pole(crate::smoothing::DC_BLOCK_HZ, sample_rate),
             substrate_sens,
-            vca_feedthrough,
-            prev_env: 0.0,
             prev_prefilter: 0.0,
             prefilter_delta: 0.0,
         };
@@ -276,10 +271,8 @@ impl Voice {
     fn update_freq_mults(&mut self) {
         let fine = (self.detune_cents / 1200.0 * std::f32::consts::LN_2).exp();
         self.oscs[0].set_freq_mult(1.0);
-        self.oscs[1]
-            .set_freq_mult(fine * (self.osc_pitch_semi[0] / 12.0).exp2());
-        self.oscs[2]
-            .set_freq_mult((self.osc_pitch_semi[1] / 12.0).exp2() / fine);
+        self.oscs[1].set_freq_mult(fine * (self.osc_pitch_semi[0] / 12.0).exp2());
+        self.oscs[2].set_freq_mult((self.osc_pitch_semi[1] / 12.0).exp2() / fine);
     }
 
     pub fn set_filter_env_amount(&mut self, octaves: f32) {
@@ -288,6 +281,22 @@ impl Voice {
 
     pub fn set_glide_rate(&mut self, rate: f32) {
         self.glide_rate = rate.clamp(1e-7, 1.0);
+    }
+
+    /// Move this card by a channel-local number of semitones. The actual
+    /// pitch follows through a short analog-CV-style slew in render.
+    pub fn set_pitch_shift_semitones(&mut self, semitones: f32) {
+        self.pitch_shift_target = (semitones.clamp(-24.0, 24.0) / 12.0).exp2();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pitch_shift_target_for_test(&self) -> f32 {
+        self.pitch_shift_target
+    }
+
+    #[cfg(test)]
+    pub(crate) fn unison_cents_for_test(&self) -> f32 {
+        self.unison_cents
     }
 
     pub fn set_cv_override(&mut self, cv: Option<f32>) {
@@ -335,8 +344,8 @@ impl Voice {
     }
 
     /// Configure this voice from a full parameter snapshot — the song
-    /// engine's per-track patches. Only voice-level parameters apply;
-    /// bus effects, the LFO, and the noise source stay shared.
+    /// engine's per-track patches. Bus effects and noise stay shared;
+    /// per-track LFO routing is resolved by the voice manager.
     pub fn apply_params(&mut self, p: &crate::voice_manager::ParamValues) {
         self.set_waveform(p.waveform);
         self.set_osc_waveform(1, p.osc2_wave);
@@ -381,6 +390,21 @@ impl Voice {
         self.unison_cents = cents.clamp(-50.0, 50.0);
     }
 
+    /// Give this card its explicit place inside one unison stack. Position
+    /// spans -1..+1 across the stack; energy normalization keeps changing
+    /// the unison count from becoming a hidden volume control.
+    pub fn set_unison_stack_position(&mut self, position: f32, count: usize) {
+        let pan = if count > 1 {
+            position.clamp(-1.0, 1.0) * 0.10
+        } else {
+            0.0
+        };
+        let theta = (pan + 1.0) * std::f32::consts::FRAC_PI_4;
+        self.pan_l = theta.cos();
+        self.pan_r = theta.sin();
+        self.unison_gain = 1.0 / (count.max(1) as f32).sqrt();
+    }
+
     pub fn set_key_track(&mut self, amount: f32) {
         self.key_track = amount.clamp(0.0, 1.0);
     }
@@ -409,6 +433,13 @@ impl Voice {
         // scratch or a slow attack would be skipped entirely.
         let same_note = self.held && self.note == Some(note);
 
+        // A reassigned card must not carry an old chord's widening CV into
+        // its new note. Retriggers keep it, because they are the same tone.
+        if !same_note {
+            self.pitch_shift_ratio = 1.0;
+            self.pitch_shift_target = 1.0;
+        }
+
         let new_cv = (note as f32 - 69.0) / 12.0;
         if self.glide_rate < 0.999 {
             // No source CV (the first note, or a chord member that must
@@ -429,9 +460,8 @@ impl Voice {
         for (osc, err_cents_per_oct) in self.oscs.iter().zip(self.voct_error) {
             // V/oct tracking error grows with distance from the calibration
             // point, then the finite reset time flattens the top end
-            let scale = (err_cents_per_oct * octaves_from_ref / 1200.0
-                * std::f32::consts::LN_2)
-                .exp();
+            let scale =
+                (err_cents_per_oct * octaves_from_ref / 1200.0 * std::f32::consts::LN_2).exp();
             let f = frequency * scale;
             osc.set_frequency(f / (1.0 + f * RESET_TIME));
         }
@@ -501,6 +531,9 @@ impl Voice {
         let amp_env = self.envelope.next_sample();
         let filter_env = self.filter_env.next_sample();
 
+        self.pitch_shift_ratio +=
+            (self.pitch_shift_target - self.pitch_shift_ratio) * self.pitch_shift_k;
+
         // Voice-shared drift walk (common controller and supply), roughly
         // twice the size of each core's individual residue
         self.drift_rng ^= self.drift_rng << 13;
@@ -538,7 +571,8 @@ impl Voice {
                 CircuitModel::Moog => 1.0,
                 CircuitModel::Arp => 0.4,
             };
-        let pitch_mult = pitch_mult * (1.0 + (substrate.pitch_mult - 1.0) * temp_sens);
+        let pitch_mult =
+            pitch_mult * self.pitch_shift_ratio * (1.0 + (substrate.pitch_mult - 1.0) * temp_sens);
 
         // The voice's coupling graph is acyclic (every stage buffered, as
         // the schematics show), so integrating stages in topological order
@@ -563,8 +597,13 @@ impl Voice {
             self.fm_mean = 1.0;
             1.0
         };
-        let o1 = self.oscs[0].next_sample(self.common_drift, pitch_mult * fm_mult, pulse_width, None);
-        let sync = if self.sync_on { self.oscs[0].wrap_frac() } else { None };
+        let o1 =
+            self.oscs[0].next_sample(self.common_drift, pitch_mult * fm_mult, pulse_width, None);
+        let sync = if self.sync_on {
+            self.oscs[0].wrap_frac()
+        } else {
+            None
+        };
         let o2 = self.oscs[1].next_sample(self.common_drift, pitch_mult, pulse_width, sync);
         let o3 = self.oscs[2].next_sample(self.common_drift, pitch_mult, pulse_width, None);
         self.prev_osc2 = (o2 / (0.9 * PROGRAM_V)).clamp(-1.0, 1.0);
@@ -580,10 +619,7 @@ impl Voice {
 
         // Volts everywhere: the mixer sums program-level signals into the
         // VCF's summing junction
-        let osc = osc_mix * MIXER_GAIN
-            + self.oscs[0].sub() * self.sub_level * 0.9
-            + noise
-            + bleed;
+        let osc = osc_mix * MIXER_GAIN + self.oscs[0].sub() * self.sub_level * 0.9 + noise + bleed;
 
         // Remember the pre-filter node for the neighbor's trace capacitance
         self.prefilter_delta = osc - self.prev_prefilter;
@@ -613,13 +649,9 @@ impl Voice {
 
         // Gentle velocity curve on amplitude
         let vel_amp = 0.3 + 0.7 * self.velocity * self.velocity;
-        // 902 control feedthrough: the envelope's edge couples into the
-        // audio path (post-trim residue) — fast attacks thump, physically
-        let feedthrough = (amp_env - self.prev_env) * self.vca_feedthrough * PROGRAM_V;
-        self.prev_env = amp_env;
         // The VCA never fully closes: the -60 dB floor keeps the
         // free-running oscillators faintly alive between notes
-        let sample = filtered * (amp_env * vel_amp + VCA_FLOOR) + feedthrough;
+        let sample = filtered * (amp_env * vel_amp + VCA_FLOOR) * self.unison_gain;
 
         (sample * self.pan_l, sample * self.pan_r)
     }
@@ -661,7 +693,7 @@ mod tests {
 
     fn held_voice_f0(fm: f32, osc2_wave: Waveform, osc2_semis: f32, pw: f32) -> f32 {
         let sr = 48000.0;
-        let mut v = Voice::new(sr, 0, 1);
+        let mut v = Voice::new(sr, 0);
         v.set_waveform(Waveform::Sine);
         v.set_osc_waveform(1, osc2_wave);
         v.set_osc_pitch(1, osc2_semis);
@@ -670,7 +702,10 @@ mod tests {
         v.set_fm_amount(fm);
         v.set_filter_cutoff(20000.0);
         v.trigger(69, 1.0, 0, None); // A4
-        let neutral = SubstrateState { pitch_mult: 1.0, cutoff_oct: 0.0 };
+        let neutral = SubstrateState {
+            pitch_mult: 1.0,
+            cutoff_oct: 0.0,
+        };
         // settle past the fm_mean tracker's time constant
         for _ in 0..(sr as usize) {
             v.render_next(0.0, 1.0, 0.0, 0.0, neutral, 0.0);
@@ -709,7 +744,7 @@ mod tests {
     #[test]
     fn a_stolen_card_replays_its_slow_attack() {
         let sr = 48000.0;
-        let mut v = Voice::new(sr, 0, 1);
+        let mut v = Voice::new(sr, 0);
         v.set_waveform(Waveform::Sawtooth);
         v.set_filter_cutoff(18000.0);
         v.set_filter_env_amount(0.0);
@@ -753,9 +788,9 @@ mod tests {
     #[test]
     fn a_card_with_no_source_cv_starts_in_tune() {
         let sr = 48000.0;
-        let mut v = Voice::new(sr, 0, 1);
+        let mut v = Voice::new(sr, 0);
         v.set_glide_rate(1.0 / (2.0 * sr)); // 2 seconds per octave
-        // A glide two octaves long, interrupted well before it arrives
+                                            // A glide two octaves long, interrupted well before it arrives
         v.trigger(48, 1.0, 0, Some((72.0 - 69.0) / 12.0));
         assert!(
             v.glide_remaining().abs() > 1.0,
@@ -780,7 +815,7 @@ mod tests {
         // E1 (~41 Hz) sits right on the coupling's knee, where a moved
         // corner shows up as a level change
         let level_at = |sr: f32| -> f32 {
-            let mut v = Voice::new(sr, 0, 1);
+            let mut v = Voice::new(sr, 0);
             v.set_waveform(Waveform::Sine);
             v.set_filter_cutoff(16000.0);
             v.set_filter_env_amount(0.0);
@@ -818,7 +853,7 @@ mod tests {
         // real time. If the coefficient is hardcoded it races ahead at
         // the higher rate and cancels FM movement it should have passed.
         let travelled_after_one_tau = |sr: f32| -> f32 {
-            let mut v = Voice::new(sr, 0, 1);
+            let mut v = Voice::new(sr, 0);
             v.set_waveform(Waveform::Sine);
             v.set_osc_waveform(1, Waveform::Square);
             v.set_osc_pitch(1, 12.0);

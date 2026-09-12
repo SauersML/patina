@@ -5,9 +5,9 @@
 // sawtooth through triangle to rising ramp. Range follows the Juno-106
 // service endpoints, 0.1-30 Hz.
 //
-// The LFO is GLOBAL — one per instrument, shared by every voice, the way
-// a modular's 901 in low range or the Juno's single LFO drives everything
-// together. Correlated modulation is part of the sound.
+// The live panel LFO is global, like a Juno's single modulator. Song tracks
+// each instantiate this same circuit so a track patch's rate and routing
+// remain local and are never silently discarded.
 
 pub struct Lfo {
     sample_rate: f32,
@@ -67,7 +67,10 @@ mod tests {
         let min = samples.iter().cloned().fold(f32::MAX, f32::min);
         let mean = samples.iter().sum::<f32>() / samples.len() as f32;
         assert!(max > 0.98 && min < -0.98, "full swing: {min}..{max}");
-        assert!(mean.abs() < 0.02, "triangle should be centered, mean={mean}");
+        assert!(
+            mean.abs() < 0.02,
+            "triangle should be centered, mean={mean}"
+        );
     }
 
     #[test]
@@ -78,11 +81,7 @@ mod tests {
         lfo.set_rate(1.0);
         lfo.set_shape(0.9);
         let samples: Vec<f32> = (0..1000).map(|_| lfo.next()).collect();
-        let rising = samples
-            .windows(2)
-            .filter(|w| w[1] > w[0])
-            .count() as f32
-            / 999.0;
+        let rising = samples.windows(2).filter(|w| w[1] > w[0]).count() as f32 / 999.0;
         assert!(
             (0.85..=0.95).contains(&rising),
             "rise fraction should track shape, got {rising}"
@@ -103,6 +102,9 @@ mod tests {
                 peaks += 1;
             }
         }
-        assert!((9..=11).contains(&peaks), "expected ~10 peaks at 5 Hz, got {peaks}");
+        assert!(
+            (9..=11).contains(&peaks),
+            "expected ~10 peaks at 5 Hz, got {peaks}"
+        );
     }
 }

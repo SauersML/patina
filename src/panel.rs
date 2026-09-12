@@ -89,7 +89,12 @@ impl Textures {
         let rgb = panel_render::render_backdrop(w, h);
         let image = panel_render::backdrop_image(w, h, &rgb);
         let backdrop = ctx.load_texture("panel-backdrop", image, TextureOptions::LINEAR);
-        Self { backdrop, backdrop_rgb: rgb, backdrop_size: [w, h], frost: HashMap::new() }
+        Self {
+            backdrop,
+            backdrop_rgb: rgb,
+            backdrop_size: [w, h],
+            frost: HashMap::new(),
+        }
     }
 }
 
@@ -110,9 +115,16 @@ pub fn gradient_quad(rect: Rect, top: Color32, bottom: Color32) -> Shape {
 /// scope, replacing the walnut (blue + orange + brown never resolved).
 pub fn rail_shapes(rect: Rect) -> Vec<Shape> {
     vec![
-        Shape::rect_filled(rect, CornerRadius::ZERO, Color32::from_rgb(0x14, 0x19, 0x1f)),
+        Shape::rect_filled(
+            rect,
+            CornerRadius::ZERO,
+            Color32::from_rgb(0x14, 0x19, 0x1f),
+        ),
         gradient_quad(
-            Rect::from_min_max(rect.min, pos2(rect.right(), rect.top() + rect.height() * 0.5)),
+            Rect::from_min_max(
+                rect.min,
+                pos2(rect.right(), rect.top() + rect.height() * 0.5),
+            ),
             Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 16),
             Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 0),
         ),
@@ -133,7 +145,10 @@ pub fn glass_shapes(rect: Rect, rounding: f32) -> Vec<Shape> {
         shapes.push(Shape::rect_stroke(
             rect.expand(expand),
             CornerRadius::same((rounding + expand) as u8),
-            Stroke::new(2.0, Color32::from_rgba_unmultiplied(0x10, 0x2a, 0x38, alpha)),
+            Stroke::new(
+                2.0,
+                Color32::from_rgba_unmultiplied(0x10, 0x2a, 0x38, alpha),
+            ),
             egui::StrokeKind::Outside,
         ));
     }
@@ -265,9 +280,13 @@ pub fn knob_sized(
     // Geometry per density: (w, h, center_y, tick r0, tick major, tick
     // minor, arc r, disc r, pointer in/out, label pt, value pt)
     let g = if compact {
-        (48.0, 74.0, 34.0, 16.0, 20.0, 18.5, 13.5, 10.5, 3.5, 9.5, 7.6, 8.5)
+        (
+            48.0, 74.0, 34.0, 16.0, 20.0, 18.5, 13.5, 10.5, 3.5, 9.5, 7.6, 8.5,
+        )
     } else {
-        (59.0, 78.0, 38.0, 20.0, 24.0, 22.0, 17.0, 13.0, 4.5, 11.5, 9.0, 10.0)
+        (
+            59.0, 78.0, 38.0, 20.0, 24.0, 22.0, 17.0, 13.0, 4.5, 11.5, 9.0, 10.0,
+        )
     };
     let (rect, response) = ui.allocate_exact_size(vec2(g.0, g.1), Sense::click_and_drag());
     let mut changed = false;
@@ -386,7 +405,11 @@ pub fn knob_sized(
         [center + dir * g.8, center + dir * g.9],
         Stroke::new(
             2.0,
-            if engaged { TOUCH_HI } else { Color32::from_rgb(0xee, 0xf4, 0xf6) },
+            if engaged {
+                TOUCH_HI
+            } else {
+                Color32::from_rgb(0xee, 0xf4, 0xf6)
+            },
         ),
     );
 
@@ -407,7 +430,11 @@ pub fn knob_sized(
 /// 6 the bus-drive saturation curve. `ghost` fades the glyph (the soft
 /// snare pad for rolls).
 pub fn drum_glyph(painter: &egui::Painter, rect: Rect, which: usize, color: Color32, ghost: bool) {
-    let color = if ghost { color.gamma_multiply(0.5) } else { color };
+    let color = if ghost {
+        color.gamma_multiply(0.5)
+    } else {
+        color
+    };
     let s = Stroke::new(1.7, color);
     let thin = Stroke::new(1.2, color);
     let c = rect.center();
@@ -433,27 +460,27 @@ pub fn drum_glyph(painter: &egui::Painter, rect: Rect, which: usize, color: Colo
         1 => {
             // Snare: crossed sticks over the shallow shell — the classic
             // percussion mark, unmistakable at pad size
-            let shell = Rect::from_center_size(
-                c + vec2(0.0, w * 0.22),
-                vec2(w * 0.85, w * 0.30),
-            );
+            let shell = Rect::from_center_size(c + vec2(0.0, w * 0.22), vec2(w * 0.85, w * 0.30));
             painter.rect_stroke(shell, CornerRadius::same(2), s, egui::StrokeKind::Inside);
             let top = shell.top() - 1.0;
             painter.line_segment(
-                [pos2(c.x - w * 0.42, c.y - w * 0.44), pos2(c.x + w * 0.20, top)],
+                [
+                    pos2(c.x - w * 0.42, c.y - w * 0.44),
+                    pos2(c.x + w * 0.20, top),
+                ],
                 Stroke::new(1.8, color),
             );
             painter.line_segment(
-                [pos2(c.x + w * 0.42, c.y - w * 0.44), pos2(c.x - w * 0.20, top)],
+                [
+                    pos2(c.x + w * 0.42, c.y - w * 0.44),
+                    pos2(c.x - w * 0.20, top),
+                ],
                 Stroke::new(1.8, color),
             );
         }
         2 => {
             // Rim shot: the stick striking down onto the drum's edge
-            let shell = Rect::from_center_size(
-                c + vec2(0.0, w * 0.18),
-                vec2(w * 0.9, w * 0.34),
-            );
+            let shell = Rect::from_center_size(c + vec2(0.0, w * 0.18), vec2(w * 0.9, w * 0.34));
             painter.rect_stroke(shell, CornerRadius::same(2), s, egui::StrokeKind::Inside);
             painter.line_segment(
                 [
@@ -570,24 +597,16 @@ pub fn waveform_selector(ui: &mut egui::Ui, id: &str, selected: &mut Waveform) -
         Waveform::Square,
     ];
     let cell = vec2(40.0, 30.0);
-    let (rect, _) = ui.allocate_exact_size(
-        vec2(cell.x * OPTIONS.len() as f32, cell.y),
-        Sense::hover(),
-    );
+    let (rect, _) =
+        ui.allocate_exact_size(vec2(cell.x * OPTIONS.len() as f32, cell.y), Sense::hover());
     let painter = ui.painter();
     painter.rect_filled(rect, CornerRadius::same(7), INSET);
 
     let mut changed = false;
     for (i, wf) in OPTIONS.iter().enumerate() {
-        let cell_rect = Rect::from_min_size(
-            pos2(rect.left() + cell.x * i as f32, rect.top()),
-            cell,
-        );
-        let response = ui.interact(
-            cell_rect,
-            ui.id().with((id, "wave", i)),
-            Sense::click(),
-        );
+        let cell_rect =
+            Rect::from_min_size(pos2(rect.left() + cell.x * i as f32, rect.top()), cell);
+        let response = ui.interact(cell_rect, ui.id().with((id, "wave", i)), Sense::click());
         let is_selected = *selected == *wf;
         if response.clicked() && !is_selected {
             *selected = *wf;
@@ -614,7 +633,12 @@ pub fn waveform_selector(ui: &mut egui::Ui, id: &str, selected: &mut Waveform) -
             );
         }
     }
-    painter.rect_stroke(rect, CornerRadius::same(7), Stroke::new(1.0, HAIRLINE), egui::StrokeKind::Inside);
+    painter.rect_stroke(
+        rect,
+        CornerRadius::same(7),
+        Stroke::new(1.0, HAIRLINE),
+        egui::StrokeKind::Inside,
+    );
     changed
 }
 
@@ -668,7 +692,12 @@ pub fn segmented(ui: &mut egui::Ui, id: &str, labels: &[&str], selected: usize) 
             );
         }
     }
-    painter.rect_stroke(rect, CornerRadius::same(7), Stroke::new(1.0, HAIRLINE), egui::StrokeKind::Inside);
+    painter.rect_stroke(
+        rect,
+        CornerRadius::same(7),
+        Stroke::new(1.0, HAIRLINE),
+        egui::StrokeKind::Inside,
+    );
     result
 }
 
@@ -684,7 +713,12 @@ pub fn step_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
         BG2
     };
     painter.rect_filled(rect, CornerRadius::same(6), fill);
-    painter.rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, HAIRLINE), egui::StrokeKind::Inside);
+    painter.rect_stroke(
+        rect,
+        CornerRadius::same(6),
+        Stroke::new(1.0, HAIRLINE),
+        egui::StrokeKind::Inside,
+    );
     painter.text(
         rect.center(),
         Align2::CENTER_CENTER,
@@ -748,9 +782,9 @@ pub fn card<R>(
                 (rect.left(), rect.top(), rect.width(), rect.height()),
                 12.0,
             );
-            let handle = ui
-                .ctx()
-                .load_texture(format!("frost-{:?}", key), img, TextureOptions::LINEAR);
+            let handle =
+                ui.ctx()
+                    .load_texture(format!("frost-{:?}", key), img, TextureOptions::LINEAR);
             t.frost.insert(key, handle);
         }
         let handle = &t.frost[&key];
@@ -764,7 +798,8 @@ pub fn card<R>(
             ),
         );
     } else {
-        ui.painter().set(bg_idx, Shape::Vec(glass_shapes(rect, 12.0)));
+        ui.painter()
+            .set(bg_idx, Shape::Vec(glass_shapes(rect, 12.0)));
     }
 }
 

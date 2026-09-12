@@ -324,6 +324,9 @@ mod tests {
                 max_err = max_err.max((y - x).abs());
             }
         }
-        assert!(max_err < 1e-2, "5 kHz sine should pass cleanly, err={max_err}");
+        assert!(
+            max_err < 1e-2,
+            "5 kHz sine should pass cleanly, err={max_err}"
+        );
     }
 }

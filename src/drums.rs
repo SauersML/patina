@@ -179,7 +179,6 @@ pub fn note_from_name(s: &str) -> Option<u8> {
     DrumVoice::from_name(s).map(DrumVoice::gm_note)
 }
 
-
 /// White noise in -1..1, full bandwidth. The 909's own noise generator is
 /// digital — cascaded 4006 shift registers XOR-clocked (IC31-33) — so a
 /// modern PRNG is the same instrument, not an approximation of one.
@@ -247,11 +246,11 @@ fn rc_coef(tau: f32, sample_rate: f32) -> f32 {
 struct Kick {
     sample_rate: f32,
     phase: f32,
-    amp: f32,     // shell envelope, 0..1
+    amp: f32, // shell envelope, 0..1
     amp_coef: f32,
     sweep_fast: f32, // pitch-envelope caps, 0..1 each
     sweep_slow: f32,
-    click: f32,   // click resonator envelope
+    click: f32, // click resonator envelope
     click_phase: f32,
     accent: f32,  // trigger voltage this hit, 0..1
     t_since: f32, // seconds since trigger (for the short anti-thump ramp)
@@ -512,8 +511,11 @@ struct Rim {
 ///   F1  C=0.010 µF, Rin=2.2 k, Rfb=470 k -> ~496 Hz
 ///   F3  C=0.0047 µF, Rin=2.2 k, Rfb=470 k -> ~1054 Hz
 /// Relative levels and the (short, all-transient) T60s are DERIVED.
-const RIM_MODES: [(f32, f32, f32); 3] =
-    [(220.0, 1.0, 0.040), (500.0, 0.85, 0.032), (1020.0, 0.5, 0.022)];
+const RIM_MODES: [(f32, f32, f32); 3] = [
+    (220.0, 1.0, 0.040),
+    (500.0, 0.85, 0.032),
+    (1020.0, 0.5, 0.022),
+];
 
 impl Rim {
     fn new(sample_rate: f32) -> Self {
@@ -828,10 +830,7 @@ impl DrumMachine {
             noise_rng: 0x6D2B_79F5,
             drive: 0.0,
             drive_target: 0.0,
-            bus_smooth_k: crate::smoothing::approach(
-                crate::smoothing::GAIN_SMOOTH_S,
-                sample_rate,
-            ),
+            bus_smooth_k: crate::smoothing::approach(crate::smoothing::GAIN_SMOOTH_S, sample_rate),
             bus_shaper_l: AdaaTanh::new(),
             bus_shaper_r: AdaaTanh::new(),
             tone: 1.0,
@@ -1057,7 +1056,10 @@ mod tests {
             "tail should ring near the tuned fundamental {f0:.0} Hz, got {tail_hz:.0}"
         );
         // 15 ms at f0 would give ~1 crossing; the sweep packs in several
-        assert!(early >= 2, "onset should be swept sharply up: {early} crossings");
+        assert!(
+            early >= 2,
+            "onset should be swept sharply up: {early} crossings"
+        );
     }
 
     #[test]
@@ -1098,7 +1100,10 @@ mod tests {
             clean < stock && stock < hot,
             "drive should widen clean->grit monotonically: {clean:.4} / {stock:.4} / {hot:.4}"
         );
-        assert!(hot > 10.0 * clean.max(1e-6), "full drive should be properly dirty");
+        assert!(
+            hot > 10.0 * clean.max(1e-6),
+            "full drive should be properly dirty"
+        );
     }
 
     #[test]
@@ -1113,8 +1118,10 @@ mod tests {
         let m1 = goertzel(win, f1);
         let m2 = goertzel(win, f1 * SNARE_SHELL_RATIO);
         let off = goertzel(win, f1 * 0.7); // below the lower mode
-        assert!(m1 > 3.0 * off && m2 > 2.0 * off,
-            "both shell modes should stand above the floor: m1={m1:.2} m2={m2:.2} off={off:.2}");
+        assert!(
+            m1 > 3.0 * off && m2 > 2.0 * off,
+            "both shell modes should stand above the floor: m1={m1:.2} m2={m2:.2} off={off:.2}"
+        );
 
         // Snappy adds broadband top the shells don't have
         let hf = |snappy: f32| -> f32 {
@@ -1124,7 +1131,10 @@ mod tests {
             let out = render(&mut dm, (0.2 * SR) as usize);
             goertzel(&out, 5000.0)
         };
-        assert!(hf(1.0) > 4.0 * hf(0.0), "snappy should gate the noise path in");
+        assert!(
+            hf(1.0) > 4.0 * hf(0.0),
+            "snappy should gate the noise path in"
+        );
     }
 
     #[test]
@@ -1169,7 +1179,10 @@ mod tests {
                 reattacks += 1;
             }
         }
-        assert!(reattacks >= 2, "the flam should retrigger, got {reattacks} re-attacks");
+        assert!(
+            reattacks >= 2,
+            "the flam should retrigger, got {reattacks} re-attacks"
+        );
         // And the tail must outlive the flam window
         let tail_rms: f32 = out[(0.1 * SR) as usize..(0.2 * SR) as usize]
             .iter()
@@ -1186,7 +1199,10 @@ mod tests {
         let out = render(&mut dm, (0.3 * SR) as usize);
         let high = goertzel(&out, 8000.0);
         let low = goertzel(&out, 800.0);
-        assert!(high > 6.0 * low, "hat energy should sit high: 8k={high:.2} 800={low:.2}");
+        assert!(
+            high > 6.0 * low,
+            "hat energy should sit high: 8k={high:.2} 800={low:.2}"
+        );
 
         // Choke: open hat, then closed 100 ms later — the ring must die
         let ring_with = |choke: bool| -> f32 {
@@ -1225,13 +1241,14 @@ mod tests {
             dm.trigger_note(note, 1.0);
             let out = render(&mut dm, SR as usize);
             let peak = out.iter().fold(0.0f32, |a, &s| a.max(s.abs()));
-            out.iter()
-                .rposition(|s| s.abs() > peak * 0.05)
-                .unwrap_or(0)
+            out.iter().rposition(|s| s.abs() > peak * 0.05).unwrap_or(0)
         };
         let ch = length(42);
         let oh = length(46);
-        assert!(oh > 2 * ch, "open hat should ring far longer: ch={ch}, oh={oh}");
+        assert!(
+            oh > 2 * ch,
+            "open hat should ring far longer: ch={ch}, oh={oh}"
+        );
     }
 
     #[test]
@@ -1265,7 +1282,10 @@ mod tests {
         };
         let (soft_peak, soft_h3) = measure(0.2);
         let (hard_peak, hard_h3) = measure(1.0);
-        assert!(hard_peak > soft_peak * 1.3, "accent should raise the VCA peak");
+        assert!(
+            hard_peak > soft_peak * 1.3,
+            "accent should raise the VCA peak"
+        );
         assert!(
             hard_h3 > soft_h3,
             "accent should push the shaper harder too: {soft_h3:.4} vs {hard_h3:.4}"
@@ -1302,14 +1322,20 @@ mod tests {
             dm.trigger_note(note, f32::NAN);
             for _ in 0..(0.2 * SR) as usize {
                 let (l, r) = dm.render_next();
-                assert!(l.is_finite() && r.is_finite(), "note {note} poisoned the board");
+                assert!(
+                    l.is_finite() && r.is_finite(),
+                    "note {note} poisoned the board"
+                );
             }
             // And a good hit afterwards must still speak
             dm.trigger_note(note, 1.0);
             let mut peak = 0.0f32;
             for _ in 0..(0.2 * SR) as usize {
                 let (l, r) = dm.render_next();
-                assert!(l.is_finite() && r.is_finite(), "note {note} poisoned the board");
+                assert!(
+                    l.is_finite() && r.is_finite(),
+                    "note {note} poisoned the board"
+                );
                 peak = peak.max(l.abs());
             }
             assert!(peak > 0.01, "note {note} stayed dead after a NaN trigger");
@@ -1328,13 +1354,15 @@ mod tests {
             let mut peak = 0.0f32;
             for _ in 0..(1.0 * SR) as usize {
                 let (l, r) = dm.render_next();
-                assert!(l.is_finite() && r.is_finite(), "velocity {vel} broke the board");
+                assert!(
+                    l.is_finite() && r.is_finite(),
+                    "velocity {vel} broke the board"
+                );
                 peak = peak.max(l.abs());
             }
             assert!(peak < 60.0, "velocity {vel} blew the rail, peak={peak}");
         }
     }
-
 
     /// Panel knobs are automation lanes and automation values are parsed
     /// floats — `automate bd_tune NaN` is a song the parser accepts.
@@ -1377,13 +1405,15 @@ mod tests {
             let mut peak = 0.0f32;
             for _ in 0..(0.5 * SR) as usize {
                 let (l, r) = dm.render_next();
-                assert!(l.is_finite() && r.is_finite(), "{name} = NaN poisoned the board");
+                assert!(
+                    l.is_finite() && r.is_finite(),
+                    "{name} = NaN poisoned the board"
+                );
                 peak = peak.max(l.abs());
             }
             assert!(peak > 0.01, "{name} = NaN silenced the board");
         }
     }
-
 
     /// The board is modeled at fixed frequencies in Hz (the hat bank's
     /// 5.2 kHz high-pass, the clap's 1.1 kHz band-pass). Across the whole
@@ -1407,7 +1437,10 @@ mod tests {
                 let mut peak = 0.0f32;
                 for k in 0..(sr as usize) {
                     let (l, r) = dm.render_next();
-                    assert!(l.is_finite() && r.is_finite(), "sr {sr} note {note} non-finite at {k}");
+                    assert!(
+                        l.is_finite() && r.is_finite(),
+                        "sr {sr} note {note} non-finite at {k}"
+                    );
                     peak = peak.max(l.abs()).max(r.abs());
                 }
                 assert!(peak < 1e3, "sr {sr} note {note} blew up, peak {peak}");
@@ -1438,7 +1471,10 @@ mod tests {
                 1,
                 "{v:?} appears more than once in the panel order"
             );
-            assert!(DrumVoice::LOW_SLIVER.contains(&v), "{v:?} has no sliver note");
+            assert!(
+                DrumVoice::LOW_SLIVER.contains(&v),
+                "{v:?} has no sliver note"
+            );
             assert_eq!(DrumVoice::ALL[v.pad_index()], v, "{v:?} pad index is wrong");
             assert_eq!(DrumVoice::for_note(v.gm_note()), Some(v), "{v:?} GM note");
         }
@@ -1460,9 +1496,17 @@ mod tests {
         );
         // Names resolve to notes that resolve back to the same voice
         for (name, want) in [
-            ("BD", Kick), ("KICK", Kick), ("SD", Snare), ("SNARE", Snare),
-            ("RS", Rim), ("RIM", Rim), ("CP", Clap), ("CLAP", Clap),
-            ("CH", ClosedHat), ("HH", ClosedHat), ("OH", OpenHat),
+            ("BD", Kick),
+            ("KICK", Kick),
+            ("SD", Snare),
+            ("SNARE", Snare),
+            ("RS", Rim),
+            ("RIM", Rim),
+            ("CP", Clap),
+            ("CLAP", Clap),
+            ("CH", ClosedHat),
+            ("HH", ClosedHat),
+            ("OH", OpenHat),
         ] {
             assert_eq!(DrumVoice::from_name(name), Some(want), "name {name}");
             let note = note_from_name(name).unwrap();
@@ -1492,9 +1536,7 @@ mod tests {
             assert!(act[v.pad_index()] > 0.1, "{v:?} pad did not light");
             for other in DrumVoice::ALL {
                 // The two hats share one source and one envelope pair
-                let hats = |x: DrumVoice| {
-                    matches!(x, DrumVoice::ClosedHat | DrumVoice::OpenHat)
-                };
+                let hats = |x: DrumVoice| matches!(x, DrumVoice::ClosedHat | DrumVoice::OpenHat);
                 if other != v && !(hats(v) && hats(other)) {
                     assert!(
                         act[other.pad_index()] < 0.05,
@@ -1510,7 +1552,11 @@ mod tests {
     #[test]
     fn the_sliver_kick_is_the_gm_kick() {
         for note in [0u8, 35, 36] {
-            assert_eq!(DrumVoice::for_note(note), Some(DrumVoice::Kick), "note {note}");
+            assert_eq!(
+                DrumVoice::for_note(note),
+                Some(DrumVoice::Kick),
+                "note {note}"
+            );
         }
         // and they sound the same
         let render_note = |note: u8| -> Vec<f32> {

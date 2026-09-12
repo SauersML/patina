@@ -217,7 +217,8 @@ impl LadderFilter {
         loop {
             iters += 1;
             // Midpoint arguments
-            let s0 = vin_avg_a + (0.5 / (2.0 * VT)) * k * (v[3] + p[3]) - self.fb_dc * k / (2.0 * VT);
+            let s0 =
+                vin_avg_a + (0.5 / (2.0 * VT)) * k * (v[3] + p[3]) - self.fb_dc * k / (2.0 * VT);
             let s1 = a_half * (v[0] + p[0]);
             let s2 = a_half * (v[1] + p[1]);
             let s3 = a_half * (v[2] + p[2]);
@@ -363,8 +364,7 @@ impl LadderFilter {
     pub fn process(&mut self, input: f32, cutoff_mult: f32) -> f32 {
         // Slow thermal drift, bounded random walk (SCHEMATIC: matched-pair
         // temperature sensitivity; magnitude as before)
-        self.thermal_drift =
-            (self.thermal_drift + (rand01(&mut self.rng) - 0.5) * 1e-4) * 0.9995;
+        self.thermal_drift = (self.thermal_drift + (rand01(&mut self.rng) - 0.5) * 1e-4) * 0.9995;
 
         // PARAM_SLEW_TAU_S panel slew removes zipper noise from stepped
         // automation
@@ -376,8 +376,7 @@ impl LadderFilter {
             CircuitModel::Arp => ARP_FC_MAX.min(self.sample_rate * 0.49),
             CircuitModel::Moog => self.sample_rate * 0.49,
         };
-        let fc = (self.cutoff * cutoff_mult * (1.0 + self.thermal_drift))
-            .clamp(16.0, fc_top);
+        let fc = (self.cutoff * cutoff_mult * (1.0 + self.thermal_drift)).clamp(16.0, fc_top);
 
         // 2x oversampling; exact placement via tan prewarp per substep
         let t_step = 0.5 / self.sample_rate;
@@ -428,8 +427,7 @@ impl LadderFilter {
                 // referenced to program level
                 if self.saturation > 0.02 {
                     let pv = crate::oscillator::PROGRAM_V;
-                    out = pv * self.sat_adaa.process(out * self.saturation / pv)
-                        / self.saturation;
+                    out = pv * self.sat_adaa.process(out * self.saturation / pv) / self.saturation;
                 }
                 out
             }

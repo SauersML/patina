@@ -57,7 +57,10 @@ fn to_color_image(w: usize, h: usize, rgb: &[[f32; 3]]) -> ColorImage {
             )
         })
         .collect();
-    ColorImage { size: [w, h], pixels }
+    ColorImage {
+        size: [w, h],
+        pixels,
+    }
 }
 
 fn gaussian_kernel(sigma: f32) -> Vec<f32> {
@@ -271,12 +274,7 @@ pub fn frost_panel(
             let sh = (shadow[sy * ow + x] - m).max(0.0) * 0.55;
 
             if m <= 0.002 {
-                pixels.push(Color32::from_rgba_unmultiplied(
-                    0,
-                    0,
-                    0,
-                    (sh * 255.0) as u8,
-                ));
+                pixels.push(Color32::from_rgba_unmultiplied(0, 0, 0, (sh * 255.0) as u8));
                 continue;
             }
 
@@ -307,14 +305,13 @@ pub fn frost_panel(
             b -= seat;
 
             // Inner border glint from the mask gradient
-            let edge = (m
-                - rounded_coverage(
-                    x as f32 - pad as f32 + 0.5,
-                    y as f32 - pad as f32 + 0.5 + 1.2,
-                    pw as f32,
-                    ph as f32,
-                    corner,
-                ))
+            let edge = (m - rounded_coverage(
+                x as f32 - pad as f32 + 0.5,
+                y as f32 - pad as f32 + 0.5 + 1.2,
+                pw as f32,
+                ph as f32,
+                corner,
+            ))
             .max(0.0);
             let glint = edge * if fy < 0.5 { 0.55 } else { 0.18 };
             r += glint;
@@ -337,7 +334,10 @@ pub fn frost_panel(
             ));
         }
     }
-    ColorImage { size: [ow, oh], pixels }
+    ColorImage {
+        size: [ow, oh],
+        pixels,
+    }
 }
 
 pub const fn frost_pad() -> f32 {

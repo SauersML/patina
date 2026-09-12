@@ -430,9 +430,16 @@ pub fn cfstring_to_string(s: CFStringRef) -> String {
     }
     let mut buf = [0i8; 512];
     unsafe {
-        if CFStringGetCString(s, buf.as_mut_ptr(), buf.len() as CFIndex, kCFStringEncodingUTF8) != 0
+        if CFStringGetCString(
+            s,
+            buf.as_mut_ptr(),
+            buf.len() as CFIndex,
+            kCFStringEncodingUTF8,
+        ) != 0
         {
-            std::ffi::CStr::from_ptr(buf.as_ptr()).to_string_lossy().into_owned()
+            std::ffi::CStr::from_ptr(buf.as_ptr())
+                .to_string_lossy()
+                .into_owned()
         } else {
             String::new()
         }
@@ -441,7 +448,11 @@ pub fn cfstring_to_string(s: CFStringRef) -> String {
 
 pub fn cfnumber_i32(v: i32) -> CFNumberRef {
     unsafe {
-        CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &v as *const i32 as *const c_void)
+        CFNumberCreate(
+            kCFAllocatorDefault,
+            kCFNumberSInt32Type,
+            &v as *const i32 as *const c_void,
+        )
     }
 }
 
