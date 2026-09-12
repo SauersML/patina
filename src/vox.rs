@@ -1213,6 +1213,7 @@ pub struct VoxBox {
     spectral: crate::spectral::Spectral,
     mode: crate::vocoder::VocoderMode,
     sample_rate: f32,
+    knob_smooth_k: f32,
     // Optional recorded modulator: any voice, poured through the same circuit
     wav: Option<Vec<f32>>,
     wav_pos: usize,
@@ -1237,6 +1238,7 @@ impl VoxBox {
             spectral: crate::spectral::Spectral::new(sample_rate),
             mode: crate::vocoder::VocoderMode::TalkBox,
             sample_rate,
+            knob_smooth_k: crate::smoothing::approach(crate::smoothing::KNOB_SMOOTH_S, sample_rate),
             wav: None,
             wav_pos: 0,
             wav_active: false,
@@ -1404,7 +1406,7 @@ impl VoxBox {
             crate::vocoder::VocoderMode::Spectral => self.spectral.process(m, carrier),
             _ => self.vocoder.process(m, carrier),
         };
-        let k = crate::smoothing::approach(crate::smoothing::KNOB_SMOOTH_S, self.sample_rate);
+        let k = self.knob_smooth_k;
         self.level += (self.level_t - self.level) * k;
         self.dry += (self.dry_t - self.dry) * k;
         vocoded * self.level + m * self.dry * (0.9 * PROGRAM_V)

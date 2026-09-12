@@ -17,16 +17,19 @@ pub struct HighPassLadder {
     cutoff: f32, // smoothed
     /// Slew coefficient for `PARAM_SLEW_TAU_S` at this rate.
     slew_k: f32,
+    integrator_a: f32,
     s: [f32; 4],
 }
 
 impl HighPassLadder {
     pub fn new(sample_rate: f32) -> Self {
+        let g = (PI * 16.0 / sample_rate).tan();
         Self {
             sample_rate,
             target_cutoff: 16.0,
             cutoff: 16.0,
             slew_k: crate::voice::smoothing_coef(PARAM_SLEW_TAU_S, sample_rate),
+            integrator_a: g / (1.0 + g),
             s: [0.0; 4],
         }
     }
@@ -48,11 +51,16 @@ impl HighPassLadder {
 
     #[inline]
     pub fn process(&mut self, input: f32) -> f32 {
-        self.cutoff += (self.target_cutoff - self.cutoff) * self.slew_k;
-        // Trapezoidal (zero-delay) one-pole integrators, so the passband
-        // stays flat instead of sagging like an explicit discretization
-        let g = (PI * self.cutoff / self.sample_rate).tan();
-        let a = g / (1.0 + g);
+        let cutoff = self.cutoff + (self.target_cutoff - self.cutoff) * self.slew_k;
+        // Recompute throughout automation, then reuse the exact coefficient
+        // once the smoothed f32 stops changing. No quantization or early snap.
+        if cutoff != self.cutoff {
+            self.cutoff = cutoff;
+            let g = (PI * cutoff / self.sample_rate).tan();
+            self.integrator_a = g / (1.0 + g);
+        }
+        // Trapezoidal (zero-delay) one-pole integrators keep the passband flat.
+        let a = self.integrator_a;
 
         let mut x = input;
         for state in &mut self.s {
@@ -69,6 +77,34 @@ impl HighPassLadder {
 mod tests {
     use super::*;
     use std::f32::consts::TAU;
+
+    #[test]
+    fn cached_coefficient_preserves_samples_through_sweeps_and_settling() {
+        for sr in [8000.0, 44100.0, 96000.0, 192000.0] {
+            let mut filter = HighPassLadder::new(sr);
+            let mut cutoff = 16.0;
+            let mut states = [0.0; 4];
+            for target in [16.0, 3000.0, 80.0, 8000.0, 16.0] {
+                filter.set_cutoff(target);
+                for n in 0..(sr as usize / 4) {
+                    let input = (TAU * 731.0 * n as f32 / sr).sin();
+                    // Original uncached trapezoidal filter, recomputing tan
+                    // on every sample even after the control settles.
+                    cutoff += (filter.target_cutoff - cutoff) * filter.slew_k;
+                    let g = (PI * cutoff / sr).tan();
+                    let a = g / (1.0 + g);
+                    let mut expected = input;
+                    for state in &mut states {
+                        let v = (expected - *state) * a;
+                        let low = v + *state;
+                        *state = low + v;
+                        expected -= low;
+                    }
+                    assert_eq!(filter.process(input).to_bits(), expected.to_bits());
+                }
+            }
+        }
+    }
 
     #[test]
     fn passes_highs_blocks_lows() {

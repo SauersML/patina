@@ -128,6 +128,7 @@ pub struct LadderFilter {
     target_resonance: f32,
     resonance: f32, // smoothed, knob 0..4
     drive: f32,
+    drive_makeup: f32,
     saturation: f32,
     /// Ladder state, volts.
     v: [f32; 4],
@@ -146,6 +147,7 @@ pub struct LadderFilter {
     rng: u32,
     sat_adaa: AdaaTanh,
     /// Diagnostic: worst Newton iteration count since last read.
+    #[cfg(test)]
     max_iters_seen: usize,
 }
 
@@ -167,6 +169,7 @@ impl LadderFilter {
             target_resonance: 0.0,
             resonance: 0.0,
             drive: 1.0,
+            drive_makeup: 1.0,
             saturation: 1.0,
             v: [0.0; 4],
             vin_prev: 0.0,
@@ -179,6 +182,7 @@ impl LadderFilter {
             param_slew_k: crate::voice::smoothing_coef(PARAM_SLEW_TAU_S, sample_rate),
             rng,
             sat_adaa: AdaaTanh::new(),
+            #[cfg(test)]
             max_iters_seen: 0,
         }
     }
@@ -197,6 +201,7 @@ impl LadderFilter {
 
     pub fn set_drive(&mut self, drive: f32) {
         self.drive = drive.clamp(0.1, 10.0);
+        self.drive_makeup = self.drive.sqrt().max(0.5);
     }
 
     pub fn set_saturation(&mut self, saturation: f32) {
@@ -204,7 +209,8 @@ impl LadderFilter {
     }
 
     /// Diagnostic for tests: worst Newton iteration count since last call.
-    pub fn take_max_iters(&mut self) -> usize {
+    #[cfg(test)]
+    fn take_max_iters(&mut self) -> usize {
         std::mem::replace(&mut self.max_iters_seen, 0)
     }
 
@@ -253,6 +259,7 @@ impl LadderFilter {
 
             let worst = f1.abs().max(f2.abs()).max(f3.abs()).max(f4.abs());
             if worst < NEWTON_TOL || iters > NEWTON_MAX_ITERS {
+                #[cfg(test)]
                 if iters > self.max_iters_seen {
                     self.max_iters_seen = iters;
                 }
@@ -338,6 +345,7 @@ impl LadderFilter {
 
             let worst = f1.abs().max(f2.abs()).max(f3.abs()).max(f4.abs());
             if worst < NEWTON_TOL || iters > NEWTON_MAX_ITERS {
+                #[cfg(test)]
                 if iters > self.max_iters_seen {
                     self.max_iters_seen = iters;
                 }
@@ -432,7 +440,7 @@ impl LadderFilter {
                 // keeps the drive knob about grit rather than volume
                 // (CHOICE); unity through-gain at resonance minimum per
                 // the 904A calibration
-                let mut out = -self.v[3] / (INPUT_ATTEN * self.drive.sqrt().max(0.5));
+                let mut out = -self.v[3] / (INPUT_ATTEN * self.drive_makeup);
 
                 // Partial make-up for the exact 1/(1+k) passband loss. The
                 // hardware does NOT do this — players ride the volume;
@@ -474,7 +482,7 @@ impl LadderFilter {
                 // high resonance. The gang law 0.65*k is the one constant
                 // jointly trimmed to BOTH manual specs: passband held near
                 // unity under resonance AND 13-14 V p-p self-oscillation
-                let mut out = self.v[3] / (ARP_ATTEN * self.drive.sqrt().max(0.5));
+                let mut out = self.v[3] / (ARP_ATTEN * self.drive_makeup);
                 out *= 1.0 + 0.65 * k;
 
                 // The TL074/LM3900 output stages clip at the +/-15 V
