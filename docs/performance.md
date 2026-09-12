@@ -57,3 +57,25 @@ varied between runs.
 
 The dense result is smaller than the between-run variation, so this
 measurement does not establish an improvement for that workload.
+
+A normalized 30-second bounce measured **24,510,464 bytes before and
+2,195,456 bytes after** in maximum resident set size: approximately **91%
+less RAM** (23.4 MiB to 2.1 MiB). Both WAVs contained 1,440,000 stereo frames
+and reported the same peak, RMS, and integrated loudness. This workload has
+one short note and a long tail, isolating the cost of retaining the bounce.
+
+## Validation
+
+The final core test run completed with **222 passed, 3 failed, 3 ignored**.
+The same three failures occurred in the unchanged baseline:
+
+- `oscillator::tests::moog_tracking_error_is_additive_hertz`
+- `song::tests::tempo_lane_can_accelerate_continuously_into_audio_rate`
+- `voice_manager::tests::pitch_bend_shifts_frequency`
+
+All new numerical, loudness, WAV, and iterator checks passed, as did the
+existing filter, tape, and whole-engine stability checks. To keep local
+resource use bounded, the engine and tests were compiled directly with
+cached dependencies, one codegen worker, and low process priority. The final
+test build peaked near 202 MiB resident memory; the serial test run near
+11 MiB. App/GUI and native plugin feature builds were not rerun.
