@@ -13,7 +13,7 @@ use crate::chorus::ChorusMode;
 use crate::oscillator::{CircuitModel, Waveform};
 use crate::panel_render;
 use crate::song::{Curve, Param};
-use crate::voice_manager::VoiceManager;
+use crate::voice_manager::{ParamValues, VoiceManager, SCOPE_LEN};
 
 // The design system and widget set live in crate::panel, shared with the
 // plugin editor (src/editor.rs) so every surface speaks the same language.
@@ -60,6 +60,41 @@ const PAD_BOTTOM: [(&str, &str, Key, f32, bool); 3] = [
 /// names (which the pad tables never hold) fall back to the kick's slot.
 fn pad_activity_index(name: &str) -> usize {
     crate::drums::DrumVoice::from_name(name).map_or(0, |v| v.pad_index())
+}
+
+/// Reused display data. Copy under one short engine lock, then release it
+/// before calculating meters, laying out controls, or drawing waveforms.
+struct DisplaySnapshot {
+    params: ParamValues,
+    scope: [f32; SCOPE_LEN],
+    scope_len: usize,
+    notes: [bool; 128],
+    drums: [f32; 6],
+    voices_active: bool,
+}
+
+impl DisplaySnapshot {
+    fn new() -> Self {
+        Self {
+            params: ParamValues::default(),
+            scope: [0.0; SCOPE_LEN],
+            scope_len: 0,
+            notes: [false; 128],
+            drums: [0.0; 6],
+            voices_active: false,
+        }
+    }
+
+    fn capture(&mut self, vm: &VoiceManager) {
+        self.params = vm.params;
+        self.notes = vm.held_note_states();
+        self.drums = vm.drums.activity();
+        self.voices_active = vm.voices.iter().any(|voice| voice.is_active());
+        let (a, b) = vm.scope.as_slices();
+        self.scope[..a.len()].copy_from_slice(a);
+        self.scope[a.len()..a.len() + b.len()].copy_from_slice(b);
+        self.scope_len = a.len() + b.len();
+    }
 }
 
 pub struct SynthUI {
@@ -151,6 +186,7 @@ pub struct SynthUI {
     ghost_flash: f32,
     theme_applied: bool,
     notes_active: bool,
+    display: DisplaySnapshot,
     textures: Option<Textures>,
     /// Slow-smoothed engine signals feeding the sky: loudness, filter
     /// openness, and an integrated cloud-drift phase.
@@ -297,6 +333,7 @@ impl SynthUI {
             ghost_flash: 0.0,
             theme_applied: false,
             notes_active: false,
+            display: DisplaySnapshot::new(),
             textures: None,
             mood_energy: 0.0,
             mood_bright: 1.0,
@@ -473,13 +510,41 @@ impl SynthUI {
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             self.theme_applied = true;
         }
+        // A minimized window needs no textures, shader passes or panel layout.
+        // Input on restore causes a new frame immediately.
+        if ctx.input(|i| i.viewport().minimized == Some(true)) {
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+            // Release held window keys once; subsequent minimized ticks
+            // do not need the engine lock at all.
+            if !self.pressed_keys.is_empty() || self.active_mouse_note.is_some() {
+                let mut vm = self.voice_manager.lock();
+                for (_, note) in self.pressed_keys.drain() {
+                    vm.note_off(note);
+                }
+                if let Some(note) = self.active_mouse_note.take() {
+                    vm.note_off(note);
+                }
+            }
+            self.pressed_drum_keys.clear();
+            self.mouse_pad_down = None;
+            return;
+        }
         self.ensure_textures(ctx);
+
+        // A display refresh never waits for an audio buffer. Retain the
+        // previous snapshot when audio owns the engine; controls and notes
+        // still use their normal write path when the player interacts.
+        if let Some(vm) = self.voice_manager.try_lock() {
+            self.display.capture(&vm);
+        }
+        // Delayed repaints make egui's stable_dt use its 60 Hz prediction.
+        // Use elapsed time so metering and fades keep their duration at 10/30 Hz.
+        let dt = ctx.input(|i| i.unstable_dt).clamp(0.0, 0.25);
 
         // Pull the engine's canonical parameter values so the controls follow
         // song automation (and any other source) live
         {
-            let vm = self.voice_manager.lock();
-            let p = vm.params;
+            let p = self.display.params;
             self.volume = p.volume;
             self.waveform = p.waveform;
             self.attack = p.attack;
@@ -550,26 +615,39 @@ impl SynthUI {
             self.oh_decay = p.oh_decay;
             self.dr_drive = p.dr_drive;
             self.current_octave = p.ui_octave.round() as i32;
-            self.notes_active = vm.held_note_states().iter().any(|&held| held);
+            self.notes_active = self.display.notes.iter().any(|&held| held);
 
             // The sky listens, slowly: loudness and filter openness ease in
             // over seconds, and cloud drift accelerates as an integral so
             // speed changes never jump
             let rms = {
-                let n = vm.scope.len().max(1);
-                let sum: f32 = vm.scope.iter().rev().take(512).map(|s| s * s).sum();
+                let n = self.display.scope_len.max(1);
+                let sum: f32 = self.display.scope[..self.display.scope_len]
+                    .iter()
+                    .rev()
+                    .take(512)
+                    .map(|s| s * s)
+                    .sum();
                 (sum / n.min(512) as f32).sqrt()
             };
             let target_energy = (rms * 5.0).clamp(0.0, 1.0);
             let target_bright = ((p.cutoff / 20.0).ln() / (1000.0f32).ln()).clamp(0.0, 1.0);
-            self.mood_energy += (target_energy - self.mood_energy) * 0.012;
-            self.mood_bright += (target_bright - self.mood_bright) * 0.008;
+            self.mood_energy += (target_energy - self.mood_energy) * (1.0 - (-dt / 1.38).exp());
+            self.mood_bright += (target_bright - self.mood_bright) * (1.0 - (-dt / 2.08).exp());
         }
-        let dt = ctx.input(|i| i.stable_dt).min(0.05);
         self.sky_phase += dt * (0.008 + self.mood_energy * 0.030);
 
-        // The sky is alive: repaint at display cadence
-        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        // Audio runs independently of panel cadence. Input events repaint
+        // immediately; only autonomous animation and meter polling are paced.
+        let active = self.display.voices_active
+            || self.display.drums.iter().any(|&level| level > 0.001)
+            || self.mood_energy > 0.01;
+        let interval_ms = if active && ctx.input(|i| i.focused) {
+            33
+        } else {
+            100
+        };
+        ctx.request_repaint_after(std::time::Duration::from_millis(interval_ms));
 
         let time = ctx.input(|i| i.time) as f32;
         TIME_BITS.store(time.to_bits() as u64, AtomicOrdering::Relaxed);
@@ -582,8 +660,8 @@ impl SynthUI {
             let mood = [self.mood_energy, self.mood_bright, self.sky_phase];
             let painter = ctx.layer_painter(egui::LayerId::background());
             painter.add(aurora_gpu::sky_shape(ctx.screen_rect(), time, mood));
-            let rects: Vec<Rect> = std::mem::take(&mut *GLASS_RECTS.lock());
-            for (i, rect) in rects.into_iter().enumerate() {
+            let mut rects = GLASS_RECTS.lock();
+            for (i, rect) in rects.drain(..).enumerate() {
                 let slot = (i as u32 + 1) % 64;
                 painter.add(aurora_gpu::glass_shape(
                     rect,
@@ -1476,7 +1554,7 @@ impl SynthUI {
             painter.circle_filled(pos2(rect.left() + 40.0, rect.top() + 10.5), 2.0, CYAN);
         }
 
-        let samples: Vec<f32> = self.voice_manager.lock().scope.iter().copied().collect();
+        let samples = &self.display.scope[..self.display.scope_len];
         if samples.len() < 64 {
             return;
         }
@@ -1608,7 +1686,7 @@ impl SynthUI {
 
         // Light keys from the engine's live voice state, so song playback,
         // MIDI, QWERTY, and mouse input all show up on the keyboard
-        let key_states = self.voice_manager.lock().held_note_states();
+        let key_states = self.display.notes;
 
         // Hover preview: tint the key under the pointer and show a hand
         // cursor, so the keyboard invites playing before the first click
@@ -1793,11 +1871,8 @@ impl SynthUI {
     /// K L ; ' / , . / QWERTY cluster, lit by the board's actual VCA
     /// envelopes. Click velocity follows strike depth, like the keys.
     fn draw_drum_pads(&mut self, ui: &egui::Ui, rect: Rect, response: &egui::Response) {
-        let activity = {
-            let vm = self.voice_manager.lock();
-            vm.drums.activity()
-        };
-        self.ghost_flash *= 0.88;
+        let activity = self.display.drums;
+        self.ghost_flash *= (-ui.input(|i| i.unstable_dt).clamp(0.0, 0.25) / 0.13).exp();
         let painter = ui.painter();
         painter.rect_filled(rect.expand(3.0), CornerRadius::same(6), INSET);
 

@@ -44,7 +44,7 @@ format for programmatic playback and parameter automation.
 
 3. Or play a song file:
    ```
-   cargo run --release            # shuffles to a random song
+   cargo run --release            # opens the live synth, silent until played
    cargo run --release -- --play songs/ferris-wheel.song
    ```
 

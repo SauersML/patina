@@ -20,7 +20,7 @@ use std::collections::{HashMap, VecDeque};
 const CROSSTALK: f32 = 0.0008;
 
 /// Samples kept for the UI oscilloscope display.
-const SCOPE_LEN: usize = 2048;
+pub(crate) const SCOPE_LEN: usize = 2048;
 
 /// Canonical values of every automatable parameter, updated by the setters
 /// below. The UI reads this each frame so sliders follow song automation,

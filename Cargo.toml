@@ -30,7 +30,6 @@ app = [
     "dep:dasp_sample",
     "dep:midir",
     "dep:midly",
-    "dep:crossbeam-channel",
 ]
 # The CLAP/VST3 plugin (host provides audio, MIDI, and parameter UI):
 #   cargo xtask bundle patina --release --no-default-features --features plugin
@@ -61,7 +60,6 @@ bytemuck = { version = "1.16", features = ["derive"], optional = true }
 dasp_sample = { version = "0.11", optional = true }
 midir = { version = "0.10.1", optional = true }
 midly = { version = "0.5.3", optional = true }
-crossbeam-channel = { version = "0.5.14", optional = true }
 
 nice-plug = { version = "0.1.10", optional = true }
 
