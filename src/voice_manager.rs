@@ -306,7 +306,8 @@ pub struct ChannelMix {
 /// discard the LFO values written in their patch files.
 struct ChannelLfo {
     generator: Lfo,
-    sample: f32,
+    depths: (f32, f32, f32),
+    modulation: (f32, f32, f32),
 }
 
 impl ChannelLfo {
@@ -316,13 +317,15 @@ impl ChannelLfo {
         generator.set_shape(params.lfo_shape);
         Self {
             generator,
-            sample: 0.0,
+            depths: (params.lfo_pitch, params.lfo_filter, params.lfo_pwm),
+            modulation: (1.0, 0.0, 0.0),
         }
     }
 
     fn configure(&mut self, params: &ParamValues) {
         self.generator.set_rate(params.lfo_rate);
         self.generator.set_shape(params.lfo_shape);
+        self.depths = (params.lfo_pitch, params.lfo_filter, params.lfo_pwm);
     }
 }
 
@@ -1254,12 +1257,20 @@ impl VoiceManager {
         // (an exponential frequency ratio), filter in octaves, PWM on the
         // pulse comparator threshold
         let lfo = self.lfo.next();
-        for modulation in self.channel_lfos.values_mut() {
-            modulation.sample = modulation.generator.next();
-        }
         // Pitch bend slews (~ms scale) toward its target; mod wheel adds
         // performance vibrato on top of the patch's own LFO>Pitch depth
         self.bend_ratio += (self.bend_target - self.bend_ratio) * 0.002;
+        // Each channel computes its modulation once, shared by all its
+        // voices. Keep advancing generators even while their cards sleep.
+        for channel in self.channel_lfos.values_mut() {
+            let sample = channel.generator.next();
+            let cents = channel.depths.0 + self.mod_wheel * 75.0;
+            channel.modulation = (
+                (sample * cents / 1200.0).exp2() * self.bend_ratio,
+                sample * channel.depths.1,
+                sample * channel.depths.2,
+            );
+        }
         let vibrato_cents = self.params.lfo_pitch + self.mod_wheel * 75.0;
         let panel_pitch_mult = if vibrato_cents > 0.01 {
             (lfo * vibrato_cents / 1200.0).exp2() * self.bend_ratio
@@ -1283,10 +1294,6 @@ impl VoiceManager {
             deltas[i] = voice.prefilter_delta();
         }
 
-        // Every voice renders every sample, always: the oscillators
-        // free-run from power-on and the VCAs only close to their -60 dB
-        // floor, so a "silent" instrument is still faintly alive — like
-        // the hardware, and unlike digital silence
         // Advance every mixer strip once per sample: smoothed gain and
         // pan (no zipper under automation), duck envelopes breathing back
         let knob_k = self.knob_smooth_k;
@@ -1314,26 +1321,16 @@ impl VoiceManager {
             if voice.channel() == VOX_CHANNEL {
                 voice.set_cv_override(vox_cv);
             }
+            if voice.skip_if_idle() {
+                continue;
+            }
             let ch = voice.channel();
             let (pitch_mult, cutoff_mod, pwm_mod) = self
-                .channel_params
+                .channel_lfos
                 .get(&ch)
-                .and_then(|params| {
-                    self.channel_lfos
-                        .get(&ch)
-                        .map(|modulation| (params, modulation.sample))
-                })
-                .map_or(
-                    (panel_pitch_mult, lfo_cutoff_oct, pw_offset),
-                    |(params, lfo)| {
-                        let cents = params.lfo_pitch + self.mod_wheel * 75.0;
-                        (
-                            (lfo * cents / 1200.0).exp2() * self.bend_ratio,
-                            lfo * params.lfo_filter,
-                            lfo * params.lfo_pwm,
-                        )
-                    },
-                );
+                .map_or((panel_pitch_mult, lfo_cutoff_oct, pw_offset), |channel| {
+                    channel.modulation
+                });
             let (l, r) =
                 voice.render_next(noise, pitch_mult, cutoff_mod, pwm_mod, substrate, bleed);
             if ch == VOX_CHANNEL {

@@ -793,59 +793,80 @@ fn register_channels(vm: &mut VoiceManager, song: &Song) {
     }
 }
 
-/// Render a song offline, as fast as the CPU allows: same events, same
-/// engine, no audio device. Returns interleaved-by-frame stereo samples,
-/// with a few seconds of tail for reverb and tape print-through to ring out.
-pub fn render_offline(song: &Song, sample_rate: f32) -> Vec<(f32, f32)> {
-    render_offline_solo(song, sample_rate, None)
+/// A sample-accurate offline bounce. Audio is generated on demand; keeping
+/// a long song in memory is the caller's explicit choice via `collect()`.
+pub struct OfflineRender<'a> {
+    vm: VoiceManager,
+    events: &'a [SongEvent],
+    next_event: usize,
+    frame: usize,
+    total: usize,
+    sample_rate: f64,
+    peak_voices: usize,
 }
 
-/// Render with one channel soloed (stem bounces): everything still runs —
-/// oscillators free-run, tempo and automation march — but only the solo
-/// channel's strip reaches the bus and the sends.
-pub fn render_offline_solo(song: &Song, sample_rate: f32, solo: Option<u16>) -> Vec<(f32, f32)> {
-    // Offline bounces get a bigger card cage than the live instrument:
-    // 24 voice boards, each its own circuit (per-index component
-    // tolerances, ladder mismatch, drift walk) — an ensemble of unique
-    // instantiations, not copies. Live paths keep their realtime-safe
-    // counts; a bounce has no such budget and voice-stealing is audible.
-    // Unison multiplies voice demand (a 3-card lead over 2-card pads over
-    // 2-card bass), so an offline bounce gets a generous cage — stealing
-    // is audible and a bounce has no realtime budget to respect.
-    let mut vm = VoiceManager::new(sample_rate, 64);
-    vm.set_solo(solo);
-    // A bounce records a warmed-up instrument, not a cold power-on
-    vm.warm_up();
-    register_channels(&mut vm, song);
-    let events = &song.events;
-    let end = events.last().map(|e| e.time).unwrap_or(0.0) + song.tail_seconds;
-    let total = (end * sample_rate as f64) as usize;
-    let mut out = Vec::with_capacity(total);
-    let mut next = 0;
-    // Allocation-pressure telemetry: the deepest simultaneous claim on
-    // the voice cards, so chorus voicings can be checked against the
-    // card limit without hand-counting note-ons
-    let mut peak_voices = 0usize;
-    for n in 0..total {
-        let t = n as f64 / sample_rate as f64;
+impl OfflineRender<'_> {
+    pub fn peak_voices(&self) -> usize {
+        self.peak_voices
+    }
+}
+
+impl Iterator for OfflineRender<'_> {
+    type Item = (f32, f32);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.frame == self.total {
+            return None;
+        }
+        let t = self.frame as f64 / self.sample_rate;
         let mut fired = false;
-        while next < events.len() && events[next].time <= t {
-            dispatch(&mut vm, &events[next].kind);
-            next += 1;
+        while self.next_event < self.events.len() && self.events[self.next_event].time <= t {
+            dispatch(&mut self.vm, &self.events[self.next_event].kind);
+            self.next_event += 1;
             fired = true;
         }
         if fired {
-            let active = vm.voices.iter().filter(|v| v.is_active()).count();
-            peak_voices = peak_voices.max(active);
+            self.peak_voices = self
+                .peak_voices
+                .max(self.vm.voices.iter().filter(|v| v.is_active()).count());
         }
-        out.push(vm.render_next());
+        self.frame += 1;
+        Some(self.vm.render_next())
     }
-    println!(
-        "peak concurrent voices: {}/{}",
-        peak_voices,
-        vm.voices.len()
-    );
-    out
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.total - self.frame;
+        (remaining, Some(remaining))
+    }
+}
+
+impl ExactSizeIterator for OfflineRender<'_> {}
+impl std::iter::FusedIterator for OfflineRender<'_> {}
+
+/// Stream a song through the full engine, including its configured tail.
+pub fn render_offline(song: &Song, sample_rate: f32) -> OfflineRender<'_> {
+    render_offline_solo(song, sample_rate, None)
+}
+
+/// Stream a stem: all events and circuits still run, but only the solo
+/// channel's strip reaches the bus and effect sends.
+pub fn render_offline_solo(song: &Song, sample_rate: f32, solo: Option<u16>) -> OfflineRender<'_> {
+    // Unison multiplies voice demand. Offline bounces use 64 distinct
+    // voice boards to keep busy arrangements from stealing held notes.
+    let mut vm = VoiceManager::new(sample_rate, 64);
+    vm.set_solo(solo);
+    vm.warm_up();
+    register_channels(&mut vm, song);
+    let end = song.events.last().map(|e| e.time).unwrap_or(0.0) + song.tail_seconds;
+    OfflineRender {
+        vm,
+        events: &song.events,
+        next_event: 0,
+        frame: 0,
+        total: (end * sample_rate as f64) as usize,
+        sample_rate: sample_rate as f64,
+        peak_voices: 0,
+    }
 }
 
 pub fn spawn_player(song: Song, voice_manager: Arc<Mutex<VoiceManager>>) {
@@ -2018,8 +2039,17 @@ mod tests {
     #[test]
     fn tail_directive_sets_exact_offline_render_allowance() {
         let song = parse_song("bpm 60\ngate 1\ntail 0.25\ntrack a\nC4:1\n").unwrap();
-        let frames = render_offline(&song, 48000.0);
-        assert_eq!(frames.len(), (1.25 * 48000.0) as usize);
+        let mut frames = render_offline(&song, 48000.0);
+        let total = (1.25 * 48000.0) as usize;
+        assert_eq!(frames.len(), total);
+        assert_eq!(frames.peak_voices(), 0);
+        assert!(frames.next().is_some());
+        assert_eq!(frames.peak_voices(), 1);
+        assert_eq!(frames.len(), total - 1);
+        assert_eq!(frames.by_ref().count(), total - 1);
+        assert_eq!(frames.size_hint(), (0, Some(0)));
+        assert_eq!(frames.next(), None);
+        assert_eq!(frames.next(), None);
         assert!((song.tail_seconds - 0.25).abs() < f64::EPSILON);
         assert!(parse_song("tail -1\ntrack a\nC4\n").is_err());
     }
@@ -2189,7 +2219,7 @@ mod tests {
              [A2 E3 A3]:6=AA\n",
         )
         .unwrap();
-        let frames = render_offline(&song, 48000.0);
+        let frames: Vec<_> = render_offline(&song, 48000.0).collect();
         let peak = frames
             .iter()
             .fold(0.0f32, |a, &(l, r)| a.max(l.abs()).max(r.abs()));
@@ -2220,7 +2250,7 @@ mod tests {
             "VoxLead fires ahead of its 1.0 s note-on: {} s",
             lead.time
         );
-        let frames = render_offline(&song, sr);
+        let frames: Vec<_> = render_offline(&song, sr).collect();
         let mono: Vec<f32> = frames.iter().map(|&(l, r)| (l + r) * 0.5).collect();
         // 120 bpm: the note-on is at 1.0 s
         let win = |a: f32, b: f32| {
@@ -2309,7 +2339,7 @@ mod tests {
                 if channel == SAMPLER_CHANNEL_BASE
         )));
 
-        let frames = render_offline(&song, 48000.0);
+        let frames: Vec<_> = render_offline(&song, 48000.0).collect();
         let peak = frames
             .iter()
             .fold(0.0f32, |a, &(l, r)| a.max(l.abs()).max(r.abs()));
@@ -2553,7 +2583,7 @@ mod tests {
         // Drum names outside a kit= track stay errors
         assert!(parse_song("bpm 120\ntrack a\nBD\n").is_err());
 
-        let frames = render_offline(&song, 48000.0);
+        let frames: Vec<_> = render_offline(&song, 48000.0).collect();
         let peak = frames
             .iter()
             .fold(0.0f32, |a, &(l, r)| a.max(l.abs()).max(r.abs()));
@@ -2657,7 +2687,7 @@ mod tests {
 
         // The render: silence until the anchored beat, the recording
         // articulating the carrier right on it
-        let frames = render_offline(&song, 48000.0);
+        let frames: Vec<_> = render_offline(&song, 48000.0).collect();
         let before = frames_rms(&frames, 0.0, 1.9, 48000.0);
         let after = frames_rms(&frames, 2.0, 2.3, 48000.0);
         assert!(
@@ -2952,7 +2982,7 @@ mod tests {
              0\n",
         )
         .unwrap();
-        let frames = render_offline(&song, 48000.0);
+        let frames: Vec<_> = render_offline(&song, 48000.0).collect();
         for k in 0..3 {
             let on = k as f64; // notes at beats 0, 2, 4 -> 0, 1, 2 s
             let sung = frames_rms(&frames, on + 0.05, on + 0.4, 48000.0);

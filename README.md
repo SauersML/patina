@@ -205,3 +205,6 @@ No knobs — it's the chassis. It is simply *on*, the way gravity is.
 - **Chorus**: modeled on the Roland Juno bucket-brigade chorus, modes I–IV.
 - **Tape**: cassette model with wow/flutter/drift transport, Langevin magnetization curve, head bump, gap loss, dropouts, and hiss.
 - **Voice Management**: polyphonic with age-based voice stealing (idle voices first, then releasing, then oldest), equal-power stereo voice spread, DC-blocked and soft-limited master bus.
+
+See [engine and bounce performance](docs/performance.md) for streaming-render
+memory behavior, measured CPU costs, and benchmark commands.

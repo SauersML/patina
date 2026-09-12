@@ -496,6 +496,18 @@ impl Voice {
         self.held || !self.envelope.is_idle()
     }
 
+    /// Clear the last coupling delta when the card sleeps. The manager
+    /// uses this before channel lookups; direct voice rendering uses the
+    /// same rule, including the performance-line override.
+    pub(crate) fn skip_if_idle(&mut self) -> bool {
+        if !self.held && self.envelope.is_idle() && self.cv_override.is_none() {
+            self.prefilter_delta = 0.0;
+            true
+        } else {
+            false
+        }
+    }
+
     /// The change of this card's pre-filter node last sample — what the
     /// neighbor's trace capacitance picks up.
     pub fn prefilter_delta(&self) -> f32 {
@@ -516,15 +528,7 @@ impl Voice {
         substrate: SubstrateState,
         bleed: f32,
     ) -> (f32, f32) {
-        // Idle cards cost nothing. A voice that is not held, has a fully
-        // decayed envelope, and carries no performance-line override is
-        // silent (its only output would be sub-audible VCA bleed): skip
-        // the oscillator + ladder Newton solve entirely. This is what
-        // lets an offline bounce run a large card cage — most cards are
-        // idle most of the time — without paying for 64 filter solves a
-        // sample. A held or still-ringing voice takes the full path below.
-        if !self.held && self.envelope.is_idle() && self.cv_override.is_none() {
-            self.prefilter_delta = 0.0;
+        if self.skip_if_idle() {
             return (0.0, 0.0);
         }
         let pulse_width = (self.pulse_width + pw_offset).clamp(0.05, 0.95);

@@ -868,14 +868,6 @@ impl JilesAtherton {
     }
 }
 
-/// Fast rational tanh (accurate within the +-3 range it is used in).
-#[inline]
-fn fast_tanh(x: f32) -> f32 {
-    let x = x.clamp(-3.0, 3.0);
-    let x2 = x * x;
-    x * (27.0 + x2) / (27.0 + 9.0 * x2)
-}
-
 /// Langevin function L(x) = coth(x) - 1/x and its derivative, computed
 /// together (they share coth via csch^2 = coth^2 - 1). L is the
 /// anhysteretic magnetization curve of the oxide particles.
@@ -893,7 +885,12 @@ fn langevin_pair(x: f32) -> (f32, f32) {
         // Asymptotic: coth -> sign(x)
         (x.signum() - 1.0 / x, 1.0 / (x * x))
     } else {
-        let coth = 1.0 / fast_tanh(x);
+        // Invert the rational tanh algebraically. This is the same oxide
+        // curve, with one division instead of a division and reciprocal
+        // at each of the 96 RK2 layer evaluations per stereo sample.
+        let t = x.clamp(-3.0, 3.0);
+        let t2 = t * t;
+        let coth = (27.0 + 9.0 * t2) / (t * (27.0 + t2));
         let inv_x = 1.0 / x;
         let l = coth - inv_x;
         // L'(x) = 1/x^2 - csch^2 = 1/x^2 + 1 - coth^2
@@ -1203,6 +1200,24 @@ impl PeakingFilter {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn direct_coth_preserves_the_oxide_curve() {
+        for i in -60000..=60000 {
+            let x = i as f32 * 0.0001;
+            if x.abs() < 0.6 {
+                continue;
+            }
+            let t = x.clamp(-3.0, 3.0);
+            let t2 = t * t;
+            let coth = 1.0 / (t * (27.0 + t2) / (27.0 + 9.0 * t2));
+            let inv_x = 1.0 / x;
+            let expected = (coth - inv_x, (inv_x * inv_x + 1.0 - coth * coth).max(0.0));
+            let actual = super::langevin_pair(x);
+            assert!((actual.0 - expected.0).abs() < 1e-6, "L({x})");
+            assert!((actual.1 - expected.1).abs() < 2e-6, "L'({x})");
+        }
+    }
+
     use super::*;
 
     const FS: f32 = 48000.0;

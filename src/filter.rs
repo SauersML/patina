@@ -76,6 +76,22 @@ use std::f32::consts::PI;
 use crate::adaa::AdaaTanh;
 use crate::oscillator::CircuitModel;
 
+/// Lambert's continued fraction for tanh, evaluated as an 11/10 rational
+/// polynomial. Maximum absolute error is below 1e-6 in f32; saturation
+/// beyond eight differs from tanh by less than 2.3e-7. The Newton loop
+/// evaluates this for every transistor pair, so avoiding libm calls here
+/// saves work without lowering oversampling or the solver's tolerance.
+#[inline]
+fn transistor_tanh(x: f32) -> f32 {
+    let x = x.clamp(-8.0, 8.0);
+    let z = x * x;
+    let numerator =
+        13749310575.0 + z * (1964187225.0 + z * (64324260.0 + z * (675675.0 + z * (2145.0 + z))));
+    let denominator = 13749310575.0
+        + z * (6547290750.0 + z * (413513100.0 + z * (7567560.0 + z * (45045.0 + z * 66.0))));
+    (x * numerator / denominator).clamp(-1.0, 1.0)
+}
+
 /// Thermal voltage at room temperature, volts.
 const VT: f32 = 0.02585;
 /// The input attenuation stage: program level (10 V p-p) is dropped to
@@ -223,11 +239,11 @@ impl LadderFilter {
             let s2 = a_half * (v[1] + p[1]);
             let s3 = a_half * (v[2] + p[2]);
             let s4 = a_half * (v[3] + p[3]);
-            let t0 = s0.tanh();
-            let t1 = s1.tanh();
-            let t2 = s2.tanh();
-            let t3 = s3.tanh();
-            let t4 = s4.tanh();
+            let t0 = transistor_tanh(s0);
+            let t1 = transistor_tanh(s1);
+            let t2 = transistor_tanh(s2);
+            let t3 = transistor_tanh(s3);
+            let t4 = transistor_tanh(s4);
 
             // Residuals (eqs. 15)
             let f1 = v[0] - p[0] + c[0] * (t1 + t0);
@@ -310,10 +326,10 @@ impl LadderFilter {
             let x2 = m1 - m2;
             let x3 = m2 - m3;
             let x4 = m3 - m4;
-            let t1 = (a * x1).tanh();
-            let t2 = (a * x2).tanh();
-            let t3 = (a * x3).tanh();
-            let t4 = (a * x4).tanh();
+            let t1 = transistor_tanh(a * x1);
+            let t2 = transistor_tanh(a * x2);
+            let t3 = transistor_tanh(a * x3);
+            let t4 = transistor_tanh(a * x4);
 
             let f1 = v[0] - p[0] - c[0] * t1;
             let f2 = v[1] - p[1] - c[1] * t2;
@@ -473,6 +489,18 @@ impl LadderFilter {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn transistor_curve_matches_tanh_across_operating_range() {
+        for i in -100000..=100000 {
+            let x = i as f32 * 0.0001;
+            let y = super::transistor_tanh(x);
+            assert!((y - x.tanh()).abs() < 1e-6, "x={x}, approximation={y}");
+            assert!(y.abs() <= 1.0);
+        }
+        assert_eq!(super::transistor_tanh(f32::INFINITY), 1.0);
+        assert_eq!(super::transistor_tanh(f32::NEG_INFINITY), -1.0);
+    }
+
     use super::*;
     use std::f32::consts::TAU;
 
