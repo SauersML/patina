@@ -3,30 +3,37 @@ use cpal::{Sample, SampleFormat, SizedSample};
 use dasp_sample::FromSample;
 use eframe::egui;
 use parking_lot::Mutex;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use patina::midi_handler::MidiHandler;
 use patina::song;
 use patina::ui::SynthUI;
 use patina::voice_manager::VoiceManager;
 
+/// How often the MIDI ports are re-scanned for a keyboard plugged in or
+/// pulled out after launch.
+const MIDI_RESCAN_EVERY: Duration = Duration::from_secs(1);
+
 impl eframe::App for SynthApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.midi_scanned_at.elapsed() >= MIDI_RESCAN_EVERY {
+            self.midi.refresh();
+            self.midi_scanned_at = Instant::now();
+        }
+        // Keep ticking even when the panel is idle so a hot-plugged keyboard
+        // is noticed without waiting for a mouse move.
+        ctx.request_repaint_after(MIDI_RESCAN_EVERY);
         self.ui.update(ctx);
-    }
-
-    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.running.store(false, Ordering::SeqCst);
     }
 }
 
 struct SynthApp {
     ui: SynthUI,
     _stream: cpal::Stream,
-    running: Arc<AtomicBool>,
+    /// Owns every open MIDI input; dropping the app closes the ports.
+    midi: MidiHandler,
+    midi_scanned_at: Instant,
 }
 
 fn run<T>(
@@ -41,9 +48,7 @@ where
     let channels = config.channels as usize;
 
     let voice_manager = Arc::new(Mutex::new(VoiceManager::new(sample_rate, 10))); // 10 voices
-    let (mut midi_handler, _midi_rx) = MidiHandler::new()?;
-    midi_handler.set_voice_manager(Arc::clone(&voice_manager));
-    let running = Arc::new(AtomicBool::new(true));
+    let midi = MidiHandler::new(Arc::clone(&voice_manager))?;
     let vm_clone = Arc::clone(&voice_manager);
 
     let stream = device.build_output_stream(
@@ -86,7 +91,8 @@ where
             Ok(Box::new(SynthApp {
                 ui,
                 _stream: stream,
-                running,
+                midi,
+                midi_scanned_at: Instant::now(),
             }))
         }),
     )
