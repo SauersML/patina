@@ -2,7 +2,7 @@
 # F2/C3; D then C on top of the A, A then D on top of the F). The Kokoro
 # choir bounce of that loop is the bed; on top, one saw patch with every
 # drive pinned (patches/claude-drive.patch): a driven eighth-note bass, a
-# lead that leans into its notes by a half step the way the user played,
+# lead in A natural minor that leans into its notes (B into C, G into A),
 # and a 909 with its bus drive and kick drive at the top of the dial.
 # 51 bpm so one choir bar is exactly four beats.
 
@@ -25,7 +25,13 @@ automate bd_drive
 automate tape_drive
 1
 automate tape_age
-0.35
+0.3
+automate dr_tone
+0.4
+automate bd_attack
+0.1
+automate hh_metal
+0.15
 
 # ---- the bed: the sung loop, two cycles per file, locked to 16 beats ----
 track bed sample=renders/kokoro-choir-am-f.wav root=C4 fixed loop beats=16 gain=0.9 attack=0.02 release=1.5
@@ -39,7 +45,7 @@ A1 A1@0.6 A1 A1@0.6 A2@0.7 A1 E2 G2@0.85 | F1 F1@0.6 F1 F1@0.6 F2@0.7 F1 C2 E2@0
 >B
 A1 A1@0.65 A1@0.9 A2@0.7 A1 A1@0.65 E2 G2@0.9 | F1 F1@0.65 F1@0.9 F2@0.7 F1 F1@0.65 C2 E2@0.9
 A1 A1@0.65 A1@0.9 A1 A2@0.7 A1 E2 G2@0.9 | F1 F1@0.65 F1@0.9 F1 F2@0.7 F1 C2 E2@0.9
-A1 A1@0.65 A1@0.9 A2@0.7 A1 A1@0.65 E2 G#2@0.9 | F1 F1@0.65 F1@0.9 F2@0.7 F1 F1@0.65 C2 E2@0.9
+A1 A1@0.65 A1@0.9 A2@0.7 A1 A1@0.65 E2 G2@0.9 | F1 F1@0.65 F1@0.9 F2@0.7 F1 F1@0.65 C2 E2@0.9
 A1 A1@0.65 A1@0.9 A1 A2@0.7 A2@0.6 E2 G2@0.9 | F1 F1@0.65 F1@0.9 F1 F2@0.7 F2@0.6 C2 E2@0.9
 >C
 A1:3.5 G2:0.5@0.6 | F1:3.5 E2:0.5@0.6
@@ -47,33 +53,33 @@ A1:2 E2:1.5 G2:0.5@0.7 | F1:2 C2:1.5 E2:0.5@0.7
 >D
 A1 A1@0.7 A1@0.95 A2@0.75 A1 A1@0.7 E2 G2@0.95 | F1 F1@0.7 F1@0.95 F2@0.75 F1 F1@0.7 C2 E2@0.95
 A1 A1@0.7 A1@0.95 A1 A2@0.75 A1 E2 G2@0.95 | F1 F1@0.7 F1@0.95 F1 F2@0.75 F1 C2 E2@0.95
-A1 A1@0.7 A1@0.95 A2@0.75 A1 A1@0.7 E2 G#2@0.95 | F1 F1@0.7 F1@0.95 F2@0.75 F1 F1@0.7 C2 E2@0.95
+A1 A1@0.7 A1@0.95 A2@0.75 A1 A1@0.7 E2 G2@0.95 | F1 F1@0.7 F1@0.95 F2@0.75 F1 F1@0.7 C2 E2@0.95
 A1 A1@0.7 A1@0.95 A1 A2@0.75 A2@0.65 E2 G2@0.95 | F1:1 F1:1@0.7 F1:2
 
 automate bass.cutoff
-600 R:8 900:16@exp 2400:32@exp 500:0.1@step R:15.9 3200:24@exp 900:8@exp
+500 R:8 700:16@exp 1400:32@exp 450:0.1@step R:15.9 1600:24@exp 700:8@exp
 
 # ---- lead: the half-step leans, each phrase written out ----
-track lead patch=claude-drive vel=0.75 len=1 gain=0.8 reverb_send=0.25
+track lead patch=claude-drive vel=0.7 len=1 gain=0.8 reverb_send=0.25
 >A
 R:8
-D5:1.5 C#5:0.25@0.5 C5:2.25 | A4:1 Bb4:0.5@0.5 A4:0.5 D5:2
+D5:1.5 B4:0.25@0.5 C5:2.25 | A4:1 G4:0.5@0.5 A4:0.5 D5:2
 >B
-D5:1.5 C#5:0.25@0.5 C5:2.25 | A4:1 Bb4:0.5@0.5 A4:0.5 D5:2
-D5:0.5 E5:0.5 D5:0.5 C#5:0.5@0.55 C5:2 | A4:0.5 G4:0.5@0.6 A4:1 D5:1.5 C#5:0.5@0.5
-D5:1.5 C#5:0.25@0.5 C5:1.25 B4:0.5@0.5 C5:0.5 | A4:1.5 Bb4:0.25@0.5 A4:0.25 D5:1 E5:1
-D5:2 C5:2 | A4:1 Bb4:0.5@0.5 A4:0.5 D5:1 F5:0.5@0.6 E5:0.5@0.5
+D5:1.5 B4:0.25@0.5 C5:2.25 | A4:1 G4:0.5@0.5 A4:0.5 D5:2
+D5:0.5 E5:0.5 D5:0.5 B4:0.5@0.55 C5:2 | A4:0.5 G4:0.5@0.6 A4:1 D5:1.5 E5:0.5@0.5
+D5:1.5 B4:0.25@0.5 C5:1.25 B4:0.5@0.5 C5:0.5 | A4:1.5 G4:0.25@0.5 A4:0.25 D5:1 E5:1
+D5:2 C5:2 | A4:1 G4:0.5@0.5 A4:0.5 D5:1 F5:0.5@0.6 E5:0.5@0.5
 >C
-A5:1.5 G#5:0.25@0.5 G5:2.25 | F5:1 E5:0.5@0.5 F5:0.5 D5:2
+A5:1.5 F5:0.25@0.5 G5:2.25 | F5:1 E5:0.5@0.5 F5:0.5 D5:2
 E5:1 D5:1 C5:2 | A4:2 D5:2
 >D
-D5:1.5 C#5:0.25@0.55 C5:2.25 | A4:1 Bb4:0.5@0.55 A4:0.5 D5:2
-D5:0.5 E5:0.5 D5:0.5 C#5:0.5@0.55 C5:2 | A4:0.5 G4:0.5@0.6 A4:1 D5:2
-D5:1.5 C#5:0.25@0.55 C5:1.25 B4:0.5@0.55 C5:0.5 | A4:1.5 Bb4:0.25@0.55 A4:0.25 D5:2
+D5:1.5 B4:0.25@0.55 C5:2.25 | A4:1 G4:0.5@0.55 A4:0.5 D5:2
+D5:0.5 E5:0.5 D5:0.5 B4:0.5@0.55 C5:2 | A4:0.5 G4:0.5@0.6 A4:1 D5:2
+D5:1.5 B4:0.25@0.55 C5:1.25 B4:0.5@0.55 C5:0.5 | A4:1.5 G4:0.25@0.55 A4:0.25 D5:2
 D5:2 C5:2 | A4:1 D5:3
 
 automate lead.cutoff
-1400 R:8 1800:16@exp 2600:32@exp 3400:16@exp 2600:32@exp
+1100 R:8 1300:16@exp 1900:32@exp 2300:16@exp 1900:32@exp
 
 # ---- 909: bus drive and kick drive pinned above; every bar placed by hand ----
 track kick kit=909 vel=0.8 len=0.5

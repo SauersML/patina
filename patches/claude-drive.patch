@@ -1,7 +1,9 @@
-# Claude Drive — a lone saw with every drive knob pinned. Ladder drive
-# at 5, saturation near the top, tape drive at 1: the filter is asked to
-# clip before it resonates, so the resonance peak spits instead of sings.
-# A detuned second saw and a sub keep the bottom solid under the grit.
+# Claude Drive — one saw, nothing stacked (the Bocuma lesson: the voice
+# is the envelope and the filter, not the mix). Ladder drive and tape
+# drive pinned as asked, but no squelch: a modest filter-envelope bloom
+# that decays over a couple of seconds, moderate resonance, strong key
+# tracking, cutoff in the vowel range. Light triangle vibrato and a short
+# auto glide keep held lines alive without an LFO sweep.
 waveform 2
 mix_saw 0
 mix_pulse 0
@@ -9,49 +11,49 @@ mix_tri 0
 mix_sine 0
 osc2_wave 2
 osc2_pitch 0
-osc2_level 0.55
+osc2_level 0
 osc3_wave 2
-osc3_pitch -12
-osc3_level 0.3
-detune 9
-sub 0.35
+osc3_pitch 0
+osc3_level 0
+detune 0
+sub 0
 circuit 0
-key_track 0.5
+key_track 0.7
 osc_fm 0
 sync 0
 ring 0
-glide 0.03
+glide 0.012
 pulse_width 0.5
-attack 0.004
-decay 0.4
-sustain 0.6
-release 0.28
-filter_env 2.4
-filter_attack 0.002
-filter_decay 0.33
-filter_sustain 0.2
-filter_release 0.3
-cutoff 900
-resonance 1.4
+attack 0.008
+decay 1.6
+sustain 0.25
+release 0.6
+filter_env 0.9
+filter_attack 0.005
+filter_decay 1.6
+filter_sustain 0.3
+filter_release 0.6
+cutoff 1100
+resonance 0.9
 drive 5
-saturation 1.8
-hpf 40
-volume 0.5
+saturation 0.6
+hpf 24
+volume 0.55
 octave 2
-noise 0.02
-fuzz 0.3
-spring 0.18
-reverb_decay 0.5
-reverb_wet 0.16
+noise 0
+fuzz 0
+spring 0.08
+reverb_decay 0.7
+reverb_wet 0.25
 chorus_mode 0
 chorus_rate 0.5
 chorus_depth 0
-lfo_rate 0.8
+lfo_rate 1.2
 lfo_shape 0.5
-lfo_pitch 0
-lfo_filter 0
+lfo_pitch 3
+lfo_filter 0.05
 lfo_pwm 0
-tape_wow 0.1
-tape_flutter 0.05
+tape_wow 0.3
+tape_flutter 0.06
 tape_drive 1
-tape_age 0.35
+tape_age 0.3
