@@ -65,6 +65,11 @@ pub struct Chorus {
     /// the glide lasts the same time at every sample rate.
     depth_smooth_k: f32,
     wet_dry_mix: f32,
+    /// The insert mix actually heard, gliding toward `wet_dry_mix` (0 while
+    /// Off) at the knob rate. The switch used to step the output from dry
+    /// to (1 - m) dry + wet, half the signal swing in one sample, and Off
+    /// dropped the voices along with the whole wet signal at once.
+    mix_heard: f32,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -139,6 +144,7 @@ impl Chorus {
             ),
             voices,
             wet_dry_mix: 0.5,
+            mix_heard: 0.0,
         }
     }
 
@@ -193,7 +199,11 @@ impl Chorus {
         self.mode = mode;
         let rng = &mut self.rng;
         let (voices, mix) = match mode {
-            ChorusMode::Off => (vec![], 0.0),
+            ChorusMode::Off => {
+                // The voices keep running while the wet signal fades out
+                self.wet_dry_mix = 0.0;
+                return;
+            }
             ChorusMode::I => (vec![Voice::new(0.513, 0.515, 0.00535, rng)], 0.5),
             ChorusMode::II => (vec![Voice::new(0.863, 0.865, 0.00535, rng)], 0.8),
             ChorusMode::III => (
@@ -250,7 +260,26 @@ impl Chorus {
         send_right: f32,
     ) -> (f32, f32) {
         if self.mode == ChorusMode::Off {
-            return (input_left, input_right);
+            self.mix_heard += (0.0 - self.mix_heard) * self.depth_smooth_k;
+            if self.mix_heard < 1e-4 {
+                if self.mix_heard != 0.0 {
+                    // Faded out: empty the line, so switching back on
+                    // starts from silence rather than replaying the audio
+                    // it held when it was switched off
+                    self.mix_heard = 0.0;
+                    self.buffer_left.fill(0.0);
+                    self.buffer_right.fill(0.0);
+                    self.low_pass_left.prev = 0.0;
+                    self.low_pass_right.prev = 0.0;
+                    self.high_pass_left.prev_input = 0.0;
+                    self.high_pass_left.prev_output = 0.0;
+                    self.high_pass_right.prev_input = 0.0;
+                    self.high_pass_right.prev_output = 0.0;
+                }
+                return (input_left, input_right);
+            }
+        } else {
+            self.mix_heard += (self.wet_dry_mix - self.mix_heard) * self.depth_smooth_k;
         }
         // The BBD line feeds back on itself, so one non-finite sample
         // circulates forever and the chorus never produces audio again.
@@ -276,7 +305,7 @@ impl Chorus {
             0.0
         };
 
-        let m = self.wet_dry_mix.clamp(0.0, 1.0);
+        let m = self.mix_heard.clamp(0.0, 1.0);
         let fed_left = input_left * m + send_left;
         let fed_right = input_right * m + send_right;
 
@@ -590,7 +619,6 @@ mod tests {
         );
     }
 
-    #[test]
     /// The BBD clock LFO must be ONE shape: same span, same mean, for both
     /// channels. Left and right are decorrelated by phase and rate, never
     /// by a standing mean-delay offset (see LFO_PARTIAL_RATIO). Before this
@@ -645,6 +673,45 @@ mod tests {
             (mean_l - mean_r).abs() < 0.01,
             "standing L/R mean-delay offset: {mean_l} vs {mean_r}"
         );
+    }
+
+    /// Throwing the switch on or off mid-note fades the chorus in or out
+    /// instead of stepping, and a chorus switched back on never replays
+    /// the audio its line held when it was switched off.
+    #[test]
+    fn switching_fades_and_never_replays_old_audio() {
+        let sr = 48000.0;
+        let mut chorus = Chorus::new(sr);
+        let sine = |n: usize| (std::f32::consts::TAU * 220.0 * n as f32 / sr).sin() * 0.5;
+        let (mut p1, mut p2) = (0.0f32, 0.0f32);
+        let (mut steady, mut switched) = (0.0f32, 0.0f32);
+        for n in 0..48000 {
+            if n == 12000 {
+                chorus.set_mode(ChorusMode::II);
+            }
+            if n == 36000 {
+                chorus.set_mode(ChorusMode::Off);
+            }
+            let (y, _) = chorus.process(sine(n), sine(n));
+            let d2 = (y - 2.0 * p1 + p2).abs();
+            (p2, p1) = (p1, y);
+            if (2000..11000).contains(&n) {
+                steady = steady.max(d2);
+            } else if (12000..12500).contains(&n) || (36000..36500).contains(&n) {
+                switched = switched.max(d2);
+            }
+        }
+        assert!(switched < 3.0 * steady, "switch step {switched} vs sine {steady}");
+
+        // Silence for a while, then back on: nothing but hiss comes out
+        for _ in 0..48000 {
+            chorus.process(0.0, 0.0);
+        }
+        chorus.set_mode(ChorusMode::II);
+        let ghost = (0..4800)
+            .map(|_| chorus.process(0.0, 0.0).0.abs())
+            .fold(0.0f32, f32::max);
+        assert!(ghost < 0.01, "re-engaged chorus replayed old audio: {ghost}");
     }
 
     #[test]
