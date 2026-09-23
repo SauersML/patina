@@ -123,6 +123,20 @@ const PRINT_LEVEL: f32 = 0.0035;
 /// Record-alignment trimmer pivots (the deck's two "trim pots").
 const TRIM_LOW_HZ: f32 = 2500.0;
 const TRIM_HIGH_HZ: f32 = 9000.0;
+/// Engaging or leaving the deck crossfades over this long. An idle deck is
+/// a wire, but the running transport reads CENTER_DELAY_S behind it and the
+/// recorded path adds its own filter latency, so switching either stage in
+/// or out mid-program jumped the output by up to the full signal swing.
+const ENGAGE_S: f32 = 0.01;
+/// Silence recorded through a freshly engaged oxide before it is heard: a
+/// virgin core magnetizes asymmetrically for its first bias cycles, and at
+/// low field the makeup gain (up to x60) turned that into a -19 dBFS thump
+/// at the moment tape_age or tape_drive left zero.
+const PREROLL_S: f32 = 0.03;
+/// Wow and flutter depths glide over this long. Their depth IS the read
+/// point's excursion, so a jump moved the read point up to 3.5 ms in one
+/// sample; a glide this slow bends the pitch by a few percent at most.
+const DEPTH_GLIDE_S: f32 = 0.1;
 
 pub struct Tape {
     sample_rate: f32,
@@ -198,6 +212,33 @@ pub struct Tape {
     dc_block: [OnePoleHighPass; 2],
     crosstalk_lp: [OnePole; 2],
     prev_out: (f32, f32),
+
+    // Engagement
+    /// Per-sample step of the ENGAGE_S crossfades.
+    engage_step: f32,
+    /// 0 = wire, 1 = the transport's output.
+    transport_mix: f32,
+    /// 0 = the transport's unrecorded read, 1 = the recorded path.
+    record_mix: f32,
+    /// Whether the oxide has been pre-rolled since it last went quiet.
+    oxide_primed: bool,
+    /// A drive move glides the record field and its calibrated makeup
+    /// together over ENGAGE_S, from these values to the new calibration:
+    /// the oxide's magnetization carries over, so jumping the makeup under
+    /// it scaled the whole held signal at once (a x4 step leaving drive
+    /// 0.3 for 0). 1 = settled.
+    drive_glide: f32,
+    glide_from: (f32, f32),
+    glide_to: (f32, f32),
+    /// The wear the heads currently see, gliding toward `age` at the
+    /// ENGAGE_S rate: a jump moved the right channel's azimuth read point
+    /// and every layer's spacing loss in one sample.
+    age_heard: f32,
+    /// The transport's wow and flutter depths, gliding toward the knobs
+    /// (see DEPTH_GLIDE_S).
+    wow_heard: f32,
+    flutter_heard: f32,
+    depth_step: f32,
 }
 
 impl Tape {
@@ -296,6 +337,17 @@ impl Tape {
             dc_block: [OnePoleHighPass::new(sample_rate, 10.0); 2],
             crosstalk_lp: [OnePole::new(sample_rate, 300.0); 2],
             prev_out: (0.0, 0.0),
+            engage_step: 1.0 / (ENGAGE_S * sample_rate).max(1.0),
+            transport_mix: 0.0,
+            record_mix: 0.0,
+            oxide_primed: false,
+            drive_glide: 1.0,
+            glide_from: (0.0, 1.0),
+            glide_to: (0.0, 1.0),
+            age_heard: 0.0,
+            wow_heard: 0.0,
+            flutter_heard: 0.0,
+            depth_step: 1.0 / (DEPTH_GLIDE_S * sample_rate).max(1.0),
         };
         tape.update_drive();
         tape.update_age();
@@ -332,13 +384,23 @@ impl Tape {
     }
 
     fn update_drive(&mut self) {
-        self.field_scale = 0.05 + 0.5 * self.drive;
+        let field_scale = 0.05 + 0.5 * self.drive;
 
         // Self-alignment, step 2: record a small 1 kHz tone through the full
         // biased multi-layer magnetic path and set makeup gain from what
         // comes back. Quadrature projection rejects the bias residue.
         // Runs only on knob moves, never per sample.
-        self.makeup = calibrate_makeup(self.field_scale, self.sample_rate);
+        let makeup = calibrate_makeup(field_scale, self.sample_rate);
+        self.glide_to = (field_scale, makeup);
+        if self.record_mix > 0.0 {
+            self.glide_from = (self.field_scale, self.makeup);
+            self.drive_glide = 0.0;
+        } else {
+            // Nothing is being heard from the oxide: take the new
+            // alignment at once
+            (self.field_scale, self.makeup) = self.glide_to;
+            self.drive_glide = 1.0;
+        }
 
         // The head-bump contour is a playback-geometry effect; it fades in
         // quickly with record level only so a barely-engaged deck stays
@@ -350,21 +412,30 @@ impl Tape {
     }
 
     fn update_age(&mut self) {
-        self.spacing_age_um = SPACING_NEW_UM + (SPACING_WORN_UM - SPACING_NEW_UM) * self.age;
-        // Azimuth error: worse effective spacing on the outer track...
-        self.azimuth_spacing_factor = 1.0 + 0.5 * self.age;
-        // ...and an interchannel timing skew, up to ~0.1 ms
-        self.azimuth_skew = self.age * 0.0001 * self.sample_rate;
-
-        // Particle quality: worn oxide switches in coarser avalanches
-        self.barkhausen_level = BARKHAUSEN * (0.4 + 1.6 * self.age * self.age);
-
-        self.print_level = PRINT_LEVEL * self.age * self.age;
-        self.wallace_stale = true;
+        if self.transport_mix == 0.0 {
+            // The heads are idle: take the new wear at once
+            self.hear_age(self.age);
+        }
 
         // Reschedule so raising AGE from zero doesn't wait on a stale
         // (effectively infinite) arrival time
         self.next_dropout = self.sample_dropout_interval();
+    }
+
+    /// Set the head/tape geometry and oxide quality for a wear of `age`.
+    fn hear_age(&mut self, age: f32) {
+        self.age_heard = age;
+        self.spacing_age_um = SPACING_NEW_UM + (SPACING_WORN_UM - SPACING_NEW_UM) * age;
+        // Azimuth error: worse effective spacing on the outer track...
+        self.azimuth_spacing_factor = 1.0 + 0.5 * age;
+        // ...and an interchannel timing skew, up to ~0.1 ms
+        self.azimuth_skew = age * 0.0001 * self.sample_rate;
+
+        // Particle quality: worn oxide switches in coarser avalanches
+        self.barkhausen_level = BARKHAUSEN * (0.4 + 1.6 * age * age);
+
+        self.print_level = PRINT_LEVEL * age * age;
+        self.wallace_stale = true;
     }
 
     /// Poisson arrival time for the next oxide dropout, in samples.
@@ -400,17 +471,42 @@ impl Tape {
         self.buffer_right[self.write] = input_right;
         self.write = (self.write + 1) % self.size;
 
-        if self.wow + self.flutter + self.drive + self.age < 1e-4 {
+        let transport_on = self.wow + self.flutter + self.drive + self.age >= 1e-4;
+        self.transport_mix = if transport_on {
+            (self.transport_mix + self.engage_step).min(1.0)
+        } else {
+            (self.transport_mix - self.engage_step).max(0.0)
+        };
+        if self.transport_mix == 0.0 {
+            self.record_mix = 0.0;
+            self.oxide_primed = false;
+            if self.age_heard != self.age {
+                self.hear_age(self.age);
+            }
+            self.wow_heard = self.wow;
+            self.flutter_heard = self.flutter;
             return (input_left, input_right);
+        }
+        let glide = |heard: f32, knob: f32, step: f32| {
+            if knob > heard {
+                (heard + step).min(knob)
+            } else {
+                (heard - step).max(knob)
+            }
+        };
+        self.wow_heard = glide(self.wow_heard, self.wow, self.depth_step);
+        self.flutter_heard = glide(self.flutter_heard, self.flutter, self.depth_step);
+        if self.age_heard != self.age {
+            self.hear_age(glide(self.age_heard, self.age, self.engage_step));
         }
 
         // --- Transport: one tape speed, both channels ---
         self.wow_phase = (self.wow_phase + WOW_HZ / self.sample_rate).fract();
         self.flutter_phase = (self.flutter_phase + FLUTTER_HZ / self.sample_rate).fract();
 
-        let wow_sq = self.wow * self.wow; // perceptual taper
-        let flutter_sq = self.flutter * self.flutter;
-        let scrape_amp = self.flutter * (0.2 + 0.8 * self.age);
+        let wow_sq = self.wow_heard * self.wow_heard; // perceptual taper
+        let flutter_sq = self.flutter_heard * self.flutter_heard;
+        let scrape_amp = self.flutter_heard * (0.2 + 0.8 * self.age_heard);
         let delay_seconds = CENTER_DELAY_S
             + wow_sq * WOW_DEPTH_S * (2.0 * PI * self.wow_phase).sin()
             + wow_sq * DRIFT_DEPTH_S * self.drift.next()
@@ -426,9 +522,20 @@ impl Tape {
 
         // Transport-only mode: nothing is being recorded, pass the wobbled
         // program straight through
-        if self.drive + self.age < 5e-3 {
+        let record_on = self.drive + self.age >= 5e-3;
+        self.record_mix = if record_on {
+            (self.record_mix + self.engage_step).min(1.0)
+        } else {
+            (self.record_mix - self.engage_step).max(0.0)
+        };
+        if self.record_mix == 0.0 {
+            self.oxide_primed = false;
             self.prev_out = (left, right);
-            return (left, right);
+            let t = self.transport_mix;
+            return (
+                input_left + (left - input_left) * t,
+                input_right + (right - input_right) * t,
+            );
         }
 
         // --- Dropouts: the tape lifts across its full width ---
@@ -468,6 +575,16 @@ impl Tape {
             self.wallace_stale = lift > 1e-4;
         }
 
+        if !self.oxide_primed {
+            self.preroll_oxide();
+        }
+        if self.drive_glide < 1.0 {
+            self.drive_glide = (self.drive_glide + self.engage_step).min(1.0);
+            let (p, (f0, m0), (f1, m1)) = (self.drive_glide, self.glide_from, self.glide_to);
+            self.field_scale = f0 + (f1 - f0) * p;
+            self.makeup = m0 * (m1 / m0).powf(p);
+        }
+
         let bias_sub = self.bias_table;
 
         let mut out = [left, right];
@@ -488,7 +605,26 @@ impl Tape {
         out[1] += bleed_into_r;
 
         self.prev_out = (out[0], out[1]);
-        (out[0], out[1])
+        let (r, t) = (self.record_mix, self.transport_mix);
+        let tape_left = left + (out[0] - left) * r;
+        let tape_right = right + (out[1] - right) * r;
+        (
+            input_left + (tape_left - input_left) * t,
+            input_right + (tape_right - input_right) * t,
+        )
+    }
+
+    /// Record PREROLL_S of silence so the oxide, the resamplers and the
+    /// playback filters reach their biased steady state before the
+    /// recorded path is heard (see PREROLL_S).
+    fn preroll_oxide(&mut self) {
+        let bias_sub = self.bias_table;
+        for _ in 0..(PREROLL_S * self.sample_rate) as usize {
+            for ch in 0..2 {
+                self.process_channel(0.0, ch, &bias_sub);
+            }
+        }
+        self.oxide_primed = true;
     }
 
     fn process_channel(&mut self, x: f32, ch: usize, bias_sub: &[f32; OS]) -> f32 {
@@ -1445,6 +1581,56 @@ mod tests {
             let (l, r) = tape.process(x, x);
             assert_eq!(l, x);
             assert_eq!(r, x);
+        }
+    }
+
+    /// Turning any tape knob up from zero, or back down, mid-program must
+    /// not click: the idle wire, the delayed transport and the recorded
+    /// path are crossfaded, and the oxide is pre-rolled before it is heard.
+    #[test]
+    fn engaging_and_leaving_the_deck_is_click_free() {
+        for (drive, age, wow) in [(0.3, 0.0, 0.0), (0.0, 0.2, 0.0), (0.01, 0.0, 0.0), (0.0, 0.0, 0.3)]
+        {
+            // In silence, engaging the oxide is inaudible
+            let mut tape = Tape::new(FS);
+            for _ in 0..4800 {
+                tape.process(0.0, 0.0);
+            }
+            tape.set_drive(drive);
+            tape.set_age(age);
+            tape.set_wow(wow);
+            let thump = (0..960)
+                .map(|_| tape.process(0.0, 0.0).0.abs())
+                .fold(0.0f32, f32::max);
+            assert!(thump < 0.003, "engaging drive {drive} age {age}: thump {thump}");
+
+            // Under a sine, no step at either switch exceeds the sine's own
+            let mut tape = Tape::new(FS);
+            let (mut prev, mut steady, mut switched) = (0.0f32, 0.0f32, 0.0f32);
+            for (n, x) in sine(24000, 220.0).enumerate() {
+                if n == 12000 {
+                    tape.set_drive(drive);
+                    tape.set_age(age);
+                    tape.set_wow(wow);
+                }
+                if n == 18000 {
+                    tape.set_drive(0.0);
+                    tape.set_age(0.0);
+                    tape.set_wow(0.0);
+                }
+                let y = tape.process(x, x).0;
+                let step = (y - prev).abs();
+                prev = y;
+                if (4000..11000).contains(&n) {
+                    steady = steady.max(step);
+                } else if (12000..13000).contains(&n) || (18000..19000).contains(&n) {
+                    switched = switched.max(step);
+                }
+            }
+            assert!(
+                switched < 1.5 * steady,
+                "drive {drive} age {age} wow {wow}: switching step {switched} vs sine step {steady}"
+            );
         }
     }
 
