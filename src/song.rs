@@ -177,7 +177,10 @@ const AUTOMATION_STEPS_PER_BEAT: f64 = 32.0;
 /// The score clock may deliberately enter audio-rate territory so a repeated
 /// figure can accelerate continuously into a pitched blur. This is a song-DSL
 /// limit, not the much narrower range of a conventional front-panel tempo knob.
-const MAX_SONG_BPM: f32 = 60_000.0;
+/// 400 beats a second already puts a sixteenth-note figure at 1.6 kHz; past
+/// it the tempo map's 1/32-beat grid step falls toward a single sample and
+/// the clock can no longer place the notes it is asked for.
+const MAX_SONG_BPM: f32 = 24_000.0;
 
 /// The longest silence `gate` may carve off a note's end, in seconds:
 /// enough to articulate a separation, never enough to eat a word.
