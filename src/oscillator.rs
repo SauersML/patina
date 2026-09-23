@@ -631,16 +631,23 @@ mod tests {
             let mut osc = Oscillator::new(sr, f0, seed);
             osc.set_model(model);
             osc.set_waveform(Waveform::Sawtooth);
-            let secs = 8.0;
-            let n = (secs * sr) as usize;
+            // Time the first and last wraps to the sub-sample (wrap_frac
+            // is the time since the wrap): a bare wrap count over 8 s
+            // resolves only 0.125 Hz, coarser than the residue itself.
+            let n = (8.0 * sr) as usize;
+            let mut first: Option<f64> = None;
+            let mut last = 0.0f64;
             let mut wraps = 0u32;
-            for _ in 0..n {
+            for i in 0..n {
                 osc.next_sample(0.0, 1.0, 0.5, None);
-                if osc.wrap_frac().is_some() {
+                if let Some(frac) = osc.wrap_frac() {
+                    let t = (i as f64 - frac as f64) / sr as f64;
+                    first.get_or_insert(t);
+                    last = t;
                     wraps += 1;
                 }
             }
-            wraps as f32 / secs - f0
+            ((wraps - 1) as f64 / (last - first.unwrap())) as f32 - f0
         };
         let mut moog_low = 0.0f32;
         let mut moog_high = 0.0f32;
@@ -653,9 +660,11 @@ mod tests {
         }
         let k = seeds.len() as f32;
         let (moog_low, moog_high, arp_low) = (moog_low / k, moog_high / k, arp_low / k);
-        // Same Hz-scale error at both ends of the keyboard (not cents)
+        // Same Hz-scale error at both ends of the keyboard (not cents). A
+        // serviced bank's residue is within +/-0.06 Hz, a mean magnitude
+        // near 0.03 Hz; a cents-scale error would grow 16x from A1 to A5.
         assert!(
-            moog_low > 0.04 && moog_high > 0.04 && moog_high < 4.0 * moog_low,
+            moog_low > 0.01 && moog_high > 0.01 && moog_high < 4.0 * moog_low,
             "Moog offset should be Hz-additive: low {moog_low:.3} Hz, high {moog_high:.3} Hz"
         );
         assert!(
