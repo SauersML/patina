@@ -8,7 +8,9 @@
 //
 // Modeled as a biased soft-knee waveshaper: u = g*(x + BIAS), y = tanh(u),
 // with the tanh evaluated through first-order antiderivative antialiasing
-// (Parker et al.) and a DC blocker to remove the bias-shift thump.
+// (Parker et al.). The stage's resting output tanh(g*BIAS) is subtracted
+// exactly, and a DC blocker takes the program-dependent shift that
+// asymmetric clipping adds on top.
 // One knob: 0 = true bypass, 1 = full Fuzz-Face scream.
 
 use crate::adaa::AdaaTanh;
@@ -49,6 +51,9 @@ pub struct Fuzz {
     smooth_k: f32,
     adaa: [AdaaTanh; 2],
     dc: [DcBlock; 2],
+    /// Whether the shaper ran last sample; a re-engaged shaper seeds its
+    /// antiderivative history instead of spanning back to a stale input.
+    engaged: bool,
 }
 
 impl Fuzz {
@@ -59,6 +64,7 @@ impl Fuzz {
             smooth_k: crate::smoothing::approach(crate::smoothing::KNOB_SMOOTH_S, sample_rate),
             adaa: [AdaaTanh::new(), AdaaTanh::new()],
             dc: [DcBlock::new(sample_rate), DcBlock::new(sample_rate)],
+            engaged: false,
         }
     }
 
@@ -78,6 +84,7 @@ impl Fuzz {
         self.smoothed += (self.amount - self.smoothed) * self.smooth_k;
         let w = self.smoothed;
         if w < 0.002 && self.amount < 0.002 {
+            self.engaged = false;
             return (left, right);
         }
 
@@ -88,14 +95,23 @@ impl Fuzz {
         let makeup = 0.85 / (g * 0.7).tanh().max(0.3);
         // Short crossfade near zero so engaging the knob never clicks
         let fade = (w * 50.0).min(1.0);
+        // The bias point's resting output. Left for the DC blocker, it
+        // stepped in at full size whenever the pedal engaged (the blocker
+        // starts from rest and passes a step whole) and moved with every
+        // turn of the knob: engaging on silence thumped at -12 dBFS.
+        let rest = (g * BIAS).tanh();
 
         let mut out = [left, right];
         for (ch, sample) in out.iter_mut().enumerate() {
             let u = g * (*sample * 0.7 + BIAS);
-            let shaped = self.adaa[ch].process(u);
+            if !self.engaged {
+                self.adaa[ch].seed(u);
+            }
+            let shaped = self.adaa[ch].process(u) - rest;
             let fuzzed = self.dc[ch].process(shaped) * makeup;
             *sample = *sample * (1.0 - fade) + fuzzed * fade;
         }
+        self.engaged = true;
         (out[0], out[1])
     }
 }
@@ -140,6 +156,24 @@ mod tests {
             }
         }
         assert!(energy > 1.0, "fuzz should be passing audio again: {energy}");
+    }
+
+    /// Engaging the pedal or turning its knob over silence stays silent:
+    /// the bias point's resting output is removed exactly.
+    #[test]
+    fn engaging_and_turning_on_silence_is_silent() {
+        let mut fuzz = Fuzz::new(48000.0);
+        for _ in 0..4800 {
+            fuzz.process(0.0, 0.0);
+        }
+        let mut peak = 0.0f32;
+        for amount in [0.1, 1.0, 0.4, 0.0, 0.6] {
+            fuzz.set_amount(amount);
+            for _ in 0..24000 {
+                peak = peak.max(fuzz.process(0.0, 0.0).0.abs());
+            }
+        }
+        assert!(peak < 1e-3, "fuzz thumped on silence: {peak}");
     }
 
     #[test]
