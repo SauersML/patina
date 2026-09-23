@@ -1,0 +1,121 @@
+# The Next Chapter
+#
+# A score for a short film about inheritance and foresight. D major at 66,
+# six scenes of four bars (the last one held): a music box alone (a story
+# you were born with), the felt piano's tune over a bed (passed down), a
+# turn to the minor with a borrowed G minor and a heartbeat under it (the
+# chapters that end too soon), a rising line at dawn with the choir coming
+# in (seeing further), the full statement (what may lie ahead), and a
+# ritardando into D add9 with the music box answering (a chapter of your
+# own).
+
+bpm 66
+gate 0.92
+tail 5
+
+section BORN     0..16
+section PASSED   16..32
+section LOSS     32..48
+section DAWN     48..64
+section AHEAD    64..80
+section YOURS    80..96
+
+automate bpm
+66 R:84 54:12@smooth
+
+automate reverb_decay
+0.78
+automate reverb_wet
+0.36 R:32 0.42:16@smooth R:16 0.46:16@smooth R:16
+automate chorus_mode
+2
+automate chorus_depth
+0.22
+automate spring
+0.08
+automate tape_wow
+0.10
+automate tape_flutter
+0.04
+automate tape_drive
+0.12
+automate tape_age
+0.15
+automate lfo_rate
+0.22
+automate lfo_shape
+0.5
+automate lfo_pitch
+2.5
+
+# ---------------------------------------------------------------- the bed
+track pad vel=0.34 len=4 patch=dreampad reverb_send=0.5
+[50 57 62 66] [47 54 59 62] [43 50 55 59] [45 52 57 61]
+[50 57 62 66] [49 57 61 64] [47 54 59 62] [43 55 59 62]
+[40 52 55 59] [47 54 59 62] [43 55 59 62] [43 55 58 62]
+[42 57 62 66]@0.4 [43 59 62 67]@0.42 [45 57 61 64 69]@0.44 [47 54 59 62 66]@0.46
+[43 55 59 62 67]@0.48 [45 57 61 64 69]@0.5 [42 54 57 61 66]@0.48 [47 54 59 62 66]@0.46
+[43 55 59 62 67]@0.42 [45 57 62 64]:2@0.4 [45 57 61 64]:2@0.38 [38 50 57 62 64 66]:8@0.36
+
+automate pad.gain
+0.0 0.85:8@smooth R:88
+
+# ------------------------------------------------ the music box: the story
+track box vel=0.42 len=1 patch=musicbox reverb_send=0.6 pan=0.18
+81 78 74:2 | 86 83 78:2 | 83 79 74:2 | 85 81 76 81
+81:4@0.3 R:12
+R:16
+R:16
+R:16
+R:8 81@0.34 78@0.32 74@0.3 76@0.36 81:2@0.3 86:2@0.26
+
+# ------------------------------------------------------- the felt piano
+track tune vel=0.62 len=1 patch=feltkeys reverb_send=0.35 pan=-0.06
+R:16
+69:1.5 66:0.5 69 71 | 69:2 64 66 | 74:1.5 73:0.5 71 69 | 71:3 R
+67:1.5@0.56 66:0.5@0.54 64:2@0.52 | 66@0.52 62@0.5 59:2@0.48 | 62:1.5@0.52 64:0.5 67 71 | 70:2@0.58 69:2@0.54
+66@0.6 69@0.62 74:2@0.66 | 74@0.66 76@0.68 71:2@0.64 | 73@0.68 76@0.7 81:2@0.74 | 78:3@0.76 76@0.7
+74:1.5@0.78 76:0.5@0.76 78@0.8 79@0.82 | 81:2@0.84 76@0.78 73@0.74 | 73:1.5@0.72 74:0.5@0.72 76@0.76 78@0.8 | 74:3@0.74 R
+71@0.6 74@0.62 79:2@0.64 | 76:2@0.58 73:2@0.54 | 74:8@0.5
+
+# ------------------------------------------------------------- the bass
+track bass vel=0.5 len=4 patch=deepsine
+R:16
+38 37 35 31
+40 35 31 31
+42@0.54 43@0.56 45@0.58 47@0.6
+43@0.62 45@0.64 42@0.6 47@0.58
+43@0.54 45:4@0.5 38:8@0.46
+
+# ----------------------------------------- the choir: dawn, and after it
+track choir vel=0.3 len=4 patch=cassette-choir reverb_send=0.55
+R:48
+[66 69 74]@0.24 [67 71 74]@0.28 [69 73 76]@0.32 [66 71 74]@0.36
+[67 71 74]@0.4 [69 73 76]@0.42 [66 69 73]@0.4 [66 71 74]@0.38
+[67 71 74]@0.34 [69 74 76]:2@0.3 [69 73 76]:2@0.28 [66 69 74]:8@0.26
+
+# -------------------------------------------------- bells from far away
+track bells vel=0.28 len=1 patch=sunbell reverb_send=0.7 pan=0.3
+R:48
+R:4 | R:2 83:2 | R:2 88:2 | R:2 86:2
+R:2 86:2 | R:4 | R:2 85:2 | R:3 83
+R:16
+
+# ------------------------------------ a heartbeat, felt, under the loss
+track heart kit=909 vel=0.34 len=1
+R:32
+BD:0.35 BD:3.65@0.26 BD:0.35 BD:3.65@0.26 BD:0.35 BD:3.65@0.26 BD:0.35 BD:3.65@0.26
+BD:0.35@0.26 BD:3.65@0.2 BD:0.35@0.22 BD:3.65@0.16 BD:0.35@0.18 BD:3.65@0.12 R:4
+
+automate bd_tune
+0.18
+automate bd_decay
+0.62
+automate bd_attack
+0.0
+automate bd_sweep
+0.25
+automate dr_tone
+0.12
+automate bd_level
+0.55
