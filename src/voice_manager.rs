@@ -2124,34 +2124,35 @@ mod tests {
     #[test]
     fn pitch_bend_shifts_frequency() {
         let sr = 44100.0;
-        // Zero-crossing rate as a crude frequency probe, FX bypassed
-        let crossings_with_bend = |semitones: f32| {
+        // Fundamental period by autocorrelation, FX bypassed. Zero
+        // crossings cannot probe this voice: three free-running saws with
+        // random start phases sum to a wave that crosses zero several
+        // times a cycle, and how often depends on where the phases fell.
+        // The shortest lag that correlates nearly as well as the best one
+        // is the fundamental rather than one of its multiples.
+        let period_with_bend = |semitones: f32| {
             let mut vm = VoiceManager::new(sr, 8);
             vm.set_reverb_wet(0.0);
             vm.set_detune(0.0);
             vm.set_pitch_bend(semitones);
             vm.note_on(69, 1.0);
-            let mut crossings = 0u32;
-            let mut prev = 0.0f32;
-            for i in 0..(sr as usize) {
-                let (l, _) = vm.render_next();
-                // Skip the bend slew and attack before counting
-                if i > 20000 {
-                    if prev <= 0.0 && l > 0.0 {
-                        crossings += 1;
-                    }
-                    prev = l;
-                }
-            }
-            crossings
+            // Skip the bend slew and attack before measuring
+            let x: Vec<f32> = (0..sr as usize).map(|_| vm.render_next().0).collect();
+            let x = &x[20000..28000];
+            let n = x.len() / 2;
+            let r: Vec<f32> = (0..400)
+                .map(|lag| (0..n).map(|i| x[i] * x[i + lag]).sum())
+                .collect();
+            let best = r[40..].iter().cloned().fold(f32::MIN, f32::max);
+            (40..400).find(|&lag| r[lag] >= 0.9 * best).unwrap() as f32
         };
-        let base = crossings_with_bend(0.0);
-        let bent = crossings_with_bend(2.0);
-        let ratio = bent as f32 / base as f32;
+        let base = period_with_bend(0.0);
+        let bent = period_with_bend(2.0);
+        let ratio = base / bent;
         // +2 semitones = x1.1225
         assert!(
-            (1.06..1.19).contains(&ratio),
-            "bend +2 st should raise pitch ~12%: base={base}, bent={bent}, ratio={ratio}"
+            (1.10..1.145).contains(&ratio),
+            "bend +2 st should raise pitch ~12%: base period {base}, bent {bent}, ratio {ratio}"
         );
     }
 }
