@@ -32,8 +32,10 @@ const LIFTER_S: f32 = 0.002;
 /// Whitening floor: bins more than ~36 dB under the carrier's envelope
 /// peak stop being amplified (they hold no real signal, only noise).
 const WHITEN_FLOOR: f32 = 0.015;
-/// Per-bin gain ceiling after whitening.
-const MAX_GAIN: f32 = 10.0;
+/// Per-bin gain ceiling after whitening, against a unit-mean shape
+/// (~29 dB): how far a bin the carrier barely feeds may be lifted toward
+/// the voice's formant peak.
+const MAX_GAIN: f32 = 28.6;
 
 /// Twiddle factors for every radix-2 stage, computed once.
 ///
@@ -246,11 +248,27 @@ impl Spectral {
         // gain, phases untouched — the carrier's harmonic core, level,
         // and envelope are the only things that move
         let c_peak = c_env.iter().fold(1e-9f32, |a, &v| a.max(v));
+        let mut energy_in = 0.0f32;
+        let mut energy_out = 0.0f32;
         for k in 0..N {
-            let g = (self.shape[k] * 0.35 / (c_env[k].max(WHITEN_FLOOR * c_peak) / c_peak))
-                .min(MAX_GAIN);
+            energy_in += cr[k] * cr[k] + ci[k] * ci[k];
+            let g = (self.shape[k] / (c_env[k].max(WHITEN_FLOOR * c_peak) / c_peak)).min(MAX_GAIN);
             cr[k] *= g;
             ci[k] *= g;
+            energy_out += cr[k] * cr[k] + ci[k] * ci[k];
+        }
+        // ...and at the carrier's own level. Whitening lifts every
+        // harmonic toward the envelope peak, so the dressed frame held
+        // many times the carrier's energy: a saw came out 15-19 dB over
+        // its own level and over every other vox_mode, and a lead at
+        // vox_level 1 sat pinned in the output limiter. The frame's
+        // energy is now the carrier frame's, whatever the shape.
+        if energy_out > 1e-12 {
+            let level = (energy_in / energy_out).sqrt();
+            for k in 0..N {
+                cr[k] *= level;
+                ci[k] *= level;
+            }
         }
         fft(&mut cr, &mut ci, true);
 
@@ -363,6 +381,34 @@ mod tests {
             held > 0.2,
             "the frozen mouth must keep the held note sounding, got {held}"
         );
+    }
+
+    /// The voice shapes the carrier and never sets its level: the output
+    /// sits at the carrier's own level, like every other vox_mode, and
+    /// the shape's overall size makes no difference to it.
+    #[test]
+    fn the_carrier_owns_the_level() {
+        let sr = 48000.0;
+        for f0 in [55.0f32, 110.0, 220.0] {
+            for voice_level in [0.05f32, 0.5] {
+                let mut s = Spectral::new(sr);
+                let mut noise = crate::noise::NoiseSource::new(sr);
+                let (mut out2, mut car2) = (0.0f64, 0.0f64);
+                for n in 0..(sr as usize) {
+                    let carrier = (((n as f32 * f0 / sr) % 1.0) * 2.0 - 1.0) * 5.0;
+                    let y = s.process(noise.next() * voice_level, carrier);
+                    if n > (sr as usize) / 4 {
+                        out2 += (y as f64).powi(2);
+                        car2 += (carrier as f64).powi(2);
+                    }
+                }
+                let db = 10.0 * (out2 / car2).log10();
+                assert!(
+                    db.abs() < 3.0,
+                    "{f0} Hz carrier, voice {voice_level}: output {db:+.1} dB re the carrier"
+                );
+            }
+        }
     }
 
     /// The transform itself, pinned independently of the vocoder around
