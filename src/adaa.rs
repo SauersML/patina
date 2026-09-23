@@ -29,6 +29,14 @@ impl AdaaTanh {
         Self { x1: 0.0, f1: 0.0 }
     }
 
+    /// Take `x` as the previous input, so the next quotient spans one real
+    /// step. A shaper switched back in after sitting bypassed otherwise
+    /// forms its first quotient against whatever input it saw last time.
+    pub fn seed(&mut self, x: f32) {
+        self.x1 = x;
+        self.f1 = ln_cosh(x);
+    }
+
     #[inline]
     pub fn process(&mut self, x: f32) -> f32 {
         let f0 = ln_cosh(x);

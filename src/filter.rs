@@ -114,11 +114,13 @@ const ARP_RAIL: f32 = 13.5;
 /// Newton-Raphson stopping tolerance on the residual, volts.
 const NEWTON_TOL: f32 = 1e-6;
 const NEWTON_MAX_ITERS: usize = 8;
-/// Panel slew on cutoff and resonance: enough to de-zipper stepped
+/// Panel slew on cutoff, resonance, drive and output saturation: enough to de-zipper stepped
 /// automation, short enough to still feel immediate. A TIME, derived per
 /// rate — a hardcoded coefficient made a swept cutoff arrive twice as
 /// fast at 96 kHz, so the same automation rendered differently.
 const PARAM_SLEW_TAU_S: f32 = 0.004;
+/// Crossfade time of the output saturation stage's bypass (see `sat_fade`).
+const SAT_FADE_S: f32 = 0.002;
 
 pub struct LadderFilter {
     model: CircuitModel,
@@ -127,9 +129,11 @@ pub struct LadderFilter {
     cutoff: f32, // smoothed
     target_resonance: f32,
     resonance: f32, // smoothed, knob 0..4
-    drive: f32,
+    target_drive: f32,
+    drive: f32, // smoothed
     drive_makeup: f32,
-    saturation: f32,
+    target_saturation: f32,
+    saturation: f32, // smoothed
     /// Ladder state, volts.
     v: [f32; 4],
     /// Previous ladder input, volts (the midpoint rule averages the input).
@@ -146,6 +150,12 @@ pub struct LadderFilter {
     param_slew_k: f32,
     rng: u32,
     sat_adaa: AdaaTanh,
+    /// How much of the Moog output saturation stage is heard, 0..1. The
+    /// stage fades in and out over SAT_FADE_S as it crosses its 0.02
+    /// bypass threshold: its antialiasing adds half a sample of delay the
+    /// bypass does not have, which switched in as a step.
+    sat_fade: f32,
+    sat_fade_step: f32,
     /// Diagnostic: worst Newton iteration count since last read.
     #[cfg(test)]
     max_iters_seen: usize,
@@ -168,8 +178,10 @@ impl LadderFilter {
             cutoff: 15000.0,
             target_resonance: 0.0,
             resonance: 0.0,
+            target_drive: 1.0,
             drive: 1.0,
             drive_makeup: 1.0,
+            target_saturation: 1.0,
             saturation: 1.0,
             v: [0.0; 4],
             vin_prev: 0.0,
@@ -182,6 +194,8 @@ impl LadderFilter {
             param_slew_k: crate::voice::smoothing_coef(PARAM_SLEW_TAU_S, sample_rate),
             rng,
             sat_adaa: AdaaTanh::new(),
+            sat_fade: 1.0,
+            sat_fade_step: 1.0 / (SAT_FADE_S * sample_rate).max(1.0),
             #[cfg(test)]
             max_iters_seen: 0,
         }
@@ -199,13 +213,17 @@ impl LadderFilter {
         self.target_resonance = resonance.clamp(0.0, 4.0);
     }
 
+    /// Drive and saturation slew like cutoff: the ladder state holds the
+    /// signal at the OLD input scale, so a jumped make-up gain rescaled it
+    /// in one sample (drive 4 -> 1 doubled the output at once), and a
+    /// jumped saturation moved the shaper's input between two samples of
+    /// its antiderivative quotient.
     pub fn set_drive(&mut self, drive: f32) {
-        self.drive = drive.clamp(0.1, 10.0);
-        self.drive_makeup = self.drive.sqrt().max(0.5);
+        self.target_drive = drive.clamp(0.1, 10.0);
     }
 
     pub fn set_saturation(&mut self, saturation: f32) {
-        self.saturation = saturation.clamp(0.0, 2.0);
+        self.target_saturation = saturation.clamp(0.0, 2.0);
     }
 
     /// Diagnostic for tests: worst Newton iteration count since last call.
@@ -394,6 +412,14 @@ impl LadderFilter {
         // automation
         self.cutoff += (self.target_cutoff - self.cutoff) * self.param_slew_k;
         self.resonance += (self.target_resonance - self.resonance) * self.param_slew_k;
+        if self.drive != self.target_drive {
+            self.drive += (self.target_drive - self.drive) * self.param_slew_k;
+            if (self.target_drive - self.drive).abs() < 1e-6 {
+                self.drive = self.target_drive;
+            }
+            self.drive_makeup = self.drive.sqrt().max(0.5);
+        }
+        self.saturation += (self.target_saturation - self.saturation) * self.param_slew_k;
 
         let fc_top = match self.model {
             // The 4072's documented bandwidth ceiling
@@ -449,9 +475,24 @@ impl LadderFilter {
 
                 // Output saturation stage with antiderivative antialiasing,
                 // referenced to program level
-                if self.saturation > 0.02 {
+                let was_heard = self.sat_fade > 0.0;
+                self.sat_fade = if self.saturation > 0.02 {
+                    (self.sat_fade + self.sat_fade_step).min(1.0)
+                } else {
+                    (self.sat_fade - self.sat_fade_step).max(0.0)
+                };
+                if self.sat_fade > 0.0 {
                     let pv = crate::oscillator::PROGRAM_V;
-                    out = pv * self.sat_adaa.process(out * self.saturation / pv) / self.saturation;
+                    let sat = self.saturation.max(0.02);
+                    let x = out * sat / pv;
+                    // Coming back from bypass, the stage's last input is
+                    // stale, and dividing by a saturation near the 0.02
+                    // threshold magnified that one bad quotient ~50x
+                    if !was_heard {
+                        self.sat_adaa.seed(x);
+                    }
+                    let shaped = pv * self.sat_adaa.process(x) / sat;
+                    out += (shaped - out) * self.sat_fade;
                 }
                 out
             }
@@ -529,6 +570,49 @@ mod tests {
             }
         }
         peak / level
+    }
+
+    /// A drive or saturation move under a held note must glide, not step:
+    /// the ladder holds the signal at the old input scale, so an instant
+    /// make-up change rescaled it within one sample.
+    #[test]
+    fn drive_and_saturation_moves_do_not_click() {
+        let sr = 48000.0;
+        for model in [CircuitModel::Moog, CircuitModel::Arp] {
+            for (knob, from, to) in [("drive", 4.0, 1.0), ("drive", 1.0, 4.0), ("sat", 0.0, 1.5), ("sat", 1.5, 0.0)] {
+                let mut f = LadderFilter::new(sr, 7);
+                f.set_model(model);
+                f.set_cutoff(3000.0);
+                let set = |f: &mut LadderFilter, v: f32| {
+                    if knob == "drive" {
+                        f.set_drive(v)
+                    } else {
+                        f.set_saturation(v)
+                    }
+                };
+                set(&mut f, from);
+                let (mut p1, mut p2) = (0.0f32, 0.0f32);
+                let (mut steady, mut moved) = (0.0f32, 0.0f32);
+                for n in 0..24000 {
+                    if n == 12000 {
+                        set(&mut f, to);
+                    }
+                    let x = (TAU * 220.0 * n as f32 / sr).sin() * 2.0;
+                    let y = f.process(x, 1.0);
+                    let d2 = (y - 2.0 * p1 + p2).abs();
+                    (p2, p1) = (p1, y);
+                    if (6000..12000).contains(&n) {
+                        steady = steady.max(d2);
+                    } else if (12000..12100).contains(&n) {
+                        moved = moved.max(d2);
+                    }
+                }
+                assert!(
+                    moved < 2.0 * steady,
+                    "{model:?} {knob} {from}->{to}: step {moved} vs steady {steady}"
+                );
+            }
+        }
     }
 
     /// Four cascaded one-poles: |H(fc)|/|H(passband)| = (1/sqrt(2))^4 =
