@@ -8,7 +8,7 @@
 
 use crate::chorus::ChorusMode;
 use crate::oscillator::Waveform;
-use crate::song::Param;
+use crate::song::{Param, ParseFinite};
 use crate::voice_manager::{ParamValues, VoiceManager};
 
 /// The factory bank, embedded so the binary is self-contained.
@@ -54,7 +54,7 @@ pub fn apply(vm: &mut VoiceManager, text: &str) -> Result<(), String> {
         let value: f32 = it
             .next()
             .ok_or_else(|| format!("line {}: '{}' has no value", no + 1, name))?
-            .parse()
+            .parse_finite()
             .map_err(|_| format!("line {}: bad value for '{}'", no + 1, name))?;
         let param = Param::from_name(name)
             .ok_or_else(|| format!("line {}: unknown parameter '{}'", no + 1, name))?;

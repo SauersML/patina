@@ -182,6 +182,10 @@ const AUTOMATION_STEPS_PER_BEAT: f64 = 32.0;
 /// the clock can no longer place the notes it is asked for.
 const MAX_SONG_BPM: f32 = 24_000.0;
 
+/// The last beat a song may reach: over a day at 60 bpm, and a tempo map
+/// of a few million steps.
+const MAX_SONG_BEATS: f64 = 100_000.0;
+
 /// The longest silence `gate` may carve off a note's end, in seconds:
 /// enough to articulate a separation, never enough to eat a word.
 const GATE_GAP_MAX_S: f64 = 0.08;
@@ -632,6 +636,25 @@ impl Param {
     }
 }
 
+/// Every number in song and patch text must be finite. Rust's float
+/// parser also accepts `nan`, `inf` and `infinity`, and those sail past the
+/// range checks (every comparison with NaN is false; `clamp` passes NaN
+/// through): `C4:inf` sized the tempo map past memory and panicked, `bpm
+/// nan` timed every event at NaN, and a NaN cutoff poisons a recursive
+/// filter for good.
+pub(crate) trait ParseFinite {
+    fn parse_finite<T: std::str::FromStr + Copy + Into<f64>>(&self) -> Result<T, ()>;
+}
+
+impl ParseFinite for str {
+    fn parse_finite<T: std::str::FromStr + Copy + Into<f64>>(&self) -> Result<T, ()> {
+        match self.parse::<T>() {
+            Ok(v) if v.into().is_finite() => Ok(v),
+            _ => Err(()),
+        }
+    }
+}
+
 /// Parse patch-file text (`param value` lines) into a parameter snapshot.
 /// Bus-level lines are ignored — a channel patch describes a voice, not
 /// the shared effects.
@@ -647,7 +670,7 @@ pub fn params_from_patch(text: &str) -> Result<ParamValues, String> {
         let value: f32 = it
             .next()
             .ok_or_else(|| format!("patch line {}: '{}' has no value", no + 1, name))?
-            .parse()
+            .parse_finite()
             .map_err(|_| format!("patch line {}: bad value for '{}'", no + 1, name))?;
         let param = Param::from_name(name)
             .ok_or_else(|| format!("patch line {}: unknown parameter '{}'", no + 1, name))?;
@@ -947,23 +970,23 @@ fn parse_song(text: &str) -> Result<Song, String> {
             "bpm" => {
                 bpm = line[3..]
                     .trim()
-                    .parse::<f64>()
+                    .parse_finite::<f64>()
                     .map_err(|_| err("invalid bpm".into()))?;
-                if bpm <= 0.0 {
-                    return Err(err("bpm must be positive".into()));
+                if !(20.0..=MAX_SONG_BPM as f64).contains(&bpm) {
+                    return Err(err(format!("bpm must be 20-{MAX_SONG_BPM}")));
                 }
             }
             "gate" => {
                 gate = line[4..]
                     .trim()
-                    .parse::<f64>()
+                    .parse_finite::<f64>()
                     .map_err(|_| err("invalid gate".into()))?;
                 gate = gate.clamp(0.05, 1.0);
             }
             "tail" => {
                 tail_seconds = line[4..]
                     .trim()
-                    .parse::<f64>()
+                    .parse_finite::<f64>()
                     .map_err(|_| err("invalid tail duration".into()))?;
                 if !(0.0..=30.0).contains(&tail_seconds) {
                     return Err(err("tail must be between 0 and 30 seconds".into()));
@@ -981,10 +1004,10 @@ fn parse_song(text: &str) -> Result<Song, String> {
                     .split_once("..")
                     .ok_or_else(|| err(format!("section range must be A..B, got '{}'", range)))?;
                 let a: f64 = a
-                    .parse()
+                    .parse_finite()
                     .map_err(|_| err(format!("invalid section start '{}'", a)))?;
                 let b: f64 = b
-                    .parse()
+                    .parse_finite()
                     .map_err(|_| err(format!("invalid section end '{}'", b)))?;
                 if b <= a || a < 0.0 {
                     return Err(err(format!("section {}: end must be after start", name)));
@@ -1024,15 +1047,15 @@ fn parse_song(text: &str) -> Result<Song, String> {
                 for opt in line.split_whitespace().skip(2) {
                     if let Some(v) = opt.strip_prefix("vel=") {
                         vel = v
-                            .parse::<f32>()
+                            .parse_finite::<f32>()
                             .map_err(|_| err(format!("invalid vel '{}'", v)))?;
                     } else if let Some(v) = opt.strip_prefix("len=") {
                         len = v
-                            .parse::<f64>()
+                            .parse_finite::<f64>()
                             .map_err(|_| err(format!("invalid len '{}'", v)))?;
                     } else if let Some(v) = opt.strip_prefix("swing=") {
                         swing = v
-                            .parse::<f64>()
+                            .parse_finite::<f64>()
                             .map_err(|_| err(format!("invalid swing '{}'", v)))?;
                         if !(0.4..=0.8).contains(&swing) {
                             return Err(err("swing must be 0.4-0.8 (0.5 = straight)".into()));
@@ -1052,7 +1075,7 @@ fn parse_song(text: &str) -> Result<Song, String> {
                         )
                     }) {
                         let value = v
-                            .parse::<f32>()
+                            .parse_finite::<f32>()
                             .map_err(|_| err(format!("invalid {} '{}'", k, v)))?;
                         mix_opts.push((Param::from_name(k).unwrap(), value));
                     } else if opt.strip_prefix("kit=").is_some() {
@@ -1084,7 +1107,7 @@ fn parse_song(text: &str) -> Result<Song, String> {
                         // checked after parsing, so removing some other
                         // note can never silently shift the vocal
                         let b = v
-                            .parse::<f64>()
+                            .parse_finite::<f64>()
                             .map_err(|_| err(format!("invalid wav_at '{}'", v)))?;
                         if b < 0.0 {
                             return Err(err("wav_at must be >= 0".into()));
@@ -1124,7 +1147,7 @@ fn parse_song(text: &str) -> Result<Song, String> {
                     } else if smp.is_some() && opt.starts_with("beats=") {
                         let v = &opt[6..];
                         let n: f64 = v
-                            .parse()
+                            .parse_finite()
                             .map_err(|_| err(format!("invalid beats '{}'", v)))?;
                         if n <= 0.0 {
                             return Err(err("beats must be positive".into()));
@@ -1244,7 +1267,7 @@ fn parse_song(text: &str) -> Result<Song, String> {
                     let param = Param::from_name(pname)
                         .ok_or_else(|| err(format!("unknown parameter '{}'", pname)))?;
                     let value: f32 = toks[2]
-                        .parse()
+                        .parse_finite()
                         .map_err(|_| err(format!("invalid value '{}'", toks[2])))?;
                     let names = toks.get(4).copied().ok_or_else(|| {
                         err("`during` needs section names, e.g. during CH1,CH2".into())
@@ -1254,7 +1277,7 @@ fn parse_song(text: &str) -> Result<Song, String> {
                             toks.get(6)
                                 .copied()
                                 .ok_or_else(|| err("`base` needs a value".into()))?
-                                .parse()
+                                .parse_finite()
                                 .map_err(|_| err("invalid base value".into()))?,
                         ),
                         Some(t) => return Err(err(format!("unexpected token '{}'", t))),
@@ -1554,6 +1577,13 @@ fn parse_song(text: &str) -> Result<Song, String> {
     end_notes_at_restrike(&mut events);
 
     let max_beat = events.iter().map(|e| e.0).fold(0.0f64, f64::max);
+    // The tempo map holds one step per 1/32 beat to the last event, so a
+    // stray seek like `>1e9` would size it past memory
+    if max_beat > MAX_SONG_BEATS {
+        return Err(format!(
+            "the song runs to beat {max_beat}, past the {MAX_SONG_BEATS}-beat limit"
+        ));
+    }
     let time_of = tempo_map(bpm, &tempo_lane, max_beat);
     Ok(Song {
         events: events
@@ -1664,7 +1694,7 @@ fn parse_sampler_option(
 ) -> Result<(), String> {
     use crate::sampler::PlayMode;
     let secs = |v: &str, what: &str| -> Result<f32, String> {
-        v.parse::<f32>()
+        v.parse_finite::<f32>()
             .map_err(|_| format!("invalid {} '{}'", what, v))
     };
     if let Some(v) = opt.strip_prefix("root=") {
@@ -1782,7 +1812,10 @@ fn resolve_seek(
     spec: &str,
     sections: &std::collections::HashMap<String, (f64, f64)>,
 ) -> Result<f64, String> {
-    if let Ok(beat) = spec.parse::<f64>() {
+    if let Ok(beat) = spec.parse_finite::<f64>() {
+        if beat < 0.0 {
+            return Err(format!("invalid seek '>{}' (before the song starts)", spec));
+        }
         return Ok(beat);
     }
     let (name, end) = match spec.strip_suffix(".end") {
@@ -1808,7 +1841,7 @@ fn parse_automation_token(token: &str) -> Result<AutoToken, String> {
     }
     if let Some(i) = s.rfind(':') {
         let d = s[i + 1..]
-            .parse::<f64>()
+            .parse_finite::<f64>()
             .map_err(|_| "invalid duration".to_string())?;
         if d <= 0.0 {
             return Err("duration must be positive".into());
@@ -1823,7 +1856,7 @@ fn parse_automation_token(token: &str) -> Result<AutoToken, String> {
         ));
     }
 
-    let value = s.parse::<f32>().map_err(|_| "invalid value".to_string())?;
+    let value = s.parse_finite::<f32>().map_err(|_| "invalid value".to_string())?;
     match dur {
         Some(dur) => Ok(AutoToken::Ramp {
             to: value,
@@ -1936,7 +1969,7 @@ fn parse_note_token(
     let mut shift = 0.0f64;
     if let Some(i) = s.rfind('~') {
         shift = s[i + 1..]
-            .parse::<f64>()
+            .parse_finite::<f64>()
             .map_err(|_| "invalid timing shift".to_string())?;
         if shift.abs() > 0.5 {
             return Err("timing shift must be within +/-0.5 beats".into());
@@ -1946,13 +1979,13 @@ fn parse_note_token(
 
     if let Some(i) = s.rfind('@') {
         vel = s[i + 1..]
-            .parse::<f32>()
+            .parse_finite::<f32>()
             .map_err(|_| "invalid velocity".to_string())?;
         s = &s[..i];
     }
     if let Some(i) = s.rfind(':') {
         dur = s[i + 1..]
-            .parse::<f64>()
+            .parse_finite::<f64>()
             .map_err(|_| "invalid duration".to_string())?;
         s = &s[..i];
     }
@@ -2076,6 +2109,37 @@ mod tests {
         assert!(ev
             .iter()
             .any(|e| matches!(e.kind, EventKind::NoteOff { .. }) && e.time == second_on));
+    }
+
+    #[test]
+    fn non_finite_and_runaway_numbers_are_refused() {
+        for text in [
+            "track a\nC4:inf\n",
+            "track a\nC4:nan\n",
+            "track a\nC4@nan\n",
+            "track a\nC4~nan\n",
+            "track a\n>nan C4\n",
+            "track a\n>-2 C4\n",
+            "track a\n>1e9 C4\n",
+            "track a\nC4:1e12\n",
+            "track a swing=nan\nC4\n",
+            "track a gain=nan\nC4\n",
+            "bpm nan\ntrack a\nC4\n",
+            "bpm 1e9\ntrack a\nC4\n",
+            "gate nan\ntrack a\nC4\n",
+            "tail inf\ntrack a\nC4\n",
+            "section A 0..inf\ntrack a\nC4\n",
+            "track a\nC4\nautomate cutoff\nnan\n",
+            "track a\nC4\nautomate cutoff\n500 inf:1\n",
+            "track a\nC4\nautomate cutoff\n500 R:nan\n",
+            "track a\nC4\nautomate bpm\n120 nan:1\n",
+        ] {
+            assert!(parse_song(text).is_err(), "accepted {text:?}");
+        }
+        assert!(params_from_patch("cutoff nan\n").is_err());
+        assert!(params_from_patch("cutoff inf\n").is_err());
+        let mut vm = VoiceManager::new(44100.0, 4);
+        assert!(crate::patch::apply(&mut vm, "resonance NaN\n").is_err());
     }
 
     #[test]
