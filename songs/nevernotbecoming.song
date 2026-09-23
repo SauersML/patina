@@ -141,7 +141,7 @@ automate buzz.osc2_level
   0.8
 automate buzz.osc3_level
   0.8
-automate buzz.noise
+automate noise
   0.12
 automate buzz.sub
   0.3

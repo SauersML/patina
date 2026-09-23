@@ -116,6 +116,10 @@
 //   `automate pad.pan`, `automate snare.reverb_send` (dub throws that
 //   touch only the snare), `automate bass.duck`. `automate chorus_mix`
 //   overrides the mode switch's insert mix (0 = bus dry, sends only).
+//   A track prefix needs a control the track owns: its voice, its strip,
+//   its tape slot, the 909 board on a kit track, the voice box on a vox
+//   track. The bus circuits under every track (noise, reverb_wet, spring,
+//   chorus, tape, volume) refuse one; automate them unscoped.
 //
 //   The first token must be a plain value (the starting point). After that,
 //   V:D@shape means "ramp to V over D beats". R:D / .:D holds the current
@@ -563,6 +567,69 @@ impl Param {
             | Param::SmpRelease
             | Param::SmpCutoff
             | Param::SmpRes => vm.set_sampler_all(self, value),
+        }
+    }
+
+    /// Whether automation addressed to one track's channel lands on that
+    /// track alone. Voice-level controls live in the channel's snapshot
+    /// and strip controls on its desk strip; the tape deck's transport
+    /// routes to its slot, and the 909 board and the voice box are whole
+    /// instruments owned by their one track. Everything else -- the
+    /// shared noise generator, the reverb, spring, chorus and tape, the
+    /// master volume, the performance controllers -- is one circuit under
+    /// every track, and `set_channel_param` hands it to the global path,
+    /// so `automate buzz.noise` used to noise up the whole mix.
+    pub(crate) fn reaches_track(self, channel: u16) -> bool {
+        use Param as P;
+        if self.apply_to_params(&mut ParamValues::default(), self.range().0) {
+            return true;
+        }
+        match self {
+            P::TrackGain
+            | P::TrackPan
+            | P::ReverbSend
+            | P::SpringSend
+            | P::ChorusSend
+            | P::DuckAmount
+            | P::DuckRelease => true,
+            P::SmpPitch
+            | P::SmpStart
+            | P::SmpGain
+            | P::SmpPan
+            | P::SmpAttack
+            | P::SmpRelease
+            | P::SmpCutoff
+            | P::SmpRes => crate::sampler::slot_for_channel(channel).is_some(),
+            P::BdLevel
+            | P::BdTune
+            | P::BdAttack
+            | P::BdDecay
+            | P::BdSweep
+            | P::BdDrive
+            | P::SdLevel
+            | P::SdTune
+            | P::SdTone
+            | P::SdSnappy
+            | P::SdDecay
+            | P::RsLevel
+            | P::RsTune
+            | P::CpLevel
+            | P::CpDecay
+            | P::HhLevel
+            | P::HhTune
+            | P::HhMetal
+            | P::ChDecay
+            | P::OhDecay
+            | P::DrumDrive
+            | P::DrumTone => channel == crate::drums::DRUM_CHANNEL,
+            P::VoxLevel
+            | P::VoxDry
+            | P::VoxBreath
+            | P::VoxClarity
+            | P::VoxVibrato
+            | P::VoxModeSel
+            | P::VoxIntonation => channel == crate::vox::VOX_CHANNEL,
+            _ => false,
         }
     }
 
@@ -1250,6 +1317,23 @@ fn parse_song(text: &str) -> Result<Song, String> {
                                     name, track
                                 ))
                             })?;
+                        if let Some(param) = Param::from_name(pname) {
+                            if !param.reaches_track(ch) {
+                                return Err(err(format!(
+                                    "automate '{}': {} is shared by every track, so a \
+                                     track cannot own it; automate it unscoped \
+                                     (`automate {}`){}",
+                                    name,
+                                    pname,
+                                    pname,
+                                    match param {
+                                        Param::ReverbWet => ", or this track's reverb_send",
+                                        Param::SpringWet => ", or this track's spring_send",
+                                        _ => "",
+                                    }
+                                )));
+                            }
+                        }
                         (ch, pname)
                     }
                     None => (0u16, name),
@@ -2140,6 +2224,40 @@ mod tests {
         assert!(params_from_patch("cutoff inf\n").is_err());
         let mut vm = VoiceManager::new(44100.0, 4);
         assert!(crate::patch::apply(&mut vm, "resonance NaN\n").is_err());
+    }
+
+    #[test]
+    fn scoped_automation_must_land_on_its_track() {
+        let head = "track lead\nC4\ntrack beat kit=909\nBD\ntrack sing vox\nC4\n";
+        // Voice-level, strip and board controls belong to the track
+        for lane in [
+            "lead.cutoff",
+            "lead.unison",
+            "lead.reverb_send",
+            "beat.bd_tune",
+            "sing.vox_mode",
+        ] {
+            let text = format!("{head}automate {lane}\n0.5\n");
+            assert!(parse_song(&text).is_ok(), "{lane} refused");
+        }
+        // Bus circuits under every track would silently go global
+        for lane in [
+            "lead.noise",
+            "lead.reverb_wet",
+            "lead.spring",
+            "lead.tape_wow",
+            "lead.volume",
+            "lead.bd_tune",
+            "beat.vox_level",
+            "lead.smp_pitch",
+        ] {
+            let text = format!("{head}automate {lane}\n0.5\n");
+            assert!(parse_song(&text).is_err(), "{lane} accepted");
+            let during = format!("{head}section A 0..1\nautomate {lane}: 0.5 during A\n");
+            assert!(parse_song(&during).is_err(), "{lane} during accepted");
+        }
+        // Unscoped, the bus controls are fine
+        assert!(parse_song(&format!("{head}automate noise\n0.1\n")).is_ok());
     }
 
     #[test]
