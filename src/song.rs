@@ -1551,6 +1551,7 @@ fn parse_song(text: &str) -> Result<Song, String> {
             .unwrap_or(std::cmp::Ordering::Equal)
             .then(a.1.cmp(&b.1))
     });
+    end_notes_at_restrike(&mut events);
 
     let max_beat = events.iter().map(|e| e.0).fold(0.0f64, f64::max);
     let time_of = tempo_map(bpm, &tempo_lane, max_beat);
@@ -1569,6 +1570,46 @@ fn parse_song(text: &str) -> Result<Song, String> {
         samplers,
         tracks: track_channels,
     })
+}
+
+/// One key cannot be held twice: striking it again ends the earlier press.
+/// A note whose off lands after the next strike of the same key on the
+/// same channel -- a swung offbeat leaning into the next grid note, a
+/// `~+` drag, a long note under a repeated one -- would otherwise release
+/// the NEW note (the engine retriggers the held card on the re-strike, and
+/// the stale off then lifts it), cutting it to a click. The earlier note's
+/// off moves to the re-strike's beat, where it sorts before the on exactly
+/// as a gate-1 repeat does. `events` must already be sorted.
+fn end_notes_at_restrike(events: &mut Vec<(f64, u8, EventKind)>) {
+    let mut held: std::collections::HashMap<(u16, u8), u32> = std::collections::HashMap::new();
+    let mut i = 0;
+    while i < events.len() {
+        match events[i].2 {
+            EventKind::NoteOn { note, channel, .. } => {
+                let count = held.entry((channel, note)).or_insert(0);
+                if *count > 0 {
+                    let stale = events[i + 1..].iter().position(|e| {
+                        matches!(e.2, EventKind::NoteOff { note: n, channel: c }
+                            if n == note && c == channel)
+                    });
+                    if let Some(k) = stale {
+                        let (_, _, off) = events.remove(i + 1 + k);
+                        events.insert(i, (events[i].0, 0, off));
+                        i += 1;
+                    }
+                } else {
+                    *count = 1;
+                }
+            }
+            EventKind::NoteOff { note, channel } => {
+                if let Some(count) = held.get_mut(&(channel, note)) {
+                    *count = count.saturating_sub(1);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
 }
 
 /// Compile the tempo lane into beat -> seconds. The lane is sampled at
@@ -1990,6 +2031,52 @@ fn parse_note(s: &str) -> Result<u8, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every key's ons and offs must alternate, each off after its on: an
+    /// off that arrives while a LATER strike holds the key releases that
+    /// later note instead of its own.
+    fn assert_keys_alternate(song: &Song) {
+        let mut held = std::collections::HashMap::new();
+        for e in &song.events {
+            match e.kind {
+                EventKind::NoteOn { note, channel, .. } => {
+                    let was = held.insert((channel, note), true);
+                    assert_ne!(was, Some(true), "note {note} struck again while held");
+                }
+                EventKind::NoteOff { note, channel } => {
+                    let was = held.insert((channel, note), false);
+                    assert_eq!(was, Some(true), "note {note} released twice");
+                }
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn restriking_a_key_ends_the_earlier_note_first() {
+        // Swung late, the offbeat 16th's off lands after the next grid C4
+        let swung = parse_song("track a swing=0.66\n(C4:0.25)x8\n").unwrap();
+        assert_keys_alternate(&swung);
+        // Swung early, the offbeat strikes before the onbeat has let go
+        let early = parse_song("track a swing=0.4\n(C4:0.25)x8\n").unwrap();
+        assert_keys_alternate(&early);
+        // A dragged hit and a long note under a repeat
+        let dragged = parse_song("track a\nC4~+0.3 C4 C4\n").unwrap();
+        assert_keys_alternate(&dragged);
+        let under = parse_song("track a\nC4:4 >1 C4\n").unwrap();
+        assert_keys_alternate(&under);
+        // The moved off sits at the re-strike's time, just before its on
+        let ev = &dragged.events;
+        let second_on = ev
+            .iter()
+            .filter(|e| matches!(e.kind, EventKind::NoteOn { .. }))
+            .nth(1)
+            .unwrap()
+            .time;
+        assert!(ev
+            .iter()
+            .any(|e| matches!(e.kind, EventKind::NoteOff { .. }) && e.time == second_on));
+    }
 
     #[test]
     fn note_names() {
