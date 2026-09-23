@@ -1008,10 +1008,18 @@ impl SamplerBank {
                 h.svf = [i1l, i2l, i1r, i2r];
             }
 
-            // Edge declick so a region cut mid-waveform can't click
-            let declick = EDGE_DECLICK_SECS as f64 * src_rate;
-            let dist = if h.reverse { h.pos - r0 } else { r1 - h.pos };
-            let edge = (dist / declick.max(1.0)).clamp(0.0, 1.0) as f32;
+            // Edge declick so a region cut mid-waveform can't click. A
+            // forward loop never reaches the edge (it wraps at its end and
+            // its crossfade makes the seam), so it takes none: a loop
+            // ending at the region end -- `loop` alone, or `loop=a:b` up
+            // to `end=` -- used to fade to -17 dB on every pass.
+            let edge = if h.looping.is_some() && !h.reverse {
+                1.0
+            } else {
+                let declick = EDGE_DECLICK_SECS as f64 * src_rate;
+                let dist = if h.reverse { h.pos - r0 } else { r1 - h.pos };
+                (dist / declick.max(1.0)).clamp(0.0, 1.0) as f32
+            };
 
             // Constant-power pan, center unity
             let ph = (cfg.pan.clamp(-1.0, 1.0) + 1.0) * std::f32::consts::FRAC_PI_4;
@@ -1684,6 +1692,43 @@ mod tests {
             );
         }
         assert!(bank.any_active(), "looped head died");
+    }
+
+    /// A loop that runs to the end of the region holds its level through
+    /// every wrap: the region-edge declick is for heads that stop there.
+    #[test]
+    fn a_loop_to_the_region_end_does_not_dip_at_the_wrap() {
+        // 0.5 s of a 2 kHz sine: every loop body below is a whole number
+        // of cycles, so the crossfade joins in phase and cannot dip
+        let s: Vec<f32> = (0..24000)
+            .map(|i| (std::f32::consts::TAU * 2000.0 * i as f32 / 48000.0).sin() * 0.5)
+            .collect();
+        let data = Arc::new(SampleData {
+            left: s.clone(),
+            right: s,
+            rate: 48000,
+        });
+        for loop_pts in [(0.0, f32::MAX), (0.1, 0.5)] {
+            let cfg = SlotConfig {
+                root: 69,
+                loop_pts: Some(loop_pts),
+                xfade: 0.01,
+                attack: 0.001,
+                ..Default::default()
+            };
+            let mut bank = SamplerBank::new(48000.0);
+            bank.set_slot(0, SamplerSlot { data: data.clone(), cfg });
+            bank.note_on(0, 69, 1.0);
+            let out: Vec<f32> = (0..96000).map(|_| bank.render_next(1.0).0).collect();
+            // Peak per millisecond (two cycles) after the attack, through
+            // several wraps, against the level before the first one
+            let peaks: Vec<f32> = out[4800..]
+                .chunks(48)
+                .map(|c| c.iter().fold(0.0f32, |a, &b| a.max(b.abs())))
+                .collect();
+            let (level, lo) = (peaks[10], peaks.iter().cloned().fold(f32::MAX, f32::min));
+            assert!(lo > 0.9 * level, "loop {loop_pts:?} dipped to {lo} of {level}");
+        }
     }
 
     /// A short reel sliced into many pads: every slice can be under one
