@@ -1145,9 +1145,19 @@ fn parse_song(text: &str) -> Result<Song, String> {
                             .parse_finite::<f32>()
                             .map_err(|_| err(format!("invalid {} '{}'", k, v)))?;
                         mix_opts.push((Param::from_name(k).unwrap(), value));
-                    } else if opt.strip_prefix("kit=").is_some() {
+                    } else if let Some(kit) = opt.strip_prefix("kit=") {
                         // A drum track: notes route to the rhythm section
-                        // (there is one board, so no per-track patches here)
+                        // (there is one board, so no per-track patches
+                        // here). Any other name used to play the 909 too,
+                        // so `kit=808` or a kit patch's name sounded like
+                        // it had been honored.
+                        if kit != "909" {
+                            return Err(err(format!(
+                                "unknown kit '{}': the rhythm section is one 909 board \
+                                 (kit=909); shape it with bd_/sd_/hh_ automation",
+                                kit
+                            )));
+                        }
                         channel = crate::drums::DRUM_CHANNEL;
                     } else if opt == "vox" {
                         // The voice box: notes play the vocoder's carrier,
@@ -2854,6 +2864,8 @@ mod tests {
         assert!(all_drum, "kit= tracks must route every note to the board");
         // Drum names outside a kit= track stay errors
         assert!(parse_song("bpm 120\ntrack a\nBD\n").is_err());
+        // There is one board; another kit name is refused, not ignored
+        assert!(parse_song("bpm 120\ntrack beat kit=808\nBD\n").is_err());
 
         let frames: Vec<_> = render_offline(&song, 48000.0).collect();
         let peak = frames
