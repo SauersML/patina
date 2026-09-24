@@ -137,56 +137,50 @@ struct Row {
 enum Kind {
     Float {
         display: Display,
-        default: f32,
         guarded: bool,
     },
     Choice {
         variants: &'static [&'static str],
-        default: usize,
     },
 }
 
-const fn flt(param: Param, name: &'static str, display: Display, default: f32) -> Row {
+const fn flt(param: Param, name: &'static str, display: Display) -> Row {
     Row {
         param,
         name,
         kind: Kind::Float {
             display,
-            default,
             guarded: false,
         },
     }
 }
 
-const fn gflt(param: Param, name: &'static str, display: Display, default: f32) -> Row {
+const fn gflt(param: Param, name: &'static str, display: Display) -> Row {
     Row {
         param,
         name,
         kind: Kind::Float {
             display,
-            default,
             guarded: true,
         },
     }
 }
 
-const fn sel(
-    param: Param,
-    name: &'static str,
-    variants: &'static [&'static str],
-    default: usize,
-) -> Row {
+const fn sel(param: Param, name: &'static str, variants: &'static [&'static str]) -> Row {
     Row {
         param,
         name,
-        kind: Kind::Choice { variants, default },
+        kind: Kind::Choice { variants },
     }
 }
 
 use Display::{Fraction, Hertz, Percent, Plain, Seconds};
 
 /// THE host presentation table. Range/taper/setter for each row come from
-/// `Param`; only the human name, formatting, default, and guard live here.
+/// `Param`; only the human name, formatting, and guard live here. There is
+/// no default column: every default is the Init patch's value (see
+/// `init_value`), so the plugin a host instantiates and the app that powers
+/// on are the same sound by construction.
 /// Order is the host display order (and the AU parameter-ID order).
 ///
 /// NAMES are fully spelled out: Logic shows this list flat, with no section
@@ -202,86 +196,86 @@ const PRESENTATION: &[Row] = &[
     // project. The first 56 rows are frozen in their original shipped order;
     // anything new goes on the END, never in the middle.
 
-    sel (Param::WaveformSel, "Waveform",   WAVE_NAMES,    2),
-    flt (Param::Volume,     "Volume",      Percent,       0.5),
-    flt (Param::Detune,     "Detune",      Plain(" ct"),  7.0),
-    flt (Param::PulseWidth, "Pulse Width", Fraction,      0.5),
-    flt (Param::NoiseLevel, "Noise",       Percent,       0.0),
-    flt (Param::LfoRate,    "LFO Rate",           Hertz,        1.0),
-    flt (Param::LfoShape,   "LFO Shape",          Percent,      0.5),
-    flt (Param::LfoPitch,   "LFO to Pitch",       Plain(" ct"), 0.0),
-    flt (Param::LfoFilter,  "LFO to Filter",      Plain(" oct"), 0.0),
-    flt (Param::LfoPwm,     "LFO to Pulse Width", Plain(""),    0.0),
-    flt (Param::Attack,     "Amp Attack",  Seconds, 0.1),
-    flt (Param::Decay,      "Amp Decay",   Seconds, 0.1),
-    flt (Param::Sustain,    "Amp Sustain", Percent, 0.7),
-    flt (Param::Release,    "Amp Release", Seconds, 0.2),
-    flt (Param::Cutoff,     "Filter Cutoff",     Hertz,     15000.0),
-    flt (Param::Resonance,  "Filter Resonance",  Plain(""), 0.0),
-    flt (Param::Drive,      "Filter Drive",      Plain(""), 1.0),
-    flt (Param::Saturation, "Filter Saturation", Plain(""), 1.0),
-    flt (Param::HpfCutoff,  "High-Pass Filter",  Hertz,     16.0),
-    flt (Param::FilterEnvAmount, "Filter Envelope Amount", Plain(" oct"), 0.0),
-    flt (Param::FilterAttack,    "Filter Attack",  Seconds, 0.005),
-    flt (Param::FilterDecay,     "Filter Decay",   Seconds, 0.3),
-    flt (Param::FilterSustain,   "Filter Sustain", Percent, 0.0),
-    flt (Param::FilterRelease,   "Filter Release", Seconds, 0.3),
-    flt (Param::FuzzAmount,  "Fuzz",            Percent,     0.0),
-    flt (Param::SpringWet,   "Spring Reverb",   Percent,     0.0),
-    flt (Param::ReverbDecay, "Reverb Decay",    Fraction,    0.5),
-    flt (Param::ReverbWet,   "Reverb Mix",      Percent,     0.5),
-    sel (Param::ChorusModeSel, "Chorus Mode",   CHORUS_NAMES, 0),
-    gflt(Param::ChorusRate,  "Chorus Rate",     Hertz,       0.5),
-    gflt(Param::ChorusDepth, "Chorus Depth",    Percent,     0.3),
-    flt (Param::TapeWow,     "Tape Wow",        Percent,     0.0),
-    flt (Param::TapeFlutter, "Tape Flutter",    Percent,     0.0),
-    gflt(Param::TapeDrive,   "Tape Drive",      Percent,     0.0),
-    gflt(Param::TapeAge,     "Tape Age",        Percent,     0.0),
-    flt (Param::BdLevel,   "Kick Level",      Percent,  0.8),
-    flt (Param::BdTune,    "Kick Tune",       Fraction, 0.35),
-    flt (Param::BdAttack,  "Kick Attack",     Fraction, 0.5),
-    flt (Param::BdDecay,   "Kick Decay",      Fraction, 0.45),
-    flt (Param::BdSweep,   "Kick Sweep",      Fraction, 0.5),
-    flt (Param::BdDrive,   "Kick Drive",      Fraction, 0.25),
-    flt (Param::SdLevel,   "Snare Level",     Percent,  0.75),
-    flt (Param::SdTune,    "Snare Tune",      Fraction, 0.4),
-    flt (Param::SdTone,    "Snare Tone",      Fraction, 0.5),
-    flt (Param::SdSnappy,  "Snare Snappy",    Fraction, 0.6),
-    flt (Param::SdDecay,   "Snare Decay",     Fraction, 0.5),
-    flt (Param::RsLevel,   "Rim Shot Level",  Percent,  0.7),
-    flt (Param::RsTune,    "Rim Shot Tune",   Fraction, 0.5),
-    flt (Param::CpLevel,   "Clap Level",      Percent,  0.75),
-    flt (Param::CpDecay,   "Clap Decay",      Fraction, 0.5),
-    flt (Param::HhLevel,   "Hi-Hat Level",    Percent,  0.7),
-    flt (Param::HhTune,    "Hi-Hat Tune",     Fraction, 0.5),
-    flt (Param::HhMetal,   "Hi-Hat Metal",    Fraction, 0.65),
-    flt (Param::ChDecay,   "Closed Hat Decay", Fraction, 0.35),
-    flt (Param::OhDecay,   "Open Hat Decay",  Fraction, 0.5),
-    flt (Param::DrumDrive, "Drum Bus Drive",  Percent,  0.0),
+    sel (Param::WaveformSel, "Waveform",   WAVE_NAMES),
+    flt (Param::Volume,     "Volume",      Percent),
+    flt (Param::Detune,     "Detune",      Plain(" ct")),
+    flt (Param::PulseWidth, "Pulse Width", Fraction),
+    flt (Param::NoiseLevel, "Noise",       Percent),
+    flt (Param::LfoRate,    "LFO Rate",           Hertz),
+    flt (Param::LfoShape,   "LFO Shape",          Percent),
+    flt (Param::LfoPitch,   "LFO to Pitch",       Plain(" ct")),
+    flt (Param::LfoFilter,  "LFO to Filter",      Plain(" oct")),
+    flt (Param::LfoPwm,     "LFO to Pulse Width", Plain("")),
+    flt (Param::Attack,     "Amp Attack",  Seconds),
+    flt (Param::Decay,      "Amp Decay",   Seconds),
+    flt (Param::Sustain,    "Amp Sustain", Percent),
+    flt (Param::Release,    "Amp Release", Seconds),
+    flt (Param::Cutoff,     "Filter Cutoff",     Hertz),
+    flt (Param::Resonance,  "Filter Resonance",  Plain("")),
+    flt (Param::Drive,      "Filter Drive",      Plain("")),
+    flt (Param::Saturation, "Filter Saturation", Plain("")),
+    flt (Param::HpfCutoff,  "High-Pass Filter",  Hertz),
+    flt (Param::FilterEnvAmount, "Filter Envelope Amount", Plain(" oct")),
+    flt (Param::FilterAttack,    "Filter Attack",  Seconds),
+    flt (Param::FilterDecay,     "Filter Decay",   Seconds),
+    flt (Param::FilterSustain,   "Filter Sustain", Percent),
+    flt (Param::FilterRelease,   "Filter Release", Seconds),
+    flt (Param::FuzzAmount,  "Fuzz",            Percent),
+    flt (Param::SpringWet,   "Spring Reverb",   Percent),
+    flt (Param::ReverbDecay, "Reverb Decay",    Fraction),
+    flt (Param::ReverbWet,   "Reverb Mix",      Percent),
+    sel (Param::ChorusModeSel, "Chorus Mode",   CHORUS_NAMES),
+    gflt(Param::ChorusRate,  "Chorus Rate",     Hertz),
+    gflt(Param::ChorusDepth, "Chorus Depth",    Percent),
+    flt (Param::TapeWow,     "Tape Wow",        Percent),
+    flt (Param::TapeFlutter, "Tape Flutter",    Percent),
+    gflt(Param::TapeDrive,   "Tape Drive",      Percent),
+    gflt(Param::TapeAge,     "Tape Age",        Percent),
+    flt (Param::BdLevel,   "Kick Level",      Percent),
+    flt (Param::BdTune,    "Kick Tune",       Fraction),
+    flt (Param::BdAttack,  "Kick Attack",     Fraction),
+    flt (Param::BdDecay,   "Kick Decay",      Fraction),
+    flt (Param::BdSweep,   "Kick Sweep",      Fraction),
+    flt (Param::BdDrive,   "Kick Drive",      Fraction),
+    flt (Param::SdLevel,   "Snare Level",     Percent),
+    flt (Param::SdTune,    "Snare Tune",      Fraction),
+    flt (Param::SdTone,    "Snare Tone",      Fraction),
+    flt (Param::SdSnappy,  "Snare Snappy",    Fraction),
+    flt (Param::SdDecay,   "Snare Decay",     Fraction),
+    flt (Param::RsLevel,   "Rim Shot Level",  Percent),
+    flt (Param::RsTune,    "Rim Shot Tune",   Fraction),
+    flt (Param::CpLevel,   "Clap Level",      Percent),
+    flt (Param::CpDecay,   "Clap Decay",      Fraction),
+    flt (Param::HhLevel,   "Hi-Hat Level",    Percent),
+    flt (Param::HhTune,    "Hi-Hat Tune",     Fraction),
+    flt (Param::HhMetal,   "Hi-Hat Metal",    Fraction),
+    flt (Param::ChDecay,   "Closed Hat Decay", Fraction),
+    flt (Param::OhDecay,   "Open Hat Decay",  Fraction),
+    flt (Param::DrumDrive, "Drum Bus Drive",  Percent),
 
     // --- Appended after the frozen block (new controls) ------------------
-    sel (Param::CircuitSel, "Circuit",     CIRCUIT_NAMES, 0),
-    flt (Param::SubLevel,   "Sub Oscillator", Percent,    0.0),
-    flt (Param::Glide,      "Glide",       Plain(" s"),   0.0),
-    sel (Param::Osc2Wave,   "Oscillator 2 Waveform", WAVE_NAMES, 2),
-    flt (Param::Osc2Pitch,  "Oscillator 2 Pitch",    Plain(" st"), 0.0),
-    flt (Param::Osc2Level,  "Oscillator 2 Level",    Percent,      0.72),
-    sel (Param::Osc3Wave,   "Oscillator 3 Waveform", WAVE_NAMES, 2),
-    flt (Param::Osc3Pitch,  "Oscillator 3 Pitch",    Plain(" st"), 0.0),
-    flt (Param::Osc3Level,  "Oscillator 3 Level",    Percent,      0.72),
-    sel (Param::SyncSel,    "Oscillator Sync", SYNC_NAMES, 0),
-    flt (Param::RingAmount, "Ring Modulation", Percent,    0.0),
-    flt (Param::OscFm,      "Oscillator FM",   Percent,    0.0),
-    flt (Param::KeyTrack,   "Key Tracking",    Percent,    0.4),
-    flt (Param::MixSaw,     "Oscillator 1 Mix Sawtooth", Percent, 0.0),
-    flt (Param::MixPulse,   "Oscillator 1 Mix Pulse",    Percent, 0.0),
-    flt (Param::MixTri,     "Oscillator 1 Mix Triangle", Percent, 0.0),
-    flt (Param::MixSine,    "Oscillator 1 Mix Sine",     Percent, 0.0),
-    flt (Param::Unison,        "Unison Voices", Plain(""),    1.0),
-    flt (Param::UnisonDetune,  "Unison Detune", Plain(" ct"), 12.0),
-    flt (Param::ReverbTone,  "Reverb Tone",     Hertz,       5500.0),
-    flt (Param::ReverbPre,   "Reverb Predelay", Plain(" s"), 0.012),
-    flt (Param::DrumTone,  "Drum Bus Tone",   Fraction, 1.0),
+    sel (Param::CircuitSel, "Circuit",     CIRCUIT_NAMES),
+    flt (Param::SubLevel,   "Sub Oscillator", Percent),
+    flt (Param::Glide,      "Glide",       Plain(" s")),
+    sel (Param::Osc2Wave,   "Oscillator 2 Waveform", WAVE_NAMES),
+    flt (Param::Osc2Pitch,  "Oscillator 2 Pitch",    Plain(" st")),
+    flt (Param::Osc2Level,  "Oscillator 2 Level",    Percent),
+    sel (Param::Osc3Wave,   "Oscillator 3 Waveform", WAVE_NAMES),
+    flt (Param::Osc3Pitch,  "Oscillator 3 Pitch",    Plain(" st")),
+    flt (Param::Osc3Level,  "Oscillator 3 Level",    Percent),
+    sel (Param::SyncSel,    "Oscillator Sync", SYNC_NAMES),
+    flt (Param::RingAmount, "Ring Modulation", Percent),
+    flt (Param::OscFm,      "Oscillator FM",   Percent),
+    flt (Param::KeyTrack,   "Key Tracking",    Percent),
+    flt (Param::MixSaw,     "Oscillator 1 Mix Sawtooth", Percent),
+    flt (Param::MixPulse,   "Oscillator 1 Mix Pulse",    Percent),
+    flt (Param::MixTri,     "Oscillator 1 Mix Triangle", Percent),
+    flt (Param::MixSine,    "Oscillator 1 Mix Sine",     Percent),
+    flt (Param::Unison,        "Unison Voices", Plain("")),
+    flt (Param::UnisonDetune,  "Unison Detune", Plain(" ct")),
+    flt (Param::ReverbTone,  "Reverb Tone",     Hertz),
+    flt (Param::ReverbPre,   "Reverb Predelay", Plain(" s")),
+    flt (Param::DrumTone,  "Drum Bus Tone",   Fraction),
 ];
 
 /// Parameters that are NOT host-automation knobs and are deliberately kept
@@ -323,7 +317,10 @@ const EXCLUDED: &[Param] = &[
     Param::SmpRelease,
     Param::SmpCutoff,
     Param::SmpRes,
-    // Mixer desk (per-track strips) + the song-only chorus insert override
+    // Mixer desk (per-track strips, the song's post-effects arrangement
+    // trim, a track's own pitch CV) + the song-only chorus insert override
+    Param::Output,
+    Param::PitchShift,
     Param::TrackGain,
     Param::TrackPan,
     Param::ReverbSend,
@@ -344,12 +341,9 @@ pub fn param_defs() -> Vec<ParamDef> {
         .map(|row| {
             let (min, max, _curve) = row.param.range();
             let id = row.param.name();
+            let default = init_value(row.param);
             match row.kind {
-                Kind::Float {
-                    display,
-                    default,
-                    guarded,
-                } => ParamDef::Float(FloatDef {
+                Kind::Float { display, guarded } => ParamDef::Float(FloatDef {
                     id,
                     name: row.name,
                     param: row.param,
@@ -359,16 +353,36 @@ pub fn param_defs() -> Vec<ParamDef> {
                     display,
                     guarded,
                 }),
-                Kind::Choice { variants, default } => ParamDef::Choice(ChoiceDef {
+                Kind::Choice { variants } => ParamDef::Choice(ChoiceDef {
                     id,
                     name: row.name,
                     param: row.param,
                     variants,
-                    default,
+                    default: default as usize,
                 }),
             }
         })
         .collect()
+}
+
+/// The Init patch's setting for `param` — THE default of every host
+/// parameter. A power-on state is a patch like any other (the Polymoog comes
+/// on in Preset 8, Patina in Init), so the defaults are read out of that
+/// patch's text rather than kept in a second list that could disagree with
+/// it. `init_patch_sets_every_host_parameter` pins that the patch leaves no
+/// host parameter unset.
+fn init_value(param: Param) -> f32 {
+    let name = param.name();
+    crate::patch::FACTORY[0]
+        .1
+        .lines()
+        .filter_map(|line| {
+            let line = line.split('#').next()?;
+            let mut it = line.split_whitespace();
+            (it.next()? == name).then(|| it.next()?.parse::<f32>().ok())?
+        })
+        .last()
+        .unwrap_or_else(|| panic!("the Init patch does not set `{name}`"))
 }
 
 /// Route one MIDI note-on to the keyboard voices or, on GM channel 10
@@ -538,6 +552,47 @@ mod tests {
                 assert_eq!(min, 0.0, "{} min", c.id);
                 assert_eq!(max as usize, c.variants.len() - 1, "{} max", c.id);
             }
+        }
+    }
+
+    /// Every host default is read out of the Init patch, so the patch must
+    /// set each presented parameter (a missing one would panic at plugin
+    /// construction) — and the bank's first slot must really be Init.
+    #[test]
+    fn init_patch_sets_every_host_parameter() {
+        assert_eq!(crate::patch::FACTORY[0].0, "Init");
+        for row in PRESENTATION {
+            let name = row.param.name();
+            let set = crate::patch::FACTORY[0].1.lines().any(|l| {
+                l.split('#').next().unwrap().split_whitespace().next() == Some(name)
+            });
+            assert!(set, "the Init patch does not set `{name}`");
+        }
+    }
+
+    /// Init is a dry voice: every effect in the chain is out, so what a
+    /// fresh plugin instance or a freshly launched app plays is the
+    /// oscillator and filter alone.
+    #[test]
+    fn init_is_dry() {
+        for p in [
+            Param::ReverbWet,
+            Param::SpringWet,
+            Param::FuzzAmount,
+            Param::ChorusModeSel,
+            Param::TapeWow,
+            Param::TapeFlutter,
+            Param::TapeDrive,
+            Param::TapeAge,
+            Param::Saturation,
+            Param::Osc2Level,
+            Param::Osc3Level,
+            Param::Detune,
+            Param::LfoPitch,
+            Param::LfoFilter,
+            Param::LfoPwm,
+        ] {
+            assert_eq!(init_value(p), 0.0, "Init sets `{}` on", p.name());
         }
     }
 
