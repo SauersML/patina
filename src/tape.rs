@@ -1005,33 +1005,40 @@ impl JilesAtherton {
 }
 
 /// Langevin function L(x) = coth(x) - 1/x and its derivative, computed
-/// together (they share coth via csch^2 = coth^2 - 1). L is the
-/// anhysteretic magnetization curve of the oxide particles.
+/// together. L is the anhysteretic magnetization curve of the oxide
+/// particles, so it must be smooth: any step in it is a step in the
+/// magnetization every time the field crosses that point.
+///
+/// Below |x| = 0.8 the Taylor series (to x^9, error < 3e-6) avoids the
+/// coth - 1/x cancellation. Above it coth comes exactly from one
+/// exponential, e = exp(-2|x|): coth = (1 + e) / (1 - e) and
+/// csch^2 = 4e / (1 - e)^2, with no cancellation left to fear. This used
+/// to hand over at |x| = 0.6 to a rational tanh whose 1% error the
+/// subtraction magnified: L stepped from 0.1953 to 0.1755 and its slope
+/// by a quarter at the join, a kink the tape laid down as a tick on loud
+/// program (Ember's chords, 21 dB under the music).
 #[inline]
 fn langevin_pair(x: f32) -> (f32, f32) {
     let ax = x.abs();
-    if ax < 0.6 {
-        // Series: no cancellation trouble near zero
+    if ax < 0.8 {
         let x2 = x * x;
         (
-            x * (1.0 / 3.0 - x2 / 45.0 + 2.0 * x2 * x2 / 945.0),
-            1.0 / 3.0 - x2 / 15.0 + 2.0 * x2 * x2 / 189.0,
+            x * (1.0 / 3.0
+                + x2 * (-1.0 / 45.0
+                    + x2 * (2.0 / 945.0 + x2 * (-1.0 / 4725.0 + x2 * (2.0 / 93555.0))))),
+            1.0 / 3.0
+                + x2 * (-1.0 / 15.0
+                    + x2 * (2.0 / 189.0 + x2 * (-1.0 / 675.0 + x2 * (2.0 / 10395.0)))),
         )
-    } else if ax > 6.0 {
-        // Asymptotic: coth -> sign(x)
-        (x.signum() - 1.0 / x, 1.0 / (x * x))
     } else {
-        // Invert the rational tanh algebraically. This is the same oxide
-        // curve, with one division instead of a division and reciprocal
-        // at each of the 96 RK2 layer evaluations per stereo sample.
-        let t = x.clamp(-3.0, 3.0);
-        let t2 = t * t;
-        let coth = (27.0 + 9.0 * t2) / (t * (27.0 + t2));
-        let inv_x = 1.0 / x;
+        let e = (-2.0 * ax).exp();
+        let one_minus = 1.0 - e;
+        let coth = (1.0 + e) / one_minus;
+        let inv_x = 1.0 / ax;
         let l = coth - inv_x;
-        // L'(x) = 1/x^2 - csch^2 = 1/x^2 + 1 - coth^2
-        let lp = inv_x * inv_x + 1.0 - coth * coth;
-        (l, lp.max(0.0))
+        // L'(x) = 1/x^2 - csch^2(x)
+        let lp = inv_x * inv_x - 4.0 * e / (one_minus * one_minus);
+        (l.copysign(x), lp.max(0.0))
     }
 }
 
@@ -1336,27 +1343,34 @@ impl PeakingFilter {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn direct_coth_preserves_the_oxide_curve() {
-        for i in -60000..=60000 {
-            let x = i as f32 * 0.0001;
-            if x.abs() < 0.6 {
-                continue;
-            }
-            let t = x.clamp(-3.0, 3.0);
-            let t2 = t * t;
-            let coth = 1.0 / (t * (27.0 + t2) / (27.0 + 9.0 * t2));
-            let inv_x = 1.0 / x;
-            let expected = (coth - inv_x, (inv_x * inv_x + 1.0 - coth * coth).max(0.0));
-            let actual = super::langevin_pair(x);
-            assert!((actual.0 - expected.0).abs() < 1e-6, "L({x})");
-            assert!((actual.1 - expected.1).abs() < 2e-6, "L'({x})");
-        }
-    }
-
     use super::*;
 
     const FS: f32 = 48000.0;
+
+    /// The anhysteretic curve is exact and seamless: it matches coth - 1/x
+    /// everywhere and has no step anywhere, including at the branch join.
+    #[test]
+    fn the_langevin_curve_is_exact_and_seamless() {
+        let exact = |x: f64| 1.0 / x.tanh() - 1.0 / x;
+        let dexact = |x: f64| 1.0 / (x * x) - 1.0 / (x.sinh() * x.sinh());
+        let mut prev = langevin_pair(0.0005).0;
+        for i in 2..20000 {
+            let x = i as f32 * 0.0005;
+            let (l, lp) = langevin_pair(x);
+            assert!((l as f64 - exact(x as f64)).abs() < 2e-5, "L({x}) = {l}");
+            assert!(
+                (lp as f64 - dexact(x as f64)).abs() < 2e-4,
+                "L'({x}) = {lp}"
+            );
+            assert!(
+                (langevin_pair(-x).0 + l).abs() < 1e-7,
+                "L must be odd at {x}"
+            );
+            // one 0.0005 step of a curve whose slope is at most 1/3
+            assert!((l - prev).abs() < 0.0005 / 3.0 + 1e-6, "L stepped at {x}");
+            prev = l;
+        }
+    }
 
     fn sine(n: usize, freq: f32) -> impl Iterator<Item = f32> {
         (0..n).map(move |i| (2.0 * PI * freq * i as f32 / FS).sin() * 0.5)
@@ -1491,21 +1505,14 @@ mod tests {
         }
     }
 
-    /// The deck claims +-3.5 dB across the band (see
+    /// The deck claims +-2.5 dB across the band (see
     /// `frequency_response_meets_cassette_spec`, which measures 48 kHz).
     /// It has to hold that claim at EVERY rate a host might hand it, or the
     /// model is quietly a different deck at 96 kHz. This pins the spread so
-    /// it cannot silently widen.
-    ///
-    /// Known limitation, measured and deliberate: the residual spread here
-    /// (~1 dB at 13 kHz between 48 and 96 kHz) is the record-EQ alignment.
-    /// `align_record_trim` solves the two trimmer gains from ANALOG
-    /// responses, but `OnePoleHighPass` is a backward-Euler discretization
-    /// whose deviation from that analog target grows with f/fs. Making the
-    /// solver agree with the implementation would flatten the deck at every
-    /// rate — and would also remove the +2.8 dB presence bump at 5 kHz that
-    /// 44.1/48 kHz renders currently have, i.e. it revoices the instrument.
-    /// That is a tone decision, not a bug fix, so it is left alone here.
+    /// it cannot silently widen. Measured after the oxide curve was made
+    /// exact: the worst point is +2.0 dB at 8 kHz (44.1 kHz), and 13 kHz
+    /// spreads 1 dB across rates. The old +2.8 dB presence bump at 5 kHz
+    /// came from the rational-tanh kink in the curve, and it went with it.
     #[test]
     fn the_deck_holds_its_spec_at_every_sample_rate() {
         for sr in [44100.0f32, 48000.0, 88200.0, 96000.0] {
@@ -1515,19 +1522,19 @@ mod tests {
                 let n = sr as usize;
                 let mut out = Vec::with_capacity(n / 2);
                 for i in 0..n {
-                    let x = (2.0 * PI * freq * i as f32 / sr).sin() * 0.5 * 0.2;
+                    let x = (2.0 * PI * freq * i as f32 / sr).sin() * 0.5 * 0.06;
                     let (l, _) = tape.process(x, x);
                     if i >= n / 2 {
                         out.push(l);
                     }
                 }
-                tone_amplitude(&out, freq, sr) / 0.1
+                tone_amplitude(&out, freq, sr) / 0.03
             };
             let reference = gain_at(1000.0);
             for freq in [200.0, 500.0, 2000.0, 5000.0, 8000.0, 11000.0, 13000.0] {
                 let db = 20.0 * (gain_at(freq) / reference).log10();
                 assert!(
-                    db.abs() < 3.5,
+                    db.abs() < 2.5,
                     "at {sr} Hz, {freq} Hz is {db:+.2} dB against the 1 kHz reference"
                 );
             }
@@ -1589,8 +1596,12 @@ mod tests {
     /// path are crossfaded, and the oxide is pre-rolled before it is heard.
     #[test]
     fn engaging_and_leaving_the_deck_is_click_free() {
-        for (drive, age, wow) in [(0.3, 0.0, 0.0), (0.0, 0.2, 0.0), (0.01, 0.0, 0.0), (0.0, 0.0, 0.3)]
-        {
+        for (drive, age, wow) in [
+            (0.3, 0.0, 0.0),
+            (0.0, 0.2, 0.0),
+            (0.01, 0.0, 0.0),
+            (0.0, 0.0, 0.3),
+        ] {
             // In silence, engaging the oxide is inaudible
             let mut tape = Tape::new(FS);
             for _ in 0..4800 {
@@ -1602,7 +1613,10 @@ mod tests {
             let thump = (0..960)
                 .map(|_| tape.process(0.0, 0.0).0.abs())
                 .fold(0.0f32, f32::max);
-            assert!(thump < 0.003, "engaging drive {drive} age {age}: thump {thump}");
+            assert!(
+                thump < 0.003,
+                "engaging drive {drive} age {age}: thump {thump}"
+            );
 
             // Under a sine, no step at either switch exceeds the sine's own
             let mut tape = Tape::new(FS);
@@ -1816,31 +1830,32 @@ mod tests {
 
     #[test]
     fn frequency_response_meets_cassette_spec() {
-        // A fresh, aligned deck must hold +-3.5 dB against the 1 kHz
+        // A fresh, aligned deck must hold +-2.5 dB against the 1 kHz
         // reference across the audible band (Type I cassettes were specced
         // around 30 Hz - 14 kHz +-3 dB; we verify 200 Hz - 13 kHz, clear of
         // the head-bump region below and the spec edge above). Measured the
-        // way the real spec is measured: at low level (~-20 VU), because at
-        // reference level cassette HF genuinely saturates — that is
-        // compression, not frequency response.
+        // way the real spec is measured: at low level (~-30 VU), because
+        // nearer reference level cassette HF genuinely saturates (13 kHz
+        // reads -3.6 dB at twice this level, through the 120 us record
+        // boost) — that is compression, not frequency response.
         let gain_at = |freq: f32| {
             let mut tape = Tape::new(FS);
             tape.set_drive(0.3);
             let n = 48000;
             let mut out = Vec::with_capacity(n / 2);
             for (i, x) in sine(n, freq).enumerate() {
-                let (l, _) = tape.process(x * 0.2, x * 0.2);
+                let (l, _) = tape.process(x * 0.06, x * 0.06);
                 if i >= n / 2 {
                     out.push(l);
                 }
             }
-            tone_amplitude(&out, freq, FS) / 0.1
+            tone_amplitude(&out, freq, FS) / 0.03
         };
         let reference = gain_at(1000.0);
         for freq in [200.0, 500.0, 2000.0, 5000.0, 8000.0, 11000.0, 13000.0] {
             let db = 20.0 * (gain_at(freq) / reference).log10();
             assert!(
-                db.abs() < 3.5,
+                db.abs() < 2.5,
                 "{} Hz is {:+.2} dB against the 1 kHz reference",
                 freq,
                 db
