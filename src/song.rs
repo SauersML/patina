@@ -256,6 +256,9 @@ param_table! {
     // resonance/cutoff, 72/73/75/79 envelope, 91/93 sends); the 102-119
     // block carries the engine-specific rest, the drums claim 20-31 and
     // 52-60, the tape deck the leftover low block.
+    //
+    // Envelope times run to 10 s, the Moog 911's own range (2 ms-10 s per
+    // segment); a 2 s ceiling cut every slow swell and long bloom short.
     // ------------------------------------------------------------------
     Volume:          "volume",         Some(7),   (0.0, 1.0, Lin);
     Output:          "output",         None,      (0.0, 1.0, Lin);
@@ -265,10 +268,10 @@ param_table! {
     Resonance:       "resonance",      Some(71),  (0.0, 4.0, Lin);
     Drive:           "drive",          Some(103), (0.1, 5.0, Lin);
     Saturation:      "saturation",     Some(104), (0.0, 2.0, Lin);
-    Attack:          "attack",         Some(73),  (0.0001, 2.0, Log);
-    Decay:           "decay",          Some(75),  (0.001, 2.0, Log);
+    Attack:          "attack",         Some(73),  (0.0001, 10.0, Log);
+    Decay:           "decay",          Some(75),  (0.001, 10.0, Log);
     Sustain:         "sustain",        Some(79),  (0.0, 1.0, Lin);
-    Release:         "release",        Some(72),  (0.001, 2.0, Log);
+    Release:         "release",        Some(72),  (0.001, 10.0, Log);
     HpfCutoff:       "hpf",            Some(102), (16.0, 8000.0, Log);
     FuzzAmount:      "fuzz",           None,      (0.0, 1.0, Lin);
     NoiseLevel:      "noise",          Some(81),  (0.0, 1.0, Lin);
@@ -307,16 +310,18 @@ param_table! {
     LfoFilter:       "lfo_filter",     Some(78),  (0.0, 4.0, Lin);
     LfoPwm:          "lfo_pwm",        None,      (0.0, 0.45, Lin);
     FilterEnvAmount: "filter_env",     Some(106), (-5.0, 5.0, Lin);
-    FilterAttack:    "filter_attack",  Some(107), (0.001, 2.0, Log);
-    FilterDecay:     "filter_decay",   Some(108), (0.01, 2.0, Log);
+    FilterAttack:    "filter_attack",  Some(107), (0.001, 10.0, Log);
+    FilterDecay:     "filter_decay",   Some(108), (0.01, 10.0, Log);
     FilterSustain:   "filter_sustain", Some(109), (0.0, 1.0, Lin);
-    FilterRelease:   "filter_release", Some(110), (0.01, 2.0, Log);
+    FilterRelease:   "filter_release", Some(110), (0.01, 10.0, Log);
     ReverbDecay:     "reverb_decay",   None,      (0.0, 0.99, Lin);
     ReverbWet:       "reverb_wet",     Some(91),  (0.0, 1.0, Lin);
     ReverbTone:      "reverb_tone",    None,      (800.0, 12000.0, Log);
     ReverbPre:       "reverb_pre",     None,      (0.0, 0.08, Lin);
     Unison:          "unison",         None,      (1.0, 4.0, Step);
     UnisonDetune:    "unison_detune",  None,      (0.0, 40.0, Lin);
+    // Stereo spread of the voice cards (0 = every note centered)
+    Spread:          "spread",         None,      (0.0, 1.0, Lin);
     ChorusModeSel:   "chorus_mode",    Some(112), (0.0, 4.0, Step);
     ChorusRate:      "chorus_rate",    Some(111), (0.1, 10.0, Log);
     ChorusDepth:     "chorus_depth",   Some(93),  (0.0, 1.0, Lin);
@@ -429,6 +434,115 @@ impl Param {
 }
 
 impl Param {
+    /// This parameter's setting in a snapshot, in the same units a song or
+    /// patch line writes (selectors as their index). `None` = the value
+    /// lives outside `ParamValues` (mixer strips, sampler slots, MIDI
+    /// performance controls, the arrangement trim). Patch SAVE writes every
+    /// `Some`, so a saved patch cannot leave a control behind; the sweep test
+    /// drives every row through it.
+    #[rustfmt::skip]
+    pub fn read(self, v: &ParamValues) -> Option<f32> {
+        Some(match self {
+            Param::WaveformSel => v.waveform as u8 as f32,
+            Param::Osc2Wave => v.osc2_wave as u8 as f32,
+            Param::Osc3Wave => v.osc3_wave as u8 as f32,
+            Param::CircuitSel => match v.circuit {
+                crate::oscillator::CircuitModel::Moog => 0.0,
+                crate::oscillator::CircuitModel::Arp => 1.0,
+            },
+            Param::SyncSel => if v.sync { 1.0 } else { 0.0 },
+            Param::ChorusModeSel => match v.chorus_mode {
+                ChorusMode::Off => 0.0,
+                ChorusMode::I => 1.0,
+                ChorusMode::II => 2.0,
+                ChorusMode::III => 3.0,
+                ChorusMode::IV => 4.0,
+            },
+            Param::Volume => v.volume,
+            Param::Detune => v.detune,
+            Param::Cutoff => v.cutoff,
+            Param::Resonance => v.resonance,
+            Param::Drive => v.drive,
+            Param::Saturation => v.saturation,
+            Param::HpfCutoff => v.hpf_cutoff,
+            Param::FuzzAmount => v.fuzz,
+            Param::NoiseLevel => v.noise,
+            Param::SpringWet => v.spring,
+            Param::Glide => v.glide,
+            Param::SubLevel => v.sub,
+            Param::Osc2Pitch => v.osc2_pitch,
+            Param::Osc2Level => v.osc2_level,
+            Param::Osc3Pitch => v.osc3_pitch,
+            Param::Osc3Level => v.osc3_level,
+            Param::KeyTrack => v.key_track,
+            Param::OscFm => v.osc_fm,
+            Param::RingAmount => v.ring,
+            Param::PulseWidth => v.pulse_width,
+            Param::MixSaw => v.mix_saw,
+            Param::MixPulse => v.mix_pulse,
+            Param::MixTri => v.mix_tri,
+            Param::MixSine => v.mix_sine,
+            Param::UiOctave => v.ui_octave,
+            Param::LfoRate => v.lfo_rate,
+            Param::LfoShape => v.lfo_shape,
+            Param::LfoPitch => v.lfo_pitch,
+            Param::LfoFilter => v.lfo_filter,
+            Param::LfoPwm => v.lfo_pwm,
+            Param::Attack => v.attack,
+            Param::Decay => v.decay,
+            Param::Sustain => v.sustain,
+            Param::Release => v.release,
+            Param::FilterEnvAmount => v.filter_env_amount,
+            Param::FilterAttack => v.filter_attack,
+            Param::FilterDecay => v.filter_decay,
+            Param::FilterSustain => v.filter_sustain,
+            Param::FilterRelease => v.filter_release,
+            Param::ReverbDecay => v.reverb_decay,
+            Param::ReverbWet => v.reverb_wet,
+            Param::ReverbTone => v.reverb_tone,
+            Param::ReverbPre => v.reverb_pre,
+            Param::Unison => v.unison,
+            Param::UnisonDetune => v.unison_detune,
+            Param::Spread => v.spread,
+            Param::ChorusRate => v.chorus_rate,
+            Param::ChorusDepth => v.chorus_depth,
+            Param::TapeWow => v.tape_wow,
+            Param::TapeFlutter => v.tape_flutter,
+            Param::TapeDrive => v.tape_drive,
+            Param::TapeAge => v.tape_age,
+            Param::BdLevel => v.bd_level,
+            Param::BdTune => v.bd_tune,
+            Param::BdAttack => v.bd_attack,
+            Param::BdDecay => v.bd_decay,
+            Param::BdSweep => v.bd_sweep,
+            Param::BdDrive => v.bd_drive,
+            Param::SdLevel => v.sd_level,
+            Param::SdTune => v.sd_tune,
+            Param::SdTone => v.sd_tone,
+            Param::SdSnappy => v.sd_snappy,
+            Param::SdDecay => v.sd_decay,
+            Param::RsLevel => v.rs_level,
+            Param::RsTune => v.rs_tune,
+            Param::CpLevel => v.cp_level,
+            Param::CpDecay => v.cp_decay,
+            Param::HhLevel => v.hh_level,
+            Param::HhTune => v.hh_tune,
+            Param::HhMetal => v.hh_metal,
+            Param::ChDecay => v.ch_decay,
+            Param::OhDecay => v.oh_decay,
+            Param::DrumDrive => v.dr_drive,
+            Param::DrumTone => v.dr_tone,
+            Param::VoxLevel => v.vox_level,
+            Param::VoxDry => v.vox_dry,
+            Param::VoxBreath => v.vox_breath,
+            Param::VoxClarity => v.vox_clarity,
+            Param::VoxVibrato => v.vox_vibrato,
+            Param::VoxModeSel => v.vox_mode,
+            Param::VoxIntonation => v.vox_intonation,
+            _ => return None,
+        })
+    }
+
     /// Look a parameter up by its song-file name (the table is PARAM_DEFS).
     pub(crate) fn from_name(name: &str) -> Option<Self> {
         PARAM_DEFS.iter().find(|d| d.name == name).map(|d| d.param)
@@ -512,6 +626,7 @@ impl Param {
             Param::ReverbPre => vm.set_reverb_pre(value),
             Param::Unison => vm.set_unison(value),
             Param::UnisonDetune => vm.set_unison_detune(value),
+            Param::Spread => vm.set_spread(value),
             Param::ChorusModeSel => {
                 let mode = match value.round() as i32 {
                     i32::MIN..=0 => ChorusMode::Off,
@@ -697,6 +812,8 @@ impl Param {
             // the shared bus.
             Param::Unison => p.unison = value,
             Param::UnisonDetune => p.unison_detune = value,
+            // Spread is voice-level too: where THIS track's notes sit
+            Param::Spread => p.spread = value,
             _ => return false,
         }
         true
@@ -3114,98 +3231,6 @@ mod tests {
         assert!(parse_song("bpm 120\ntrack t\nC4\nautomate bpm: 1 during A\n").is_err());
     }
 
-    /// Read a parameter's canonical engine value back, for the sweep
-    /// test below. None = the value lives outside ParamValues (mixer
-    /// strips, sampler slots, performance controllers, enums — those are
-    /// asserted separately or by their own tests).
-    #[rustfmt::skip]
-    fn readback(vm: &VoiceManager, p: Param) -> Option<f32> {
-        let v = &vm.params;
-        Some(match p {
-            Param::Volume => v.volume,
-            Param::Detune => v.detune,
-            Param::Cutoff => v.cutoff,
-            Param::Resonance => v.resonance,
-            Param::Drive => v.drive,
-            Param::Saturation => v.saturation,
-            Param::HpfCutoff => v.hpf_cutoff,
-            Param::FuzzAmount => v.fuzz,
-            Param::NoiseLevel => v.noise,
-            Param::SpringWet => v.spring,
-            Param::Glide => v.glide,
-            Param::SubLevel => v.sub,
-            Param::Osc2Pitch => v.osc2_pitch,
-            Param::Osc2Level => v.osc2_level,
-            Param::Osc3Pitch => v.osc3_pitch,
-            Param::Osc3Level => v.osc3_level,
-            Param::KeyTrack => v.key_track,
-            Param::OscFm => v.osc_fm,
-            Param::RingAmount => v.ring,
-            Param::PulseWidth => v.pulse_width,
-            Param::MixSaw => v.mix_saw,
-            Param::MixPulse => v.mix_pulse,
-            Param::MixTri => v.mix_tri,
-            Param::MixSine => v.mix_sine,
-            Param::UiOctave => v.ui_octave,
-            Param::LfoRate => v.lfo_rate,
-            Param::LfoShape => v.lfo_shape,
-            Param::LfoPitch => v.lfo_pitch,
-            Param::LfoFilter => v.lfo_filter,
-            Param::LfoPwm => v.lfo_pwm,
-            Param::Attack => v.attack,
-            Param::Decay => v.decay,
-            Param::Sustain => v.sustain,
-            Param::Release => v.release,
-            Param::FilterEnvAmount => v.filter_env_amount,
-            Param::FilterAttack => v.filter_attack,
-            Param::FilterDecay => v.filter_decay,
-            Param::FilterSustain => v.filter_sustain,
-            Param::FilterRelease => v.filter_release,
-            Param::ReverbDecay => v.reverb_decay,
-            Param::ReverbWet => v.reverb_wet,
-            Param::ReverbTone => v.reverb_tone,
-            Param::ReverbPre => v.reverb_pre,
-            Param::Unison => v.unison,
-            Param::UnisonDetune => v.unison_detune,
-            Param::ChorusRate => v.chorus_rate,
-            Param::ChorusDepth => v.chorus_depth,
-            Param::TapeWow => v.tape_wow,
-            Param::TapeFlutter => v.tape_flutter,
-            Param::TapeDrive => v.tape_drive,
-            Param::TapeAge => v.tape_age,
-            Param::BdLevel => v.bd_level,
-            Param::BdTune => v.bd_tune,
-            Param::BdAttack => v.bd_attack,
-            Param::BdDecay => v.bd_decay,
-            Param::BdSweep => v.bd_sweep,
-            Param::BdDrive => v.bd_drive,
-            Param::SdLevel => v.sd_level,
-            Param::SdTune => v.sd_tune,
-            Param::SdTone => v.sd_tone,
-            Param::SdSnappy => v.sd_snappy,
-            Param::SdDecay => v.sd_decay,
-            Param::RsLevel => v.rs_level,
-            Param::RsTune => v.rs_tune,
-            Param::CpLevel => v.cp_level,
-            Param::CpDecay => v.cp_decay,
-            Param::HhLevel => v.hh_level,
-            Param::HhTune => v.hh_tune,
-            Param::HhMetal => v.hh_metal,
-            Param::ChDecay => v.ch_decay,
-            Param::OhDecay => v.oh_decay,
-            Param::DrumDrive => v.dr_drive,
-            Param::DrumTone => v.dr_tone,
-            Param::VoxLevel => v.vox_level,
-            Param::VoxDry => v.vox_dry,
-            Param::VoxBreath => v.vox_breath,
-            Param::VoxClarity => v.vox_clarity,
-            Param::VoxVibrato => v.vox_vibrato,
-            Param::VoxModeSel => v.vox_mode,
-            Param::VoxIntonation => v.vox_intonation,
-            _ => return None,
-        })
-    }
-
     /// The "no silently clamped params" sweep: every parameter in THE
     /// table, driven to both documented extremes, must actually land in
     /// the engine. This is the test that would have caught the historic
@@ -3219,7 +3244,7 @@ mod tests {
             let (lo, hi, _) = def.param.range();
             for target in [lo, hi] {
                 def.param.apply(&mut vm, target);
-                if let Some(got) = readback(&vm, def.param) {
+                if let Some(got) = def.param.read(&vm.params) {
                     assert!(
                         (got - target).abs() < 1e-4,
                         "param '{}' set to {} but the engine recorded {} — a stale clamp?",

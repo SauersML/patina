@@ -390,15 +390,26 @@ impl Voice {
         self.unison_cents = cents.clamp(-50.0, 50.0);
     }
 
-    /// Give this card its explicit place inside one unison stack. Position
-    /// spans -1..+1 across the stack; energy normalization keeps changing
-    /// the unison count from becoming a hidden volume control.
-    pub fn set_unison_stack_position(&mut self, position: f32, count: usize) {
-        let pan = if count > 1 {
-            position.clamp(-1.0, 1.0) * 0.10
+    /// Place this card in the stereo field: the note's own position
+    /// (`note_position`, -1..+1, scaled by `spread`) plus its place inside
+    /// one unison stack (`stack_position`, -1..+1 across the stack). A stack
+    /// always fans a little (±0.10) and widens with the spread. Energy
+    /// normalization keeps changing the unison count from becoming a
+    /// hidden volume control.
+    pub fn set_stereo_position(
+        &mut self,
+        note_position: f32,
+        stack_position: f32,
+        count: usize,
+        spread: f32,
+    ) {
+        let spread = spread.clamp(0.0, 1.0);
+        let stack = if count > 1 {
+            stack_position.clamp(-1.0, 1.0) * (0.10 + 0.40 * spread)
         } else {
             0.0
         };
+        let pan = (note_position.clamp(-1.0, 1.0) * spread * 0.85 + stack).clamp(-1.0, 1.0);
         let theta = (pan + 1.0) * std::f32::consts::FRAC_PI_4;
         self.pan_l = theta.cos();
         self.pan_r = theta.sin();

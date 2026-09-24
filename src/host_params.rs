@@ -135,13 +135,8 @@ struct Row {
 }
 
 enum Kind {
-    Float {
-        display: Display,
-        guarded: bool,
-    },
-    Choice {
-        variants: &'static [&'static str],
-    },
+    Float { display: Display, guarded: bool },
+    Choice { variants: &'static [&'static str] },
 }
 
 const fn flt(param: Param, name: &'static str, display: Display) -> Row {
@@ -276,6 +271,7 @@ const PRESENTATION: &[Row] = &[
     flt (Param::ReverbTone,  "Reverb Tone",     Hertz),
     flt (Param::ReverbPre,   "Reverb Predelay", Plain(" s")),
     flt (Param::DrumTone,  "Drum Bus Tone",   Fraction),
+    flt (Param::Spread,    "Stereo Spread",   Percent),
 ];
 
 /// Parameters that are NOT host-automation knobs and are deliberately kept
@@ -365,24 +361,14 @@ pub fn param_defs() -> Vec<ParamDef> {
         .collect()
 }
 
-/// The Init patch's setting for `param` — THE default of every host
+/// The Init patch's setting for `param`: THE default of every host
 /// parameter. A power-on state is a patch like any other (the Polymoog comes
 /// on in Preset 8, Patina in Init), so the defaults are read out of that
-/// patch's text rather than kept in a second list that could disagree with
-/// it. `init_patch_sets_every_host_parameter` pins that the patch leaves no
-/// host parameter unset.
+/// patch rather than kept in a second list that could disagree with it.
+/// `init_patch_sets_every_host_parameter` pins that none is missing.
 fn init_value(param: Param) -> f32 {
-    let name = param.name();
-    crate::patch::FACTORY[0]
-        .1
-        .lines()
-        .filter_map(|line| {
-            let line = line.split('#').next()?;
-            let mut it = line.split_whitespace();
-            (it.next()? == name).then(|| it.next()?.parse::<f32>().ok())?
-        })
-        .last()
-        .unwrap_or_else(|| panic!("the Init patch does not set `{name}`"))
+    crate::patch::init_value(param)
+        .unwrap_or_else(|| panic!("the Init patch does not set `{}`", param.name()))
 }
 
 /// Route one MIDI note-on to the keyboard voices or, on GM channel 10
@@ -562,11 +548,11 @@ mod tests {
     fn init_patch_sets_every_host_parameter() {
         assert_eq!(crate::patch::FACTORY[0].0, "Init");
         for row in PRESENTATION {
-            let name = row.param.name();
-            let set = crate::patch::FACTORY[0].1.lines().any(|l| {
-                l.split('#').next().unwrap().split_whitespace().next() == Some(name)
-            });
-            assert!(set, "the Init patch does not set `{name}`");
+            assert!(
+                crate::patch::init_value(row.param).is_some(),
+                "the Init patch does not set `{}`",
+                row.param.name()
+            );
         }
     }
 

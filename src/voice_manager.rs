@@ -86,6 +86,8 @@ pub struct ParamValues {
     pub reverb_pre: f32,
     pub unison: f32,
     pub unison_detune: f32,
+    /// How far the voice cards fan out across the stereo field, 0..1.
+    pub spread: f32,
     pub chorus_mode: ChorusMode,
     /// Keyboard register the UI should sit at; patches set it so a bass
     /// preset arrives with the keys already down where it lives.
@@ -214,6 +216,7 @@ impl Default for ParamValues {
             reverb_pre: 0.012,
             unison: 1.0,
             unison_detune: 12.0,
+            spread: 0.0,
             chorus_mode: ChorusMode::Off,
             ui_octave: 4.0,
             chorus_rate: 0.5,
@@ -255,6 +258,22 @@ impl Default for ParamValues {
             vox_intonation: 0.12,
         }
     }
+}
+
+/// Where the `age`-th note sits in the stereo field, -1..+1, before
+/// `spread` scales it.
+///
+/// A polysynth with a pan pot on every voice card (the Oberheim SEM
+/// polys, the OB-X) and a rotating assigner puts successive notes on
+/// successive cards, so a chord fans out across the field while any one
+/// note stays where it was struck. Modelled here as the golden-ratio
+/// sequence: any few consecutive notes are spread evenly across the field
+/// and balance about the center, however many cards are busy, and a held
+/// note never moves. The assigner itself stays idle-first, so turning
+/// the spread up changes where notes sit and nothing else.
+pub fn stereo_position(age: u64) -> f32 {
+    const PHI_FRAC: f64 = 0.618_033_988_749_894_8;
+    ((age as f64 * PHI_FRAC).fract() * 2.0 - 1.0) as f32
 }
 
 /// One-pole high-pass at ~10 Hz that strips DC offset from the output bus.
@@ -684,10 +703,15 @@ impl VoiceManager {
         // detuned instruments, the analog "thickness" one card cannot make
         // (a lone oscillator into a ladder is inherently thin). Count and
         // spread come from the channel's patch, or the live panel.
-        let (unison_count, unison_detune) = match &chan_params {
-            Some(p) => (p.unison, p.unison_detune),
-            None => (self.params.unison, self.params.unison_detune),
+        let (unison_count, unison_detune, spread) = match &chan_params {
+            Some(p) => (p.unison, p.unison_detune, p.spread),
+            None => (
+                self.params.unison,
+                self.params.unison_detune,
+                self.params.spread,
+            ),
         };
+        let note_position = stereo_position(age);
         let count = (unison_count.round() as usize).clamp(1, 4);
 
         // Retrigger every card already holding this note on this channel.
@@ -761,7 +785,7 @@ impl VoiceManager {
                     self.voices[i].apply_params(&p);
                 }
                 self.voices[i].set_unison_cents(offset);
-                self.voices[i].set_unison_stack_position(stack_position, count);
+                self.voices[i].set_stereo_position(note_position, stack_position, count, spread);
                 self.voices[i].trigger(note, velocity, age, glide_from);
             }
         }
@@ -1495,6 +1519,10 @@ impl VoiceManager {
         self.params.unison_detune = Param::UnisonDetune.clamp(v);
     }
 
+    pub fn set_spread(&mut self, v: f32) {
+        self.params.spread = Param::Spread.clamp(v);
+    }
+
     pub fn set_chorus_mix(&mut self, mix: f32) {
         self.chorus.set_mix(mix);
     }
@@ -1654,6 +1682,51 @@ fn soft_limit(x: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Spread 0 keeps every note dead center (exactly mono); spread up fans
+    /// a chord across both speakers, balanced about the middle.
+    #[test]
+    fn spread_fans_a_chord_across_the_field() {
+        let chord = |spread: f32| {
+            let mut vm = VoiceManager::new(48000.0, 8);
+            vm.warm_up();
+            crate::patch::load(&mut vm, crate::patch::FACTORY[0].1).unwrap();
+            vm.set_spread(spread);
+            for n in [48, 55, 60, 64, 67, 71] {
+                vm.note_on(n, 0.8);
+            }
+            let (mut l2, mut r2, mut s2) = (0.0f64, 0.0f64, 0.0f64);
+            for i in 0..48000 {
+                let (l, r) = vm.render_next();
+                if i > 4800 {
+                    l2 += (l * l) as f64;
+                    r2 += (r * r) as f64;
+                    s2 += ((l - r) * (l - r)) as f64;
+                }
+            }
+            (l2, r2, s2 / (l2 + r2))
+        };
+        let (_, _, side) = chord(0.0);
+        assert!(side < 1e-9, "spread 0 must be mono, side ratio {side}");
+        let (l2, r2, side) = chord(0.7);
+        assert!(side > 0.05, "spread 0.7 barely widened the chord: {side}");
+        let balance = 10.0 * (l2 / r2).log10();
+        assert!(balance.abs() < 1.5, "chord leans {balance:.2} dB to one side");
+    }
+
+    /// Successive notes land spread across the field and balance about the
+    /// center: the rotating-assigner model behind `spread`.
+    #[test]
+    fn stereo_positions_balance_over_any_few_notes() {
+        for start in 1..200u64 {
+            let p: Vec<f32> = (start..start + 4).map(stereo_position).collect();
+            let mean = p.iter().sum::<f32>() / 4.0;
+            let (lo, hi) = p.iter().fold((1f32, -1f32), |(a, b), &x| (a.min(x), b.max(x)));
+            // the golden-ratio sequence's worst four-note mean is 0.382
+            assert!(mean.abs() < 0.39, "notes {start}..+4 lean {mean}");
+            assert!(hi - lo > 1.0, "notes {start}..+4 bunch up: {p:?}");
+        }
+    }
 
     /// A unison patch must claim COUNT cards for one note, each a distinct
     /// circuit — the mechanism behind analog thickness. A count of 3 with

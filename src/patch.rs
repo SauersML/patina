@@ -6,9 +6,7 @@
 // calls the live setters — the UI follows automatically, and you can click
 // through presets while holding a chord to morph the sound underneath it.
 
-use crate::chorus::ChorusMode;
-use crate::oscillator::Waveform;
-use crate::song::{Param, ParseFinite};
+use crate::song::{Param, ParseFinite, PARAM_DEFS};
 use crate::voice_manager::{ParamValues, VoiceManager};
 
 /// The factory bank, embedded so the binary is self-contained.
@@ -41,6 +39,22 @@ fn strip_comment(raw: &str) -> &str {
         }
     }
     raw
+}
+
+/// Init's setting for `param`, if Init names it. Init is the power-on
+/// state and the reset position of every control, in the app panel and in
+/// every plugin host alike, so each of them reads its default here rather
+/// than keeping a list of its own.
+pub fn init_value(param: Param) -> Option<f32> {
+    let name = param.name();
+    FACTORY[0]
+        .1
+        .lines()
+        .filter_map(|raw| {
+            let mut it = strip_comment(raw).split_whitespace();
+            (it.next()? == name).then(|| it.next()?.parse::<f32>().ok())?
+        })
+        .last()
 }
 
 /// Select a patch: every block of the panel moves at once (US 3,981,218),
@@ -76,120 +90,21 @@ pub fn apply(vm: &mut VoiceManager, text: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Snapshot the current parameters as patch text (the inverse of `apply`).
+/// Snapshot the current parameters as patch text (the inverse of `apply`):
+/// one line for every parameter the snapshot holds, in table order (so the
+/// `waveform` macro line comes before the per-oscillator overrides). The
+/// list is the parameter table itself, so a control added to the engine is
+/// saved without anyone remembering to add it here. It used to be a
+/// hand-kept list that had already lost unison, reverb tone and predelay,
+/// and the drum bus tone.
 pub fn serialize(p: &ParamValues) -> String {
-    let wf_num = |w: Waveform| match w {
-        Waveform::Sine => 0,
-        Waveform::Square => 1,
-        Waveform::Sawtooth => 2,
-        Waveform::Triangle => 3,
-    };
-    let waveform = wf_num(p.waveform);
-    let osc2_wave = wf_num(p.osc2_wave);
-    let osc3_wave = wf_num(p.osc3_wave);
-    let chorus_mode = match p.chorus_mode {
-        ChorusMode::Off => 0,
-        ChorusMode::I => 1,
-        ChorusMode::II => 2,
-        ChorusMode::III => 3,
-        ChorusMode::IV => 4,
-    };
-    format!(
-        "# Patina patch\n\
-         volume {}\nwaveform {}\nosc2_wave {}\nosc2_pitch {}\nosc2_level {}\n\
-         osc3_wave {}\nosc3_pitch {}\nosc3_level {}\n\
-         circuit {}\nkey_track {}\nosc_fm {}\nsync {}\nring {}\n\
-         detune {}\nnoise {}\nglide {}\nsub {}\npulse_width {}\n\
-         mix_saw {}\nmix_pulse {}\nmix_tri {}\nmix_sine {}\n\
-         lfo_rate {}\nlfo_shape {}\nlfo_pitch {}\nlfo_filter {}\nlfo_pwm {}\n\
-         cutoff {}\nresonance {}\ndrive {}\nsaturation {}\nhpf {}\n\
-         filter_env {}\nfilter_attack {}\nfilter_decay {}\nfilter_sustain {}\nfilter_release {}\n\
-         attack {}\ndecay {}\nsustain {}\nrelease {}\n\
-         fuzz {}\nspring {}\nreverb_decay {}\nreverb_wet {}\n\
-         chorus_mode {}\nchorus_rate {}\nchorus_depth {}\n\
-         tape_wow {}\ntape_flutter {}\ntape_drive {}\ntape_age {}\n\
-         bd_level {}\nbd_tune {}\nbd_attack {}\nbd_decay {}\nbd_sweep {}\nbd_drive {}\n\
-         sd_level {}\nsd_tune {}\nsd_tone {}\nsd_snappy {}\nsd_decay {}\n\
-         rs_level {}\nrs_tune {}\ncp_level {}\ncp_decay {}\n\
-         hh_level {}\nhh_tune {}\nhh_metal {}\nch_decay {}\noh_decay {}\ndr_drive {}\n",
-        p.volume,
-        waveform,
-        osc2_wave,
-        p.osc2_pitch,
-        p.osc2_level,
-        osc3_wave,
-        p.osc3_pitch,
-        p.osc3_level,
-        if p.circuit == crate::oscillator::CircuitModel::Arp {
-            1
-        } else {
-            0
-        },
-        p.key_track,
-        p.osc_fm,
-        if p.sync { 1 } else { 0 },
-        p.ring,
-        p.detune,
-        p.noise,
-        p.glide,
-        p.sub,
-        p.pulse_width,
-        p.mix_saw,
-        p.mix_pulse,
-        p.mix_tri,
-        p.mix_sine,
-        p.lfo_rate,
-        p.lfo_shape,
-        p.lfo_pitch,
-        p.lfo_filter,
-        p.lfo_pwm,
-        p.cutoff,
-        p.resonance,
-        p.drive,
-        p.saturation,
-        p.hpf_cutoff,
-        p.filter_env_amount,
-        p.filter_attack,
-        p.filter_decay,
-        p.filter_sustain,
-        p.filter_release,
-        p.attack,
-        p.decay,
-        p.sustain,
-        p.release,
-        p.fuzz,
-        p.spring,
-        p.reverb_decay,
-        p.reverb_wet,
-        chorus_mode,
-        p.chorus_rate,
-        p.chorus_depth,
-        p.tape_wow,
-        p.tape_flutter,
-        p.tape_drive,
-        p.tape_age,
-        p.bd_level,
-        p.bd_tune,
-        p.bd_attack,
-        p.bd_decay,
-        p.bd_sweep,
-        p.bd_drive,
-        p.sd_level,
-        p.sd_tune,
-        p.sd_tone,
-        p.sd_snappy,
-        p.sd_decay,
-        p.rs_level,
-        p.rs_tune,
-        p.cp_level,
-        p.cp_decay,
-        p.hh_level,
-        p.hh_tune,
-        p.hh_metal,
-        p.ch_decay,
-        p.oh_decay,
-        p.dr_drive,
-    )
+    let mut out = String::from("# Patina patch\n");
+    for def in PARAM_DEFS {
+        if let Some(v) = def.param.read(p) {
+            out.push_str(&format!("{} {}\n", def.name, v));
+        }
+    }
+    out
 }
 
 /// Save the current sound to patches/user-N.patch, N = first free slot.
@@ -244,9 +159,18 @@ mod tests {
                     serialize(&fresh.params),
                     "'{name}' after '{prev}' differs from '{name}' alone"
                 );
-                assert_eq!(vm.params.unison, fresh.params.unison, "'{name}' after '{prev}'");
-                assert_eq!(vm.params.ui_octave, fresh.params.ui_octave, "'{name}' after '{prev}'");
-                assert_eq!(vm.params.reverb_tone, fresh.params.reverb_tone, "'{name}' after '{prev}'");
+                assert_eq!(
+                    vm.params.unison, fresh.params.unison,
+                    "'{name}' after '{prev}'"
+                );
+                assert_eq!(
+                    vm.params.ui_octave, fresh.params.ui_octave,
+                    "'{name}' after '{prev}'"
+                );
+                assert_eq!(
+                    vm.params.reverb_tone, fresh.params.reverb_tone,
+                    "'{name}' after '{prev}'"
+                );
             }
         }
     }

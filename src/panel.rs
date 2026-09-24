@@ -668,8 +668,10 @@ pub fn segmented(ui: &mut egui::Ui, id: &str, labels: &[&str], selected: usize) 
         if is_selected {
             gloss_fill(&painter, cell_rect.shrink(2.0), 5.0);
         }
+        // Text on the lit cyan fill reads in dark ink; thin white letters
+        // washed out against it (glyphs keep white: their strokes are bold)
         let color = if is_selected {
-            CYAN_BRIGHT
+            TOUCH_INK
         } else if response.hovered() {
             WELL_TXT_HOVER
         } else {

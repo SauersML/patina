@@ -22,7 +22,7 @@ use crate::panel::{
     knob_sized, legend, rail_shapes, segmented, step_button, sublegend, tracked, vseparator,
     waveform_selector, Textures, BG0, BG2, BG2_HOVER, CYAN, CYAN_BRIGHT, EBONY, EBONY_EDGE,
     GLASS_RECTS, GPU_ON, HAIRLINE, HAIRLINE_HI, INSET, IVORY, IVORY_SHADE, TOUCH, TOUCH_DEEP,
-    TOUCH_HI, TOUCH_INK, TXT, TXT_LOW, TXT_MID, WELL_LINE, WELL_TXT,
+    TOUCH_HI, TOUCH_INK, TXT, TXT_LOW, TXT_MID, WELL_LINE, WELL_TXT, WELL_TXT_HOVER,
 };
 
 // Frame time for the WGSL sky (seconds, as f32 bits); slot 0 = sky.
@@ -215,10 +215,12 @@ fn param_knob(
     label: &str,
     param: Param,
     value: &mut f32,
-    default: f32,
     fmt: impl Fn(f32) -> String,
 ) {
     let (lo, hi, curve) = param.range();
+    // Double-click returns a knob to where Init has it: the panel's reset
+    // position is the power-on patch, not a second list of defaults.
+    let default = crate::patch::init_value(param).unwrap_or(lo);
     if knob(ui, label, value, lo, hi, default, curve == Curve::Log, fmt) {
         param.apply(&mut vm.lock(), *value);
     }
@@ -232,9 +234,9 @@ fn param_knob_sm(
     label: &str,
     param: Param,
     value: &mut f32,
-    default: f32,
 ) {
     let (lo, hi, curve) = param.range();
+    let default = crate::patch::init_value(param).unwrap_or(lo);
     if knob_sized(
         ui,
         label,
@@ -764,12 +766,14 @@ impl SynthUI {
             if selected {
                 gloss_fill(&painter, cell, 6.0);
             }
+            // The strip is a dark inset: its names use the well palette,
+            // like every other selector on the panel
             let color = if selected {
-                CYAN_BRIGHT
+                TOUCH_INK
             } else if response.hovered() {
-                TXT
+                WELL_TXT_HOVER
             } else {
-                TXT_MID
+                WELL_TXT
             };
             painter.text(
                 cell.center(),
@@ -899,7 +903,6 @@ impl SynthUI {
                     "Level",
                     Param::Volume,
                     &mut self.volume,
-                    0.5,
                     fmt_pct,
                 );
                 param_knob(
@@ -908,7 +911,6 @@ impl SynthUI {
                     "Detune",
                     Param::Detune,
                     &mut self.detune,
-                    7.0,
                     |v| format!("{:.0} ct", v),
                 );
                 param_knob(
@@ -917,7 +919,6 @@ impl SynthUI {
                     "Sub",
                     Param::SubLevel,
                     &mut self.sub,
-                    0.0,
                     fmt_pct,
                 );
                 param_knob(
@@ -926,7 +927,6 @@ impl SynthUI {
                     "Noise",
                     Param::NoiseLevel,
                     &mut self.noise,
-                    0.0,
                     fmt_pct,
                 );
                 param_knob(
@@ -935,7 +935,6 @@ impl SynthUI {
                     "Width",
                     Param::PulseWidth,
                     &mut self.pulse_width,
-                    0.5,
                     fmt_pct,
                 );
                 param_knob(
@@ -944,7 +943,6 @@ impl SynthUI {
                     "Glide",
                     Param::Glide,
                     &mut self.glide,
-                    0.0,
                     |v| {
                         if v < 0.001 {
                             "off".into()
@@ -952,6 +950,43 @@ impl SynthUI {
                             fmt_time(v)
                         }
                     },
+                );
+                // How many cards each note claims, how far apart they tune,
+                // and how wide the cards fan across the field. These read
+                // the engine snapshot directly: no copy of them to keep.
+                ui.add_space(28.0);
+                let p = self.display.params;
+                let (mut unison, mut unison_detune, mut spread) =
+                    (p.unison, p.unison_detune, p.spread);
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Unison",
+                    Param::Unison,
+                    &mut unison,
+                    |v| {
+                        if v < 1.5 {
+                            "off".into()
+                        } else {
+                            format!("{v:.0} cards")
+                        }
+                    },
+                );
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Spread",
+                    Param::UnisonDetune,
+                    &mut unison_detune,
+                    |v| format!("{v:.0} ct"),
+                );
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Stereo",
+                    Param::Spread,
+                    &mut spread,
+                    fmt_pct,
                 );
             });
             // The other two oscillator sections: a voice is three
@@ -991,24 +1026,10 @@ impl SynthUI {
                     } else {
                         (Param::Osc3Level, Param::Osc3Pitch)
                     };
-                    param_knob(
-                        ui,
-                        &self.voice_manager,
-                        "Level",
-                        p_level,
-                        level,
-                        0.72,
-                        fmt_pct,
-                    );
-                    param_knob(
-                        ui,
-                        &self.voice_manager,
-                        "Pitch",
-                        p_pitch,
-                        pitch,
-                        if which == 1 { 0.0 } else { -12.0 },
-                        |v| format!("{v:+.0} st"),
-                    );
+                    param_knob(ui, &self.voice_manager, "Level", p_level, level, fmt_pct);
+                    param_knob(ui, &self.voice_manager, "Pitch", p_pitch, pitch, |v| {
+                        format!("{v:+.0} st")
+                    });
                     if which == 1 {
                         ui.add_space(10.0);
                     }
@@ -1034,7 +1055,6 @@ impl SynthUI {
                     "FM",
                     Param::OscFm,
                     &mut self.osc_fm,
-                    0.0,
                     fmt_pct,
                 );
                 param_knob(
@@ -1043,7 +1063,6 @@ impl SynthUI {
                     "Ring",
                     Param::RingAmount,
                     &mut self.ring,
-                    0.0,
                     fmt_pct,
                 );
                 if let Some(i) =
@@ -1070,7 +1089,6 @@ impl SynthUI {
                     "Attack",
                     Param::Attack,
                     &mut self.attack,
-                    0.1,
                     fmt_time,
                 );
                 param_knob(
@@ -1079,7 +1097,6 @@ impl SynthUI {
                     "Decay",
                     Param::Decay,
                     &mut self.decay,
-                    0.1,
                     fmt_time,
                 );
                 param_knob(
@@ -1088,7 +1105,6 @@ impl SynthUI {
                     "Sustain",
                     Param::Sustain,
                     &mut self.sustain,
-                    0.7,
                     fmt_pct,
                 );
                 param_knob(
@@ -1097,7 +1113,6 @@ impl SynthUI {
                     "Release",
                     Param::Release,
                     &mut self.release,
-                    0.2,
                     fmt_time,
                 );
             });
@@ -1118,7 +1133,6 @@ impl SynthUI {
                     "Cutoff",
                     Param::Cutoff,
                     &mut self.filter_cutoff,
-                    15000.0,
                     fmt_hz,
                 );
                 param_knob(
@@ -1127,7 +1141,6 @@ impl SynthUI {
                     "Reso",
                     Param::Resonance,
                     &mut self.filter_resonance,
-                    0.0,
                     fmt_x,
                 );
                 param_knob(
@@ -1136,7 +1149,6 @@ impl SynthUI {
                     "Drive",
                     Param::Drive,
                     &mut self.filter_drive,
-                    1.0,
                     fmt_x,
                 );
                 param_knob(
@@ -1145,7 +1157,6 @@ impl SynthUI {
                     "Shape",
                     Param::Saturation,
                     &mut self.filter_saturation,
-                    1.0,
                     fmt_x,
                 );
                 param_knob(
@@ -1154,7 +1165,6 @@ impl SynthUI {
                     "Hi-Pass",
                     Param::HpfCutoff,
                     &mut self.hpf_cutoff,
-                    16.0,
                     fmt_hz,
                 );
                 param_knob(
@@ -1163,7 +1173,6 @@ impl SynthUI {
                     "Track",
                     Param::KeyTrack,
                     &mut self.key_track,
-                    0.4,
                     fmt_pct,
                 );
             });
@@ -1184,7 +1193,6 @@ impl SynthUI {
                     "Amount",
                     Param::FilterEnvAmount,
                     &mut self.fenv_amount,
-                    0.0,
                     |v| format!("{:+.1} oct", v),
                 );
                 param_knob(
@@ -1193,7 +1201,6 @@ impl SynthUI {
                     "Attack",
                     Param::FilterAttack,
                     &mut self.fenv_attack,
-                    0.005,
                     fmt_time,
                 );
                 param_knob(
@@ -1202,7 +1209,6 @@ impl SynthUI {
                     "Decay",
                     Param::FilterDecay,
                     &mut self.fenv_decay,
-                    0.3,
                     fmt_time,
                 );
                 param_knob(
@@ -1211,7 +1217,6 @@ impl SynthUI {
                     "Sustain",
                     Param::FilterSustain,
                     &mut self.fenv_sustain,
-                    0.0,
                     fmt_pct,
                 );
                 param_knob(
@@ -1220,7 +1225,6 @@ impl SynthUI {
                     "Release",
                     Param::FilterRelease,
                     &mut self.fenv_release,
-                    0.3,
                     fmt_time,
                 );
             });
@@ -1236,7 +1240,6 @@ impl SynthUI {
                     "Rate",
                     Param::LfoRate,
                     &mut self.lfo_rate,
-                    1.0,
                     |v| format!("{:.2} Hz", v),
                 );
                 param_knob(
@@ -1245,7 +1248,6 @@ impl SynthUI {
                     "Shape",
                     Param::LfoShape,
                     &mut self.lfo_shape,
-                    0.5,
                     |v| {
                         if v < 0.15 {
                             "saw".into()
@@ -1264,7 +1266,6 @@ impl SynthUI {
                     "Pitch",
                     Param::LfoPitch,
                     &mut self.lfo_pitch,
-                    0.0,
                     |v| format!("{:.0} ct", v),
                 );
                 param_knob(
@@ -1273,7 +1274,6 @@ impl SynthUI {
                     "Filter",
                     Param::LfoFilter,
                     &mut self.lfo_filter,
-                    0.0,
                     |v| format!("{:.2} oct", v),
                 );
                 param_knob(
@@ -1282,7 +1282,6 @@ impl SynthUI {
                     "PWM",
                     Param::LfoPwm,
                     &mut self.lfo_pwm,
-                    0.0,
                     fmt_pct,
                 );
             });
@@ -1326,7 +1325,6 @@ impl SynthUI {
                             "Rate",
                             Param::ChorusRate,
                             &mut self.chorus_rate,
-                            0.5,
                             |v| format!("{:.1} Hz", v),
                         );
                         param_knob(
@@ -1335,7 +1333,6 @@ impl SynthUI {
                             "Depth",
                             Param::ChorusDepth,
                             &mut self.chorus_depth,
-                            0.3,
                             fmt_pct,
                         );
                     });
@@ -1351,7 +1348,6 @@ impl SynthUI {
                             "Decay",
                             Param::ReverbDecay,
                             &mut self.reverb_decay,
-                            0.5,
                             fmt_pct,
                         );
                         param_knob(
@@ -1360,7 +1356,6 @@ impl SynthUI {
                             "Mix",
                             Param::ReverbWet,
                             &mut self.reverb_wet,
-                            0.5,
                             fmt_pct,
                         );
                         param_knob(
@@ -1369,7 +1364,6 @@ impl SynthUI {
                             "Spring",
                             Param::SpringWet,
                             &mut self.spring,
-                            0.0,
                             fmt_pct,
                         );
                     });
@@ -1385,7 +1379,6 @@ impl SynthUI {
                             "Wow",
                             Param::TapeWow,
                             &mut self.tape_wow,
-                            0.0,
                             fmt_pct,
                         );
                         param_knob(
@@ -1394,7 +1387,6 @@ impl SynthUI {
                             "Flutter",
                             Param::TapeFlutter,
                             &mut self.tape_flutter,
-                            0.0,
                             fmt_pct,
                         );
                         param_knob(
@@ -1403,7 +1395,6 @@ impl SynthUI {
                             "Drive",
                             Param::TapeDrive,
                             &mut self.tape_drive,
-                            0.0,
                             fmt_pct,
                         );
                         param_knob(
@@ -1412,7 +1403,6 @@ impl SynthUI {
                             "Age",
                             Param::TapeAge,
                             &mut self.tape_age,
-                            0.0,
                             fmt_pct,
                         );
                     });
@@ -1427,7 +1417,6 @@ impl SynthUI {
                         "Germanium",
                         Param::FuzzAmount,
                         &mut self.fuzz,
-                        0.0,
                         fmt_pct,
                     );
                 });
@@ -1453,56 +1442,56 @@ impl SynthUI {
                 ui.vertical(|ui| {
                     ui.label(sublegend("Kick"));
                     ui.horizontal(|ui| {
-                        param_knob_sm(ui, &vm, "Level", Param::BdLevel, &mut self.bd_level, 0.8);
-                        param_knob_sm(ui, &vm, "Tune", Param::BdTune, &mut self.bd_tune, 0.35);
-                        param_knob_sm(ui, &vm, "Attack", Param::BdAttack, &mut self.bd_attack, 0.5);
-                        param_knob_sm(ui, &vm, "Decay", Param::BdDecay, &mut self.bd_decay, 0.45);
-                        param_knob_sm(ui, &vm, "Sweep", Param::BdSweep, &mut self.bd_sweep, 0.5);
-                        param_knob_sm(ui, &vm, "Drive", Param::BdDrive, &mut self.bd_drive, 0.25);
+                        param_knob_sm(ui, &vm, "Level", Param::BdLevel, &mut self.bd_level);
+                        param_knob_sm(ui, &vm, "Tune", Param::BdTune, &mut self.bd_tune);
+                        param_knob_sm(ui, &vm, "Attack", Param::BdAttack, &mut self.bd_attack);
+                        param_knob_sm(ui, &vm, "Decay", Param::BdDecay, &mut self.bd_decay);
+                        param_knob_sm(ui, &vm, "Sweep", Param::BdSweep, &mut self.bd_sweep);
+                        param_knob_sm(ui, &vm, "Drive", Param::BdDrive, &mut self.bd_drive);
                     });
                 });
                 vseparator(ui, 74.0);
                 ui.vertical(|ui| {
                     ui.label(sublegend("Snare"));
                     ui.horizontal(|ui| {
-                        param_knob_sm(ui, &vm, "Level", Param::SdLevel, &mut self.sd_level, 0.75);
-                        param_knob_sm(ui, &vm, "Tune", Param::SdTune, &mut self.sd_tune, 0.4);
-                        param_knob_sm(ui, &vm, "Tone", Param::SdTone, &mut self.sd_tone, 0.5);
-                        param_knob_sm(ui, &vm, "Snappy", Param::SdSnappy, &mut self.sd_snappy, 0.6);
-                        param_knob_sm(ui, &vm, "Decay", Param::SdDecay, &mut self.sd_decay, 0.5);
+                        param_knob_sm(ui, &vm, "Level", Param::SdLevel, &mut self.sd_level);
+                        param_knob_sm(ui, &vm, "Tune", Param::SdTune, &mut self.sd_tune);
+                        param_knob_sm(ui, &vm, "Tone", Param::SdTone, &mut self.sd_tone);
+                        param_knob_sm(ui, &vm, "Snappy", Param::SdSnappy, &mut self.sd_snappy);
+                        param_knob_sm(ui, &vm, "Decay", Param::SdDecay, &mut self.sd_decay);
                     });
                 });
                 vseparator(ui, 74.0);
                 ui.vertical(|ui| {
                     ui.label(sublegend("Rim"));
                     ui.horizontal(|ui| {
-                        param_knob_sm(ui, &vm, "Level", Param::RsLevel, &mut self.rs_level, 0.7);
-                        param_knob_sm(ui, &vm, "Tune", Param::RsTune, &mut self.rs_tune, 0.5);
+                        param_knob_sm(ui, &vm, "Level", Param::RsLevel, &mut self.rs_level);
+                        param_knob_sm(ui, &vm, "Tune", Param::RsTune, &mut self.rs_tune);
                     });
                 });
                 vseparator(ui, 74.0);
                 ui.vertical(|ui| {
                     ui.label(sublegend("Clap"));
                     ui.horizontal(|ui| {
-                        param_knob_sm(ui, &vm, "Level", Param::CpLevel, &mut self.cp_level, 0.75);
-                        param_knob_sm(ui, &vm, "Decay", Param::CpDecay, &mut self.cp_decay, 0.5);
+                        param_knob_sm(ui, &vm, "Level", Param::CpLevel, &mut self.cp_level);
+                        param_knob_sm(ui, &vm, "Decay", Param::CpDecay, &mut self.cp_decay);
                     });
                 });
                 vseparator(ui, 74.0);
                 ui.vertical(|ui| {
                     ui.label(sublegend("Hi-Hat"));
                     ui.horizontal(|ui| {
-                        param_knob_sm(ui, &vm, "Level", Param::HhLevel, &mut self.hh_level, 0.7);
-                        param_knob_sm(ui, &vm, "Tune", Param::HhTune, &mut self.hh_tune, 0.5);
-                        param_knob_sm(ui, &vm, "Metal", Param::HhMetal, &mut self.hh_metal, 0.65);
-                        param_knob_sm(ui, &vm, "Closed", Param::ChDecay, &mut self.ch_decay, 0.35);
-                        param_knob_sm(ui, &vm, "Open", Param::OhDecay, &mut self.oh_decay, 0.5);
+                        param_knob_sm(ui, &vm, "Level", Param::HhLevel, &mut self.hh_level);
+                        param_knob_sm(ui, &vm, "Tune", Param::HhTune, &mut self.hh_tune);
+                        param_knob_sm(ui, &vm, "Metal", Param::HhMetal, &mut self.hh_metal);
+                        param_knob_sm(ui, &vm, "Closed", Param::ChDecay, &mut self.ch_decay);
+                        param_knob_sm(ui, &vm, "Open", Param::OhDecay, &mut self.oh_decay);
                     });
                 });
                 vseparator(ui, 74.0);
                 ui.vertical(|ui| {
                     ui.label(sublegend("Bus"));
-                    param_knob_sm(ui, &vm, "Drive", Param::DrumDrive, &mut self.dr_drive, 0.0);
+                    param_knob_sm(ui, &vm, "Drive", Param::DrumDrive, &mut self.dr_drive);
                 });
             });
         });

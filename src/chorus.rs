@@ -749,7 +749,10 @@ mod tests {
                 switched = switched.max(d2);
             }
         }
-        assert!(switched < 3.0 * steady, "switch step {switched} vs sine {steady}");
+        assert!(
+            switched < 3.0 * steady,
+            "switch step {switched} vs sine {steady}"
+        );
 
         // Silence for a while, then back on: nothing but hiss comes out
         for _ in 0..48000 {
@@ -759,7 +762,10 @@ mod tests {
         let ghost = (0..4800)
             .map(|_| chorus.process(0.0, 0.0).0.abs())
             .fold(0.0f32, f32::max);
-        assert!(ghost < 0.01, "re-engaged chorus replayed old audio: {ghost}");
+        assert!(
+            ghost < 0.01,
+            "re-engaged chorus replayed old audio: {ghost}"
+        );
     }
 
     #[test]

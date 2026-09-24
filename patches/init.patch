@@ -29,6 +29,7 @@ glide 0
 pulse_width 0.5
 unison 1
 unison_detune 12
+spread 0
 
 # Modulation (LFO parked, routed nowhere)
 lfo_rate 1
