@@ -35,7 +35,7 @@ resonance 1.2
 drive 1.8
 saturation 0.8
 hpf 60
-volume 0.55
+volume 0.352
 octave 4
 noise 0
 fuzz 0.35

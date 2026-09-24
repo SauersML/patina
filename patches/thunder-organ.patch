@@ -1,7 +1,7 @@
 # Thunder Organ — a chapel organ wired through a guitar amp: three ranks,
 # full sustain, key-tracked ladder, and a spring tank that flinches
 octave 3
-volume 0.58
+volume 0.125
 waveform 1
 sync 0
 ring 0

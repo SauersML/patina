@@ -1,7 +1,7 @@
 # Cassette Choir — a mellotron that spent forty years in a shoebox: soft
 # triangle voices, breath noise, and tape so old the pitch is a memory
 octave 4
-volume 0.55
+volume 0.501
 waveform 3
 sync 0
 ring 0
