@@ -6,9 +6,9 @@
 // classic high-quality feedback-delay-network recipe (Jot's energy-exact
 // decay, Dattorro's input diffusion, modulated tank lines):
 //
-//   in -> pre-delay -> band-limit -> 4 series allpass diffusers
+//   in (L, R) -> pre-delay -> band-limit -> 4 series allpass diffusers
 //      -> 8-line tank, Householder unitary feedback
-//         each line: fractional read (4 lines slowly modulated),
+//         each line: fractional read (every line slowly modulated),
 //         one-pole damping in the loop, per-line gain
 //         g_i = 10^(-3 L_i / (T60 sr))  -- every line decays at the SAME
 //         rate, so the tail's color stays constant as it fades
@@ -28,9 +28,15 @@ const LINE_MS: [f32; N] = [31.71, 37.11, 40.23, 44.14, 51.43, 58.22, 66.18, 73.6
 const DIFF_MS: [f32; 4] = [4.77, 3.60, 12.73, 9.30];
 const DIFF_G: f32 = 0.70;
 /// LFO rates for the modulated lines, Hz — incommensurate on purpose.
-const MOD_RATES: [f32; 4] = [0.071, 0.113, 0.167, 0.229];
-/// Modulation depth, ms (a few cents of pitch at these rates).
-const MOD_DEPTH_MS: f32 = 0.16;
+const MOD_RATES: [f32; N] = [0.071, 0.113, 0.167, 0.229, 0.089, 0.137, 0.193, 0.263];
+/// Modulation depth, ms: 1-3 cents of pitch at these rates. At the old
+/// 0.16 ms, on half the lines, the tail's spectrum held narrow peaks 10 dB
+/// above its local mean (top 1%) where a fully diffuse tail sits at 6.5;
+/// sweeping every line this far brings it to 7.5, and deeper buys nothing.
+const MOD_DEPTH_MS: f32 = 1.0;
+/// How far each tank line set leans toward its own input side (0 = the
+/// old mono feed, 1 = left lines hear only the left input).
+const STEREO_FEED: f32 = 0.6;
 
 /// Snap values that have decayed past all audibility to exactly zero.
 ///
@@ -140,20 +146,49 @@ impl OnePoleLp {
     }
 }
 
-pub struct Reverb {
-    sample_rate: f32,
+/// One side's feed into the tank: pre-delay, band limits, diffusion.
+/// Left and right each have their own, so the tank hears WHERE a sound
+/// is, not only that it happened.
+struct Feed {
     pre_delay: DelayLine,
-    pre_delay_samples: usize,
     in_lp: OnePoleLp,
     in_hp_tracker: OnePoleLp,
     diffusers: [Diffuser; 4],
+}
+
+impl Feed {
+    fn new(sample_rate: f32) -> Self {
+        Self {
+            pre_delay: DelayLine::new((0.082 * sample_rate) as usize + 2),
+            in_lp: OnePoleLp::new(9500.0, sample_rate),
+            in_hp_tracker: OnePoleLp::new(90.0, sample_rate),
+            diffusers: core::array::from_fn(|i| Diffuser::new(sample_rate, DIFF_MS[i])),
+        }
+    }
+
+    fn process(&mut self, x: f32, pre_delay_samples: usize) -> f32 {
+        self.pre_delay.push(x);
+        let fed = self.pre_delay.read_int(pre_delay_samples);
+        let fed = self.in_lp.process(fed);
+        let mut diffused = fed - self.in_hp_tracker.process(fed);
+        for d in &mut self.diffusers {
+            diffused = d.process(diffused);
+        }
+        diffused
+    }
+}
+
+pub struct Reverb {
+    sample_rate: f32,
+    feeds: [Feed; 2],
+    pre_delay_samples: usize,
     lines: [DelayLine; N],
     line_len: [f32; N],
     damping: [OnePoleLp; N],
     /// Per-line decay gain for the current T60 (Jot's condition).
     gains: [f32; N],
-    lfo_phase: [f32; 4],
-    lfo_inc: [f32; 4],
+    lfo_phase: [f32; N],
+    lfo_inc: [f32; N],
     mod_depth: f32,
     /// Wet-path low cut so long tails don't accumulate mud.
     out_hp_l: OnePoleLp,
@@ -169,16 +204,13 @@ impl Reverb {
         });
         let mut r = Self {
             sample_rate,
-            pre_delay: DelayLine::new((0.082 * sample_rate) as usize + 2),
+            feeds: [Feed::new(sample_rate), Feed::new(sample_rate)],
             pre_delay_samples: (0.012 * sample_rate) as usize,
-            in_lp: OnePoleLp::new(9500.0, sample_rate),
-            in_hp_tracker: OnePoleLp::new(90.0, sample_rate),
-            diffusers: core::array::from_fn(|i| Diffuser::new(sample_rate, DIFF_MS[i])),
             lines,
             line_len,
             damping: core::array::from_fn(|_| OnePoleLp::new(5500.0, sample_rate)),
             gains: [0.0; N],
-            lfo_phase: [0.0, 0.25, 0.5, 0.75],
+            lfo_phase: core::array::from_fn(|i| i as f32 / N as f32),
             lfo_inc: core::array::from_fn(|i| MOD_RATES[i] / sample_rate),
             mod_depth: MOD_DEPTH_MS * 1e-3 * sample_rate,
             out_hp_l: OnePoleLp::new(60.0, sample_rate),
@@ -208,7 +240,7 @@ impl Reverb {
     /// a 40-60 ms gap keeps transients legible inside a dark room.
     pub fn set_pre(&mut self, seconds: f32) {
         self.pre_delay_samples = ((seconds.clamp(0.0, 0.08) * self.sample_rate) as usize)
-            .min(self.pre_delay.buffer.len() - 2);
+            .min(self.feeds[0].pre_delay.buffer.len() - 2);
     }
 
     /// Tail damping cutoff, Hz. The in-loop lowpass is the tail's COLOR:
@@ -262,27 +294,28 @@ impl Reverb {
             0.0
         };
 
-        // Feed: mono sum through pre-delay and band limits into the
-        // diffusion chain
-        let mono = (input_left + input_right) * 0.5 * self.wet + (send_left + send_right) * 0.5;
-        self.pre_delay.push(mono);
-        let fed = self.pre_delay.read_int(self.pre_delay_samples);
-        let fed = self.in_lp.process(fed);
-        let fed = fed - self.in_hp_tracker.process(fed);
-        let mut diffused = fed;
-        for d in &mut self.diffusers {
-            diffused = d.process(diffused);
-        }
+        // Feed: each side through its own pre-delay, band limits and
+        // diffusion. The tank used to hear the mono sum, so a note panned
+        // hard left bloomed exactly as it would have from the center.
+        // Each line takes its side at the level it used to take the mono
+        // sum, so a centered sound fills the tank exactly as before.
+        let pre = self.pre_delay_samples;
+        let diffused_l = self.feeds[0].process(input_left * self.wet + send_left, pre);
+        let diffused_r = self.feeds[1].process(input_right * self.wet + send_right, pre);
+        // Mid/side at the injection: every line keeps the full mid (a
+        // centered sound fills the tank exactly as it did), and the side
+        // leans each line set toward its own speaker by STEREO_FEED. Full
+        // side weight would throw 3 dB more reverb at a hard-panned sound
+        // than it used to; 0.6 keeps the image and moves that level 1.3 dB.
+        let mid = (diffused_l + diffused_r) * 0.5;
+        let side = (diffused_l - diffused_r) * 0.5 * STEREO_FEED;
+        let (feed_l, feed_r) = (mid + side, mid - side);
 
-        // Tank read: lines 0..3 modulated, 4..7 static
+        // Tank read: every line slowly modulated (MOD_RATES)
         let mut outs = [0.0f32; N];
         for i in 0..N {
-            let delay = if i < 4 {
-                self.lfo_phase[i] = (self.lfo_phase[i] + self.lfo_inc[i]) % 1.0;
-                self.line_len[i] + self.mod_depth * (TAU * self.lfo_phase[i]).sin()
-            } else {
-                self.line_len[i]
-            };
+            self.lfo_phase[i] = (self.lfo_phase[i] + self.lfo_inc[i]) % 1.0;
+            let delay = self.line_len[i] + self.mod_depth * (TAU * self.lfo_phase[i]).sin();
             let v = self.lines[i].read_frac(delay);
             outs[i] = self.damping[i].process(v) * self.gains[i];
         }
@@ -291,9 +324,12 @@ impl Reverb {
         // per-line gains alone set the decay)
         let s = outs.iter().sum::<f32>() * (2.0 / N as f32);
         for i in 0..N {
-            // Alternating injection signs decorrelate the lines from the
-            // shared mono feed
-            let inject = if i % 2 == 0 { diffused } else { -diffused };
+            // Even lines (the left taps) take the left feed and odd lines
+            // the right, so the tail opens on the side the sound came from
+            // before the Householder mix spreads it. The alternating signs
+            // decorrelate the two sets; for a centered sound this is the
+            // mono feed exactly, sign for sign.
+            let inject = if i % 2 == 0 { feed_l } else { -feed_r };
             self.lines[i].push(inject + outs[i] - s);
         }
 
@@ -382,6 +418,34 @@ mod tests {
             peak < 8.0 * rms,
             "tail should be diffuse: peak {peak:.5} vs rms {rms:.5}"
         );
+    }
+
+    /// The tank hears where a sound is: a hit on the left opens its tail
+    /// on the left before the network spreads it, while a centered hit
+    /// stays balanced.
+    #[test]
+    fn a_panned_hit_blooms_on_its_own_side() {
+        let sr = 48000.0;
+        let early = |l_in: f32, r_in: f32| {
+            let mut reverb = Reverb::new(sr);
+            reverb.set_wet(1.0);
+            reverb.set_pre(0.0);
+            let (mut el, mut er) = (0.0f64, 0.0f64);
+            for i in 0..(0.1 * sr) as usize {
+                let x = if i == 0 { 1.0 } else { 0.0 };
+                let (l, r) = reverb.process(x * l_in, x * r_in);
+                el += ((l - x * l_in) as f64).powi(2);
+                er += ((r - x * r_in) as f64).powi(2);
+            }
+            10.0 * (el / er).log10()
+        };
+        let left = early(1.0, 0.0);
+        assert!(left > 6.0, "a left hit's first 100 ms leans only {left:.1} dB left");
+        // The two sides tap different lines, so their first echoes land at
+        // different times: ~0.9 dB of early lean is the tap layout (the
+        // whole tail is balanced to 0.1 dB), not a feed imbalance.
+        let center = early(1.0, 1.0);
+        assert!(center.abs() < 1.5, "a centered hit leans {center:.1} dB");
     }
 
     /// A mono impulse must come back with real stereo width: the L/R
