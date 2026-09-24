@@ -12,7 +12,7 @@ format for programmatic playback and parameter automation.
 - 🛝 Glide per US 3,991,645: the keyboard CV lags through an RC before the exponential converter, so portamento settles exponentially in octave space — the authentic Minimoog/303 swoop
 - 📊 Analog-style exponential ADSR amplitude envelope
 - 🎯 Dedicated filter envelope (±5 octaves), velocity-to-filter, and keyboard tracking
-- 🔊 Polyphonic voices with age-based stealing, spread across the stereo field
+- 🔊 Polyphonic voices with age-based stealing; the STEREO knob fans successive notes across the field the way a rotating assigner over pan-potted voice cards does (Oberheim-style), so chords spread and balance while a held note never moves
 - 🎛️ Moog-inspired ladder filter: 4 tanh stages, 2× oversampled, resonance to self-oscillation, drive, saturation, transistor mismatch, thermal drift
 - 🧈 Per-sample parameter smoothing — no zipper noise under automation
 - 🌀 Juno-style chorus (modes I–IV), stereo reverb, a 905-style dual-spring reverb (dispersive, fixed mechanical decay, wet/dry only), and a physically-modeled cassette tape stage (wow, flutter, saturation, age)
@@ -73,7 +73,7 @@ On macOS the git hooks install all three automatically after every commit
 
 ## 🎚️ Patches
 
-The strip at the top of the panel holds the factory bank (US 3,981,218 style — one click retunes every block at once, live, even under held notes): **Init · Glasswing · Rust Engine · Peppermint · Sea of Dials · Fathom · Tears · Moths · Anemone · Thunder · Choir** — each with its own keyboard register (a bass patch arrives at octave 2). `SAVE` snapshots your current knobs to `patches/user-N.patch` — plain text, same parameter names as song automation, edit at will.
+The strip at the top of the panel holds the factory bank (US 3,981,218 style — one click retunes every block at once, live, even under held notes, and every patch lands over Init so nothing leaks from the last one): **Init · Ember · Tidewater · Glasswing · Sea of Dials · Aurora · Vellum · Choir · Thunder · Lantern · Tears · Fathom · Warehouse** — sustained, dimensional voices, level-matched to −20 LUFS, each with its own keyboard register. Init is one dry sawtooth with every effect out, and it is also every control's reset position and every plugin parameter's default. `SAVE` snapshots every control to `patches/user-N.patch` — plain text, same parameter names as song automation, edit at will.
 
 ## 🎛️ Usage
 

@@ -12,20 +12,17 @@ use crate::voice_manager::{ParamValues, VoiceManager};
 /// The factory bank, embedded so the binary is self-contained.
 pub const FACTORY: &[(&str, &str)] = &[
     ("Init", include_str!("../patches/init.patch")),
+    ("Ember", include_str!("../patches/ember.patch")),
+    ("Tidewater", include_str!("../patches/tidewater.patch")),
     ("Glasswing", include_str!("../patches/glasswing.patch")),
-    ("Rust Engine", include_str!("../patches/rust-engine.patch")),
-    ("Peppermint", include_str!("../patches/peppermint.patch")),
-    (
-        "Sea of Dials",
-        include_str!("../patches/sea-of-dials.patch"),
-    ),
-    ("Fathom", include_str!("../patches/fathom.patch")),
-    ("Tears", include_str!("../patches/tears.patch")),
-    ("Moths", include_str!("../patches/moths.patch")),
-    ("Anemone", include_str!("../patches/glass-anemone.patch")),
-    ("Thunder", include_str!("../patches/thunder-organ.patch")),
+    ("Sea of Dials", include_str!("../patches/sea-of-dials.patch")),
+    ("Aurora", include_str!("../patches/aurora.patch")),
+    ("Vellum", include_str!("../patches/vellum.patch")),
     ("Choir", include_str!("../patches/cassette-choir.patch")),
-    ("Bocuma", include_str!("../patches/bocuma.patch")),
+    ("Thunder", include_str!("../patches/thunder-organ.patch")),
+    ("Lantern", include_str!("../patches/lantern.patch")),
+    ("Tears", include_str!("../patches/tears.patch")),
+    ("Fathom", include_str!("../patches/fathom.patch")),
     ("Warehouse", include_str!("../patches/warehouse.patch")),
 ];
 
@@ -179,7 +176,7 @@ mod tests {
     #[test]
     fn snapshot_round_trips() {
         let mut vm = VoiceManager::new(44100.0, 8);
-        apply(&mut vm, FACTORY[2].1).unwrap(); // Acid
+        apply(&mut vm, FACTORY[2].1).unwrap();
         let snap = serialize(&vm.params);
 
         let mut vm2 = VoiceManager::new(44100.0, 8);

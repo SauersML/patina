@@ -1,0 +1,41 @@
+# Ember — an OB-X brass pad: two sawtooth cards a few cents apart and a
+# third an octave down for body, the filter opening slowly under every
+# chord and settling half-shut, cards fanned across the field, chorus I.
+# It swells like a section drawing breath, and holds.
+waveform 2
+osc2_wave 2
+osc2_level 0.8
+osc3_wave 2
+osc3_pitch -12
+osc3_level 0.3
+detune 8
+circuit 0
+key_track 0.5
+cutoff 1300
+resonance 0.35
+drive 1.4
+saturation 0.4
+hpf 80
+filter_env 1.4
+filter_attack 0.45
+filter_decay 1.8
+filter_sustain 0.7
+filter_release 1.4
+attack 0.09
+decay 1.2
+sustain 0.9
+release 1.6
+spread 0.6
+lfo_rate 0.23
+lfo_filter 0.12
+chorus_mode 1
+chorus_rate 0.45
+chorus_depth 0.35
+reverb_wet 0.3
+reverb_decay 0.62
+reverb_tone 4200
+reverb_pre 0.025
+tape_wow 0.04
+tape_drive 0.15
+volume 0.461
+octave 3

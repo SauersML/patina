@@ -2,7 +2,7 @@
 # rolling bass on the keys. Drum knobs ride along in patches like every
 # other block of the instrument.
 octave 2
-volume 1.0
+volume 0.861
 waveform 2
 osc2_wave 1
 osc2_pitch 0

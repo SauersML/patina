@@ -32,23 +32,23 @@ fn write_wav(path: &str, frames: &[(f32, f32)]) {
 }
 
 /// (seconds from start, note offset from the patch's C, velocity, held seconds)
+///
+/// Sustained playing, the way a pad, lead or bass is actually judged: a
+/// voiced chord held long enough to hear it breathe, a legato change into
+/// a second chord, a legato melody, and a long low note.
 fn phrase() -> Vec<(f32, i32, f32, f32)> {
     let mut ev = vec![];
-    // 0.0: one long note, then its release
-    ev.push((0.0, 0, 0.8, 1.6));
-    // 3.0: a held chord
-    for n in [0, 4, 7, 11] {
-        ev.push((3.0, n, 0.7, 2.0));
+    for n in [0, 7, 14, 16] {
+        ev.push((0.0, n, 0.7, 5.0));
     }
-    // 6.0: a quick legato-ish line, then staccato
-    let line = [0, 2, 3, 5, 7, 5, 3, 2, 0, 7, 12, 7];
-    for (i, n) in line.iter().enumerate() {
-        let vel = if i % 4 == 0 { 0.95 } else { 0.55 };
-        ev.push((6.0 + i as f32 * 0.18, *n, vel, if i < 8 { 0.17 } else { 0.06 }));
+    for n in [-3, 4, 11, 12] {
+        ev.push((5.0, n, 0.65, 4.0));
     }
-    // 9.0: an octave below and two octaves above
-    ev.push((9.0, -12, 0.8, 1.0));
-    ev.push((10.5, 24, 0.8, 1.0));
+    let line = [(12, 0.8), (14, 0.6), (16, 0.7), (19, 0.9), (16, 0.6), (14, 0.7), (12, 0.8)];
+    for (i, (n, v)) in line.iter().enumerate() {
+        ev.push((10.0 + i as f32 * 0.45, *n, *v, 0.5));
+    }
+    ev.push((14.0, -12, 0.8, 3.0));
     ev
 }
 
@@ -60,7 +60,7 @@ fn render(text: &str, warm: bool) -> Vec<(f32, f32)> {
     load(&mut vm, text).unwrap();
     let base = 12 * (vm.params.ui_octave as i32 + 1);
     let ev = phrase();
-    let total = (13.5 * SR) as usize;
+    let total = (20.0 * SR) as usize;
     let mut out = Vec::with_capacity(total);
     for i in 0..total {
         let t = i as f32 / SR;
