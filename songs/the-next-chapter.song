@@ -128,7 +128,7 @@ R:36
 [57 62 66 69]:4=AA [57 61 64 69]:4=AA [55 62 64 69]:4=AA
 [57 64 66 69]:8=AA R:2
 automate vox_level
-0 R:4 0.04:4@smooth R:2 0:2@smooth R:36 0.022:2@smooth R:8 0.05:2@smooth R:10 0.06:2@smooth R:4 0:4@smooth
+0 R:4 0.28:4@smooth R:2 0:2@smooth R:36 0.16:2@smooth R:8 0.35:2@smooth R:10 0.42:2@smooth R:4 0:4@smooth
 
 track glass vel=0.4 len=1 patch=nc-glass reverb_send=0.45 pan=0.2
 81:2 78 74 | 76:3 R | 76:2 R:2
