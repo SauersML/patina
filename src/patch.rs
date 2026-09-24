@@ -43,6 +43,19 @@ fn strip_comment(raw: &str) -> &str {
     raw
 }
 
+/// Select a patch: every block of the panel moves at once (US 3,981,218),
+/// so the patch is laid over Init rather than over whatever the last patch
+/// left behind. A patch that does not mention a control gets Init's
+/// setting for it. Before this, a patch's sound depended on the previous
+/// selection: a 49-line patch clicked after Warehouse kept Warehouse's
+/// unison, reverb tone and mixer levels.
+pub fn load(vm: &mut VoiceManager, text: &str) -> Result<(), String> {
+    apply(vm, FACTORY[0].1)?;
+    apply(vm, text)
+}
+
+/// Lay `text`'s lines over the current state (song automation, MIDI and
+/// incremental edits); selecting a whole patch goes through [`load`].
 pub fn apply(vm: &mut VoiceManager, text: &str) -> Result<(), String> {
     for (no, raw) in text.lines().enumerate() {
         let line = strip_comment(raw).trim();
@@ -211,6 +224,30 @@ mod tests {
                 "patch '{name}' should set an audible volume"
             );
             assert!(vm.params.cutoff >= 16.0);
+        }
+    }
+
+    /// Selecting a patch lands on the same panel whatever was selected
+    /// before it: nothing a patch leaves unmentioned leaks through from the
+    /// previous one.
+    #[test]
+    fn a_patch_sounds_the_same_whatever_came_before() {
+        for (name, text) in FACTORY {
+            let mut fresh = VoiceManager::new(44100.0, 8);
+            load(&mut fresh, text).unwrap();
+            for (prev, prev_text) in FACTORY {
+                let mut vm = VoiceManager::new(44100.0, 8);
+                load(&mut vm, prev_text).unwrap();
+                load(&mut vm, text).unwrap();
+                assert_eq!(
+                    serialize(&vm.params),
+                    serialize(&fresh.params),
+                    "'{name}' after '{prev}' differs from '{name}' alone"
+                );
+                assert_eq!(vm.params.unison, fresh.params.unison, "'{name}' after '{prev}'");
+                assert_eq!(vm.params.ui_octave, fresh.params.ui_octave, "'{name}' after '{prev}'");
+                assert_eq!(vm.params.reverb_tone, fresh.params.reverb_tone, "'{name}' after '{prev}'");
+            }
         }
     }
 

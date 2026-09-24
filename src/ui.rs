@@ -757,7 +757,7 @@ impl SynthUI {
             let response = ui.interact(cell, ui.id().with(("preset", i)), Sense::click());
             let selected = self.active_patch == Some(i);
             if response.clicked() && !selected {
-                if crate::patch::apply(&mut self.voice_manager.lock(), text).is_ok() {
+                if crate::patch::load(&mut self.voice_manager.lock(), text).is_ok() {
                     self.active_patch = Some(i);
                 }
             }
