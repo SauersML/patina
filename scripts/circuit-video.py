@@ -9,7 +9,7 @@ difference between panels is exactly what that part of the circuit did.
 Expects <logs-dir>/stems-cd-osc, stems-cd-ladder, stems-full from --render-stems.
 """
 import argparse, os, subprocess, sys
-import numpy as np, soundfile as sf, librosa
+import numpy as np, soundfile as sf
 from scipy.ndimage import gaussian_filter
 from PIL import Image, ImageDraw, ImageFilter
 
@@ -17,12 +17,23 @@ ap = argparse.ArgumentParser()
 ap.add_argument("logs"); ap.add_argument("master"); ap.add_argument("out")
 ap.add_argument("--start", type=float, default=0); ap.add_argument("--end", type=float, default=None)
 ap.add_argument("--fps", type=int, default=30); ap.add_argument("--frame-png", default=None)
+ap.add_argument("--chunk", default=None, help="k/n: render only the k-th of n time chunks, video only")
 A = ap.parse_args()
 FPS = A.fps; W, H = 1600, 900
 
+class Tap:
+    """A wav read on demand: y[a:b] pulls only that slice from disk, so a
+    dozen taps cost nothing in RAM (this Mac has 8 GB and is swapping)."""
+    def __init__(self, path):
+        self.f = sf.SoundFile(path); self.sr = self.f.samplerate; self.n = len(self.f)
+    def __len__(self): return self.n
+    def __getitem__(self, sl):
+        a, b = sl.start or 0, min(sl.stop if sl.stop is not None else self.n, self.n)
+        if b <= a: return np.zeros(0, np.float32)
+        self.f.seek(a); y = self.f.read(b - a, dtype="float32", always_2d=True)
+        return y.mean(axis=1)
 def load(path):
-    y, r = sf.read(path, dtype="float32")
-    return (y.mean(axis=1) if y.ndim > 1 else y), r
+    t = Tap(path); return t, t.sr
 master, SR = load(A.master)
 DUR = len(master) / SR
 taps = {}
@@ -38,10 +49,12 @@ cache = os.path.join(A.logs, "circuit-f0.npz")
 if os.path.exists(cache):
     F0 = dict(np.load(cache))
 else:
+    import librosa
     F0 = {}
     hop = int(SR / FPS)
     for name, lo, hi in [("lead", 150, 1400), ("bass", 40, 400)]:
-        f0, v, pr = librosa.pyin(taps[(name, "osc")], fmin=lo, fmax=hi, sr=SR, frame_length=4096, hop_length=hop, fill_na=np.nan)
+        full = taps[(name, "osc")][0:len(taps[(name, "osc")])]
+        f0, v, pr = librosa.pyin(full, fmin=lo, fmax=hi, sr=SR, frame_length=4096, hop_length=hop, fill_na=np.nan); del full
         F0[name] = np.where(v & (pr > 0.4), f0, np.nan); print(name, "tracked", flush=True)
     np.savez(cache, **F0)
 
@@ -129,6 +142,9 @@ WIRES[("bed", "c")] = wire_mask([(COLS["tape"][1] + 10, ROWS["bed"]), (1360, ROW
 WIRES[("drums", "a")] = wire_mask([(680 + 4, ROWS["bed"] + 60), (700 - 4, ROWS["bed"] + 60)])
 WIRES[("drums", "c")] = wire_mask([(850 + 10, yb + 60), (910, yb + 60), (910, yb + 20)])
 WIRE_SUM = sum(WIRES.values())
+WIRES_SOFT = {k: gaussian_filter(v, 3).astype(np.float16) for k, v in WIRES.items()}
+WIRES = {k: v.astype(np.float16) for k, v in WIRES.items()}
+WIRE_SUM_SOFT = gaussian_filter(WIRE_SUM, 3)
 
 # ---------- per-frame signal windows ----------
 def rising_zero(y, s, span):
@@ -170,7 +186,7 @@ def render_frame(i):
     t = i / FPS; s = int(t * SR)
     glow = np.zeros((W, H, 3), np.float32).transpose(1, 0, 2).copy() if False else np.zeros((H, W, 3), np.float32)
     heat = np.zeros((H, W), np.float32)
-    lit = np.zeros((H, W), np.float32)
+    lit = np.zeros((H, W), np.float32); lit_soft = np.zeros((H, W), np.float32)
     ov = Image.new("RGBA", (W, H), (0, 0, 0, 0)); od = ImageDraw.Draw(ov)
     # voices: lead and bass through osc -> ladder -> tape
     for row in ["lead", "bass"]:
@@ -201,7 +217,7 @@ def render_frame(i):
         dx, dy = DIALS[row]; od.line((dx, dy, dx + 24 * np.cos(a), dy + 24 * np.sin(a)), fill=(80, 230, 240, 255), width=3)
         # wires lit by stage level
         for key, y in [("a", osc), ("b", lad), ("c", ful)]:
-            lit += WIRES[(row, key)] * min(1.0, level(y, s) * 14)
+            b = min(1.0, level(y, s) * 14); lit += WIRES[(row, key)] * b; lit_soft += WIRES_SOFT[(row, key)] * b
     # the tape head: the sung loop, bare and through the tape
     raw, ful = taps[("bed", "osc")], taps[("bed", "full")]
     n = int(0.03 * SR); s0 = rising_zero(raw, s, int(0.012 * SR))
@@ -211,7 +227,8 @@ def render_frame(i):
     trace(glow, SCOPES[("bed", "osc")], wr * nb, CYAN)
     trace(glow, SCOPES[("bed", "tape")], wr * nf, BRASS, ghost=True)
     trace(glow, SCOPES[("bed", "tape")], wf * nf, CYAN)
-    lit += WIRES[("bed", "a")] * min(1.0, lvb * 14) + WIRES[("bed", "c")] * min(1.0, level(ful, s) * 14)
+    for key, b in [("a", min(1.0, lvb * 14)), ("c", min(1.0, level(ful, s) * 14))]:
+        lit += WIRES[("bed", key)] * b; lit_soft += WIRES_SOFT[("bed", key)] * b
     # the 909: bare and driven, a scrolling 60 ms
     draw_, drv = taps[("kick", "osc")], taps[("kick", "full")]
     n = int(0.06 * SR); wr, wd = window(draw_, s, n), window(drv, s, n)
@@ -220,7 +237,8 @@ def render_frame(i):
     trace(glow, SCOPES[("drums", "osc")], wr * nd, CYAN)
     trace(glow, SCOPES[("drums", "tape")], wr * nf, BRASS, ghost=True)
     trace(glow, SCOPES[("drums", "tape")], wd * nf, CYAN)
-    lit += WIRES[("drums", "a")] * min(1.0, level(draw_, s) * 14) + WIRES[("drums", "c")] * min(1.0, level(drv, s) * 14)
+    for key, b in [("a", min(1.0, level(draw_, s) * 14)), ("c", min(1.0, level(drv, s) * 14))]:
+        lit += WIRES[("drums", key)] * b; lit_soft += WIRES_SOFT[("drums", key)] * b
     # the bus: the master, vertical (time runs downward), 80 ms
     n = int(0.08 * SR); segm = window(master, s, n)
     x0, y0, x1, y1 = BUS; m = int((y1 - y0 - 160) * 2)
@@ -234,24 +252,31 @@ def render_frame(i):
     a = np.pi * (1.15 + 0.7 * vu_needle)
     od.line((VU[0], VU[1] + 10, VU[0] + 50 * np.cos(a), VU[1] + 50 * np.sin(a)), fill=(30, 20, 15, 255), width=3)
     # reels turn
-    reel_angle += 0.09
+    reel_angle = 0.09 * i
     for pair in REELS.values():
         for (rx, ry) in pair:
             for k in range(3):
                 ang = reel_angle + k * 2 * np.pi / 3
                 od.line((rx, ry, rx + 26 * np.cos(ang), ry + 26 * np.sin(ang)), fill=(150, 120, 70, 255), width=3)
     # composite
+    # composite in place: one full-size buffer, no chain of temporaries
     img = PANEL.copy()
-    core = np.clip(glow, 0, 2)
-    soft = gaussian_filter(core[::2, ::2], (3, 3, 0)); soft = np.repeat(np.repeat(soft, 2, axis=0), 2, axis=1)[:H, :W]
-    img += core * 0.9 + soft * 0.7
-    img += (gaussian_filter(heat[::4, ::4], 10).repeat(4, axis=0).repeat(4, axis=1)[:H, :W, None]) * HEAT * 0.9
-    img += (lit * 0.9 + gaussian_filter(lit, 3) * 0.6)[..., None] * CYAN * 0.7 + (WIRE_SUM * 0.12)[..., None] * BRASS
-    o = np.asarray(ov).astype(np.float32) / 255.0
-    img = img * (1 - o[..., 3:4]) + o[..., :3] * o[..., 3:4]
+    np.clip(glow, 0, 2, out=glow)
+    soft = gaussian_filter(glow[::2, ::2], (3, 3, 0))
+    img += glow * 0.9
+    img += np.repeat(np.repeat(soft, 2, axis=0), 2, axis=1)[:H, :W] * 0.7
+    hb = gaussian_filter(heat[::4, ::4], 10).repeat(4, axis=0).repeat(4, axis=1)[:H, :W]
+    for c in range(3): img[..., c] += hb * (HEAT[c] * 0.9)
+    lit *= 0.9; lit += lit_soft * 0.6
+    for c in range(3):
+        img[..., c] += lit * (CYAN[c] * 0.7); img[..., c] += WIRE_SUM * (0.12 * BRASS[c])
+    o = np.asarray(ov)
+    a = o[..., 3].astype(np.float32) / 255.0
+    for c in range(3): img[..., c] *= (1 - a); img[..., c] += o[..., c] * (a / 255.0)
     img += rng.normal(0, 0.004, (H, W, 1)).astype(np.float32)
-    img = 1 - np.exp(-1.5 * np.clip(img, 0, None))
-    return (np.clip(img, 0, 1) ** (1 / 1.8) * 255).astype(np.uint8)
+    np.clip(img, 0, None, out=img); img *= -1.5; np.exp(img, out=img); img *= -1; img += 1
+    np.power(img, 1 / 1.8, out=img); img *= 255
+    return img.astype(np.uint8)
 
 if A.frame_png:
     i0 = int(A.start * FPS)
@@ -259,9 +284,17 @@ if A.frame_png:
     Image.fromarray(frame).save(A.frame_png); print("wrote", A.frame_png); sys.exit(0)
 t_end = A.end if A.end else DUR
 i0, i1 = int(A.start * FPS), int(t_end * FPS)
-cmd = ["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-",
-       "-ss", str(A.start), "-t", str(t_end - A.start), "-i", A.master,
-       "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-shortest", A.out]
+if A.chunk:
+    k, n = map(int, A.chunk.split("/")); per = (i1 - i0 + n - 1) // n
+    i0, i1 = i0 + k * per, min(i1, i0 + (k + 1) * per)
+    for i in range(max(0, i0 - 20), i0): render_frame(i)      # warm the needles and heat
+    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-",
+           "-c:v", "libx264", "-preset", "veryfast", "-threads", "2", "-x264-params", "rc-lookahead=8", "-crf", "18", "-pix_fmt", "yuv420p",
+           "-f", "mpegts", A.out]    # transport stream: survives being cut off, concatenates by byte
+else:
+    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-",
+           "-ss", str(A.start), "-t", str(t_end - A.start), "-i", A.master,
+           "-c:v", "libx264", "-preset", "veryfast", "-threads", "2", "-x264-params", "rc-lookahead=8", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-shortest", A.out]
 proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
 for i in range(i0, i1):
     proc.stdin.write(render_frame(i).tobytes())
