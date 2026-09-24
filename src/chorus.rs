@@ -26,12 +26,43 @@ use std::f32::consts::PI;
 /// a standing ~2% mean-delay difference nothing in the model asks for.
 const LFO_PARTIAL_RATIO: f32 = 1.1;
 
-/// Unipolar [0, 1] BBD clock LFO at `phase` turns.
-#[inline]
-fn clock_lfo(phase: f32) -> f32 {
-    let fundamental = (2.0 * PI * phase).sin() * 0.5 + 0.5;
-    let partial = (2.0 * PI * phase * LFO_PARTIAL_RATIO).sin() * 0.5 + 0.5;
-    (fundamental + partial) * 0.5
+/// One channel's BBD clock LFO: the fundamental and the incommensurate
+/// partial, EACH with its own phase wrapped on its own cycle.
+///
+/// They used to share one phase, with the partial read as
+/// `sin(2π·1.1·phase)`. Wrapping that shared phase from 1 back to 0 left the
+/// fundamental continuous but snapped the partial from sin(0.2π) = 0.59 to
+/// 0, so once per LFO cycle the commanded delay stepped by ~15% of the
+/// depth (half a millisecond at a typical setting) inside a single sample,
+/// which is a click on every chorused patch, every 1-2 seconds. The two
+/// phases now live together and advance together, and neither can be
+/// wrapped in terms of the other.
+#[derive(Clone, Copy)]
+struct ClockLfo {
+    fundamental: f32,
+    partial: f32,
+}
+
+impl ClockLfo {
+    fn at(phase: f32) -> Self {
+        Self {
+            fundamental: phase.fract(),
+            partial: (phase * LFO_PARTIAL_RATIO).fract(),
+        }
+    }
+
+    fn advance(&mut self, turns: f32) {
+        self.fundamental = (self.fundamental + turns).fract();
+        self.partial = (self.partial + turns * LFO_PARTIAL_RATIO).fract();
+    }
+
+    /// Unipolar [0, 1] clock sweep.
+    #[inline]
+    fn value(&self) -> f32 {
+        let fundamental = (2.0 * PI * self.fundamental).sin() * 0.5 + 0.5;
+        let partial = (2.0 * PI * self.partial).sin() * 0.5 + 0.5;
+        (fundamental + partial) * 0.5
+    }
 }
 
 pub struct Chorus {
@@ -103,8 +134,8 @@ struct Saturation {
 }
 
 struct Voice {
-    phase_left: f32,
-    phase_right: f32,
+    lfo_left: ClockLfo,
+    lfo_right: ClockLfo,
     rate_left: f32,
     rate_right: f32,
     depth: f32,
@@ -354,20 +385,14 @@ impl Chorus {
         let depth_smooth_k = self.depth_smooth_k;
 
         for voice in &mut self.voices {
-            voice.phase_left += voice.rate_left / self.sample_rate;
-            voice.phase_right += voice.rate_right / self.sample_rate;
-            if voice.phase_left >= 1.0 {
-                voice.phase_left -= 1.0;
-            }
-            if voice.phase_right >= 1.0 {
-                voice.phase_right -= 1.0;
-            }
+            voice.lfo_left.advance(voice.rate_left / self.sample_rate);
+            voice.lfo_right.advance(voice.rate_right / self.sample_rate);
 
             voice.smooth_depth += (voice.depth - voice.smooth_depth) * depth_smooth_k;
 
             // One shape, two phases: see LFO_PARTIAL_RATIO
-            let lfo_left = clock_lfo(voice.phase_left);
-            let lfo_right = clock_lfo(voice.phase_right);
+            let lfo_left = voice.lfo_left.value();
+            let lfo_right = voice.lfo_right.value();
 
             let max_delay = self.size as f32 - 3.0;
             let delay_left =
@@ -509,8 +534,8 @@ impl Voice {
     /// (see LFO_PARTIAL_RATIO).
     fn new(rate_left: f32, rate_right: f32, depth: f32, rng: &mut Rng) -> Self {
         Self {
-            phase_left: rng.unipolar(),
-            phase_right: rng.unipolar(),
+            lfo_left: ClockLfo::at(rng.unipolar()),
+            lfo_right: ClockLfo::at(rng.unipolar()),
             rate_left,
             rate_right,
             depth,
@@ -536,11 +561,11 @@ mod tests {
             let x = (n as f32 * 0.05).sin() * 0.4;
             chorus.process(x, x);
         }
-        let phase_before = chorus.voices[0].phase_left;
+        let phase_before = chorus.voices[0].lfo_left.fundamental;
         chorus.set_mode(ChorusMode::II);
         assert_eq!(chorus.wet_dry_mix, 0.12, "mix override must survive");
         assert_eq!(
-            chorus.voices[0].phase_left, phase_before,
+            chorus.voices[0].lfo_left.fundamental, phase_before,
             "voices must not rebuild"
         );
     }
@@ -631,7 +656,7 @@ mod tests {
         let n = 1_000_000;
         for i in 0..n {
             // sweep phase incommensurately with the partial ratio
-            let v = clock_lfo(i as f32 * 0.0007);
+            let v = ClockLfo::at(i as f32 * 0.0007).value();
             lo = lo.min(v);
             hi = hi.max(v);
             sum += v as f64;
@@ -649,6 +674,29 @@ mod tests {
         );
     }
 
+    /// The clock sweep is continuous across every cycle wrap: over a long
+    /// run, no single sample moves the LFO by more than the steepest slope
+    /// its two sines can reach. The shared-phase version stepped by ~0.15
+    /// once per cycle.
+    #[test]
+    fn the_clock_lfo_never_steps() {
+        let rate = 0.6f32;
+        let turns = rate / 48000.0;
+        let max_slope = PI * turns * (1.0 + LFO_PARTIAL_RATIO) * 0.5;
+        let mut lfo = ClockLfo::at(0.93);
+        let mut prev = lfo.value();
+        for _ in 0..48000 * 10 {
+            lfo.advance(turns);
+            let v = lfo.value();
+            assert!(
+                (v - prev).abs() <= max_slope * 1.01 + 1e-6,
+                "clock LFO stepped by {} in one sample",
+                (v - prev).abs()
+            );
+            prev = v;
+        }
+    }
+
     /// ...and both channels of a running chorus must therefore agree on
     /// mean delay. Measured on the voice state, which is what the delay
     /// read actually uses.
@@ -663,10 +711,10 @@ mod tests {
         let n = 480_000;
         for _ in 0..n {
             let v = &mut chorus.voices[0];
-            v.phase_left = (v.phase_left + v.rate_left / 48000.0).fract();
-            v.phase_right = (v.phase_right + v.rate_right / 48000.0).fract();
-            sum_l += clock_lfo(v.phase_left) as f64;
-            sum_r += clock_lfo(v.phase_right) as f64;
+            v.lfo_left.advance(v.rate_left / 48000.0);
+            v.lfo_right.advance(v.rate_right / 48000.0);
+            sum_l += v.lfo_left.value() as f64;
+            sum_r += v.lfo_right.value() as f64;
         }
         let (mean_l, mean_r) = (sum_l / n as f64, sum_r / n as f64);
         assert!(
