@@ -106,7 +106,12 @@ R:48
 (F#4 C#5 B4 E5 F#4 A4 C#5 B4 E5 A4 F#4 C#5)x4
 
 automate m2.gain
-0 R:48 1:12@smooth
+0 R:48 0.75:12@smooth 1:36@smooth R:228 1.2:72@smooth R:96 0.8:216@smooth 0.7:24@smooth
+
+# The marimbas carry the piece's arc: soft at the first strokes, fullest
+# at the third lock, receding as the twins walk home.
+automate m1.gain
+0.6 R:24 1:72@smooth R:228 1.2:72@smooth R:96 0.8:216@smooth 0.7:24@smooth
 
 # The mallets brighten toward the climax and darken on the way home;
 # both hands move together so the twins stay the same instrument.
@@ -135,7 +140,7 @@ track bass vel=0.7 len=1.5 patch=tessera-bass reverb_send=0.12
 >732 [F#1 F#2]:10@0.6
 
 automate bass.gain
-0 R:72 1:24@smooth R:288 1.15:12@smooth R:96 0.9:12@smooth R:228
+0 R:72 1.8:24@smooth R:288 2:12@smooth R:96 1.6:12@smooth R:228
 
 # --- the breath --------------------------------------------------------
 # Eighth-note chord pulses; the swell is the gain lane below, one
@@ -175,7 +180,7 @@ track breath vel=0.5 len=0.5 patch=tessera-breath reverb_send=0.5 chorus_send=0.
 ([F#3 C#4 E4 A4])x96
 
 automate breath.gain
-0.08 R:132 (1:6@smooth 0.08:6@smooth)x8 R:36 (1:6@smooth 0.08:6@smooth)x8 R:36 (1.2:6@smooth 0.1:6@smooth)x8 (0.9:12@smooth 0.06:12@smooth)x3 (0.6:24@smooth 0:24@smooth)
+0.06 R:132 (0.7:6@smooth 0.06:6@smooth)x8 R:36 (0.7:6@smooth 0.06:6@smooth)x8 R:36 (0.85:6@smooth 0.07:6@smooth)x8 (0.63:12@smooth 0.04:12@smooth)x3 (0.42:24@smooth 0:24@smooth)
 automate breath.cutoff
 1000 R:132 1400:96@exp R:36 1800:96@exp R:36 2400:96@exp 900:120@exp
 
@@ -207,7 +212,7 @@ track organ vel=0.6 len=0.3333333333 patch=tessera-organ pan=-0.15 reverb_send=0
 (F#3 A3 C#4 E4 F#4 E4 C#4 A3)x4 F#3 A3 C#4 E4
 
 automate organ.gain
-0 R:264 0.75:36@smooth R:60 0.9:36@smooth 1.05:24@smooth R:60 0:12@smooth
+0 R:264 0.53:36@smooth R:60 0.63:36@smooth 0.74:24@smooth R:60 0:12@smooth
 automate organ.cutoff
 1200 R:264 1800:96@exp 2400:36@exp 3200:60@smooth 1600:36@exp
 
@@ -240,6 +245,6 @@ E5:6 F#5:6 C#6:12 B5:6 A5:6 F#5:12
 C#5:12 B4:12 A4:24 B4:12 E5:12 C#5:24
 
 automate reed.gain
-0 R:360 0.8:12@smooth 1:24@smooth R:156 0:60@smooth
+0 R:360 0.4:12@smooth 0.5:24@smooth R:156 0:60@smooth
 automate reed.cutoff
 1100 R:360 1600:36@exp 2200:96@exp 1000:120@exp
