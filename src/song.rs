@@ -1051,6 +1051,12 @@ impl OfflineRender<'_> {
     pub fn peak_voices(&self) -> usize {
         self.peak_voices
     }
+
+    /// Everything the stems recorded since the last call (a render
+    /// started with `render_offline_stems`).
+    pub fn take_stem_block(&mut self) -> crate::voice_manager::StemBlock {
+        self.vm.take_stem_block()
+    }
 }
 
 impl Iterator for OfflineRender<'_> {
@@ -1088,6 +1094,21 @@ impl std::iter::FusedIterator for OfflineRender<'_> {}
 /// Stream a song through the full engine, including its configured tail.
 pub fn render_offline(song: &Song, sample_rate: f32) -> OfflineRender<'_> {
     render_offline_solo(song, sample_rate, None)
+}
+
+/// Stream the mix AND record one stem per channel group in a single
+/// pass: every voice renders once for all of them. `next()` yields the
+/// mix; `take_stem_block()` hands over what each group fed its master
+/// chain, to run through the returned per-group `StemBus`es (which can
+/// live on other threads).
+pub fn render_offline_stems<'a>(
+    song: &'a Song,
+    sample_rate: f32,
+    groups: &[Vec<u16>],
+) -> (OfflineRender<'a>, Vec<crate::voice_manager::StemBus>) {
+    let mut render = render_offline_solo(song, sample_rate, None);
+    let buses = render.vm.set_stems(groups);
+    (render, buses)
 }
 
 /// Stream a stem: all events and circuits still run, but only the solo

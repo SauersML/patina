@@ -13,6 +13,7 @@ use crate::tape::Tape;
 use crate::voice::Voice;
 use crate::vox::{Syllable, VoxBox, VOX_CHANNEL};
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 
 /// Capacitive trace-to-trace coupling between adjacent voice cards. The
 /// coupling differentiates (it is a capacitor), so the bleed is presence-
@@ -277,6 +278,7 @@ pub fn stereo_position(age: u64) -> f32 {
 }
 
 /// One-pole high-pass at ~10 Hz that strips DC offset from the output bus.
+#[derive(Clone)]
 struct DcBlocker {
     x1: f32,
     y1: f32,
@@ -376,17 +378,221 @@ fn duck_decay_for(release_secs: f32, sample_rate: f32) -> f32 {
 
 /// Pass one channel's contribution through its mixer strip: ducked gain,
 /// constant-center balance pan, and taps into the three send buses.
-fn strip(
-    mixes: &HashMap<u16, ChannelMix>,
+/// The three per-track effect-send buses, in volts like the bus itself.
+#[derive(Clone, Copy, Default)]
+struct Sends {
+    spr: (f32, f32),
+    rev: (f32, f32),
+    cho: (f32, f32),
+}
+
+impl Sends {
+    #[inline]
+    fn add(&mut self, o: &Sends) {
+        self.spr.0 += o.spr.0;
+        self.spr.1 += o.spr.1;
+        self.rev.0 += o.rev.0;
+        self.rev.1 += o.rev.1;
+        self.cho.0 += o.cho.0;
+        self.cho.1 += o.cho.1;
+    }
+}
+
+/// The master chain from the summing amp to the output jack: slew, master
+/// gain, fuzz, spring/reverb/chorus returns, tape, arrangement output, DC
+/// block and soft limit. Cloneable so a stem bounce can run one private
+/// copy per stem — identical circuits, identical seeds, own state.
+#[derive(Clone)]
+struct Bus {
+    reverb: Reverb,
+    chorus: Chorus,
+    tape: Tape,
+    fuzz: Fuzz,
+    spring: SpringReverb,
+    slew_left: SlewLimiter,
+    slew_right: SlewLimiter,
+    gain: f32, // smoothed master gain
+    output_gain: f32,
+    dc_left: DcBlocker,
+    dc_right: DcBlocker,
+}
+
+impl Bus {
+    fn new(sample_rate: f32, params: &ParamValues) -> Self {
+        Bus {
+            reverb: Reverb::new(sample_rate),
+            chorus: Chorus::new(sample_rate),
+            tape: Tape::new(sample_rate),
+            fuzz: Fuzz::new(sample_rate),
+            spring: SpringReverb::new(sample_rate),
+            slew_left: SlewLimiter::new(sample_rate),
+            slew_right: SlewLimiter::new(sample_rate),
+            gain: params.volume,
+            output_gain: params.output,
+            dc_left: DcBlocker::new(sample_rate),
+            dc_right: DcBlocker::new(sample_rate),
+        }
+    }
+
+    /// One sample of the summed strips (volts) through the whole chain.
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn process(
+        &mut self,
+        left: f32,
+        right: f32,
+        sends: &Sends,
+        volume: f32,
+        output: f32,
+        gain_k: f32,
+        output_k: f32,
+    ) -> (f32, f32) {
+        // The summing amp sees the full multi-voice swing IN VOLTS; its
+        // finite slew rate shaves only the hottest, fastest edges
+        // (transient intermodulation). Volts convert to sample units here,
+        // once, at the bus — nowhere else. Smoothed master gain: fixed
+        // headroom, no zipper on volume automation.
+        let mut left = self.slew_left.process(left);
+        let mut right = self.slew_right.process(right);
+        self.gain += (volume - self.gain) * gain_k;
+        let g = self.gain * 0.7 / PROGRAM_V;
+        left *= g;
+        right *= g;
+
+        // Fuzz first (a pedal in front of everything), then parallel reverb
+        // and chorus — each fed its per-track
+        // send bus at unity alongside the global knob; tape sits last, as
+        // if the whole mix were bounced to cassette
+        let (left, right) = self.fuzz.process(left, right);
+        let (left, right) =
+            self.spring
+                .process_with_send(left, right, sends.spr.0 * g, sends.spr.1 * g);
+        let (left, right) =
+            self.reverb
+                .process_with_send(left, right, sends.rev.0 * g, sends.rev.1 * g);
+        let (left, right) =
+            self.chorus
+                .process_with_send(left, right, sends.cho.0 * g, sends.cho.1 * g);
+        let (left, right) = self.tape.process(left, right);
+
+        // Arrangement output sits after every effect return. Its short
+        // de-clicking slew permits a decisive stop without leaving the
+        // reverb tank audible or hard-truncating a non-zero sample.
+        self.output_gain += (output - self.output_gain) * output_k;
+        let left = left * self.output_gain;
+        let right = right * self.output_gain;
+
+        (
+            soft_limit(self.dc_left.process(left)),
+            soft_limit(self.dc_right.process(right)),
+        )
+    }
+}
+
+/// One stem's summed strips for the current sample (one-pass stems).
+struct Stem {
+    left: f32,
+    right: f32,
+    sends: Sends,
+    inputs: Vec<StemIn>,
+}
+
+/// What a stem's master chain needs for one sample: its strips' dry sum,
+/// their sends, and the panel's volume/output targets at that sample.
+#[derive(Clone, Copy)]
+pub struct StemIn {
+    left: f32,
+    right: f32,
+    sends: Sends,
+    volume: f32,
+    output: f32,
+}
+
+/// A master-chain setting change, as a closure over the chain.
+type BusCmd = Arc<dyn Fn(&mut Bus) + Send + Sync>;
+
+/// One block of a one-pass stem bounce: every stem's inputs, and the
+/// master-chain settings changed during the block, stamped with the
+/// sample they took effect before. Cheap to share across threads.
+pub struct StemBlock {
+    pub inputs: Vec<Arc<Vec<StemIn>>>,
+    log: Arc<Vec<(usize, BusCmd)>>,
+}
+
+impl StemBlock {
+    /// The settings log alone (each stem's worker needs it).
+    pub fn log(&self) -> StemLog {
+        StemLog(self.log.clone())
+    }
+}
+
+/// The master-chain settings log of one `StemBlock`.
+#[derive(Clone)]
+pub struct StemLog(Arc<Vec<(usize, BusCmd)>>);
+
+/// A stem's private master chain: a clone of the mix bus taken when the
+/// stems were set up, advanced block by block — on any thread — from the
+/// inputs and settings log the engine recorded.
+pub struct StemBus {
+    bus: Bus,
+    gain_k: f32,
+    output_k: f32,
+}
+
+impl StemBus {
+    /// Run one block: each logged setting lands before the sample it was
+    /// stamped with, exactly as it reached the mix bus.
+    pub fn process(&mut self, inputs: &[StemIn], log: &StemLog, out: &mut Vec<(f32, f32)>) {
+        out.clear();
+        let mut cmds = log.0.iter().peekable();
+        for (i, x) in inputs.iter().enumerate() {
+            while let Some((_, cmd)) = cmds.next_if(|(at, _)| *at <= i) {
+                cmd(&mut self.bus);
+            }
+            out.push(self.bus.process(
+                x.left,
+                x.right,
+                &x.sends,
+                x.volume,
+                x.output,
+                self.gain_k,
+                self.output_k,
+            ));
+        }
+        for (_, cmd) in cmds {
+            cmd(&mut self.bus);
+        }
+    }
+}
+
+/// Add one strip's output to its stem, if the channel has one.
+#[inline]
+fn route_stem(
+    stems: &mut [Stem],
+    stem_of: &HashMap<u16, usize>,
     ch: u16,
     l: f32,
     r: f32,
-    spr: &mut (f32, f32),
-    rev: &mut (f32, f32),
-    cho: &mut (f32, f32),
-) -> (f32, f32) {
+    sends: &Sends,
+) {
+    if stems.is_empty() {
+        return;
+    }
+    if let Some(&i) = stem_of.get(&ch) {
+        let stem = &mut stems[i];
+        stem.left += l;
+        stem.right += r;
+        stem.sends.add(sends);
+    }
+}
+
+/// A track's mixer strip: gain, trim, duck and pan on the dry signal, and
+/// the post-fader effect sends it feeds (returned, so the caller can
+/// route them to the mix bus and to the track's stem alike).
+fn strip(mixes: &HashMap<u16, ChannelMix>, ch: u16, l: f32, r: f32) -> (f32, f32, Sends) {
+    let mut sends = Sends::default();
     let Some(m) = mixes.get(&ch) else {
-        return (l, r);
+        return (l, r, sends);
     };
     let g = m.cur_gain * m.cur_trim * (1.0 - m.duck * m.duck_env);
     let (mut l, mut r) = (l * g, r * g);
@@ -395,13 +601,10 @@ fn strip(
     } else {
         r *= 1.0 + m.cur_pan;
     }
-    spr.0 += l * m.spr_send;
-    spr.1 += r * m.spr_send;
-    rev.0 += l * m.rev_send;
-    rev.1 += r * m.rev_send;
-    cho.0 += l * m.cho_send;
-    cho.1 += r * m.cho_send;
-    (l, r)
+    sends.spr = (l * m.spr_send, r * m.spr_send);
+    sends.rev = (l * m.rev_send, r * m.rev_send);
+    sends.cho = (l * m.cho_send, r * m.cho_send);
+    (l, r, sends)
 }
 
 pub struct VoiceManager {
@@ -415,18 +618,23 @@ pub struct VoiceManager {
     /// The tape deck: sampler slots (`sample=` tracks) whose playback
     /// heads mix onto the same volt bus as everything else.
     pub sampler: SamplerBank,
-    reverb: Reverb,
-    chorus: Chorus,
-    tape: Tape,
-    fuzz: Fuzz,
+    /// The master chain every strip sums into (see `Bus`).
+    bus: Bus,
+    /// One-pass stem bounces: each stem's strips summed per sample and
+    /// recorded, so every voice renders ONCE for all of them; the stems'
+    /// master chains run elsewhere (`StemBus`). Empty outside `set_stems`.
+    stems: Vec<Stem>,
+    /// Master-chain settings changed during the current stem block.
+    stem_log: Vec<(usize, BusCmd)>,
+    /// Samples recorded into the current stem block.
+    stem_frames: usize,
+    /// Song channel -> index into `stems`.
+    stem_of: HashMap<u16, usize>,
     noise_source: NoiseSource,
     noise_gain: f32, // smoothed
-    spring: SpringReverb,
     lfo: Lfo,
     substrate: Substrate,
     prev_current: f32,
-    slew_left: SlewLimiter,
-    slew_right: SlewLimiter,
     sample_rate: f32,
     /// CV (octaves from A440) of the most recently triggered note — the
     /// "hold capacitor" that glide charges from (US 3,991,645).
@@ -454,11 +662,7 @@ pub struct VoiceManager {
     solo: Option<u16>,
     pub params: ParamValues,
     pub scope: VecDeque<f32>,
-    gain: f32, // smoothed master gain
-    output_gain: f32,
     output_smooth_k: f32,
-    dc_left: DcBlocker,
-    dc_right: DcBlocker,
     /// Master-volume de-zipper coefficient, derived from the rate so the
     /// fade lasts the same ~26 ms at 44.1, 48 and 96 kHz.
     gain_smooth_k: f32,
@@ -491,18 +695,16 @@ impl VoiceManager {
             drums: DrumMachine::new(sample_rate),
             vox: VoxBox::new(sample_rate),
             sampler: SamplerBank::new(sample_rate),
-            reverb: Reverb::new(sample_rate),
-            chorus: Chorus::new(sample_rate),
-            tape: Tape::new(sample_rate),
-            fuzz: Fuzz::new(sample_rate),
+            bus: Bus::new(sample_rate, &params),
+            stems: Vec::new(),
+            stem_log: Vec::new(),
+            stem_frames: 0,
+            stem_of: HashMap::new(),
             noise_source: NoiseSource::new(sample_rate),
             noise_gain: 0.0,
-            spring: SpringReverb::new(sample_rate),
             lfo: Lfo::new(sample_rate),
             substrate: Substrate::new(sample_rate),
             prev_current: 0.0,
-            slew_left: SlewLimiter::new(sample_rate),
-            slew_right: SlewLimiter::new(sample_rate),
             sample_rate,
             last_note_cv: None,
             bend_target: 1.0,
@@ -519,11 +721,7 @@ impl VoiceManager {
             solo: None,
             params,
             scope: VecDeque::with_capacity(SCOPE_LEN),
-            gain: params.volume,
-            output_gain: params.output,
             output_smooth_k: crate::smoothing::approach(0.002, sample_rate),
-            dc_left: DcBlocker::new(sample_rate),
-            dc_right: DcBlocker::new(sample_rate),
             gain_smooth_k: crate::smoothing::approach(crate::smoothing::GAIN_SMOOTH_S, sample_rate),
             knob_smooth_k: crate::smoothing::approach(crate::smoothing::KNOB_SMOOTH_S, sample_rate),
         }
@@ -573,6 +771,64 @@ impl VoiceManager {
     /// Solo one channel for a stem bounce (None restores the full mix).
     pub fn set_solo(&mut self, channel: Option<u16>) {
         self.solo = channel;
+    }
+
+    /// One-pass stem bounce: record, per listed channel group, the sum
+    /// of that group's strips (dry and sends) every sample, and return
+    /// each group's private copy of the master chain (cloned now, so it
+    /// starts in the same state with the same settings). Every voice still
+    /// renders once; each strip reaches the mix AND its group's stem.
+    /// Unlike `set_solo`, the chassis (rail sag, crosstalk) is loaded by
+    /// the whole arrangement — each stem is the track as it sounds IN the
+    /// mix. Channels in no group reach only the mix. Collect the recording
+    /// with `take_stem_block` and run it through the returned `StemBus`es.
+    pub fn set_stems(&mut self, groups: &[Vec<u16>]) -> Vec<StemBus> {
+        self.stems = groups
+            .iter()
+            .map(|_| Stem {
+                left: 0.0,
+                right: 0.0,
+                sends: Sends::default(),
+                inputs: Vec::new(),
+            })
+            .collect();
+        self.stem_of = groups
+            .iter()
+            .enumerate()
+            .flat_map(|(i, g)| g.iter().map(move |&ch| (ch, i)))
+            .collect();
+        self.stem_log.clear();
+        self.stem_frames = 0;
+        groups
+            .iter()
+            .map(|_| StemBus {
+                bus: self.bus.clone(),
+                gain_k: self.gain_smooth_k,
+                output_k: self.output_smooth_k,
+            })
+            .collect()
+    }
+
+    /// Hand over everything recorded since the last call.
+    pub fn take_stem_block(&mut self) -> StemBlock {
+        self.stem_frames = 0;
+        StemBlock {
+            inputs: self
+                .stems
+                .iter_mut()
+                .map(|s| Arc::new(std::mem::take(&mut s.inputs)))
+                .collect(),
+            log: Arc::new(std::mem::take(&mut self.stem_log)),
+        }
+    }
+
+    /// Apply a master-chain setting to the mix bus, and log it for the
+    /// stems' chains at the sample it takes effect.
+    fn each_bus(&mut self, f: impl Fn(&mut Bus) + Send + Sync + 'static) {
+        f(&mut self.bus);
+        if !self.stems.is_empty() {
+            self.stem_log.push((self.stem_frames, Arc::new(f)));
+        }
     }
 
     pub fn set_track_mix(&mut self, channel: u16, param: crate::song::Param, value: f32) {
@@ -1034,7 +1290,8 @@ impl VoiceManager {
 
     pub fn set_fuzz(&mut self, amount: f32) {
         self.params.fuzz = Param::FuzzAmount.clamp(amount);
-        self.fuzz.set_amount(self.params.fuzz);
+        let v = self.params.fuzz;
+        self.each_bus(move |b| b.fuzz.set_amount(v));
     }
 
     pub fn set_noise(&mut self, level: f32) {
@@ -1043,7 +1300,8 @@ impl VoiceManager {
 
     pub fn set_spring(&mut self, wet: f32) {
         self.params.spring = Param::SpringWet.clamp(wet);
-        self.spring.set_wet(self.params.spring);
+        let v = self.params.spring;
+        self.each_bus(move |b| b.spring.set_wet(v));
     }
 
     pub fn set_osc1_mix_component(&mut self, which: usize, level: f32) {
@@ -1338,9 +1596,12 @@ impl VoiceManager {
         let mut left = 0.0;
         let mut right = 0.0;
         // Per-channel effect-send buses, accumulated in volts like the bus
-        let mut send_spr = (0.0f32, 0.0f32);
-        let mut send_rev = (0.0f32, 0.0f32);
-        let mut send_cho = (0.0f32, 0.0f32);
+        let mut sends = Sends::default();
+        for stem in &mut self.stems {
+            stem.left = 0.0;
+            stem.right = 0.0;
+            stem.sends = Sends::default();
+        }
         // Voices on the vox channel never reach the bus directly: they
         // are the vocoder's carrier, and only what the speech lets
         // through comes back
@@ -1368,17 +1629,11 @@ impl VoiceManager {
             if ch == VOX_CHANNEL {
                 carrier += l + r;
             } else if self.solo.map_or(true, |s| s == ch) {
-                let (l, r) = strip(
-                    &self.channel_mix,
-                    ch,
-                    l,
-                    r,
-                    &mut send_spr,
-                    &mut send_rev,
-                    &mut send_cho,
-                );
+                let (l, r, s) = strip(&self.channel_mix, ch, l, r);
                 left += l;
                 right += r;
+                sends.add(&s);
+                route_stem(&mut self.stems, &self.stem_of, ch, l, r, &s);
             }
         }
 
@@ -1387,17 +1642,11 @@ impl VoiceManager {
         // center — one mouth (with its own strip on the desk).
         let vox_out = self.vox.process(carrier);
         if self.solo.map_or(true, |s| s == VOX_CHANNEL) {
-            let (vl, vr) = strip(
-                &self.channel_mix,
-                VOX_CHANNEL,
-                vox_out,
-                vox_out,
-                &mut send_spr,
-                &mut send_rev,
-                &mut send_cho,
-            );
+            let (vl, vr, s) = strip(&self.channel_mix, VOX_CHANNEL, vox_out, vox_out);
             left += vl;
             right += vr;
+            sends.add(&s);
+            route_stem(&mut self.stems, &self.stem_of, VOX_CHANNEL, vl, vr, &s);
         }
 
         // The rhythm section renders on the same bus, in the same volts.
@@ -1407,17 +1656,11 @@ impl VoiceManager {
         // the drum machine is IN the instrument, not beside it.
         let (dl, dr) = self.drums.render_next();
         if self.solo.map_or(true, |s| s == DRUM_CHANNEL) {
-            let (dl, dr) = strip(
-                &self.channel_mix,
-                DRUM_CHANNEL,
-                dl,
-                dr,
-                &mut send_spr,
-                &mut send_rev,
-                &mut send_cho,
-            );
+            let (dl, dr, s) = strip(&self.channel_mix, DRUM_CHANNEL, dl, dr);
             left += dl;
             right += dr;
+            sends.add(&s);
+            route_stem(&mut self.stems, &self.stem_of, DRUM_CHANNEL, dl, dr, &s);
         }
 
         // The tape deck too: same bus, same volts, same rail load — and
@@ -1435,17 +1678,11 @@ impl VoiceManager {
             }
             let ch = crate::sampler::SAMPLER_CHANNEL_BASE + i as u16;
             if self.solo.map_or(true, |s| s == ch) {
-                let (sl, sr) = strip(
-                    &self.channel_mix,
-                    ch,
-                    sl,
-                    sr,
-                    &mut send_spr,
-                    &mut send_rev,
-                    &mut send_cho,
-                );
+                let (sl, sr, s) = strip(&self.channel_mix, ch, sl, sr);
                 left += sl;
                 right += sr;
+                sends.add(&s);
+                route_stem(&mut self.stems, &self.stem_of, ch, sl, sr, &s);
             }
         }
 
@@ -1453,43 +1690,23 @@ impl VoiceManager {
         // (normalized back from volts so the substrate scale is unchanged)
         self.prev_current = (left.abs() + right.abs()) / PROGRAM_V;
 
-        // Smoothed master gain: fixed headroom, no zipper on volume automation
-        // The summing amp sees the full multi-voice swing IN VOLTS; its
-        // finite slew rate shaves only the hottest, fastest edges
-        // (transient intermodulation). Volts convert to sample units here,
-        // once, at the bus — nowhere else.
-        left = self.slew_left.process(left);
-        right = self.slew_right.process(right);
-        self.gain += (self.params.volume - self.gain) * self.gain_smooth_k;
-        let g = self.gain * 0.7 / PROGRAM_V;
-        left *= g;
-        right *= g;
-
-        // Fuzz first (a pedal in front of everything), then parallel reverb
-        // and chorus — each fed its per-track
-        // send bus at unity alongside the global knob; tape sits last, as
-        // if the whole mix were bounced to cassette
-        let (left, right) = self.fuzz.process(left, right);
-        let (left, right) =
-            self.spring
-                .process_with_send(left, right, send_spr.0 * g, send_spr.1 * g);
-        let (left, right) =
-            self.reverb
-                .process_with_send(left, right, send_rev.0 * g, send_rev.1 * g);
-        let (left, right) =
-            self.chorus
-                .process_with_send(left, right, send_cho.0 * g, send_cho.1 * g);
-        let (left, right) = self.tape.process(left, right);
-
-        // Arrangement output sits after every effect return. Its short
-        // de-clicking slew permits a decisive stop without leaving the
-        // reverb tank audible or hard-truncating a non-zero sample.
-        self.output_gain += (self.params.output - self.output_gain) * self.output_smooth_k;
-        let left = left * self.output_gain;
-        let right = right * self.output_gain;
-
-        let left = soft_limit(self.dc_left.process(left));
-        let right = soft_limit(self.dc_right.process(right));
+        let (volume, output) = (self.params.volume, self.params.output);
+        let (gain_k, output_k) = (self.gain_smooth_k, self.output_smooth_k);
+        if !self.stems.is_empty() {
+            for stem in &mut self.stems {
+                stem.inputs.push(StemIn {
+                    left: stem.left,
+                    right: stem.right,
+                    sends: stem.sends,
+                    volume,
+                    output,
+                });
+            }
+            self.stem_frames += 1;
+        }
+        let (left, right) = self
+            .bus
+            .process(left, right, &sends, volume, output, gain_k, output_k);
 
         if self.scope.len() >= SCOPE_LEN {
             self.scope.pop_front();
@@ -1501,22 +1718,26 @@ impl VoiceManager {
 
     pub fn set_reverb_decay(&mut self, decay: f32) {
         self.params.reverb_decay = Param::ReverbDecay.clamp(decay);
-        self.reverb.set_decay(self.params.reverb_decay);
+        let v = self.params.reverb_decay;
+        self.each_bus(move |b| b.reverb.set_decay(v));
     }
 
     pub fn set_reverb_wet(&mut self, wet: f32) {
         self.params.reverb_wet = Param::ReverbWet.clamp(wet);
-        self.reverb.set_wet(self.params.reverb_wet);
+        let v = self.params.reverb_wet;
+        self.each_bus(move |b| b.reverb.set_wet(v));
     }
 
     pub fn set_reverb_tone(&mut self, cutoff: f32) {
         self.params.reverb_tone = Param::ReverbTone.clamp(cutoff);
-        self.reverb.set_tone(self.params.reverb_tone);
+        let v = self.params.reverb_tone;
+        self.each_bus(move |b| b.reverb.set_tone(v));
     }
 
     pub fn set_reverb_pre(&mut self, seconds: f32) {
         self.params.reverb_pre = Param::ReverbPre.clamp(seconds);
-        self.reverb.set_pre(self.params.reverb_pre);
+        let v = self.params.reverb_pre;
+        self.each_bus(move |b| b.reverb.set_pre(v));
     }
 
     pub fn set_unison(&mut self, v: f32) {
@@ -1532,42 +1753,50 @@ impl VoiceManager {
     }
 
     pub fn set_chorus_mix(&mut self, mix: f32) {
-        self.chorus.set_mix(mix);
+        let v = mix;
+        self.each_bus(move |b| b.chorus.set_mix(v));
     }
 
     pub fn set_chorus_mode(&mut self, mode: ChorusMode) {
         self.params.chorus_mode = mode;
-        self.chorus.set_mode(mode);
+        let v = mode;
+        self.each_bus(move |b| b.chorus.set_mode(v));
     }
 
     pub fn set_chorus_rate(&mut self, rate: f32) {
         self.params.chorus_rate = Param::ChorusRate.clamp(rate);
-        self.chorus.set_rate(self.params.chorus_rate);
+        let v = self.params.chorus_rate;
+        self.each_bus(move |b| b.chorus.set_rate(v));
     }
 
     pub fn set_chorus_depth(&mut self, depth: f32) {
         self.params.chorus_depth = Param::ChorusDepth.clamp(depth);
-        self.chorus.set_depth(self.params.chorus_depth);
+        let v = self.params.chorus_depth;
+        self.each_bus(move |b| b.chorus.set_depth(v));
     }
 
     pub fn set_tape_wow(&mut self, wow: f32) {
         self.params.tape_wow = Param::TapeWow.clamp(wow);
-        self.tape.set_wow(self.params.tape_wow);
+        let v = self.params.tape_wow;
+        self.each_bus(move |b| b.tape.set_wow(v));
     }
 
     pub fn set_tape_flutter(&mut self, flutter: f32) {
         self.params.tape_flutter = Param::TapeFlutter.clamp(flutter);
-        self.tape.set_flutter(self.params.tape_flutter);
+        let v = self.params.tape_flutter;
+        self.each_bus(move |b| b.tape.set_flutter(v));
     }
 
     pub fn set_tape_drive(&mut self, drive: f32) {
         self.params.tape_drive = Param::TapeDrive.clamp(drive);
-        self.tape.set_drive(self.params.tape_drive);
+        let v = self.params.tape_drive;
+        self.each_bus(move |b| b.tape.set_drive(v));
     }
 
     pub fn set_tape_age(&mut self, age: f32) {
         self.params.tape_age = Param::TapeAge.clamp(age);
-        self.tape.set_age(self.params.tape_age);
+        let v = self.params.tape_age;
+        self.each_bus(move |b| b.tape.set_age(v));
     }
 
     // --- The rhythm section's panel ---------------------------------------

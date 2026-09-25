@@ -57,6 +57,7 @@ fn flush(x: f32) -> f32 {
     }
 }
 
+#[derive(Clone)]
 struct DelayLine {
     buffer: Vec<f32>,
     write: usize,
@@ -97,6 +98,7 @@ impl DelayLine {
 }
 
 /// Schroeder allpass diffuser.
+#[derive(Clone)]
 struct Diffuser {
     line: DelayLine,
     delay: usize,
@@ -120,6 +122,7 @@ impl Diffuser {
     }
 }
 
+#[derive(Clone)]
 struct OnePoleLp {
     state: f32,
     a: f32,
@@ -149,6 +152,7 @@ impl OnePoleLp {
 /// One side's feed into the tank: pre-delay, band limits, diffusion.
 /// Left and right each have their own, so the tank hears WHERE a sound
 /// is, not only that it happened.
+#[derive(Clone)]
 struct Feed {
     pre_delay: DelayLine,
     in_lp: OnePoleLp,
@@ -178,6 +182,7 @@ impl Feed {
     }
 }
 
+#[derive(Clone)]
 pub struct Reverb {
     sample_rate: f32,
     feeds: [Feed; 2],

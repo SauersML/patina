@@ -33,6 +33,7 @@ fn flush(x: f32) -> f32 {
 }
 
 /// First-order allpass, H(z) = (a + z^-1) / (1 + a z^-1).
+#[derive(Clone)]
 struct Allpass {
     a: f32,
     x1: f32,
@@ -57,6 +58,7 @@ impl Allpass {
     }
 }
 
+#[derive(Clone)]
 struct OnePoleLp {
     state: f32,
     a: f32,
@@ -77,6 +79,7 @@ impl OnePoleLp {
     }
 }
 
+#[derive(Clone)]
 struct OnePoleHp {
     lp: OnePoleLp,
 }
@@ -96,6 +99,7 @@ impl OnePoleHp {
 
 /// One spring: a delay loop containing a dispersion chain and damping.
 /// Feedback is FIXED — the mechanical decay of a physical spring.
+#[derive(Clone)]
 struct Spring {
     delay: Vec<f32>,
     idx: usize,
@@ -136,6 +140,7 @@ impl Spring {
     }
 }
 
+#[derive(Clone)]
 pub struct SpringReverb {
     springs: [Spring; 2],
     drive_hp: OnePoleHp,

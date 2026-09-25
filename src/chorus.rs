@@ -65,6 +65,7 @@ impl ClockLfo {
     }
 }
 
+#[derive(Clone)]
 pub struct Chorus {
     buffer_left: Vec<f32>,
     buffer_right: Vec<f32>,
@@ -112,27 +113,32 @@ pub enum ChorusMode {
     IV,
 }
 
+#[derive(Clone)]
 struct LowPassFilter {
     prev: f32,
     alpha: f32,
 }
 
+#[derive(Clone)]
 struct HighPassFilter {
     prev_input: f32,
     prev_output: f32,
     cutoff: f32,
 }
 
+#[derive(Clone)]
 struct NoiseGenerator {
     level: f32,
     prev: f32,
     rng: Rng,
 }
 
+#[derive(Clone)]
 struct Saturation {
     drive: f32,
 }
 
+#[derive(Clone)]
 struct Voice {
     lfo_left: ClockLfo,
     lfo_right: ClockLfo,

@@ -158,8 +158,53 @@ fn say_song(text: &str) -> String {
     s
 }
 
+const USAGE: &str = "\
+Patina — analog synth simulator
+
+USAGE:
+    patina                                   open the synth (silent until played)
+    patina --play <song>                     open the synth and play a song file
+    patina --play <song> --render <out.wav>  bounce a song offline, no audio device
+    patina --play <song> --render-stems <dir>
+                                             one wav per track plus _mix.wav, one pass
+    patina --play <song> --export-events <out.json>
+                                             the parsed score as timed events
+    patina --say \"HH-AH-L-OW\" [--out <out.wav>]
+                                             speak a phrase through the voice box
+    patina --params                          print every automatable parameter
+    patina --help                            show this message
+
+RENDER OPTIONS:
+    --no-normalize   keep the engine's exact gain (--render; stems never normalize)
+    --bits <16|32>   output sample format: 32 = float (default, analysis-grade),
+                     16 = PCM with TPDF dither (half the size, plays anywhere)
+
+Song format reference: the header of src/song.rs, and the README.";
+
+/// `--bits 16|32` -> the offline renderers' sample format.
+fn sample_format(args: &[String]) -> Result<patina::render::SampleFormat, String> {
+    match args.iter().position(|a| a == "--bits") {
+        None => Ok(patina::render::SampleFormat::Float32),
+        Some(i) => match args.get(i + 1).map(String::as_str) {
+            Some("32") => Ok(patina::render::SampleFormat::Float32),
+            Some("16") => Ok(patina::render::SampleFormat::Pcm16),
+            other => Err(format!(
+                "--bits takes 16 or 32, got {}",
+                other.unwrap_or("nothing")
+            )),
+        },
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
+
+    // Help never touches the audio device: it must work on a headless box
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("{USAGE}");
+        return Ok(());
+    }
+    let format = sample_format(&args)?;
 
     // `patina --params`: the automatable parameter chart, straight from
     // the single source of truth (song::PARAM_DEFS + Param::range) — the
@@ -199,7 +244,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(String::as_str)
             .unwrap_or("renders/say.wav");
         let song = song::parse_song_text(&say_song(text))?;
-        patina::render::render_to_wav(&song, out, true)?;
+        patina::render::render_to_wav(&song, out, true, format)?;
         return Ok(());
     }
 
@@ -223,7 +268,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let song = song_path.ok_or("--render requires --play <song.song>")?;
         let events = song::load_song(song)?;
         let normalize = !args.iter().any(|a| a == "--no-normalize");
-        patina::render::render_to_wav(&events, out, normalize)?;
+        patina::render::render_to_wav(&events, out, normalize, format)?;
         return Ok(());
     }
 
@@ -249,14 +294,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(dir) = stems_path.as_deref() {
         let song = song_path.ok_or("--render-stems requires --play <song.song>")?;
         let song = song::load_song(song)?;
-        patina::render::render_stems(&song, dir)?;
+        patina::render::render_stems(&song, dir, format)?;
         return Ok(());
     }
 
     let host = cpal::default_host();
-    let device = host
-        .default_output_device()
-        .expect("no output device available");
+    let no_device =
+        "no usable audio output device (offline: --render / --render-stems; see --help)";
+    let device = host.default_output_device().ok_or(no_device)?;
 
     println!("Output device: {}", device.name()?);
 
@@ -274,10 +319,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // format wins, not just the first device config that matches any of them
     let mut selected_config = None;
     'search: for &(preferred_format, preferred_rate) in &preferred_formats {
-        for supported_config in device
-            .supported_output_configs()
-            .expect("error querying configs")
-        {
+        for supported_config in device.supported_output_configs().map_err(|_| no_device)? {
             if supported_config.sample_format() == preferred_format
                 && supported_config.min_sample_rate().0 <= preferred_rate
                 && supported_config.max_sample_rate().0 >= preferred_rate
@@ -290,14 +332,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Use the device's first config if no preferred one is available
-    let supported_config = selected_config.unwrap_or_else(|| {
-        device
+    let supported_config = match selected_config {
+        Some(config) => config,
+        None => device
             .supported_output_configs()
-            .expect("error querying configs")
+            .map_err(|_| no_device)?
             .next()
-            .expect("no supported config found")
-            .with_max_sample_rate()
-    });
+            .ok_or(no_device)?
+            .with_max_sample_rate(),
+    };
 
     println!("Selected output config: {:?}", supported_config);
 

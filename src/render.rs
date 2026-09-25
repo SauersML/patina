@@ -87,45 +87,169 @@ impl Meter {
     }
 }
 
-/// One wav per track channel, soloed through the same engine: what each
-/// instrument contributed, with its own sends ringing in the shared tanks.
-/// Channels that share a strip (all `kit=` tracks, all sampler tracks)
-/// bounce once under the first track's name.
+/// What `--render` / `--render-stems` write. Float32 is the default:
+/// analysis-grade, the tape noise floor survives. Pcm16 is the delivery
+/// format — half the size, readable by every tool — TPDF-dithered once,
+/// after normalization, so the quantization is never done twice.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SampleFormat {
+    Float32,
+    Pcm16,
+}
+
+impl SampleFormat {
+    fn bytes(self) -> usize {
+        match self {
+            SampleFormat::Float32 => 4,
+            SampleFormat::Pcm16 => 2,
+        }
+    }
+}
+
+/// One stem per track, all from ONE pass through the engine: every voice
+/// renders once, and each track's strips feed a private copy of the
+/// master chain (its sends ringing in its own reverb/spring/chorus, its
+/// own tape), so a stem is that track exactly as it sits in the mix —
+/// same voice stealing, same rail sag from the whole arrangement.
+/// Tracks that share a strip (all `kit=` tracks, all vox tracks) bounce
+/// once under the first track's name; each sampler track is its own.
+/// The mix of the same pass is written alongside as `_mix.wav`.
 ///
 /// Stems are NOT normalized — they are measurement files, written at the
 /// exact gain the mix hears, and each is reported as a level-table row
 /// (peak / RMS / LUFS) so measured mixing needs no hand math.
-pub fn render_stems(song: &crate::song::Song, dir: &str) -> Result<()> {
+pub fn render_stems(song: &crate::song::Song, dir: &str, format: SampleFormat) -> Result<()> {
     std::fs::create_dir_all(dir)?;
-    let mut done: Vec<u16> = Vec::new();
-    let mut table: Vec<(String, f32, f32, f32)> = Vec::new();
+    let mut names: Vec<String> = Vec::new();
+    let mut groups: Vec<Vec<u16>> = Vec::new();
     for (name, channel) in &song.tracks {
-        // group channels that mix as one strip
-        let key = if *channel == crate::drums::DRUM_CHANNEL {
-            crate::drums::DRUM_CHANNEL
-        } else if *channel >= crate::sampler::SAMPLER_CHANNEL_BASE {
-            crate::sampler::SAMPLER_CHANNEL_BASE
-        } else {
-            *channel
-        };
-        if done.contains(&key) {
+        if groups.iter().any(|g| g.contains(channel)) {
             continue;
         }
-        done.push(key);
-        let path = format!("{}/{}.wav", dir.trim_end_matches('/'), name);
-        println!("stem: {} (channel {})", path, key);
-        let mut frames = crate::song::render_offline_solo(song, 48000.0, Some(key));
-        let (peak, rms, lufs) = write_wav(&path, &mut frames, false)?;
-        println!("peak concurrent voices: {}/64", frames.peak_voices());
-        table.push((name.clone(), peak, rms, lufs));
+        names.push(name.clone());
+        groups.push(vec![*channel]);
     }
+    let dir = dir.trim_end_matches('/');
+    println!(
+        "Rendering {} stems and the mix in one pass...",
+        groups.len()
+    );
+    let start = std::time::Instant::now();
+    let (mut render, buses) = crate::song::render_offline_stems(song, 48000.0, &groups);
+    let frames = render.len();
+    let mut mix = WavWriter::create(&format!("{dir}/_mix.wav"), frames, format)?;
+    let mut stems = names
+        .iter()
+        .map(|name| WavWriter::create(&format!("{dir}/{name}.wav"), frames, format))
+        .collect::<Result<Vec<_>>>()?;
+
+    // The voices run on this thread; the stems' master chains (reverb,
+    // tape — the expensive half) run on workers, one block behind, so
+    // they overlap the next block's voices instead of adding to them.
+    let workers = std::thread::available_parallelism()
+        .map_or(2, |n| n.get())
+        .saturating_sub(1)
+        .clamp(1, buses.len().max(1));
+    let mut lanes: Vec<Vec<(usize, crate::voice_manager::StemBus)>> =
+        (0..workers).map(|_| Vec::new()).collect();
+    for (i, bus) in buses.into_iter().enumerate() {
+        lanes[i % workers].push((i, bus));
+    }
+    type Job = (
+        crate::voice_manager::StemLog,
+        Vec<std::sync::Arc<Vec<crate::voice_manager::StemIn>>>,
+    );
+    type Done = Vec<(usize, Vec<(f32, f32)>)>;
+    std::thread::scope(|scope| -> Result<()> {
+        let mut to_workers = Vec::new();
+        let mut from_workers = Vec::new();
+        for mut lane in lanes {
+            let (job_tx, job_rx) = std::sync::mpsc::sync_channel::<Job>(1);
+            let (done_tx, done_rx) = std::sync::mpsc::sync_channel::<Done>(1);
+            scope.spawn(move || {
+                for (log, inputs) in job_rx {
+                    let done = lane
+                        .iter_mut()
+                        .map(|(i, bus)| {
+                            let mut out = Vec::with_capacity(inputs[*i].len());
+                            bus.process(&inputs[*i], &log, &mut out);
+                            (*i, out)
+                        })
+                        .collect();
+                    if done_tx.send(done).is_err() {
+                        break;
+                    }
+                }
+            });
+            to_workers.push(job_tx);
+            from_workers.push(done_rx);
+        }
+        let mut in_flight = false;
+        let collect = |stems: &mut Vec<WavWriter>| -> Result<()> {
+            let mut blocks: Vec<Vec<(f32, f32)>> = vec![Vec::new(); stems.len()];
+            for rx in &from_workers {
+                for (i, out) in rx.recv().map_err(|_| Error::other("stem worker died"))? {
+                    blocks[i] = out;
+                }
+            }
+            for (stem, block) in stems.iter_mut().zip(blocks) {
+                for frame in block {
+                    stem.push(frame)?;
+                }
+            }
+            Ok(())
+        };
+        const BLOCK: usize = 8192;
+        loop {
+            let mut n = 0;
+            while n < BLOCK {
+                match render.next() {
+                    Some(frame) => mix.push(frame)?,
+                    None => break,
+                }
+                n += 1;
+            }
+            // the previous block's stems finished while this one rendered
+            if in_flight {
+                collect(&mut stems)?;
+            }
+            let block = render.take_stem_block();
+            let log = block.log();
+            for tx in &to_workers {
+                tx.send((log.clone(), block.inputs.clone()))
+                    .map_err(|_| Error::other("stem worker died"))?;
+            }
+            in_flight = true;
+            if n < BLOCK {
+                break;
+            }
+        }
+        collect(&mut stems)?;
+        drop(to_workers);
+        Ok(())
+    })?;
+
+    let mut table: Vec<(String, (f32, f32, f32))> = Vec::new();
+    for (name, stem) in names.iter().zip(stems) {
+        table.push((name.clone(), stem.finish(false)?));
+    }
+    table.push(("_mix".into(), mix.finish(false)?));
+    let seconds = frames as f64 / 48000.0;
+    let elapsed = start.elapsed().as_secs_f64();
+    println!("peak concurrent voices: {}/64", render.peak_voices());
+    println!(
+        "Rendered {seconds:.1}s x {} stems in {elapsed:.2}s ({:.1}x realtime)",
+        table.len() - 1,
+        seconds / elapsed.max(1e-6)
+    );
     println!(
         "\n{:<16} {:>10} {:>10} {:>10}",
         "stem", "peak dBFS", "rms dBFS", "LUFS"
     );
-    for (name, peak, rms, lufs) in &table {
+    for (name, (peak, rms, lufs)) in &table {
         println!("{:<16} {:>10.1} {:>10.1} {:>10.1}", name, peak, rms, lufs);
     }
+    println!("Wrote {}/", dir);
     Ok(())
 }
 
@@ -178,12 +302,17 @@ pub fn export_events(song: &crate::song::Song, path: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn render_to_wav(song: &crate::song::Song, path: &str, normalize: bool) -> Result<()> {
+pub fn render_to_wav(
+    song: &crate::song::Song,
+    path: &str,
+    normalize: bool,
+    format: SampleFormat,
+) -> Result<()> {
     println!("Rendering {} events...", song.events.len());
     let start = std::time::Instant::now();
     let mut frames = crate::song::render_offline(song, 48000.0);
     let seconds = frames.len() as f64 / 48000.0;
-    let (peak, rms, lufs) = write_wav(path, &mut frames, normalize)?;
+    let (peak, rms, lufs) = write_wav(path, &mut frames, normalize, format)?;
     println!("peak concurrent voices: {}/64", frames.peak_voices());
     println!("Levels: peak {peak:.1} dBFS, rms {rms:.1} dBFS, {lufs:.1} LUFS");
     let elapsed = start.elapsed().as_secs_f64();
@@ -195,16 +324,24 @@ pub fn render_to_wav(song: &crate::song::Song, path: &str, normalize: bool) -> R
     Ok(())
 }
 
-/// Write the raw bounce once. Peak normalization then scales the file in
-/// bounded chunks, preserving the single stochastic engine performance.
+/// Write a whole bounce: stream it once, then normalize/convert.
 fn write_wav(
     path: &str,
     frames: impl ExactSizeIterator<Item = (f32, f32)>,
     normalize: bool,
+    format: SampleFormat,
 ) -> Result<(f32, f32, f32)> {
+    let mut w = WavWriter::create(path, frames.len(), format)?;
+    for frame in frames {
+        w.push(frame)?;
+    }
+    w.finish(normalize)
+}
+
+fn wav_header(w: &mut impl Write, frames: usize, format: SampleFormat) -> Result<u32> {
+    let bytes = format.bytes();
     let data_len = frames
-        .len()
-        .checked_mul(8)
+        .checked_mul(2 * bytes)
         .and_then(|n| u32::try_from(n).ok())
         .filter(|&n| n <= u32::MAX - 36)
         .ok_or_else(|| {
@@ -213,62 +350,139 @@ fn write_wav(
                 "bounce exceeds the RIFF WAV size limit",
             )
         })?;
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(path)?;
-    let mut meter = Meter::default();
-    {
-        let mut w = BufWriter::with_capacity(64 * 1024, &mut file);
-        w.write_all(b"RIFF")?;
-        w.write_all(&(36 + data_len).to_le_bytes())?;
-        w.write_all(b"WAVEfmt ")?;
-        w.write_all(&16u32.to_le_bytes())?;
-        w.write_all(&3u16.to_le_bytes())?;
-        w.write_all(&2u16.to_le_bytes())?;
-        w.write_all(&48000u32.to_le_bytes())?;
-        w.write_all(&(48000u32 * 8).to_le_bytes())?;
-        w.write_all(&8u16.to_le_bytes())?;
-        w.write_all(&32u16.to_le_bytes())?;
-        w.write_all(b"data")?;
-        w.write_all(&data_len.to_le_bytes())?;
-        for frame in frames {
-            meter.push(frame);
-            w.write_all(&frame.0.to_le_bytes())?;
-            w.write_all(&frame.1.to_le_bytes())?;
-        }
-        w.flush()?;
-    }
-    let gain = if normalize && meter.peak > 1e-6 {
-        let gain = 0.891 / meter.peak;
-        let mut chunk = [0u8; 64 * 1024];
-        let mut offset = 44u64;
-        let end = offset + data_len as u64;
-        while offset < end {
-            let n = ((end - offset) as usize).min(chunk.len());
-            file.seek(SeekFrom::Start(offset))?;
-            file.read_exact(&mut chunk[..n])?;
-            for bytes in chunk[..n].chunks_exact_mut(4) {
-                let sample = f32::from_le_bytes(bytes.try_into().unwrap()) * gain;
-                bytes.copy_from_slice(&sample.to_le_bytes());
-            }
-            file.seek(SeekFrom::Start(offset))?;
-            file.write_all(&chunk[..n])?;
-            offset += n as u64;
-        }
-        file.flush()?;
-        println!(
-            "Normalized: peak {:.3} -> -1 dBFS ({:+.1} dB)",
-            meter.peak,
-            20.0 * gain.log10()
-        );
-        gain
-    } else {
-        1.0
+    let (tag, bits) = match format {
+        SampleFormat::Float32 => (3u16, 32u16),
+        SampleFormat::Pcm16 => (1u16, 16u16),
     };
-    Ok(meter.levels(gain))
+    w.write_all(b"RIFF")?;
+    w.write_all(&(36 + data_len).to_le_bytes())?;
+    w.write_all(b"WAVEfmt ")?;
+    w.write_all(&16u32.to_le_bytes())?;
+    w.write_all(&tag.to_le_bytes())?;
+    w.write_all(&2u16.to_le_bytes())?;
+    w.write_all(&48000u32.to_le_bytes())?;
+    w.write_all(&(48000u32 * 2 * bytes as u32).to_le_bytes())?;
+    w.write_all(&(2 * bytes as u16).to_le_bytes())?;
+    w.write_all(&bits.to_le_bytes())?;
+    w.write_all(b"data")?;
+    w.write_all(&data_len.to_le_bytes())?;
+    Ok(data_len)
+}
+
+/// A streaming stereo 48 kHz WAV: frames are metered and written as they
+/// arrive, as float32 — to the target itself, or for 16-bit output to a
+/// side file that `finish` converts once the final gain is known. Peak
+/// normalization rescales in bounded chunks, so a long bounce never has
+/// to sit in memory.
+struct WavWriter {
+    path: String,
+    float_path: String,
+    frames: usize,
+    format: SampleFormat,
+    out: BufWriter<std::fs::File>,
+    meter: Meter,
+}
+
+impl WavWriter {
+    fn create(path: &str, frames: usize, format: SampleFormat) -> Result<Self> {
+        // validate the final size before touching the disk
+        wav_header(&mut std::io::sink(), frames, format)?;
+        let float_path = match format {
+            SampleFormat::Float32 => path.to_string(),
+            SampleFormat::Pcm16 => format!("{path}.f32.tmp"),
+        };
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&float_path)?;
+        let mut out = BufWriter::with_capacity(64 * 1024, file);
+        wav_header(&mut out, frames, SampleFormat::Float32)?;
+        Ok(WavWriter {
+            path: path.to_string(),
+            float_path,
+            frames,
+            format,
+            out,
+            meter: Meter::default(),
+        })
+    }
+
+    #[inline]
+    fn push(&mut self, frame: (f32, f32)) -> Result<()> {
+        self.meter.push(frame);
+        self.out.write_all(&frame.0.to_le_bytes())?;
+        self.out.write_all(&frame.1.to_le_bytes())
+    }
+
+    /// Flush, apply normalization (-1 dBFS peak) and the output format;
+    /// returns (peak dBFS, rms dBFS, LUFS) of the file as written.
+    fn finish(self, normalize: bool) -> Result<(f32, f32, f32)> {
+        let mut file = self.out.into_inner().map_err(|e| e.into_error())?;
+        file.flush()?;
+        let gain = if normalize && self.meter.peak > 1e-6 {
+            let gain = 0.891 / self.meter.peak;
+            println!(
+                "Normalized: peak {:.3} -> -1 dBFS ({:+.1} dB)",
+                self.meter.peak,
+                20.0 * gain.log10()
+            );
+            gain
+        } else {
+            1.0
+        };
+        let data_len = (self.frames * 8) as u64;
+        match self.format {
+            SampleFormat::Float32 => {
+                if gain != 1.0 {
+                    rescale_f32(&mut file, data_len, gain)?;
+                }
+            }
+            SampleFormat::Pcm16 => {
+                let mut out =
+                    BufWriter::with_capacity(64 * 1024, std::fs::File::create(&self.path)?);
+                wav_header(&mut out, self.frames, SampleFormat::Pcm16)?;
+                file.seek(SeekFrom::Start(44))?;
+                let mut src = std::io::BufReader::with_capacity(64 * 1024, &mut file);
+                let mut buf = [0u8; 4];
+                // TPDF dither: two independent uniforms, +-1 LSB triangle
+                let mut rng = crate::rng::Rng::new(crate::rng::seed(0x16B1_D17E));
+                for _ in 0..data_len / 4 {
+                    src.read_exact(&mut buf)?;
+                    let x = f32::from_le_bytes(buf) * gain * 32767.0;
+                    let tpdf = rng.unipolar() - rng.unipolar();
+                    let q = (x + tpdf).round().clamp(-32768.0, 32767.0) as i16;
+                    out.write_all(&q.to_le_bytes())?;
+                }
+                out.flush()?;
+                drop(src);
+                drop(file);
+                std::fs::remove_file(&self.float_path)?;
+            }
+        }
+        Ok(self.meter.levels(gain))
+    }
+}
+
+/// Scale a float32 WAV's data in place, in bounded chunks.
+fn rescale_f32(file: &mut std::fs::File, data_len: u64, gain: f32) -> Result<()> {
+    let mut chunk = [0u8; 64 * 1024];
+    let mut offset = 44u64;
+    let end = offset + data_len;
+    while offset < end {
+        let n = ((end - offset) as usize).min(chunk.len());
+        file.seek(SeekFrom::Start(offset))?;
+        file.read_exact(&mut chunk[..n])?;
+        for bytes in chunk[..n].chunks_exact_mut(4) {
+            let sample = f32::from_le_bytes(bytes.try_into().unwrap()) * gain;
+            bytes.copy_from_slice(&sample.to_le_bytes());
+        }
+        file.seek(SeekFrom::Start(offset))?;
+        file.write_all(&chunk[..n])?;
+        offset += n as u64;
+    }
+    file.flush()
 }
 
 #[cfg(test)]
@@ -281,6 +495,92 @@ mod tests {
             meter.push(frame);
         }
         meter
+    }
+
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("patina-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    /// One pass, many stems: a lone track's stem is the mix bit for bit
+    /// (same strips into an identical chain), the pass's `_mix.wav` is the
+    /// plain bounce bit for bit, and every track of a busier song gets a
+    /// sounding stem — blocks and worker threads change nothing.
+    #[test]
+    fn one_pass_stems_match_the_mix() {
+        let solo = crate::song::parse_song_text(
+            "bpm 240\ntail 0.5\nautomate reverb_wet\n0.3 0.6:8\n\
+             track a reverb_send=0.5\n(C4 E4 G4 C5)x4\n",
+        )
+        .unwrap();
+        let dir = temp_dir("stems-solo");
+        render_stems(&solo, dir.to_str().unwrap(), SampleFormat::Float32).unwrap();
+        let a = std::fs::read(dir.join("a.wav")).unwrap();
+        let mix = std::fs::read(dir.join("_mix.wav")).unwrap();
+        assert_eq!(a, mix, "a lone track's stem must equal the mix");
+        let plain = dir.join("plain.wav");
+        write_wav(
+            plain.to_str().unwrap(),
+            crate::song::render_offline(&solo, 48000.0),
+            false,
+            SampleFormat::Float32,
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&plain).unwrap(), mix);
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        let duo = crate::song::parse_song_text(
+            "bpm 240\ntail 0.3\ntrack lo\n(C3:2)x4\ntrack hi pan=0.5\n(G5 . E5 .)x4\n\
+             track beat kit=909\n(BD CH SD CH)x4\n",
+        )
+        .unwrap();
+        let dir = temp_dir("stems-duo");
+        render_stems(&duo, dir.to_str().unwrap(), SampleFormat::Float32).unwrap();
+        for name in ["lo", "hi", "beat", "_mix"] {
+            let bytes = std::fs::read(dir.join(format!("{name}.wav"))).unwrap();
+            let energy: f64 = bytes[44..]
+                .chunks_exact(4)
+                .map(|b| (f32::from_le_bytes(b.try_into().unwrap()) as f64).powi(2))
+                .sum();
+            assert!(energy > 1e-3, "stem {name} is silent");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `--bits 16`: a PCM header, and every sample within the one LSB of
+    /// TPDF dither of the (normalized) float it came from.
+    #[test]
+    fn pcm16_output_is_dithered_float() {
+        let frames: Vec<_> = (0..5000)
+            .map(|i| {
+                (
+                    (i as f32 * 0.03).sin() * 0.5,
+                    (i as f32 * 0.05).cos() * 0.25,
+                )
+            })
+            .collect();
+        for normalize in [false, true] {
+            let path = std::env::temp_dir().join(format!(
+                "patina-pcm16-{}-{normalize}.wav",
+                std::process::id()
+            ));
+            let p = path.to_str().unwrap();
+            write_wav(p, frames.iter().copied(), normalize, SampleFormat::Pcm16).unwrap();
+            let bytes = std::fs::read(&path).unwrap();
+            std::fs::remove_file(&path).unwrap();
+            assert!(!std::path::Path::new(&format!("{p}.f32.tmp")).exists());
+            assert_eq!(bytes.len(), 44 + frames.len() * 4);
+            assert_eq!(u16::from_le_bytes([bytes[20], bytes[21]]), 1, "PCM tag");
+            assert_eq!(u16::from_le_bytes([bytes[34], bytes[35]]), 16, "bits");
+            let gain = if normalize { 0.891 / 0.5 } else { 1.0 };
+            for (data, &(l, r)) in bytes[44..].chunks_exact(4).zip(&frames) {
+                let ql = i16::from_le_bytes([data[0], data[1]]) as f32;
+                let qr = i16::from_le_bytes([data[2], data[3]]) as f32;
+                assert!((ql - l * gain * 32767.0).abs() <= 1.5);
+                assert!((qr - r * gain * 32767.0).abs() <= 1.5);
+            }
+        }
     }
 
     #[test]
@@ -331,7 +631,13 @@ mod tests {
                 "patina-stream-{}-{normalize}.wav",
                 std::process::id()
             ));
-            write_wav(path.to_str().unwrap(), frames.iter().copied(), normalize).unwrap();
+            write_wav(
+                path.to_str().unwrap(),
+                frames.iter().copied(),
+                normalize,
+                SampleFormat::Float32,
+            )
+            .unwrap();
             let bytes = std::fs::read(&path).unwrap();
             std::fs::remove_file(path).unwrap();
             assert_eq!(bytes.len(), 44 + frames.len() * 8);
@@ -351,7 +657,13 @@ mod tests {
     #[test]
     fn oversized_wav_is_rejected_before_opening_output() {
         let frames = (0..u32::MAX as usize).map(|_| (0.0, 0.0));
-        let error = write_wav("/no-such-directory/oversized.wav", frames, false).unwrap_err();
+        let error = write_wav(
+            "/no-such-directory/oversized.wav",
+            frames,
+            false,
+            SampleFormat::Float32,
+        )
+        .unwrap_err();
         assert_eq!(error.kind(), ErrorKind::InvalidInput);
     }
     fn reference_lufs(frames: &[(f32, f32)]) -> f32 {

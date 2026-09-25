@@ -19,6 +19,7 @@ use crate::adaa::AdaaTanh;
 /// clipping is uneven and even harmonics appear.
 const BIAS: f32 = 0.14;
 
+#[derive(Clone)]
 struct DcBlock {
     x1: f32,
     y1: f32,
@@ -43,6 +44,7 @@ impl DcBlock {
     }
 }
 
+#[derive(Clone)]
 pub struct Fuzz {
     amount: f32,
     smoothed: f32,

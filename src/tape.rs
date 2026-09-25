@@ -138,6 +138,7 @@ const PREROLL_S: f32 = 0.03;
 /// sample; a glide this slow bends the pitch by a few percent at most.
 const DEPTH_GLIDE_S: f32 = 0.1;
 
+#[derive(Clone)]
 pub struct Tape {
     sample_rate: f32,
     wow: f32,
@@ -1053,6 +1054,7 @@ fn langevin_pair(x: f32) -> (f32, f32) {
 /// with velocity-dependent friction whose negative damping self-excites and
 /// whose nonlinearity limits the amplitude. Output is the position error of
 /// the tape at the head, in normalized units.
+#[derive(Clone)]
 struct ScrapeOscillator {
     u: f32, // displacement (normalized so u and w share a scale)
     w: f32, // velocity, normalized to tape speed
@@ -1208,6 +1210,7 @@ fn cubic_interpolate(y: &[f32; 4], mu: f32) -> f32 {
 
 /// White noise through two cascaded one-pole lowpasses, normalized to roughly
 /// +-1: the slow 1/f-ish component of transport speed error.
+#[derive(Clone)]
 struct SmoothedNoise {
     stage1: f32,
     stage2: f32,

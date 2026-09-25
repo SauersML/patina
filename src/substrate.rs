@@ -162,6 +162,7 @@ impl Substrate {
 /// Finite slew rate of the discrete Model 3 summing amplifier. Only the
 /// fastest, hottest edges are touched — the mechanism behind transient
 /// intermodulation softening in hardware mixers.
+#[derive(Clone)]
 pub struct SlewLimiter {
     state: f32,
     max_step: f32,

@@ -12,6 +12,7 @@
 // tanh harmonics would otherwise fold back into the audio band, at the cost
 // of a benign half-sample delay.
 
+#[derive(Clone)]
 pub struct AdaaTanh {
     x1: f32,
     f1: f32, // ln(cosh(x1))
