@@ -31,6 +31,11 @@
 //                                # by (swing-0.5) of the pair (0.5 = straight).
 //                                # Mixer-strip options set the track's desk
 //                                # channel at bar one: gain= pan= (-1..1)
+//                                # trim= (0..4, the input level under the
+//                                # gain fader; defaults to a patch='s
+//                                # `volume` / 0.5, so level-matched patches
+//                                # keep their level and gain lanes ride
+//                                # on top of it)
 //                                # reverb_send= spring_send= chorus_send=
 //                                # (0..1, into the shared tanks at unity)
 //                                # duck= (kick-keyed sidechain depth) and
@@ -382,6 +387,11 @@ param_table! {
     // The mixer desk (voice_manager::ChannelMix): every track owns a
     // strip. Channel-scoped: address them as `automate <track>.<param>`.
     TrackGain:       "gain",           None,      (0.0, 2.0, Lin);
+    // The track's input trim, under the gain fader: a patch's `volume`
+    // line lands here (volume / 0.5, so the panel default is unity), and
+    // `trim=` on the track line overrides it. Separate from `gain` so a
+    // gain lane rides ON TOP of the patch's level instead of erasing it.
+    TrackTrim:       "trim",           None,      (0.0, 4.0, Lin);
     TrackPan:        "pan",            None,      (-1.0, 1.0, Lin);
     ReverbSend:      "reverb_send",    None,      (0.0, 1.0, Lin);
     SpringSend:      "spring_send",    None,      (0.0, 1.0, Lin);
@@ -562,6 +572,7 @@ impl Param {
             Param::Volume => vm.set_volume(value),
             Param::Output => vm.set_output(value),
             Param::TrackGain
+            | Param::TrackTrim
             | Param::TrackPan
             | Param::ReverbSend
             | Param::SpringSend
@@ -701,6 +712,7 @@ impl Param {
         }
         match self {
             P::TrackGain
+            | P::TrackTrim
             | P::TrackPan
             | P::ReverbSend
             | P::SpringSend
@@ -837,6 +849,26 @@ impl ParseFinite for str {
             _ => Err(()),
         }
     }
+}
+
+/// A patch's `volume` line, if it has one. `params_from_patch` drops it
+/// with the other bus-level lines (a channel snapshot describes a voice),
+/// but a song track honors it as the track's trim, so a level-matched
+/// patch keeps its level on a track instead of silently losing it.
+pub fn patch_volume_line(text: &str) -> Result<Option<f32>, String> {
+    let mut volume = None;
+    for (no, raw) in text.lines().enumerate() {
+        let mut it = strip_comment(raw).split_whitespace();
+        if it.next() == Some("volume") {
+            let v: f32 = it
+                .next()
+                .ok_or_else(|| format!("patch line {}: 'volume' has no value", no + 1))?
+                .parse_finite()
+                .map_err(|_| format!("patch line {}: bad value for 'volume'", no + 1))?;
+            volume = Some(Param::Volume.clamp(v));
+        }
+    }
+    Ok(volume)
 }
 
 /// Parse patch-file text (`param value` lines) into a parameter snapshot.
@@ -1228,6 +1260,10 @@ fn parse_song(text: &str) -> Result<Song, String> {
                 // mixer-strip options (gain= pan= reverb_send= ... duck=)
                 // become Param events at beat 0 on this track's channel
                 let mut mix_opts: Vec<(Param, f32)> = Vec::new();
+                // A patch's `volume` line: the panel's master level when
+                // the patch loads live, this track's trim when a song
+                // loads it (unless the track line sets trim= itself)
+                let mut patch_volume: Option<f32> = None;
                 for opt in line.split_whitespace().skip(2) {
                     if let Some(v) = opt.strip_prefix("vel=") {
                         vel = v
@@ -1249,6 +1285,7 @@ fn parse_song(text: &str) -> Result<Song, String> {
                             Param::from_name(k),
                             Some(
                                 Param::TrackGain
+                                    | Param::TrackTrim
                                     | Param::TrackPan
                                     | Param::ReverbSend
                                     | Param::SpringSend
@@ -1314,6 +1351,7 @@ fn parse_song(text: &str) -> Result<Song, String> {
                         let text = std::fs::read_to_string(&path)
                             .map_err(|e| err(format!("patch '{}': {}", path, e)))?;
                         let p = params_from_patch(&text).map_err(err)?;
+                        patch_volume = patch_volume_line(&text).map_err(err)?;
                         channels.push(p);
                         channel = channels.len() as u16;
                     } else if let Some(v) = opt.strip_prefix("sample=") {
@@ -1405,6 +1443,13 @@ fn parse_song(text: &str) -> Result<Song, String> {
                     channels.push(ParamValues::default());
                     channel = channels.len() as u16;
                 }
+                if let Some(v) = patch_volume {
+                        let explicit = mix_opts.iter().any(|(p, _)| *p == Param::TrackTrim);
+                        let neutral = ParamValues::neutral().volume;
+                        if !explicit && v != neutral {
+                            mix_opts.push((Param::TrackTrim, Param::TrackTrim.clamp(v / neutral)));
+                        }
+                    }
                 for (param, value) in mix_opts {
                     events.push((
                         0.0,
@@ -2814,6 +2859,61 @@ mod tests {
             .filter(|e| matches!(e.kind, EventKind::NoteOn { .. }))
             .count();
         assert_eq!(ons, 3);
+    }
+
+    /// A patch's `volume` line is the track's trim (volume / 0.5), a
+    /// `trim=` on the track line overrides it, and the panel-default
+    /// level emits nothing at all.
+    #[test]
+    fn patch_volume_becomes_track_trim() {
+        fn trims(song: &Song) -> Vec<(u16, f32)> {
+            song.events
+                .iter()
+                .filter_map(|e| match e.kind {
+                    EventKind::Param {
+                        param: Param::TrackTrim,
+                        value,
+                        channel,
+                    } => Some((channel, value)),
+                    _ => None,
+                })
+                .collect()
+        }
+        // feltkeys carries `volume 0.55`
+        let song = parse_song("track a patch=feltkeys\nC4\n").unwrap();
+        let t = trims(&song);
+        assert_eq!(t.len(), 1);
+        assert!((t[0].1 - 1.1).abs() < 1e-6, "{:?}", t);
+        let song = parse_song("track a patch=feltkeys trim=1\nC4\n").unwrap();
+        assert_eq!(trims(&song).iter().map(|t| t.1).collect::<Vec<_>>(), [1.0]);
+        // tessera-marimba sits at the default 0.5: no trim event
+        let song = parse_song("track a patch=tessera-marimba\nC4\n").unwrap();
+        assert!(trims(&song).is_empty());
+        // and the lane is automatable like any strip control
+        assert!(parse_song("track a\nC4\nautomate a.trim\n1 0.5:4\n").is_ok());
+    }
+
+    /// The trim multiplies under the gain fader: halving it halves the
+    /// track, and a gain lane can no longer erase a patch's level.
+    #[test]
+    fn trim_scales_the_strip_under_gain() {
+        let rms = |trim: f32| {
+            let mut vm = VoiceManager::new(48000.0, 8);
+            vm.set_channel_params(1, ParamValues::default());
+            vm.set_track_mix(1, Param::TrackTrim, trim);
+            vm.set_track_mix(1, Param::TrackGain, 0.8);
+            vm.note_on_channel(60, 0.8, 1);
+            let mut acc = 0.0f64;
+            for i in 0..48000 {
+                let (l, r) = vm.render_next();
+                if i > 24000 {
+                    acc += (l as f64).powi(2) + (r as f64).powi(2);
+                }
+            }
+            acc.sqrt()
+        };
+        let ratio = rms(0.5) / rms(1.0);
+        assert!((ratio - 0.5).abs() < 0.05, "trim 0.5 gave ratio {ratio}");
     }
 
     /// `( ... )xN` groups expand to N repetitions; `>B` seeks the track

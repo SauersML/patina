@@ -318,6 +318,7 @@ const EXCLUDED: &[Param] = &[
     Param::Output,
     Param::PitchShift,
     Param::TrackGain,
+    Param::TrackTrim,
     Param::TrackPan,
     Param::ReverbSend,
     Param::SpringSend,

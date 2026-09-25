@@ -90,7 +90,7 @@ automate dr_drive
   0.12
 
 # ---- melody: one note per beat, flat, AABC ---------------------------
-track lead patch=feltkeys gain=0.85 pan=0.08 vel=0.75 reverb_send=0.3
+track lead patch=feltkeys gain=0.85 pan=0.08 vel=0.75 reverb_send=0.3 trim=1
   (A3:1 C4:1 E4:1 G4:1 A3:1 C4:1 E4:1 D4:1 G3:1 A#3:1 D4:1 A4:1 E4:1 D4:1 A#3:1 G3:1)x4
   >SECB
   E5:1 C5:1 D5:1 A4:4.6875 R:0.3125 A4:0.5 G4:0.5 A4:0.5 G4:0.5 A4:1 E4:4.6875 R:0.3125

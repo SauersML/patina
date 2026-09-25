@@ -309,6 +309,8 @@ impl DcBlocker {
 #[derive(Clone, Copy)]
 pub struct ChannelMix {
     pub gain: f32,
+    /// Input trim under the fader (a patch's level); smoothed with it
+    pub trim: f32,
     pub pan: f32,
     pub rev_send: f32,
     pub spr_send: f32,
@@ -316,6 +318,7 @@ pub struct ChannelMix {
     pub duck: f32,
     duck_decay: f32,
     cur_gain: f32,
+    cur_trim: f32,
     cur_pan: f32,
     duck_env: f32,
 }
@@ -352,6 +355,7 @@ impl ChannelMix {
     fn new(sample_rate: f32) -> Self {
         ChannelMix {
             gain: 1.0,
+            trim: 1.0,
             pan: 0.0,
             rev_send: 0.0,
             spr_send: 0.0,
@@ -359,6 +363,7 @@ impl ChannelMix {
             duck: 0.0,
             duck_decay: duck_decay_for(0.18, sample_rate),
             cur_gain: 1.0,
+            cur_trim: 1.0,
             cur_pan: 0.0,
             duck_env: 0.0,
         }
@@ -383,7 +388,7 @@ fn strip(
     let Some(m) = mixes.get(&ch) else {
         return (l, r);
     };
-    let g = m.cur_gain * (1.0 - m.duck * m.duck_env);
+    let g = m.cur_gain * m.cur_trim * (1.0 - m.duck * m.duck_env);
     let (mut l, mut r) = (l * g, r * g);
     if m.cur_pan > 0.0 {
         l *= 1.0 - m.cur_pan;
@@ -581,6 +586,7 @@ impl VoiceManager {
         let value = param.clamp(value);
         match param {
             P::TrackGain => m.gain = value,
+            P::TrackTrim => m.trim = value,
             P::TrackPan => m.pan = value,
             P::ReverbSend => m.rev_send = value,
             P::SpringSend => m.spr_send = value,
@@ -596,6 +602,7 @@ impl VoiceManager {
         if matches!(
             param,
             P::TrackGain
+                | P::TrackTrim
                 | P::TrackPan
                 | P::ReverbSend
                 | P::SpringSend
@@ -1323,6 +1330,7 @@ impl VoiceManager {
         let knob_k = self.knob_smooth_k;
         for m in self.channel_mix.values_mut() {
             m.cur_gain += (m.gain - m.cur_gain) * knob_k;
+            m.cur_trim += (m.trim - m.cur_trim) * knob_k;
             m.cur_pan += (m.pan - m.cur_pan) * knob_k;
             m.duck_env *= m.duck_decay;
         }

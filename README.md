@@ -73,7 +73,7 @@ On macOS the git hooks install all three automatically after every commit
 
 ## 🎚️ Patches
 
-The strip at the top of the panel holds the factory bank (US 3,981,218 style — one click retunes every block at once, live, even under held notes, and every patch lands over Init so nothing leaks from the last one): **Init · Ember · Tidewater · Glasswing · Sea of Dials · Aurora · Vellum · Choir · Thunder · Lantern · Tears · Fathom · Warehouse** — sustained, dimensional voices, level-matched to −20 LUFS, each with its own keyboard register. Init is one dry sawtooth with every effect out, and it is also every control's reset position and every plugin parameter's default. `SAVE` snapshots every control to `patches/user-N.patch` — plain text, same parameter names as song automation, edit at will.
+The strip at the top of the panel holds the factory bank (US 3,981,218 style — one click retunes every block at once, live, even under held notes, and every patch lands over Init so nothing leaks from the last one): **Init · Ember · Tidewater · Glasswing · Sea of Dials · Aurora · Vellum · Choir · Thunder · Lantern · Tears · Fathom · Warehouse** — sustained, dimensional voices, level-matched to −20 LUFS, each with its own keyboard register. Init is one dry sawtooth with every effect out, and it is also every control's reset position and every plugin parameter's default. `SAVE` snapshots every control to `patches/user-N.patch` — plain text, same parameter names as song automation, edit at will. A patch's `volume` line is the master level when it loads on the panel, and the track's **trim** when a song loads it with `patch=` (volume / 0.5, so the default 0.5 is unity); `trim=` on the track line overrides it, and `automate <track>.trim` rides it.
 
 ## 🎛️ Usage
 

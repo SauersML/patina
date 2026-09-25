@@ -132,7 +132,7 @@ automate dr_drive
 
 # ---- the memory: bocuma (SH-101 voice) sings the hook at half speed
 # before the song exists, and again after it's gone
-track memory patch=bocuma vel=0.6 len=1
+track memory patch=bocuma vel=0.6 len=1 trim=1
 A3:1.5 C4:0.5@0.5 A3:2 E4:1 D4:1@0.55 C4:1 A3:1 G3:1.5@0.5 A3:4.5 R:2
 >96 C5:3@0.5 B4:1@0.45 A4:3@0.5 G4:1@0.45 E4:2@0.5 G4:1 A4:1 B4:4@0.55 C5:3@0.5 D5:1 B4:2@0.5 G4:2@0.45 E5:1.5@0.55 D5:1.5@0.5 B4:1 G#4:4@0.5
 >216 D4:1.5 C4:1.5@0.55 B3:1 G3:1@0.5 A3:4 E4:1@0.5 A3:6@0.55
@@ -172,7 +172,7 @@ R:1.5 [A3 C4 E4 G4]:0.25 R:2 [A3 C4 E4 G4]:0.25 R:1.5 [A3 C4 E4 G4]:0.25 R:2 [A3
 # ---- bass: no octave bounce. Offbeat-only pump between the kicks in
 # act one; a one-register roller with accent waves in drop 2. Passing
 # tones only at phrase ends. Tacet in the bloom.
-track bass patch=depthcharge vel=0.9 len=0.5
+track bass patch=depthcharge vel=0.9 len=0.5 trim=1
 >32 ((R A1@0.85)x8 (R F1@0.85)x4 (R G1@0.85)x3 R E1@0.85)x3
 (R A1@0.85)x8 (R F1@0.85)x4
 # alone: the walkdown into the bloom
@@ -218,7 +218,7 @@ track bell patch=glintbell vel=0.5 len=0.5
 # ---- the sync scream: one held note, osc2 climbing 19 semitones
 # written 20.7 so gate 0.7 holds it exactly 14.5 beats: the note-off
 # IS the gap
-track riser patch=syncscream vel=0.85 len=1
+track riser patch=syncscream vel=0.85 len=1 trim=1
 >128 A3:20.7
 
 # ======================================================================

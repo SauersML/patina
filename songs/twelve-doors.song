@@ -132,7 +132,7 @@ R:4 R:4 R:4 R:4 R:4 R:4 R:4 R:4
 track drone vel=0.46 len=1 patch=drone
 33:180
 
-track raw vel=0.34 len=1 patch=init
+track raw vel=0.34 len=1 patch=init trim=1
 57:180
 
 track lead vel=0.5 len=1 patch=glasslead

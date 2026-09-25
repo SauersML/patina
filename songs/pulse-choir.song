@@ -56,7 +56,7 @@ R:4 R:4 76:1 R:3 83:1 R:3 88:1 R:3
 83:1 R:3 88:1 R:3 79:1 R:3 91:1 R:3
 84:1 R:3 R:4 R:4
 
-track bloom vel=0.3 len=1 patch=glass-anemone
+track bloom vel=0.3 len=1 patch=glass-anemone trim=1
 83:2 R:30 88:2 R:30 95:2 R:30
 
 automate chords.cutoff
