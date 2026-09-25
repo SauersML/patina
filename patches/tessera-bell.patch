@@ -1,0 +1,30 @@
+# Tessera — the bell: a clean ARP-circuit sine with its octave and its
+# twelfth (3f, +19) — harmonic partials only, so a bell over F# stays in
+# F#. Long free decay, no sustain: each strike is one event in a cycle
+# that never lines up with the marimbas' six-beat bar.
+waveform 0
+osc2_wave 0
+osc2_pitch 19
+osc2_level 0.18
+osc3_wave 0
+osc3_pitch 12
+osc3_level 0.2
+detune 1
+sub 0
+circuit 1
+key_track 0.7
+attack 0.002
+decay 2.2
+sustain 0.0
+release 2.0
+filter_env 0.5
+filter_attack 0.001
+filter_decay 0.6
+filter_sustain 0.3
+filter_release 1.0
+cutoff 6000
+resonance 0.2
+drive 1.0
+saturation 1.0
+hpf 300
+volume 0.4

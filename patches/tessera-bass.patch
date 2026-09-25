@@ -1,0 +1,30 @@
+# Tessera — the bass: a struck low triangle with a sine octave beneath,
+# decaying to a quiet hold. It is a pulse, not a line: dotted quarters
+# three-against-two under the marimba pattern, then half-notes at the
+# climax so the downbeat itself drifts.
+waveform 3
+osc2_wave 0
+osc2_pitch 0
+osc2_level 0
+osc3_wave 0
+osc3_pitch -12
+osc3_level 0.4
+detune 2
+sub 0
+circuit 1
+key_track 0.3
+attack 0.004
+decay 0.5
+sustain 0.35
+release 0.3
+filter_env 0.8
+filter_attack 0.001
+filter_decay 0.25
+filter_sustain 0.2
+filter_release 0.3
+cutoff 500
+resonance 0.3
+drive 1.0
+saturation 1.0
+hpf 30
+volume 0.5

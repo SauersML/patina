@@ -1,0 +1,32 @@
+# Tessera — the organ: Glass's portable combo organ. Square core with a
+# square octave, held (sustain 0.8) so the additive triplet figures read
+# as a continuous reed of notes, gated only by the song's note gaps.
+# A small filter ping gives each note a consonant; the ladder stays
+# half-shut so it sits under the marimbas instead of beside them.
+waveform 1
+pulse_width 0.5
+osc2_wave 1
+osc2_pitch 12
+osc2_level 0.3
+osc3_wave 0
+osc3_pitch 0
+osc3_level 0
+detune 3
+sub 0
+circuit 0
+key_track 0.5
+attack 0.003
+decay 0.2
+sustain 0.8
+release 0.05
+filter_env 0.4
+filter_attack 0.001
+filter_decay 0.1
+filter_sustain 0.5
+filter_release 0.05
+cutoff 1800
+resonance 0.3
+drive 1.2
+saturation 1.0
+hpf 140
+volume 0.4
