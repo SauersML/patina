@@ -191,6 +191,13 @@ impl Chorus {
         self.apply_rate();
     }
 
+    /// The line's noise floor relative to a nominal chip (1 = as modeled,
+    /// 0 = a hypothetically silent line). Only the hiss moves: the stream
+    /// itself is untouched, so turning the trim never reshuffles the noise.
+    pub fn set_hiss(&mut self, hiss: f32) {
+        self.noise_generator.level = BBD_HISS * hiss.max(0.0);
+    }
+
     pub fn set_depth(&mut self, depth: f32) {
         let depth = depth.clamp(0.0, 1.0);
         if self.depth == Some(depth) {
@@ -496,10 +503,15 @@ impl HighPassFilter {
     }
 }
 
+/// The BBD's hiss floor at unit trim: ~-66 dBFS at the line, as measured on
+/// the nominal chip. Real MN3009-class lines spread widely from part to part
+/// and with age, which is what `set_hiss` trims.
+const BBD_HISS: f32 = 0.0005;
+
 impl NoiseGenerator {
     fn new() -> Self {
         Self {
-            level: 0.0005,
+            level: BBD_HISS,
             prev: 0.0,
             rng: Rng::new(crate::rng::seed(0xB8D_1155)),
         }
@@ -766,6 +778,28 @@ mod tests {
             ghost < 0.01,
             "re-engaged chorus replayed old audio: {ghost}"
         );
+    }
+
+    /// The hiss trim scales the BBD floor and nothing else: unit trim is the
+    /// untouched chip, half trim is 6 dB down, zero is a silent line.
+    #[test]
+    fn hiss_trim_scales_only_the_floor() {
+        let floor = |hiss: Option<f32>| {
+            let mut chorus = Chorus::new(48000.0);
+            chorus.set_mode(ChorusMode::II);
+            if let Some(h) = hiss {
+                chorus.set_hiss(h);
+            }
+            let out: Vec<f32> = (0..96000).map(|_| chorus.process(0.0, 0.0).0).collect();
+            let tail = &out[48000..];
+            (tail.iter().map(|x| x * x).sum::<f32>() / tail.len() as f32).sqrt()
+        };
+        let untouched = floor(None);
+        assert!(untouched > 0.0, "the nominal chip must hiss");
+        assert_eq!(floor(Some(1.0)), untouched, "unit trim must be the chip as modeled");
+        let half = 20.0 * (floor(Some(0.5)) / untouched).log10();
+        assert!((half + 6.02).abs() < 0.1, "half trim should sit 6 dB down, got {half:.2}");
+        assert_eq!(floor(Some(0.0)), 0.0, "zero trim is a silent line");
     }
 
     #[test]

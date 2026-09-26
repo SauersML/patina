@@ -277,6 +277,7 @@ const PRESENTATION: &[Row] = &[
     flt (Param::VelAmp,    "Velocity to Level",  Percent),
     flt (Param::VelFilter, "Velocity to Filter", Plain(" oct")),
     sel (Param::MonoSel,   "Voice Mode", MONO_NAMES),
+    gflt(Param::ChorusHiss,  "Chorus Hiss",     Percent),
 ];
 
 /// Parameters that are NOT host-automation knobs and are deliberately kept

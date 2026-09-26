@@ -342,6 +342,7 @@ param_table! {
     ChorusModeSel:   "chorus_mode",    Some(112), (0.0, 4.0, Step);
     ChorusRate:      "chorus_rate",    Some(111), (0.1, 10.0, Log);
     ChorusDepth:     "chorus_depth",   Some(93),  (0.0, 1.0, Lin);
+    ChorusHiss:      "chorus_hiss",    None,      (0.0, 2.0, Lin);
     TapeWow:         "tape_wow",       Some(92),  (0.0, 1.0, Lin);
     TapeFlutter:     "tape_flutter",   Some(94),  (0.0, 1.0, Lin);
     TapeDrive:       "tape_drive",     Some(118), (0.0, 1.0, Lin);
@@ -526,6 +527,7 @@ impl Param {
             Param::Spread => v.spread,
             Param::ChorusRate => v.chorus_rate,
             Param::ChorusDepth => v.chorus_depth,
+            Param::ChorusHiss => v.chorus_hiss,
             Param::TapeWow => v.tape_wow,
             Param::TapeFlutter => v.tape_flutter,
             Param::TapeDrive => v.tape_drive,
@@ -663,6 +665,7 @@ impl Param {
             }
             Param::ChorusRate => vm.set_chorus_rate(value),
             Param::ChorusDepth => vm.set_chorus_depth(value),
+            Param::ChorusHiss => vm.set_chorus_hiss(value),
             Param::TapeWow => vm.set_tape_wow(value),
             Param::TapeFlutter => vm.set_tape_flutter(value),
             Param::TapeDrive => vm.set_tape_drive(value),

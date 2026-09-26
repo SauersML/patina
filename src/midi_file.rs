@@ -35,13 +35,16 @@ pub fn load(path: &str, patch: Option<&str>) -> Result<Song, String> {
 
 /// One named patch plays the whole file, so it is the whole instrument —
 /// what clicking it on the panel does: the bus half (tape, rooms, chorus,
-/// width...) lands at the downbeat along with the voice. Which half a
-/// parameter belongs to is the song parser's own rule (`reaches_track`);
-/// volume stays out, since songs never take a patch's level.
+/// width, and the level that stages the voice into them) lands at the
+/// downbeat along with the voice. Which half a parameter belongs to is the
+/// song parser's own rule (`reaches_track`). Songs mix several patches and
+/// keep their own level; a lone patch's volume IS the mix level, and
+/// without it a single line reaches the chorus ~20 dB under a song's
+/// level, where the BBD hiss is no longer under the program.
 fn bus_settings(patch: &str) -> Result<Vec<SongEvent>, String> {
     Ok(crate::song::patch_lines(patch)?
         .into_iter()
-        .filter(|&(p, _)| p != Param::Volume && !p.reaches_track(1))
+        .filter(|&(p, _)| !p.reaches_track(1))
         .map(|(param, value)| SongEvent {
             time: 0.0,
             kind: EventKind::Param {
@@ -493,9 +496,9 @@ mod tests {
         assert!(crate::song::load_song_with_patch(text.to_str().unwrap(), Some("init")).is_err());
     }
 
-    /// A named patch is the whole instrument: its bus half (chorus, tape...)
-    /// fires once at the downbeat on the panel channel, while its voice half
-    /// and its level stay with the track.
+    /// A named patch is the whole instrument: its bus half (chorus, tape,
+    /// level...) fires once at the downbeat on the panel channel, while its
+    /// voice half stays with the track.
     #[test]
     fn a_patch_brings_its_bus_settings() {
         let bus = bus_settings("chorus_mode 2\ntape_age 0.5\ncutoff 640\nvolume 0.3").unwrap();
@@ -511,6 +514,6 @@ mod tests {
         assert_eq!(find(Param::ChorusModeSel), Some(2.0));
         assert_eq!(find(Param::TapeAge), Some(0.5));
         assert_eq!(find(Param::Cutoff), None, "voice settings ride the track channel");
-        assert_eq!(find(Param::Volume), None, "songs never take a patch's level");
+        assert_eq!(find(Param::Volume), Some(0.3), "a lone patch sets the mix level");
     }
 }

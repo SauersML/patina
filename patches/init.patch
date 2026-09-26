@@ -72,6 +72,7 @@ reverb_pre 0.012
 chorus_mode 0
 chorus_rate 0.5
 chorus_depth 0.3
+chorus_hiss 1
 tape_wow 0
 tape_flutter 0
 tape_drive 0

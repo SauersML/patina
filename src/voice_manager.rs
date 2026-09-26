@@ -102,6 +102,7 @@ pub struct ParamValues {
     pub ui_octave: f32,
     pub chorus_rate: f32,
     pub chorus_depth: f32,
+    pub chorus_hiss: f32,
     pub tape_wow: f32,
     pub tape_flutter: f32,
     pub tape_drive: f32,
@@ -233,6 +234,7 @@ impl Default for ParamValues {
             ui_octave: 4.0,
             chorus_rate: 0.5,
             chorus_depth: 0.3,
+            chorus_hiss: 1.0,
             tape_wow: 0.0,
             tape_flutter: 0.0,
             tape_drive: 0.0,
@@ -1695,6 +1697,11 @@ impl VoiceManager {
     pub fn set_chorus_rate(&mut self, rate: f32) {
         self.params.chorus_rate = Param::ChorusRate.clamp(rate);
         self.chorus.set_rate(self.params.chorus_rate);
+    }
+
+    pub fn set_chorus_hiss(&mut self, hiss: f32) {
+        self.params.chorus_hiss = Param::ChorusHiss.clamp(hiss);
+        self.chorus.set_hiss(self.params.chorus_hiss);
     }
 
     pub fn set_chorus_depth(&mut self, depth: f32) {
