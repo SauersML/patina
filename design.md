@@ -84,6 +84,11 @@ We will use a layered architecture with clear interfaces between components:
    - Add analog-style chorus
    - Implement tape-style delay
    - Add reverb emulation
+   - Mix-bus compressor (src/buscomp.rs): the SSL G-series bus comp,
+     after the effect returns and before the tape, like a console bus
+     compressor printing to cassette. Out by default and bit-identical
+     when out; its sidechain listens while out so the meter reads and IN
+     lands on a settled gain
 
 8. **MIDI Handler**: Processes MIDI input.
    - Uses a custom enum for type-safe MIDI events
@@ -141,7 +146,9 @@ We will use a layered architecture with clear interfaces between components:
      lost its top end); `Chorus::set_mode` rebuilt BBD voices per set
      event. Guarded examples: `Talker::set_clarity`, `Chorus::set_mode` /
      `set_rate` / `set_depth`, `Tape::set_drive` / `set_age`,
-     `VoxBox::set_mode`.
+     `VoxBox::set_mode`, `BusComp::set_makeup` (every other `BusComp`
+     setter stores a value or a time constant and needs no guard;
+     `buscomp::tests::reasserting_settings_is_a_no_op` pins it).
    - The next structural parameter you add will hit this trap: write the
      guard first, and a test that re-asserting the same value leaves
      internal state untouched (see `chorus::tests::reasserting_the_same_mode_is_a_no_op`).

@@ -13,8 +13,8 @@ use std::sync::Arc;
 
 use crate::host_params::{self, ChoiceDef, Display, FloatDef, ParamDef};
 use crate::panel::{
-    self, card, fmt_hz, fmt_pct, fmt_time, knob_sized, rail_shapes, segmented, sublegend, tracked,
-    waveform_selector, Textures, CYAN, TXT_LOW,
+    self, card, fmt_hz, fmt_pct, fmt_time, knob_sized, rail_shapes, rotary_switch, segmented,
+    sublegend, tracked, waveform_selector, Textures, CYAN, TXT_LOW,
 };
 
 /// Logical size of the editor window; the backdrop is baked at this size.
@@ -138,6 +138,18 @@ impl EditorState {
         let variants = cd.variants;
         let current = (self.host.get(idx).round().max(0.0) as usize).min(variants.len() - 1);
         if let Some(new_index) = segmented(ui, id, variants, current) {
+            self.touch(idx);
+            self.host.set(idx, new_index as f32);
+        }
+    }
+
+    /// A table-bound stepped selector drawn as the hardware's rotary switch
+    /// (the bus compressor's ratio, attack and release), at pad density.
+    fn pswitch(&mut self, ui: &mut egui::Ui, id: &str, label: &str) {
+        let (idx, cd) = self.choice(id);
+        let variants = cd.variants;
+        let current = (self.host.get(idx).round().max(0.0) as usize).min(variants.len() - 1);
+        if let Some(new_index) = rotary_switch(ui, label, current, variants, true) {
             self.touch(idx);
             self.host.set(idx, new_index as f32);
         }
@@ -382,7 +394,7 @@ impl EditorState {
         });
         ui.add_space(6.0);
 
-        // Row 4 — space (fuzz/spring/reverb) + chorus + tape
+        // Row 4 — space (fuzz/spring/reverb) + chorus + tape + bus compressor
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
                 card(ui, "Space", tex.as_mut(), None, |ui| {
@@ -416,6 +428,28 @@ impl EditorState {
                         self.pknob(ui, "tape_flutter", Some("Flutter"), false);
                         self.pknob(ui, "tape_drive", Some("Drive"), false);
                         self.pknob(ui, "tape_age", Some("Age"), false);
+                    });
+                })
+            });
+            // The mix-bus compressor sits where it does in the chain: after
+            // the effects, printing to the tape. No meter here — the AU view
+            // may run in another process and sees only parameters.
+            ui.vertical(|ui| {
+                card(ui, "Bus Compressor", tex.as_mut(), None, |ui| {
+                    ui.vertical(|ui| {
+                        ui.add_space(4.0);
+                        self.choice_selector(ui, "comp_in");
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 4.0;
+                            self.pknob(ui, "comp_threshold", Some("Thresh"), true);
+                            self.pswitch(ui, "comp_ratio", "Ratio");
+                            self.pswitch(ui, "comp_attack", "Attack");
+                            self.pswitch(ui, "comp_release", "Release");
+                            self.pknob(ui, "comp_makeup", Some("Make-Up"), true);
+                            self.pknob(ui, "comp_mix", Some("Mix"), true);
+                            self.pknob(ui, "comp_sc_hpf", Some("S/C HPF"), true);
+                        });
                     });
                 })
             });

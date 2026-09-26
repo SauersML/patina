@@ -703,6 +703,268 @@ pub fn segmented(ui: &mut egui::Ui, id: &str, labels: &[&str], selected: usize) 
     result
 }
 
+/// Rotary switch in the knob's hand, for the controls the hardware steps
+/// rather than turns (the bus compressor's ratio, attack and release). The
+/// same legend, cap and pointer as `knob`; the value arc gives way to a
+/// ring of etched detents with the one the wafer sits on lit, and the
+/// readout names the position. Drag or scroll clicks between detents (the
+/// travel accumulates, so a slow hand still steps); a click advances one
+/// position, wrapping. `compact` is `knob_sized`'s pad density. Returns the
+/// new position when it changes.
+pub fn rotary_switch(
+    ui: &mut egui::Ui,
+    label: &str,
+    selected: usize,
+    positions: &[&str],
+    compact: bool,
+) -> Option<usize> {
+    // The knob's geometry: (w, h, center_y, detent r0, detent r1, lamp r,
+    // disc r, pointer in/out, label pt, value pt)
+    let g = if compact {
+        (48.0, 74.0, 34.0, 16.0, 20.0, 13.0, 10.5, 3.5, 9.5, 7.6, 8.5)
+    } else {
+        (
+            59.0, 78.0, 38.0, 20.0, 24.0, 16.5, 13.0, 4.5, 11.5, 9.0, 10.0,
+        )
+    };
+    let n = positions.len().max(1);
+    let selected = selected.min(n - 1);
+    let (rect, response) = ui.allocate_exact_size(vec2(g.0, g.1), Sense::click_and_drag());
+
+    // 16 px of drag or 30 px of scroll per detent, carried between frames
+    let travel_id = response.id.with("travel");
+    let mut travel = ui.data(|d| d.get_temp::<f32>(travel_id)).unwrap_or(0.0);
+    if response.drag_started() {
+        travel = 0.0;
+    }
+    if response.dragged() {
+        travel -= response.drag_delta().y / 16.0;
+    }
+    if response.hovered() {
+        travel += ui.input(|i| i.raw_scroll_delta.y) / 30.0;
+    }
+    let mut next = selected;
+    while travel >= 1.0 && next + 1 < n {
+        next += 1;
+        travel -= 1.0;
+    }
+    while travel <= -1.0 && next > 0 {
+        next -= 1;
+        travel += 1.0;
+    }
+    // Against an end stop, travel does not wind up
+    let floor = if next == 0 { 0.0 } else { -1.0 };
+    let ceiling = if next + 1 == n { 0.0 } else { 1.0 };
+    travel = travel.clamp(floor, ceiling);
+    if response.clicked() {
+        next = (selected + 1) % n;
+        travel = 0.0;
+    }
+    ui.data_mut(|d| d.insert_temp(travel_id, travel));
+
+    let response = response
+        .on_hover_cursor(CursorIcon::ResizeVertical)
+        .on_hover_text("drag, scroll or click · a switch: it steps");
+    let engaged = response.hovered() || response.dragged();
+    let painter = ui.painter();
+    let center = pos2(rect.center().x, rect.top() + g.2);
+
+    painter.text(
+        pos2(rect.center().x, rect.top() + 3.0),
+        Align2::CENTER_TOP,
+        tracked(label),
+        FontId::proportional(g.9),
+        if engaged { TXT_MID } else { TXT_LOW },
+    );
+
+    // A wafer switch throws a fixed angle per position; the throw is
+    // centred on 12 o'clock and never wider than the knob's 270 degrees
+    let step = if n > 1 {
+        (270.0 / (n - 1) as f32).min(45.0).to_radians()
+    } else {
+        0.0
+    };
+    let start = 270.0_f32.to_radians() - 0.5 * step * (n - 1) as f32;
+    let angle = |i: usize| start + step * i as f32;
+    for i in 0..n {
+        let dir = vec2(angle(i).cos(), angle(i).sin());
+        if i == next {
+            painter.line_segment(
+                [center + dir * (g.3 - 1.0), center + dir * g.4],
+                Stroke::new(2.0_f32, if engaged { TOUCH_HI } else { TOUCH }),
+            );
+            painter.circle_filled(
+                center + dir * g.5,
+                2.0,
+                if engaged { TOUCH_HI } else { TOUCH },
+            );
+        } else {
+            painter.line_segment(
+                [center + dir * g.3, center + dir * g.4],
+                Stroke::new(1.0_f32, HAIRLINE_HI),
+            );
+        }
+    }
+
+    let disc = if engaged {
+        Color32::from_rgb(0x28, 0x33, 0x3d)
+    } else {
+        Color32::from_rgb(0x20, 0x29, 0x31)
+    };
+    painter.circle_filled(center, g.6, disc);
+    painter.circle_stroke(
+        center,
+        g.6,
+        if engaged {
+            Stroke::new(
+                1.2_f32,
+                Color32::from_rgba_unmultiplied(0x1e, 0xc2, 0xe8, 150),
+            )
+        } else {
+            Stroke::new(1.0_f32, HAIRLINE_HI)
+        },
+    );
+    let dir = vec2(angle(next).cos(), angle(next).sin());
+    painter.line_segment(
+        [center + dir * g.7, center + dir * g.8],
+        Stroke::new(
+            2.0_f32,
+            if engaged {
+                TOUCH_HI
+            } else {
+                Color32::from_rgb(0xee, 0xf4, 0xf6)
+            },
+        ),
+    );
+
+    painter.text(
+        pos2(rect.center().x, rect.bottom() - 2.0),
+        Align2::CENTER_BOTTOM,
+        positions[next],
+        FontId::monospace(g.10),
+        if engaged { TOUCH_HI } else { TXT_LOW },
+    );
+
+    (next != selected).then_some(next)
+}
+
+/// Full scale of the gain-reduction meter, dB.
+pub const GR_METER_FULL_DB: f32 = 20.0;
+
+/// Moving-coil gain-reduction meter set into a dark well, like the scope:
+/// the needle rests on 0 at the right and swings left as the compressor
+/// takes gain, over a LINEAR dB scale — the movement reads the dB control
+/// voltage itself. `needle_db` is where the needle is (the caller owns the
+/// movement's ballistics); `lit` is the IN lamp.
+pub fn gr_meter(ui: &mut egui::Ui, needle_db: f32, lit: bool) {
+    let (rect, _) = ui.allocate_exact_size(vec2(132.0, 78.0), Sense::hover());
+    let painter = ui.painter().with_clip_rect(rect.shrink(1.0));
+    painter.rect_filled(rect, CornerRadius::same(8), INSET);
+
+    // The movement pivots below the window, as behind a real meter face
+    let pivot = pos2(rect.center().x, rect.bottom() + 22.0);
+    let radius = 80.0;
+    let half_throw = 40.0_f32.to_radians();
+    let up = -std::f32::consts::FRAC_PI_2;
+    let angle_of =
+        |db: f32| up + half_throw - 2.0 * half_throw * (db / GR_METER_FULL_DB).clamp(-0.02, 1.02);
+    let at = |db: f32, r: f32| {
+        let a = angle_of(db);
+        pivot + vec2(a.cos(), a.sin()) * r
+    };
+
+    // The scale: an arc, a tick every 2 dB, legends every 4
+    let arc: Vec<Pos2> = (0..=40).map(|i| at(i as f32 * 0.5, radius)).collect();
+    painter.add(Shape::line(arc, Stroke::new(1.0_f32, WELL_LINE)));
+    for i in 0..=10 {
+        let db = i as f32 * 2.0;
+        let major = i % 2 == 0;
+        painter.line_segment(
+            [
+                at(db, radius - if major { 6.0 } else { 3.5 }),
+                at(db, radius),
+            ],
+            Stroke::new(1.0_f32, if major { WELL_TXT } else { WELL_LINE }),
+        );
+        if major {
+            painter.text(
+                at(db, radius + 8.0),
+                Align2::CENTER_CENTER,
+                format!("{}", db as i32),
+                FontId::monospace(8.5),
+                WELL_TXT,
+            );
+        }
+    }
+
+    // The needle, with the faint bloom the scope trace carries
+    let tip = at(needle_db, radius + 2.0);
+    let base = at(needle_db, radius - 46.0);
+    painter.line_segment(
+        [base, tip],
+        Stroke::new(
+            3.0_f32,
+            Color32::from_rgba_unmultiplied(0x6f, 0xe3, 0xf2, 40),
+        ),
+    );
+    painter.line_segment([base, tip], Stroke::new(1.3_f32, CYAN));
+
+    painter.text(
+        pos2(rect.left() + 9.0, rect.bottom() - 6.0),
+        Align2::LEFT_BOTTOM,
+        tracked("gr"),
+        FontId::proportional(8.5),
+        WELL_TXT,
+    );
+    painter.text(
+        pos2(rect.right() - 9.0, rect.bottom() - 6.0),
+        Align2::RIGHT_BOTTOM,
+        format!("{:.1} dB", -needle_db.max(0.0)),
+        FontId::monospace(8.5),
+        WELL_TXT,
+    );
+    // The IN lamp
+    painter.circle_filled(
+        pos2(rect.right() - 10.0, rect.top() + 10.0),
+        2.5,
+        // Unlit: dark lamp glass, not a hairline colour
+        if lit {
+            CYAN
+        } else {
+            Color32::from_rgb(0x24, 0x31, 0x38)
+        },
+    );
+
+    ui.painter().rect_stroke(
+        rect,
+        CornerRadius::same(8),
+        Stroke::new(1.0_f32, HAIRLINE),
+        egui::StrokeKind::Inside,
+    );
+}
+
+/// The ballistics of the meter's movement: a spring-mass needle, a touch
+/// under critical damping, resting against its zero peg. Advance `pos`
+/// (dB) and `vel` (dB/s) toward `target` over `dt` seconds of wall time.
+pub fn gr_needle_step(pos: &mut f32, vel: &mut f32, target: f32, dt: f32) {
+    const OMEGA: f32 = 30.0; // rad/s: ~40 ms to swing
+    const ZETA: f32 = 0.8;
+    let target = target.clamp(0.0, GR_METER_FULL_DB + 1.0);
+    let mut remaining = dt.clamp(0.0, 0.5);
+    while remaining > 0.0 {
+        let h = remaining.min(0.004);
+        let accel = OMEGA * OMEGA * (target - *pos) - 2.0 * ZETA * OMEGA * *vel;
+        *vel += accel * h;
+        *pos += *vel * h;
+        remaining -= h;
+    }
+    // The zero peg: the needle cannot swing past rest
+    if *pos < -0.2 {
+        *pos = -0.2;
+        *vel = 0.0;
+    }
+}
+
 /// A quiet square button for the octave stepper.
 pub fn step_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());

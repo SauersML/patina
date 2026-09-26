@@ -1,3 +1,4 @@
+use crate::buscomp::BusComp;
 use crate::chorus::{Chorus, ChorusMode};
 use crate::drums::{DrumMachine, DrumVoice, DRUM_CHANNEL};
 use crate::fuzz::Fuzz;
@@ -107,6 +108,21 @@ pub struct ParamValues {
     pub tape_flutter: f32,
     pub tape_drive: f32,
     pub tape_age: f32,
+    // The mix-bus compressor (buscomp.rs). Switches hold their position
+    // index: comp_in 0/1; comp_ratio 0..2 = 2:1, 4:1, 10:1; comp_attack
+    // 0..5 = 0.1..30 ms; comp_release 0..3 = 0.1..1.2 s, 4 = AUTO.
+    pub comp_in: f32,
+    /// dBFS peak.
+    pub comp_threshold: f32,
+    pub comp_ratio: f32,
+    pub comp_attack: f32,
+    pub comp_release: f32,
+    /// dB.
+    pub comp_makeup: f32,
+    /// 0 = the dry bus, 1 = the compressor alone.
+    pub comp_mix: f32,
+    /// Sidechain high-pass corner, Hz (20 = the card's own coupling).
+    pub comp_sc_hpf: f32,
     // The rhythm section's panel (all 0..1 knob rotations)
     pub bd_level: f32,
     pub bd_tune: f32,
@@ -239,6 +255,16 @@ impl Default for ParamValues {
             tape_flutter: 0.0,
             tape_drive: 0.0,
             tape_age: 0.0,
+            // Out of the path; the rest is where the unit is usually left
+            // on a mix bus (4:1, 10 ms, AUTO), ready for the IN switch
+            comp_in: 0.0,
+            comp_threshold: -20.0,
+            comp_ratio: 1.0,
+            comp_attack: 4.0,
+            comp_release: 4.0,
+            comp_makeup: 0.0,
+            comp_mix: 1.0,
+            comp_sc_hpf: 20.0,
             // 909 panel at rest: levels up, character knobs at the
             // factory-fresh center detents
             bd_level: 0.8,
@@ -426,6 +452,8 @@ pub struct VoiceManager {
     pub sampler: SamplerBank,
     reverb: Reverb,
     chorus: Chorus,
+    /// The console's mix-bus compressor, printing to the tape.
+    comp: BusComp,
     tape: Tape,
     fuzz: Fuzz,
     noise_source: NoiseSource,
@@ -507,6 +535,7 @@ impl VoiceManager {
             sampler: SamplerBank::new(sample_rate),
             reverb: Reverb::new(sample_rate),
             chorus: Chorus::new(sample_rate),
+            comp: BusComp::new(sample_rate),
             tape: Tape::new(sample_rate),
             fuzz: Fuzz::new(sample_rate),
             noise_source: NoiseSource::new(sample_rate),
@@ -1626,6 +1655,14 @@ impl VoiceManager {
         let (left, right) =
             self.chorus
                 .process_with_send(left, right, send_cho.0 * g, send_cho.1 * g);
+        // The bus compressor sits where the console's does: across the mix
+        // bus AFTER the effect returns have come back onto it and BEFORE
+        // the two-track — here, the cassette. So it glues the whole mix,
+        // reverb and chorus tails included (they breathe with the kick,
+        // as they do on the records), and the tape then saturates a
+        // program whose crest factor it has already brought down, instead
+        // of clipping the peaks the compressor would have tucked in.
+        let (left, right) = self.comp.process(left, right);
         let (left, right) = self.tape.process(left, right);
 
         // Master width: scale the side signal of the finished mix, smoothed
@@ -1727,6 +1764,55 @@ impl VoiceManager {
     pub fn set_tape_age(&mut self, age: f32) {
         self.params.tape_age = Param::TapeAge.clamp(age);
         self.tape.set_age(self.params.tape_age);
+    }
+
+    // --- The mix-bus compressor --------------------------------------------
+
+    pub fn set_comp_in(&mut self, v: f32) {
+        self.params.comp_in = Param::CompIn.clamp(v.round());
+        self.comp.set_engaged(self.params.comp_in >= 1.0);
+    }
+
+    pub fn set_comp_threshold(&mut self, db: f32) {
+        self.params.comp_threshold = Param::CompThreshold.clamp(db);
+        self.comp.set_threshold(self.params.comp_threshold);
+    }
+
+    pub fn set_comp_ratio(&mut self, v: f32) {
+        self.params.comp_ratio = Param::CompRatio.clamp(v.round());
+        self.comp.set_ratio(self.params.comp_ratio as usize);
+    }
+
+    pub fn set_comp_attack(&mut self, v: f32) {
+        self.params.comp_attack = Param::CompAttack.clamp(v.round());
+        self.comp.set_attack(self.params.comp_attack as usize);
+    }
+
+    pub fn set_comp_release(&mut self, v: f32) {
+        self.params.comp_release = Param::CompRelease.clamp(v.round());
+        self.comp.set_release(self.params.comp_release as usize);
+    }
+
+    pub fn set_comp_makeup(&mut self, db: f32) {
+        self.params.comp_makeup = Param::CompMakeup.clamp(db);
+        self.comp.set_makeup(self.params.comp_makeup);
+    }
+
+    pub fn set_comp_mix(&mut self, mix: f32) {
+        self.params.comp_mix = Param::CompMix.clamp(mix);
+        self.comp.set_mix(self.params.comp_mix);
+    }
+
+    pub fn set_comp_sc_hpf(&mut self, hz: f32) {
+        self.params.comp_sc_hpf = Param::CompScHpf.clamp(hz);
+        self.comp.set_sc_hpf(self.params.comp_sc_hpf);
+    }
+
+    /// The bus compressor's gain-reduction meter, dB (positive = reducing).
+    /// The sidechain listens even while the unit is out, as the card's
+    /// does, so this reads what IN would take.
+    pub fn comp_gain_reduction_db(&self) -> f32 {
+        self.comp.gain_reduction_db()
     }
 
     // --- The rhythm section's panel ---------------------------------------
@@ -2023,6 +2109,56 @@ mod tests {
         );
     }
 
+    /// The bus compressor is OUT by default and OUT means a wire: an engine
+    /// whose compressor knobs have all been moved (but not switched in)
+    /// renders bit-for-bit what an untouched engine renders.
+    #[test]
+    fn an_out_bus_compressor_leaves_the_mix_bit_identical() {
+        let sr = 48000.0;
+        let render = |touch: bool| {
+            let mut vm = VoiceManager::new(sr, 8);
+            if touch {
+                for (p, v) in [
+                    (Param::CompThreshold, -48.0),
+                    (Param::CompRatio, 2.0),
+                    (Param::CompAttack, 0.0),
+                    (Param::CompRelease, 0.0),
+                    (Param::CompMakeup, 15.0),
+                    (Param::CompMix, 0.4),
+                    (Param::CompScHpf, 250.0),
+                ] {
+                    p.apply(&mut vm, v);
+                }
+            }
+            vm.set_reverb_wet(0.5);
+            vm.note_on(57, 0.9);
+            vm.note_on_channel(36, 0.9, crate::drums::DRUM_CHANNEL);
+            (0..sr as usize)
+                .map(|_| {
+                    let (l, r) = vm.render_next();
+                    (l.to_bits(), r.to_bits())
+                })
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            render(false) == render(true),
+            "an OUT compressor touched the mix"
+        );
+        // ...and switched IN it does compress the same program
+        let mut vm = VoiceManager::new(sr, 8);
+        Param::CompIn.apply(&mut vm, 1.0);
+        Param::CompThreshold.apply(&mut vm, -40.0);
+        vm.note_on(57, 0.9);
+        for _ in 0..(sr as usize / 2) {
+            vm.render_next();
+        }
+        assert!(
+            vm.comp_gain_reduction_db() > 3.0,
+            "the meter should show the compressor working: {}",
+            vm.comp_gain_reduction_db()
+        );
+    }
+
     /// The sidechain must hear the kick by EITHER route. The reserved low
     /// sliver (note 0) exists because Logic gives software-instrument
     /// tracks no MIDI channel control, so in that host it is the only
@@ -2078,6 +2214,11 @@ mod tests {
                 (Param::TapeAge, 0.6),
                 (Param::TapeWow, 0.5),
                 (Param::TapeFlutter, 0.5),
+                (Param::CompIn, 1.0),
+                (Param::CompThreshold, -40.0),
+                (Param::CompRatio, 2.0),
+                (Param::CompAttack, 0.0),
+                (Param::CompMakeup, 15.0),
             ] {
                 p.apply(&mut vm, v);
             }

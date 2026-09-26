@@ -68,7 +68,7 @@ fn build_float_param(def: &FloatDef) -> FloatParam {
     }
 }
 
-// The four distinct selector shapes. Each variant list mirrors the matching
+// The distinct selector shapes. Each variant list mirrors the matching
 // ChoiceDef in the shared table (pinned by `selector_enums_mirror_the_table`),
 // in the engine's own value order so the host index applies as itself.
 #[derive(Enum, PartialEq, Clone, Copy)]
@@ -107,6 +107,52 @@ enum ChorusModeParam {
     IV,
 }
 
+// The bus compressor's IN switch and stepped switches (buscomp.rs).
+#[derive(Enum, PartialEq, Clone, Copy)]
+enum CompInParam {
+    Out,
+    In,
+}
+
+#[derive(Enum, PartialEq, Clone, Copy)]
+enum CompRatioParam {
+    #[name = "2:1"]
+    Two,
+    #[name = "4:1"]
+    Four,
+    #[name = "10:1"]
+    Ten,
+}
+
+#[derive(Enum, PartialEq, Clone, Copy)]
+enum CompAttackParam {
+    #[name = "0.1 ms"]
+    Ms0_1,
+    #[name = "0.3 ms"]
+    Ms0_3,
+    #[name = "1 ms"]
+    Ms1,
+    #[name = "3 ms"]
+    Ms3,
+    #[name = "10 ms"]
+    Ms10,
+    #[name = "30 ms"]
+    Ms30,
+}
+
+#[derive(Enum, PartialEq, Clone, Copy)]
+enum CompReleaseParam {
+    #[name = "0.1 s"]
+    S0_1,
+    #[name = "0.3 s"]
+    S0_3,
+    #[name = "0.6 s"]
+    S0_6,
+    #[name = "1.2 s"]
+    S1_2,
+    Auto,
+}
+
 /// A host selector backed by one of the typed EnumParams above. The wrapped
 /// param renders as a named dropdown; `index()` reads back the chosen
 /// position so it can drive the engine through `ChoiceDef::param`.
@@ -116,6 +162,10 @@ enum ChoiceKind {
     Sync(EnumParam<SyncParam>),
     Mono(EnumParam<MonoParam>),
     Chorus(EnumParam<ChorusModeParam>),
+    CompIn(EnumParam<CompInParam>),
+    CompRatio(EnumParam<CompRatioParam>),
+    CompAttack(EnumParam<CompAttackParam>),
+    CompRelease(EnumParam<CompReleaseParam>),
 }
 
 impl ChoiceKind {
@@ -136,6 +186,21 @@ impl ChoiceKind {
                 name,
                 ChorusModeParam::from_index(def.default),
             )),
+            "comp_in" => {
+                ChoiceKind::CompIn(EnumParam::new(name, CompInParam::from_index(def.default)))
+            }
+            "comp_ratio" => ChoiceKind::CompRatio(EnumParam::new(
+                name,
+                CompRatioParam::from_index(def.default),
+            )),
+            "comp_attack" => ChoiceKind::CompAttack(EnumParam::new(
+                name,
+                CompAttackParam::from_index(def.default),
+            )),
+            "comp_release" => ChoiceKind::CompRelease(EnumParam::new(
+                name,
+                CompReleaseParam::from_index(def.default),
+            )),
             other => panic!("no typed EnumParam for selector `{other}`"),
         }
     }
@@ -147,6 +212,10 @@ impl ChoiceKind {
             ChoiceKind::Sync(p) => p.as_ptr(),
             ChoiceKind::Mono(p) => p.as_ptr(),
             ChoiceKind::Chorus(p) => p.as_ptr(),
+            ChoiceKind::CompIn(p) => p.as_ptr(),
+            ChoiceKind::CompRatio(p) => p.as_ptr(),
+            ChoiceKind::CompAttack(p) => p.as_ptr(),
+            ChoiceKind::CompRelease(p) => p.as_ptr(),
         }
     }
 
@@ -158,6 +227,10 @@ impl ChoiceKind {
             ChoiceKind::Sync(p) => p.value().to_index(),
             ChoiceKind::Mono(p) => p.value().to_index(),
             ChoiceKind::Chorus(p) => p.value().to_index(),
+            ChoiceKind::CompIn(p) => p.value().to_index(),
+            ChoiceKind::CompRatio(p) => p.value().to_index(),
+            ChoiceKind::CompAttack(p) => p.value().to_index(),
+            ChoiceKind::CompRelease(p) => p.value().to_index(),
         }
     }
 
@@ -169,6 +242,10 @@ impl ChoiceKind {
             ChoiceKind::Sync(_) => SyncParam::variants(),
             ChoiceKind::Mono(_) => MonoParam::variants(),
             ChoiceKind::Chorus(_) => ChorusModeParam::variants(),
+            ChoiceKind::CompIn(_) => CompInParam::variants(),
+            ChoiceKind::CompRatio(_) => CompRatioParam::variants(),
+            ChoiceKind::CompAttack(_) => CompAttackParam::variants(),
+            ChoiceKind::CompRelease(_) => CompReleaseParam::variants(),
         }
     }
 }

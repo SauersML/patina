@@ -73,6 +73,14 @@ chorus_mode 0
 chorus_rate 0.5
 chorus_depth 0.3
 chorus_hiss 1
+comp_in 0
+comp_threshold -20
+comp_ratio 1
+comp_attack 4
+comp_release 4
+comp_makeup 0
+comp_mix 1
+comp_sc_hpf 20
 tape_wow 0
 tape_flutter 0
 tape_drive 0

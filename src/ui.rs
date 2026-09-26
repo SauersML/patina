@@ -18,11 +18,12 @@ use crate::voice_manager::{ParamValues, VoiceManager, SCOPE_LEN};
 // The design system and widget set live in crate::panel, shared with the
 // plugin editor (src/editor.rs) so every surface speaks the same language.
 use crate::panel::{
-    card, drum_glyph, fmt_hz, fmt_pct, fmt_time, fmt_x, gloss_fill, gradient_quad, knob,
-    knob_sized, legend, rail_shapes, segmented, step_button, sublegend, tracked, vseparator,
-    waveform_selector, Textures, BG0, BG2, BG2_HOVER, CYAN, CYAN_BRIGHT, EBONY, EBONY_EDGE,
-    GLASS_RECTS, GPU_ON, HAIRLINE, HAIRLINE_HI, INSET, IVORY, IVORY_SHADE, TOUCH, TOUCH_DEEP,
-    TOUCH_HI, TOUCH_INK, TXT, TXT_LOW, TXT_MID, WELL_LINE, WELL_TXT, WELL_TXT_HOVER,
+    card, drum_glyph, fmt_hz, fmt_pct, fmt_time, fmt_x, gloss_fill, gr_meter, gr_needle_step,
+    gradient_quad, knob, knob_sized, legend, rail_shapes, rotary_switch, segmented, step_button,
+    sublegend, tracked, vseparator, waveform_selector, Textures, BG0, BG2, BG2_HOVER, CYAN,
+    CYAN_BRIGHT, EBONY, EBONY_EDGE, GLASS_RECTS, GPU_ON, HAIRLINE, HAIRLINE_HI, INSET, IVORY,
+    IVORY_SHADE, TOUCH, TOUCH_DEEP, TOUCH_HI, TOUCH_INK, TXT, TXT_LOW, TXT_MID, WELL_LINE,
+    WELL_TXT, WELL_TXT_HOVER,
 };
 
 // Frame time for the WGSL sky (seconds, as f32 bits); slot 0 = sky.
@@ -71,6 +72,8 @@ struct DisplaySnapshot {
     notes: [bool; 128],
     drums: [f32; 6],
     voices_active: bool,
+    /// The bus compressor's control voltage: what its meter reads.
+    comp_gr: f32,
 }
 
 impl DisplaySnapshot {
@@ -82,6 +85,7 @@ impl DisplaySnapshot {
             notes: [false; 128],
             drums: [0.0; 6],
             voices_active: false,
+            comp_gr: 0.0,
         }
     }
 
@@ -90,6 +94,7 @@ impl DisplaySnapshot {
         self.notes = vm.held_note_states();
         self.drums = vm.drums.activity();
         self.voices_active = vm.voices.iter().any(|voice| voice.is_active());
+        self.comp_gr = vm.comp_gain_reduction_db();
         let (a, b) = vm.scope.as_slices();
         self.scope[..a.len()].copy_from_slice(a);
         self.scope[a.len()..a.len() + b.len()].copy_from_slice(b);
@@ -150,6 +155,18 @@ pub struct SynthUI {
     tape_flutter: f32,
     tape_drive: f32,
     tape_age: f32,
+    // The mix-bus compressor (mirrors ParamValues; switches as positions)
+    comp_in: bool,
+    comp_threshold: f32,
+    comp_ratio: usize,
+    comp_attack: usize,
+    comp_release: usize,
+    comp_makeup: f32,
+    comp_mix: f32,
+    comp_sc_hpf: f32,
+    /// Where the gain-reduction meter's needle is, and how fast it swings.
+    comp_needle: f32,
+    comp_needle_vel: f32,
     // The rhythm section's panel (mirrors ParamValues like everything else)
     bd_level: f32,
     bd_tune: f32,
@@ -307,6 +324,16 @@ impl SynthUI {
             tape_flutter: 0.0,
             tape_drive: 0.0,
             tape_age: 0.0,
+            comp_in: false,
+            comp_threshold: -20.0,
+            comp_ratio: 1,
+            comp_attack: 4,
+            comp_release: 4,
+            comp_makeup: 0.0,
+            comp_mix: 1.0,
+            comp_sc_hpf: 20.0,
+            comp_needle: 0.0,
+            comp_needle_vel: 0.0,
             // 909 panel defaults, mirroring ParamValues::default()
             bd_level: 0.8,
             bd_tune: 0.35,
@@ -404,6 +431,14 @@ impl SynthUI {
         vm.set_tape_flutter(self.tape_flutter);
         vm.set_tape_drive(self.tape_drive);
         vm.set_tape_age(self.tape_age);
+        vm.set_comp_in(if self.comp_in { 1.0 } else { 0.0 });
+        vm.set_comp_threshold(self.comp_threshold);
+        vm.set_comp_ratio(self.comp_ratio as f32);
+        vm.set_comp_attack(self.comp_attack as f32);
+        vm.set_comp_release(self.comp_release as f32);
+        vm.set_comp_makeup(self.comp_makeup);
+        vm.set_comp_mix(self.comp_mix);
+        vm.set_comp_sc_hpf(self.comp_sc_hpf);
     }
 
     fn apply_theme(ctx: &egui::Context) {
@@ -583,6 +618,14 @@ impl SynthUI {
             self.tape_flutter = p.tape_flutter;
             self.tape_drive = p.tape_drive;
             self.tape_age = p.tape_age;
+            self.comp_in = p.comp_in >= 1.0;
+            self.comp_threshold = p.comp_threshold;
+            self.comp_ratio = p.comp_ratio as usize;
+            self.comp_attack = p.comp_attack as usize;
+            self.comp_release = p.comp_release as usize;
+            self.comp_makeup = p.comp_makeup;
+            self.comp_mix = p.comp_mix;
+            self.comp_sc_hpf = p.comp_sc_hpf;
             self.bd_level = p.bd_level;
             self.bd_tune = p.bd_tune;
             self.bd_attack = p.bd_attack;
@@ -626,12 +669,20 @@ impl SynthUI {
             self.mood_bright += (target_bright - self.mood_bright) * (1.0 - (-dt / 2.08).exp());
         }
         self.sky_phase += dt * (0.008 + self.mood_energy * 0.030);
+        gr_needle_step(
+            &mut self.comp_needle,
+            &mut self.comp_needle_vel,
+            self.display.comp_gr,
+            dt,
+        );
 
         // Audio runs independently of panel cadence. Input events repaint
         // immediately; only autonomous animation and meter polling are paced.
         let active = self.display.voices_active
             || self.display.drums.iter().any(|&level| level > 0.001)
-            || self.mood_energy > 0.01;
+            || self.mood_energy > 0.01
+            || self.display.comp_gr > 0.05
+            || self.comp_needle.abs() > 0.05;
         let interval_ms = if active && ctx.input(|i| i.focused) {
             33
         } else {
@@ -730,7 +781,12 @@ impl SynthUI {
                     self.draw_effects_card(ui, tex.as_mut(), Some(rest));
                 });
                 self.draw_rhythm_card(ui, tex.as_mut(), Some(full + 28.0));
-                self.draw_scope(ui);
+                // The master section: the bus compressor beside the output
+                // it feeds, as on the console's centre section
+                ui.with_layout(top, |ui| {
+                    self.draw_mix_bus_card(ui, tex.as_mut(), None);
+                    self.draw_scope(ui);
+                });
             });
         self.textures = tex;
     }
@@ -1420,6 +1476,87 @@ impl SynthUI {
                         fmt_pct,
                     );
                 });
+            });
+        });
+    }
+
+    /// The mix-bus compressor (buscomp.rs): IN switch, threshold, the three
+    /// stepped switches, make-up, the parallel mix, the sidechain high-pass,
+    /// and the moving-coil gain-reduction meter the card is known by.
+    fn draw_mix_bus_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        tex: Option<&mut Textures>,
+        fill: Option<f32>,
+    ) {
+        card(ui, "Mix Bus", tex, fill, |ui| {
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.add_space(22.0);
+                    if let Some(i) = segmented(ui, "comp_in", &["OUT", "IN"], self.comp_in as usize)
+                    {
+                        self.comp_in = i == 1;
+                        Param::CompIn.apply(&mut self.voice_manager.lock(), i as f32);
+                    }
+                });
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Threshold",
+                    Param::CompThreshold,
+                    &mut self.comp_threshold,
+                    |v| format!("{:.0} dB", v),
+                );
+                for (label, param, position, names) in [
+                    (
+                        "Ratio",
+                        Param::CompRatio,
+                        &mut self.comp_ratio,
+                        &["2:1", "4:1", "10:1"][..],
+                    ),
+                    (
+                        "Attack",
+                        Param::CompAttack,
+                        &mut self.comp_attack,
+                        &["0.1 ms", "0.3 ms", "1 ms", "3 ms", "10 ms", "30 ms"][..],
+                    ),
+                    (
+                        "Release",
+                        Param::CompRelease,
+                        &mut self.comp_release,
+                        &["0.1 s", "0.3 s", "0.6 s", "1.2 s", "AUTO"][..],
+                    ),
+                ] {
+                    if let Some(i) = rotary_switch(ui, label, *position, names, false) {
+                        *position = i;
+                        param.apply(&mut self.voice_manager.lock(), i as f32);
+                    }
+                }
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Make-Up",
+                    Param::CompMakeup,
+                    &mut self.comp_makeup,
+                    |v| format!("+{:.1} dB", v),
+                );
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "Mix",
+                    Param::CompMix,
+                    &mut self.comp_mix,
+                    fmt_pct,
+                );
+                param_knob(
+                    ui,
+                    &self.voice_manager,
+                    "S/C HPF",
+                    Param::CompScHpf,
+                    &mut self.comp_sc_hpf,
+                    fmt_hz,
+                );
+                gr_meter(ui, self.comp_needle, self.comp_in);
             });
         });
     }

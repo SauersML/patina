@@ -36,6 +36,7 @@ pub fn supported_sample_rate(rate: f64) -> bool {
 }
 
 pub mod adaa;
+pub mod buscomp;
 pub mod chorus;
 pub mod drums;
 pub mod envelope;

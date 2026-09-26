@@ -174,6 +174,26 @@ mod tests {
         }
     }
 
+    /// Init names the bus compressor at exactly the engine's power-on
+    /// state, so selecting Init and powering on are the same thing.
+    #[test]
+    fn init_names_the_compressor_at_power_on() {
+        let power_on = ParamValues::default();
+        let comp: Vec<_> = FACTORY[0]
+            .1
+            .lines()
+            .filter(|l| l.starts_with("comp_"))
+            .collect();
+        assert_eq!(comp.len(), 8, "Init must name every compressor control");
+        for line in comp {
+            let mut it = line.split_whitespace();
+            let name = it.next().unwrap();
+            let value: f32 = it.next().unwrap().parse().unwrap();
+            let param = Param::from_name(name).unwrap();
+            assert_eq!(param.read(&power_on), Some(value), "`{name}`");
+        }
+    }
+
     /// serialize -> apply must round-trip the parameter block.
     #[test]
     fn snapshot_round_trips() {

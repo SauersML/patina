@@ -127,6 +127,12 @@ const CIRCUIT_NAMES: &[&str] = &["Moog", "ARP"];
 const SYNC_NAMES: &[&str] = &["Off", "On"];
 const MONO_NAMES: &[&str] = &["Poly", "Mono"];
 const CHORUS_NAMES: &[&str] = &["Off", "I", "II", "III", "IV"];
+/// The bus compressor's IN switch and its three stepped switches, named
+/// as the card's legends read (positions in `buscomp`'s own order).
+pub const COMP_IN_NAMES: &[&str] = &["Out", "In"];
+pub const COMP_RATIO_NAMES: &[&str] = &["2:1", "4:1", "10:1"];
+pub const COMP_ATTACK_NAMES: &[&str] = &["0.1 ms", "0.3 ms", "1 ms", "3 ms", "10 ms", "30 ms"];
+pub const COMP_RELEASE_NAMES: &[&str] = &["0.1 s", "0.3 s", "0.6 s", "1.2 s", "Auto"];
 
 /// One presentation row: an engine parameter plus its host cosmetics.
 struct Row {
@@ -278,6 +284,14 @@ const PRESENTATION: &[Row] = &[
     flt (Param::VelFilter, "Velocity to Filter", Plain(" oct")),
     sel (Param::MonoSel,   "Voice Mode", MONO_NAMES),
     gflt(Param::ChorusHiss,  "Chorus Hiss",     Percent),
+    sel (Param::CompIn,        "Bus Compressor",           COMP_IN_NAMES),
+    flt (Param::CompThreshold, "Bus Compressor Threshold", Plain(" dB")),
+    sel (Param::CompRatio,     "Bus Compressor Ratio",     COMP_RATIO_NAMES),
+    sel (Param::CompAttack,    "Bus Compressor Attack",    COMP_ATTACK_NAMES),
+    sel (Param::CompRelease,   "Bus Compressor Release",   COMP_RELEASE_NAMES),
+    flt (Param::CompMakeup,    "Bus Compressor Make-Up",   Plain(" dB")),
+    flt (Param::CompMix,       "Bus Compressor Mix",       Percent),
+    flt (Param::CompScHpf,     "Bus Compressor Sidechain High-Pass", Hertz),
 ];
 
 /// Parameters that are NOT host-automation knobs and are deliberately kept
@@ -576,6 +590,7 @@ mod tests {
             Param::TapeFlutter,
             Param::TapeDrive,
             Param::TapeAge,
+            Param::CompIn,
             Param::Saturation,
             Param::Osc2Level,
             Param::Osc3Level,
@@ -586,6 +601,28 @@ mod tests {
         ] {
             assert_eq!(init_value(p), 0.0, "Init sets `{}` on", p.name());
         }
+    }
+
+    /// The compressor's switch legends name the engine's own positions, in
+    /// the engine's order — a host picking "4:1" gets 4:1.
+    #[test]
+    fn compressor_switch_legends_match_the_engine() {
+        use crate::buscomp::{ATTACKS_S, RATIOS, RELEASES_S, RELEASE_AUTO};
+        let number =
+            |name: &str, unit: &str| -> f32 { name.trim_end_matches(unit).parse().unwrap() };
+        assert_eq!(COMP_RATIO_NAMES.len(), RATIOS.len());
+        for (name, ratio) in COMP_RATIO_NAMES.iter().zip(RATIOS) {
+            assert_eq!(number(name, ":1"), ratio, "{name}");
+        }
+        assert_eq!(COMP_ATTACK_NAMES.len(), ATTACKS_S.len());
+        for (name, seconds) in COMP_ATTACK_NAMES.iter().zip(ATTACKS_S) {
+            assert!((number(name, " ms") - seconds * 1e3).abs() < 1e-4, "{name}");
+        }
+        assert_eq!(COMP_RELEASE_NAMES.len(), RELEASE_AUTO + 1);
+        for (name, seconds) in COMP_RELEASE_NAMES.iter().zip(RELEASES_S) {
+            assert_eq!(number(name, " s"), seconds, "{name}");
+        }
+        assert_eq!(COMP_RELEASE_NAMES[RELEASE_AUTO], "Auto");
     }
 
     /// Defaults land inside the engine's own range for every host parameter.

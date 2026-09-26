@@ -157,6 +157,14 @@
 // chorus_mode (0=off..4=IV, use plain sets), chorus_rate, chorus_depth,
 // tape_wow, tape_flutter, tape_drive, tape_age.
 //
+// The mix-bus compressor (buscomp.rs; SSL G-series bus comp, printing to
+// the tape): comp_in (0 = out, 1 = in; plain sets), comp_threshold (dBFS
+// peak, -48..0), comp_ratio (0 = 2:1, 1 = 4:1, 2 = 10:1), comp_attack (0..5
+// = 0.1, 0.3, 1, 3, 10, 30 ms), comp_release (0..3 = 0.1, 0.3, 0.6, 1.2 s,
+// 4 = AUTO) — the three switches take plain sets — comp_makeup (dB, 0..15),
+// comp_mix (0..1 parallel blend, 1 = compressor alone), comp_sc_hpf
+// (sidechain high-pass Hz, 20..400; 20 = the card's own coupling).
+//
 // Rhythm section (the 909 board; all 0..1 panel knobs): bd_level, bd_tune,
 // bd_attack, bd_decay, bd_sweep, bd_drive, sd_level, sd_tune, sd_tone,
 // sd_snappy, sd_decay, rs_level, rs_tune, cp_level, cp_decay, hh_level,
@@ -347,6 +355,17 @@ param_table! {
     TapeFlutter:     "tape_flutter",   Some(94),  (0.0, 1.0, Lin);
     TapeDrive:       "tape_drive",     Some(118), (0.0, 1.0, Lin);
     TapeAge:         "tape_age",       Some(119), (0.0, 1.0, Lin);
+    // The mix-bus compressor (buscomp.rs): the console's centre section,
+    // printing to the tape. Its three switches are stepped like the card's
+    // (ratio 2/4/10:1, attack 0.1..30 ms, release 0.1..1.2 s + AUTO).
+    CompIn:          "comp_in",        None,      (0.0, 1.0, Step);
+    CompThreshold:   "comp_threshold", None,      (-48.0, 0.0, Lin);
+    CompRatio:       "comp_ratio",     None,      (0.0, 2.0, Step);
+    CompAttack:      "comp_attack",    None,      (0.0, 5.0, Step);
+    CompRelease:     "comp_release",   None,      (0.0, 4.0, Step);
+    CompMakeup:      "comp_makeup",    None,      (0.0, 15.0, Lin);
+    CompMix:         "comp_mix",       None,      (0.0, 1.0, Lin);
+    CompScHpf:       "comp_sc_hpf",    None,      (20.0, 400.0, Log);
     // The rhythm section: one shared 909 board, so like the effects and
     // the LFO these are bus-level parameters — unitless 0..1 panel knob
     // rotations; the circuits map them onto their electrical ranges
@@ -532,6 +551,14 @@ impl Param {
             Param::TapeFlutter => v.tape_flutter,
             Param::TapeDrive => v.tape_drive,
             Param::TapeAge => v.tape_age,
+            Param::CompIn => v.comp_in,
+            Param::CompThreshold => v.comp_threshold,
+            Param::CompRatio => v.comp_ratio,
+            Param::CompAttack => v.comp_attack,
+            Param::CompRelease => v.comp_release,
+            Param::CompMakeup => v.comp_makeup,
+            Param::CompMix => v.comp_mix,
+            Param::CompScHpf => v.comp_sc_hpf,
             Param::BdLevel => v.bd_level,
             Param::BdTune => v.bd_tune,
             Param::BdAttack => v.bd_attack,
@@ -670,6 +697,14 @@ impl Param {
             Param::TapeFlutter => vm.set_tape_flutter(value),
             Param::TapeDrive => vm.set_tape_drive(value),
             Param::TapeAge => vm.set_tape_age(value),
+            Param::CompIn => vm.set_comp_in(value),
+            Param::CompThreshold => vm.set_comp_threshold(value),
+            Param::CompRatio => vm.set_comp_ratio(value),
+            Param::CompAttack => vm.set_comp_attack(value),
+            Param::CompRelease => vm.set_comp_release(value),
+            Param::CompMakeup => vm.set_comp_makeup(value),
+            Param::CompMix => vm.set_comp_mix(value),
+            Param::CompScHpf => vm.set_comp_sc_hpf(value),
             Param::BdLevel => vm.set_bd_level(value),
             Param::BdTune => vm.set_bd_tune(value),
             Param::BdAttack => vm.set_bd_attack(value),
