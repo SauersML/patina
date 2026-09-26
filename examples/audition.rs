@@ -82,11 +82,15 @@ fn render(text: &str, warm: bool) -> Vec<(f32, f32)> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let dir = args.get(1).expect("usage: audition OUT_DIR [PATCH OUT_NAME 'param value'...]");
+    let dir = args.get(1).expect("usage: audition OUT_DIR [PATCH|FILE.patch OUT_NAME 'param value'...]");
     std::fs::create_dir_all(dir).unwrap();
     // Probe mode: one patch with lines laid on top, to isolate a circuit.
     if let Some(want) = args.get(2) {
-        let (_, text) = FACTORY.iter().find(|(n, _)| n.eq_ignore_ascii_case(want)).expect("no such patch");
+        // A bank name, or a path to any .patch file (bocuma lives outside the bank).
+        let text = match FACTORY.iter().find(|(n, _)| n.eq_ignore_ascii_case(want)) {
+            Some((_, t)) => t.to_string(),
+            None => std::fs::read_to_string(want).expect("no such patch"),
+        };
         let text = format!("{text}\n{}", args[4..].join("\n"));
         write_wav(&format!("{dir}/{}.wav", args[3]), &render(&text, true));
         return;

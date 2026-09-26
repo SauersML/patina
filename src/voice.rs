@@ -4,8 +4,21 @@ use crate::hpf::HighPassLadder;
 use crate::oscillator::{CircuitModel, Oscillator, Waveform, PROGRAM_V};
 use crate::substrate::SubstrateState;
 
-/// How much velocity opens the filter, in octaves at full velocity swing.
-const VEL_TRACK: f32 = 0.8;
+/// How much velocity opens the filter, in octaves at full velocity swing —
+/// the default of a patch's `vel_filter`.
+pub(crate) const VEL_TRACK: f32 = 0.8;
+
+/// How deep velocity reaches into the VCA — the default of a patch's
+/// `vel_amp`. At 0.7 the softest strike still sounds at 30% of the
+/// hardest, the gentle curve every patch was voiced against.
+pub(crate) const VEL_AMP: f32 = 0.7;
+
+/// A note's pitch CV in octaves from A440, the volts the keyboard's
+/// hold capacitor carries (and glide slews from).
+#[inline]
+pub(crate) fn note_cv(note: u8) -> f32 {
+    (note as f32 - 69.0) / 12.0
+}
 
 /// Finite sawtooth-core reset time (US 3,943,456 variable-rate integrator):
 /// the discharge takes real time, so f_actual = f / (1 + f * T_RESET) and
@@ -53,6 +66,12 @@ pub struct Voice {
     pub hpf: HighPassLadder,
     pub note: Option<u8>,
     velocity: f32,
+    /// The patch's velocity sensitivity: `vel_amp` is how far a soft
+    /// strike drops the VCA (0 = velocity ignored, 1 = full swing to
+    /// silence), `vel_filter` how many octaves the velocity swing moves
+    /// the cutoff.
+    vel_amp: f32,
+    vel_filter: f32,
     age: u64,
     held: bool,
     /// Position and energy compensation assigned by the unison stack.
@@ -195,6 +214,8 @@ impl Voice {
             hpf: HighPassLadder::new(sample_rate),
             note: None,
             velocity: 0.0,
+            vel_amp: VEL_AMP,
+            vel_filter: VEL_TRACK,
             age: 0,
             held: false,
             pan_l: std::f32::consts::FRAC_1_SQRT_2,
@@ -277,6 +298,14 @@ impl Voice {
 
     pub fn set_filter_env_amount(&mut self, octaves: f32) {
         self.filter_env_amount = octaves.clamp(-5.0, 5.0);
+    }
+
+    pub fn set_vel_amp(&mut self, depth: f32) {
+        self.vel_amp = depth.clamp(0.0, 1.0);
+    }
+
+    pub fn set_vel_filter(&mut self, octaves: f32) {
+        self.vel_filter = octaves.clamp(0.0, 4.0);
     }
 
     pub fn set_glide_rate(&mut self, rate: f32) {
@@ -362,6 +391,8 @@ impl Voice {
         self.set_sync(p.sync);
         self.set_ring(p.ring);
         self.set_filter_env_amount(p.filter_env_amount);
+        self.set_vel_amp(p.vel_amp);
+        self.set_vel_filter(p.vel_filter);
         self.set_pulse_width(p.pulse_width);
         self.set_osc1_mix([p.mix_saw, p.mix_pulse, p.mix_tri, p.mix_sine]);
         self.envelope.set_attack(p.attack);
@@ -443,15 +474,61 @@ impl Voice {
         // still ringing out — is a REASSIGNMENT, and must attack from
         // scratch or a slow attack would be skipped entirely.
         let same_note = self.held && self.note == Some(note);
+        self.strike(note, velocity, age, glide_from_cv, !same_note);
+    }
 
+    /// A mono channel's new gate on the card it already owns (SH-101
+    /// style: one voice, no reassignment). The envelopes re-attack from
+    /// whatever charge their caps hold, so a detached line flows without
+    /// the steal discharge's dip.
+    pub fn restrike(&mut self, note: u8, velocity: f32, age: u64, glide_from_cv: Option<f32>) {
+        self.strike(note, velocity, age, glide_from_cv, false);
+    }
+
+    /// A mono channel's legato move: the gate never dropped, so only the
+    /// pitch CV changes. Neither envelope re-strikes, and velocity stays
+    /// what the gate's leading edge sampled — a VCA gain step at every
+    /// slurred note would click.
+    pub fn legato(&mut self, note: u8, age: u64, glide_from_cv: Option<f32>) {
+        self.tune(note, glide_from_cv);
+        self.age = age;
+        self.held = true;
+    }
+
+    /// Gate the card onto `note`. `reassign` = the card is handed a note
+    /// it does not own (discharge, then attack); otherwise its envelopes
+    /// resume from their current level.
+    fn strike(
+        &mut self,
+        note: u8,
+        velocity: f32,
+        age: u64,
+        glide_from_cv: Option<f32>,
+        reassign: bool,
+    ) {
         // A reassigned card must not carry an old chord's widening CV into
         // its new note. Retriggers keep it, because they are the same tone.
-        if !same_note {
+        if reassign {
             self.pitch_shift_ratio = 1.0;
             self.pitch_shift_target = 1.0;
         }
+        self.tune(note, glide_from_cv);
+        if reassign {
+            self.envelope.note_on_stolen();
+            self.filter_env.note_on_stolen();
+        } else {
+            self.envelope.note_on();
+            self.filter_env.note_on();
+        }
+        self.velocity = velocity.clamp(0.0, 1.0);
+        self.age = age;
+        self.held = true;
+    }
 
-        let new_cv = (note as f32 - 69.0) / 12.0;
+    /// Set the keyboard CV to `note`: the glide distance from the source
+    /// CV, then each oscillator's converter with its own tolerances.
+    fn tune(&mut self, note: u8, glide_from_cv: Option<f32>) {
+        let new_cv = note_cv(note);
         if self.glide_rate < 0.999 {
             // No source CV (the first note, or a chord member that must
             // start in tune): begin AT the target. Leaving the offset
@@ -476,17 +553,7 @@ impl Voice {
             let f = frequency * scale;
             osc.set_frequency(f / (1.0 + f * RESET_TIME));
         }
-        if same_note {
-            self.envelope.note_on();
-            self.filter_env.note_on();
-        } else {
-            self.envelope.note_on_stolen();
-            self.filter_env.note_on_stolen();
-        }
         self.note = Some(note);
-        self.velocity = velocity.clamp(0.0, 1.0);
-        self.age = age;
-        self.held = true;
     }
 
     pub fn release(&mut self) {
@@ -562,7 +629,7 @@ impl Voice {
         let pitch_mult = if let Some(cv) = self.cv_override {
             // Performance line: absolute pitch, relative to the note the
             // oscillators were tuned to at trigger
-            let note_cv = (self.note.unwrap_or(69) as f32 - 69.0) / 12.0;
+            let note_cv = note_cv(self.note.unwrap_or(69));
             pitch_mult * (cv - note_cv).exp2()
         } else if self.glide_offset != 0.0 {
             // Linear slew, exact arrival: step toward the target and STOP
@@ -643,7 +710,7 @@ impl Voice {
         // Cutoff modulation in octaves: filter envelope, key tracking, velocity
         let note = self.note.unwrap_or(60) as f32;
         let key_oct = (note - 60.0) / 12.0 * self.key_track;
-        let vel_oct = (self.velocity - 0.5) * VEL_TRACK;
+        let vel_oct = (self.velocity - 0.5) * self.vel_filter;
         let mod_oct = filter_env * self.filter_env_amount
             + key_oct
             + vel_oct
@@ -662,11 +729,13 @@ impl Voice {
             y
         };
 
-        // Gentle velocity curve on amplitude
-        let vel_amp = 0.3 + 0.7 * self.velocity * self.velocity;
+        // Square-law velocity curve on amplitude, 1 - vel_amp * (1 - v^2),
+        // written so the default 0.7 is the original 0.3 + 0.7 v^2 to the
+        // last bit (1 - 0.7f32 is exactly 0.3f32)
+        let vel_gain = (1.0 - self.vel_amp) + self.vel_amp * self.velocity * self.velocity;
         // The VCA never fully closes: the -60 dB floor keeps the
         // free-running oscillators faintly alive between notes
-        let sample = filtered * (amp_env * vel_amp + VCA_FLOOR) * self.unison_gain;
+        let sample = filtered * (amp_env * vel_gain + VCA_FLOOR) * self.unison_gain;
 
         (sample * self.pan_l, sample * self.pan_r)
     }
@@ -892,6 +961,111 @@ mod tests {
             ((a - 1.0) / (b - 1.0) - 1.0).abs() < 0.06,
             "after one time constant of REAL time the FM mean-tracker had \
              reached {a:.4} at 44.1 kHz but {b:.4} at 96 kHz"
+        );
+    }
+
+    /// The defaults ARE the old hard-wired curve, bit for bit: every
+    /// patch and song written before velocity became a patch control must
+    /// render exactly as it did.
+    #[test]
+    fn default_velocity_response_is_the_original_curve() {
+        for step in 0..=127u8 {
+            let v = step as f32 / 127.0;
+            let amp = (1.0 - VEL_AMP) + VEL_AMP * v * v;
+            assert_eq!(
+                amp.to_bits(),
+                (0.3f32 + 0.7 * v * v).to_bits(),
+                "velocity {step}"
+            );
+            assert_eq!(
+                ((v - 0.5) * VEL_TRACK).to_bits(),
+                ((v - 0.5) * 0.8f32).to_bits()
+            );
+        }
+    }
+
+    /// One card's output, `seconds` into a held note.
+    fn held_note(seconds: f32, set: impl Fn(&mut Voice), velocity: f32) -> Vec<f32> {
+        let sr = 48000.0;
+        let mut v = Voice::new(sr, 0);
+        v.set_waveform(Waveform::Sawtooth);
+        v.set_filter_resonance(0.0);
+        v.envelope.set_attack(0.005);
+        v.envelope.set_sustain(1.0);
+        set(&mut v);
+        v.trigger(48, velocity, 0, None);
+        (0..(seconds * sr) as usize)
+            .map(|_| v.render_next(0.0, 1.0, 0.0, 0.0, NEUTRAL, 0.0).0)
+            .collect()
+    }
+
+    fn rms(x: &[f32]) -> f32 {
+        (x.iter().map(|s| s * s).sum::<f32>() / x.len() as f32).sqrt()
+    }
+
+    /// `vel_amp 0` takes velocity out of the VCA. With `vel_filter 0` as
+    /// well, velocity has no path left into the card: a soft and a hard
+    /// strike are the same signal, sample for sample.
+    #[test]
+    fn vel_amp_zero_makes_the_level_velocity_blind() {
+        let deaf = |v: &mut Voice| {
+            v.set_filter_cutoff(4000.0);
+            v.set_vel_amp(0.0);
+            v.set_vel_filter(0.0);
+        };
+        let soft = held_note(0.3, deaf, 0.15);
+        let hard = held_note(0.3, deaf, 1.0);
+        assert!(rms(&hard) > 0.05, "the note never sounded");
+        assert!(
+            soft == hard,
+            "vel_amp 0 still let velocity reach the output"
+        );
+
+        // ...where the default curve drops a soft strike well down
+        let open = |v: &mut Voice| {
+            v.set_filter_cutoff(4000.0);
+            v.set_vel_filter(0.0);
+        };
+        let ratio = rms(&held_note(0.3, open, 0.15)) / rms(&held_note(0.3, open, 1.0));
+        assert!(
+            (ratio - (0.3 + 0.7 * 0.15 * 0.15)).abs() < 0.01,
+            "default vel_amp should scale a soft strike to ~0.32, got {ratio:.3}"
+        );
+    }
+
+    /// `vel_filter` is octaves of cutoff across the velocity swing: a
+    /// full strike opens (v - 0.5) * vel_filter octaves, so at
+    /// `vel_filter 2` it sounds like the same patch an octave brighter.
+    #[test]
+    fn vel_filter_scales_the_cutoff_shift() {
+        let bright = |cutoff: f32, vel_filter: f32| {
+            let x = held_note(
+                0.4,
+                |v| {
+                    v.set_filter_cutoff(cutoff);
+                    v.set_vel_amp(0.0);
+                    v.set_vel_filter(vel_filter);
+                },
+                1.0,
+            );
+            rms(&x[(0.2 * 48000.0) as usize..])
+        };
+        let base = bright(500.0, 0.0);
+        let one_octave = bright(1000.0, 0.0);
+        let two_octaves = bright(2000.0, 0.0);
+        assert!(
+            one_octave > base * 1.1,
+            "the probe cannot hear an octave: {base} vs {one_octave}"
+        );
+        let by_vel = bright(500.0, 2.0);
+        assert!(
+            (by_vel / one_octave - 1.0).abs() < 0.02,
+            "vel_filter 2 at full velocity should open one octave: {by_vel} vs {one_octave}"
+        );
+        let by_vel = bright(500.0, 4.0);
+        assert!(
+            (by_vel / two_octaves - 1.0).abs() < 0.02,
+            "vel_filter 4 at full velocity should open two octaves: {by_vel} vs {two_octaves}"
         );
     }
 }

@@ -57,6 +57,9 @@ decay 0.3
 sustain 0.75
 release 0.2
 volume 0.751
+vel_amp 0.7
+vel_filter 0.8
+mono 0
 octave 4
 
 # Effects — all out
@@ -73,6 +76,7 @@ tape_wow 0
 tape_flutter 0
 tape_drive 0
 tape_age 0
+width 1
 
 # 909 panel at its factory-fresh detents
 bd_level 0.8

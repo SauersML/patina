@@ -93,6 +93,12 @@ enum SyncParam {
 }
 
 #[derive(Enum, PartialEq, Clone, Copy)]
+enum MonoParam {
+    Poly,
+    Mono,
+}
+
+#[derive(Enum, PartialEq, Clone, Copy)]
 enum ChorusModeParam {
     Off,
     I,
@@ -108,6 +114,7 @@ enum ChoiceKind {
     Wave(EnumParam<WaveformParam>),
     Circuit(EnumParam<CircuitParam>),
     Sync(EnumParam<SyncParam>),
+    Mono(EnumParam<MonoParam>),
     Chorus(EnumParam<ChorusModeParam>),
 }
 
@@ -124,6 +131,7 @@ impl ChoiceKind {
                 ChoiceKind::Circuit(EnumParam::new(name, CircuitParam::from_index(def.default)))
             }
             "sync" => ChoiceKind::Sync(EnumParam::new(name, SyncParam::from_index(def.default))),
+            "mono" => ChoiceKind::Mono(EnumParam::new(name, MonoParam::from_index(def.default))),
             "chorus_mode" => ChoiceKind::Chorus(EnumParam::new(
                 name,
                 ChorusModeParam::from_index(def.default),
@@ -137,6 +145,7 @@ impl ChoiceKind {
             ChoiceKind::Wave(p) => p.as_ptr(),
             ChoiceKind::Circuit(p) => p.as_ptr(),
             ChoiceKind::Sync(p) => p.as_ptr(),
+            ChoiceKind::Mono(p) => p.as_ptr(),
             ChoiceKind::Chorus(p) => p.as_ptr(),
         }
     }
@@ -147,6 +156,7 @@ impl ChoiceKind {
             ChoiceKind::Wave(p) => p.value().to_index(),
             ChoiceKind::Circuit(p) => p.value().to_index(),
             ChoiceKind::Sync(p) => p.value().to_index(),
+            ChoiceKind::Mono(p) => p.value().to_index(),
             ChoiceKind::Chorus(p) => p.value().to_index(),
         }
     }
@@ -157,6 +167,7 @@ impl ChoiceKind {
             ChoiceKind::Wave(_) => WaveformParam::variants(),
             ChoiceKind::Circuit(_) => CircuitParam::variants(),
             ChoiceKind::Sync(_) => SyncParam::variants(),
+            ChoiceKind::Mono(_) => MonoParam::variants(),
             ChoiceKind::Chorus(_) => ChorusModeParam::variants(),
         }
     }

@@ -65,6 +65,8 @@ pub mod vox;
 #[cfg(feature = "app")]
 pub mod aurora_gpu;
 #[cfg(feature = "app")]
+pub mod midi_file;
+#[cfg(feature = "app")]
 pub mod midi_handler;
 #[cfg(any(feature = "app", feature = "editor"))]
 pub mod panel;

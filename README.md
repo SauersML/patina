@@ -46,6 +46,7 @@ format for programmatic playback and parameter automation.
    ```
    cargo run --release            # opens the live synth, silent until played
    cargo run --release -- --play songs/ferris-wheel.song
+   cargo run --release -- --play file.mid --patch ember --render out.wav   # MIDI file, every melodic channel on patches/ember.patch (Init if omitted)
    ```
 
 ## 🔌 Plugins

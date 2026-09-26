@@ -140,7 +140,11 @@
 // carrier's tone; plain sets),
 // vox_intonation (0..1 autonomous pitch prosody: accents, declination,
 // final falls — keep low when singing, high when speaking),
-// glide (portamento seconds, 0 = off), pitch_shift (channel-local
+// glide (portamento seconds, 0 = off), mono (1 = one voice per track,
+// last-note priority, overlapping notes slur legato; plain sets),
+// vel_amp (0..1 how far a soft strike drops the level, default 0.7),
+// vel_filter (octaves the velocity swing moves the cutoff, default
+// 0.8), pitch_shift (channel-local
 // semitones -24..24 for independently gliding chord-voice tracks),
 // sub (0..1 octave-down square),
 // osc2_wave/osc3_wave (0-3), osc2_pitch/osc3_pitch (semitones -24..24),
@@ -262,6 +266,10 @@ param_table! {
     // ------------------------------------------------------------------
     Volume:          "volume",         Some(7),   (0.0, 1.0, Lin);
     Output:          "output",         None,      (0.0, 1.0, Lin);
+    // Master mid/side after the tape: 0 folds the finished mix to mono,
+    // 1 leaves it untouched, above 1 widens. The effects each add their
+    // own decorrelation; this is the one knob that sets the image.
+    Width:           "width",          None,      (0.0, 2.0, Lin);
     WaveformSel:     "waveform",       Some(113), (0.0, 3.0, Step);
     Detune:          "detune",         Some(83),  (0.0, 30.0, Lin);
     Cutoff:          "cutoff",         Some(74),  (20.0, 20000.0, Log);
@@ -277,6 +285,10 @@ param_table! {
     NoiseLevel:      "noise",          Some(81),  (0.0, 1.0, Lin);
     SpringWet:       "spring",         Some(95),  (0.0, 1.0, Lin);
     Glide:           "glide",          Some(5),   (0.0, 2.0, Lin);
+    // Mono voice mode, the SH-101's assigner: 1 = the track owns one
+    // voice (or one unison stack), last-note priority, overlapped notes
+    // slur without re-striking the envelopes
+    MonoSel:         "mono",           None,      (0.0, 1.0, Step);
     // Channel-local pitch CV. Put chord voices on separate tracks to glide
     // each one independently to an exact destination note.
     PitchShift:      "pitch_shift",    None,      (-24.0, 24.0, Lin);
@@ -314,6 +326,11 @@ param_table! {
     FilterDecay:     "filter_decay",   Some(108), (0.01, 10.0, Log);
     FilterSustain:   "filter_sustain", Some(109), (0.0, 1.0, Lin);
     FilterRelease:   "filter_release", Some(110), (0.01, 10.0, Log);
+    // Velocity sensitivity: how far a soft strike drops the VCA (0 =
+    // velocity ignored), and how many octaves the full velocity swing
+    // moves the cutoff
+    VelAmp:          "vel_amp",        None,      (0.0, 1.0, Lin);
+    VelFilter:       "vel_filter",     None,      (0.0, 4.0, Lin);
     ReverbDecay:     "reverb_decay",   None,      (0.0, 0.99, Lin);
     ReverbWet:       "reverb_wet",     Some(91),  (0.0, 1.0, Lin);
     ReverbTone:      "reverb_tone",    None,      (800.0, 12000.0, Log);
@@ -451,6 +468,7 @@ impl Param {
                 crate::oscillator::CircuitModel::Arp => 1.0,
             },
             Param::SyncSel => if v.sync { 1.0 } else { 0.0 },
+            Param::MonoSel => if v.mono { 1.0 } else { 0.0 },
             Param::ChorusModeSel => match v.chorus_mode {
                 ChorusMode::Off => 0.0,
                 ChorusMode::I => 1.0,
@@ -497,6 +515,8 @@ impl Param {
             Param::FilterDecay => v.filter_decay,
             Param::FilterSustain => v.filter_sustain,
             Param::FilterRelease => v.filter_release,
+            Param::VelAmp => v.vel_amp,
+            Param::VelFilter => v.vel_filter,
             Param::ReverbDecay => v.reverb_decay,
             Param::ReverbWet => v.reverb_wet,
             Param::ReverbTone => v.reverb_tone,
@@ -561,6 +581,7 @@ impl Param {
         match self {
             Param::Volume => vm.set_volume(value),
             Param::Output => vm.set_output(value),
+            Param::Width => vm.set_width(value),
             Param::TrackGain
             | Param::TrackPan
             | Param::ReverbSend
@@ -584,6 +605,7 @@ impl Param {
             Param::NoiseLevel => vm.set_noise(value),
             Param::SpringWet => vm.set_spring(value),
             Param::Glide => vm.set_glide(value),
+            Param::MonoSel => vm.set_mono(value.round() as i32 >= 1),
             Param::PitchShift => vm.set_pitch_shift(value),
             Param::SubLevel => vm.set_sub(value),
             Param::Osc2Wave => vm.set_osc_wave(1, waveform_from_value(value)),
@@ -620,6 +642,8 @@ impl Param {
             Param::FilterDecay => vm.set_filter_decay(value),
             Param::FilterSustain => vm.set_filter_sustain(value),
             Param::FilterRelease => vm.set_filter_release(value),
+            Param::VelAmp => vm.set_vel_amp(value),
+            Param::VelFilter => vm.set_vel_filter(value),
             Param::ReverbDecay => vm.set_reverb_decay(value),
             Param::ReverbWet => vm.set_reverb_wet(value),
             Param::ReverbTone => vm.set_reverb_tone(value),
@@ -807,6 +831,10 @@ impl Param {
             Param::FilterDecay => p.filter_decay = value,
             Param::FilterSustain => p.filter_sustain = value,
             Param::FilterRelease => p.filter_release = value,
+            Param::VelAmp => p.vel_amp = value,
+            Param::VelFilter => p.vel_filter = value,
+            // Mono is voice-level: it is how THIS track's notes claim cards
+            Param::MonoSel => p.mono = value.round() as i32 >= 1,
             // Unison is voice-level: it decides how many cards THIS track's
             // notes claim, so it must live in the per-channel snapshot, not
             // the shared bus.
@@ -844,6 +872,16 @@ impl ParseFinite for str {
 /// the shared effects.
 pub fn params_from_patch(text: &str) -> Result<ParamValues, String> {
     let mut p = ParamValues::neutral();
+    for (param, value) in patch_lines(text)? {
+        param.apply_to_params(&mut p, value);
+    }
+    Ok(p)
+}
+
+/// Every `name value` line of a patch, parsed and in file order — both
+/// halves: the voice lines a snapshot keeps and the bus lines it does not.
+pub(crate) fn patch_lines(text: &str) -> Result<Vec<(Param, f32)>, String> {
+    let mut lines = Vec::new();
     for (no, raw) in text.lines().enumerate() {
         let line = strip_comment(raw).trim();
         if line.is_empty() {
@@ -858,9 +896,9 @@ pub fn params_from_patch(text: &str) -> Result<ParamValues, String> {
             .map_err(|_| format!("patch line {}: bad value for '{}'", no + 1, name))?;
         let param = Param::from_name(name)
             .ok_or_else(|| format!("patch line {}: unknown parameter '{}'", no + 1, name))?;
-        param.apply_to_params(&mut p, value);
+        lines.push((param, value));
     }
-    Ok(p)
+    Ok(lines)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -956,10 +994,54 @@ pub struct Song {
     pub tracks: Vec<(String, u16)>,
 }
 
+/// Seconds rendered after the last event unless a song says otherwise.
+pub(crate) const DEFAULT_TAIL_SECONDS: f64 = 4.0;
+
 pub fn load_song(path: &str) -> Result<Song, String> {
+    load_song_with_patch(path, None)
+}
+
+/// Load a song, or import a Standard MIDI File (`.mid`/`.midi`, see
+/// src/midi_file.rs) whose melodic channels all play `patch`
+/// (`patches/NAME.patch`; Init when None). A song file names its voices
+/// per track (`patch=`), so an override for one is refused rather than
+/// silently ignored.
+pub fn load_song_with_patch(path: &str, patch: Option<&str>) -> Result<Song, String> {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if ext == "mid" || ext == "midi" {
+        #[cfg(feature = "app")]
+        return crate::midi_file::load(path, patch);
+        #[cfg(not(feature = "app"))]
+        return Err(format!(
+            "'{}': MIDI file import is part of the app build",
+            path
+        ));
+    }
+    if let Some(name) = patch {
+        return Err(format!(
+            "patch '{}' applies to MIDI files; '{}' picks its voices per track (patch=)",
+            name, path
+        ));
+    }
     let text = std::fs::read_to_string(path)
         .map_err(|e| format!("could not read song file '{}': {}", path, e))?;
     parse_song(&text)
+}
+
+/// A voice from `patches/NAME.patch` — a song track's `patch=`, or the
+/// `--patch` a MIDI file's channels play.
+pub(crate) fn load_patch_file(name: &str) -> Result<ParamValues, String> {
+    params_from_patch(&read_patch_file(name)?)
+}
+
+/// The text of `patches/NAME.patch`.
+pub(crate) fn read_patch_file(name: &str) -> Result<String, String> {
+    let path = format!("patches/{}.patch", name);
+    std::fs::read_to_string(&path).map_err(|e| format!("patch '{}': {}", path, e))
 }
 
 /// Parse song text directly (the `--say` builder and tests use this).
@@ -1123,7 +1205,7 @@ type RawEvent = (f64, u8, EventKind);
 fn parse_song(text: &str) -> Result<Song, String> {
     let mut bpm = 120.0_f64;
     let mut gate = 0.9_f64;
-    let mut tail_seconds = 4.0_f64;
+    let mut tail_seconds = DEFAULT_TAIL_SECONDS;
     let mut events: Vec<RawEvent> = Vec::new();
     // Per-track patches: channel N+1 = channels[N]; channel 0 = the panel
     let mut channels: Vec<ParamValues> = Vec::new();
@@ -1310,11 +1392,7 @@ fn parse_song(text: &str) -> Result<Song, String> {
                     } else if let Some(v) = opt.strip_prefix("patch=") {
                         // A private patch for this track: the file's
                         // voice-level parameters become this channel
-                        let path = format!("patches/{}.patch", v);
-                        let text = std::fs::read_to_string(&path)
-                            .map_err(|e| err(format!("patch '{}': {}", path, e)))?;
-                        let p = params_from_patch(&text).map_err(err)?;
-                        channels.push(p);
+                        channels.push(load_patch_file(v).map_err(err)?);
                         channel = channels.len() as u16;
                     } else if let Some(v) = opt.strip_prefix("sample=") {
                         smp_data = Some(std::sync::Arc::new(
@@ -2067,7 +2145,9 @@ fn parse_automation_token(token: &str) -> Result<AutoToken, String> {
         ));
     }
 
-    let value = s.parse_finite::<f32>().map_err(|_| "invalid value".to_string())?;
+    let value = s
+        .parse_finite::<f32>()
+        .map_err(|_| "invalid value".to_string())?;
     match dur {
         Some(dur) => Ok(AutoToken::Ramp {
             to: value,
@@ -2951,6 +3031,44 @@ mod tests {
         assert!(tagged && global);
         // unknown track name in dotted automation is an error
         assert!(parse_song("track a\nC4\nautomate ghost.cutoff\n400\n").is_err());
+    }
+
+    /// Velocity response and mono mode are voice-level patch lines: the
+    /// neutral base keeps the original response, a patch sets them, a
+    /// saved patch carries them, and per-track automation reaches them.
+    #[test]
+    fn velocity_and_mono_are_patch_lines() {
+        let p = params_from_patch("").unwrap();
+        assert_eq!((p.vel_amp, p.vel_filter, p.mono), (0.7, 0.8, false));
+        let p = params_from_patch("vel_amp 0.25\nvel_filter 2.5\nmono 1\n").unwrap();
+        assert_eq!((p.vel_amp, p.vel_filter, p.mono), (0.25, 2.5, true));
+        let back = params_from_patch(&crate::patch::serialize(&p)).unwrap();
+        assert_eq!(
+            (back.vel_amp, back.vel_filter, back.mono),
+            (0.25, 2.5, true)
+        );
+
+        let song = parse_song(
+            "bpm 120\n\
+             track lead\n\
+             C4 D4\n\
+             automate lead.mono\n\
+             1\n\
+             automate lead.vel_filter\n\
+             2\n",
+        )
+        .unwrap();
+        let lead = song.tracks.iter().find(|(n, _)| n == "lead").unwrap().1;
+        for want in [Param::MonoSel, Param::VelFilter] {
+            assert!(
+                song.events.iter().any(|e| matches!(
+                    e.kind,
+                    EventKind::Param { param, channel, .. } if param == want && channel == lead
+                )),
+                "`automate lead.{}` did not land on the track",
+                want.name()
+            );
+        }
     }
 
     #[test]

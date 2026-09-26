@@ -40,6 +40,7 @@ fn run<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     song_path: Option<&str>,
+    patch: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
     T: Sample + SizedSample + FromSample<f32>,
@@ -63,7 +64,7 @@ where
     let ui = SynthUI::new(Arc::clone(&voice_manager));
 
     if let Some(path) = song_path {
-        let events = song::load_song(path)?;
+        let events = song::load_song_with_patch(path, patch)?;
         song::spawn_player(events, Arc::clone(&voice_manager));
     }
 
@@ -210,6 +211,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .cloned();
     // No --play given: open silent. Songs only play when asked for.
     let song_path = song_path.as_deref();
+    // `--play tune.mid --patch NAME`: the voice (patches/NAME.patch) every
+    // melodic channel of a MIDI file plays; Init when absent
+    let patch = args
+        .iter()
+        .position(|a| a == "--patch")
+        .and_then(|i| args.get(i + 1))
+        .cloned();
+    let patch = patch.as_deref();
+    if patch.is_some() && song_path.is_none() {
+        return Err("--patch voices a MIDI file: --play <file.mid> --patch NAME".into());
+    }
 
     // Offline bounce: no window, no audio device, exits when the file is
     // done. `--no-normalize` keeps the engine's exact gain for
@@ -221,7 +233,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .cloned();
     if let Some(out) = render_path.as_deref() {
         let song = song_path.ok_or("--render requires --play <song.song>")?;
-        let events = song::load_song(song)?;
+        let events = song::load_song_with_patch(song, patch)?;
         let normalize = !args.iter().any(|a| a == "--no-normalize");
         patina::render::render_to_wav(&events, out, normalize)?;
         return Ok(());
@@ -235,7 +247,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .cloned();
     if let Some(out) = export_path.as_deref() {
         let song = song_path.ok_or("--export-events requires --play <song.song>")?;
-        let song = song::load_song(song)?;
+        let song = song::load_song_with_patch(song, patch)?;
         patina::render::export_events(&song, out)?;
         return Ok(());
     }
@@ -248,7 +260,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .cloned();
     if let Some(dir) = stems_path.as_deref() {
         let song = song_path.ok_or("--render-stems requires --play <song.song>")?;
-        let song = song::load_song(song)?;
+        let song = song::load_song_with_patch(song, patch)?;
         patina::render::render_stems(&song, dir)?;
         return Ok(());
     }
@@ -305,11 +317,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config: cpal::StreamConfig = supported_config.into();
 
     match sample_format {
-        SampleFormat::F32 => run::<f32>(&device, &config, song_path)?,
-        SampleFormat::I16 => run::<i16>(&device, &config, song_path)?,
-        SampleFormat::U16 => run::<u16>(&device, &config, song_path)?,
-        SampleFormat::U8 => run::<u8>(&device, &config, song_path)?,
-        SampleFormat::I8 => run::<i8>(&device, &config, song_path)?,
+        SampleFormat::F32 => run::<f32>(&device, &config, song_path, patch)?,
+        SampleFormat::I16 => run::<i16>(&device, &config, song_path, patch)?,
+        SampleFormat::U16 => run::<u16>(&device, &config, song_path, patch)?,
+        SampleFormat::U8 => run::<u8>(&device, &config, song_path, patch)?,
+        SampleFormat::I8 => run::<i8>(&device, &config, song_path, patch)?,
         _ => {
             println!(
                 "Unsupported sample format: {:?}, trying to use a different format...",
@@ -333,11 +345,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("Trying alternative config: {:?}", config);
 
                     match format {
-                        SampleFormat::F32 => return run::<f32>(&device, &stream_config, song_path),
-                        SampleFormat::I16 => return run::<i16>(&device, &stream_config, song_path),
-                        SampleFormat::U16 => return run::<u16>(&device, &stream_config, song_path),
-                        SampleFormat::U8 => return run::<u8>(&device, &stream_config, song_path),
-                        SampleFormat::I8 => return run::<i8>(&device, &stream_config, song_path),
+                        SampleFormat::F32 => {
+                            return run::<f32>(&device, &stream_config, song_path, patch)
+                        }
+                        SampleFormat::I16 => {
+                            return run::<i16>(&device, &stream_config, song_path, patch)
+                        }
+                        SampleFormat::U16 => {
+                            return run::<u16>(&device, &stream_config, song_path, patch)
+                        }
+                        SampleFormat::U8 => {
+                            return run::<u8>(&device, &stream_config, song_path, patch)
+                        }
+                        SampleFormat::I8 => {
+                            return run::<i8>(&device, &stream_config, song_path, patch)
+                        }
                         _ => continue,
                     }
                 }

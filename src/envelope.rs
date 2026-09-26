@@ -152,6 +152,10 @@ impl Envelope {
     /// partial re-attack is the analog behaviour — but it is ONLY right
     /// when the card keeps the note it already has. Use `note_on_stolen`
     /// whenever a card is reassigned.
+    ///
+    /// A mono voice re-struck while its release still rings is the same
+    /// circuit event (one card, one ADSR, a new gate): the attack charges
+    /// on from whatever the cap still holds, with no discharge first.
     pub fn note_on(&mut self) {
         self.stage = EnvelopeStage::Attack;
     }
@@ -197,6 +201,16 @@ impl Envelope {
 
     pub fn is_idle(&self) -> bool {
         self.stage == EnvelopeStage::Idle
+    }
+
+    #[cfg(test)]
+    pub(crate) fn stage_for_test(&self) -> EnvelopeStage {
+        self.stage
+    }
+
+    #[cfg(test)]
+    pub(crate) fn level_for_test(&self) -> f32 {
+        self.current_level
     }
 }
 
@@ -376,6 +390,39 @@ mod tests {
         assert!(
             after >= level,
             "a held retrigger must not discharge the cap: {level} -> {after}"
+        );
+    }
+
+    /// A mono voice re-struck while it rings out: the gate goes high on
+    /// the SAME card, so the attack charges on from the release's level —
+    /// no discharge, no restart from zero.
+    #[test]
+    fn a_restrike_from_release_charges_on_from_the_cap() {
+        let sr = 48000.0;
+        let mut env = Envelope::new(sr);
+        env.set_attack(0.2);
+        env.set_sustain(0.8);
+        env.set_release(1.0);
+        env.note_on();
+        for _ in 0..(0.5 * sr) as usize {
+            env.next_sample();
+        }
+        env.note_off();
+        let mut level = 0.0;
+        for _ in 0..(0.1 * sr) as usize {
+            level = env.next_sample();
+        }
+        assert!(level > 0.3, "expected a ringing release, got {level}");
+        env.note_on();
+        let mut prev = level;
+        for _ in 0..(0.01 * sr) as usize {
+            let l = env.next_sample();
+            assert!(l >= prev, "a re-strike must never dip: {prev} -> {l}");
+            prev = l;
+        }
+        assert!(
+            prev > level,
+            "...and it must be charging: {level} -> {prev}"
         );
     }
 

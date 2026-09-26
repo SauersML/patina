@@ -125,6 +125,7 @@ pub const WAVEFORM_VARIANTS: [Waveform; 4] = [
 const WAVE_NAMES: &[&str] = &["Sine", "Square", "Sawtooth", "Triangle"];
 const CIRCUIT_NAMES: &[&str] = &["Moog", "ARP"];
 const SYNC_NAMES: &[&str] = &["Off", "On"];
+const MONO_NAMES: &[&str] = &["Poly", "Mono"];
 const CHORUS_NAMES: &[&str] = &["Off", "I", "II", "III", "IV"];
 
 /// One presentation row: an engine parameter plus its host cosmetics.
@@ -272,6 +273,10 @@ const PRESENTATION: &[Row] = &[
     flt (Param::ReverbPre,   "Reverb Predelay", Plain(" s")),
     flt (Param::DrumTone,  "Drum Bus Tone",   Fraction),
     flt (Param::Spread,    "Stereo Spread",   Percent),
+    flt (Param::Width,     "Stereo Width",    Percent),
+    flt (Param::VelAmp,    "Velocity to Level",  Percent),
+    flt (Param::VelFilter, "Velocity to Filter", Plain(" oct")),
+    sel (Param::MonoSel,   "Voice Mode", MONO_NAMES),
 ];
 
 /// Parameters that are NOT host-automation knobs and are deliberately kept

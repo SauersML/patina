@@ -31,6 +31,7 @@ pub struct ParamValues {
     /// Post-effects output trim. Unlike volume, this also closes the
     /// reverb, chorus, and tape returns for a decisive arrangement stop.
     pub output: f32,
+    pub width: f32,
     pub waveform: Waveform,
     pub detune: f32,
     pub cutoff: f32,
@@ -80,6 +81,13 @@ pub struct ParamValues {
     pub filter_decay: f32,
     pub filter_sustain: f32,
     pub filter_release: f32,
+    /// Velocity sensitivity: how far a soft strike drops the VCA (0..1)
+    /// and how many octaves the velocity swing moves the cutoff.
+    pub vel_amp: f32,
+    pub vel_filter: f32,
+    /// Mono voice mode (SH-101 assigner): the channel owns one card
+    /// stack, and overlapping notes slur on it without re-striking.
+    pub mono: bool,
     pub reverb_decay: f32,
     pub reverb_wet: f32,
     pub reverb_tone: f32,
@@ -167,6 +175,7 @@ impl Default for ParamValues {
         Self {
             volume: 0.5,
             output: 1.0,
+            width: 1.0,
             waveform: Waveform::Sawtooth,
             detune: 7.0,
             cutoff: 15000.0,
@@ -210,6 +219,9 @@ impl Default for ParamValues {
             filter_decay: 0.3,
             filter_sustain: 0.0,
             filter_release: 0.3,
+            vel_amp: crate::voice::VEL_AMP,
+            vel_filter: crate::voice::VEL_TRACK,
+            mono: false,
             reverb_decay: 0.5,
             reverb_wet: 0.5,
             reverb_tone: 5500.0,
@@ -434,6 +446,10 @@ pub struct VoiceManager {
     mod_wheel: f32,
     pedal_down: bool,
     sustained: [bool; 128],
+    /// Every key down on each channel, oldest first. On a mono channel
+    /// this is the SH-101's note stack: last-note priority, and lifting
+    /// the sounding key falls back to the newest key still down.
+    held_keys: HashMap<u16, Vec<u8>>,
     note_counter: u64,
     /// Sample clock, for the chord-detection window on glide.
     samples_rendered: u64,
@@ -451,6 +467,7 @@ pub struct VoiceManager {
     pub scope: VecDeque<f32>,
     gain: f32, // smoothed master gain
     output_gain: f32,
+    width_gain: f32,
     output_smooth_k: f32,
     dc_left: DcBlocker,
     dc_right: DcBlocker,
@@ -505,6 +522,7 @@ impl VoiceManager {
             mod_wheel: 0.0,
             pedal_down: false,
             sustained: [false; 128],
+            held_keys: HashMap::new(),
             note_counter: 0,
             samples_rendered: 0,
             last_note_on_sample: u64::MAX,
@@ -516,6 +534,7 @@ impl VoiceManager {
             scope: VecDeque::with_capacity(SCOPE_LEN),
             gain: params.volume,
             output_gain: params.output,
+            width_gain: params.width,
             output_smooth_k: crate::smoothing::approach(0.002, sample_rate),
             dc_left: DcBlocker::new(sample_rate),
             dc_right: DcBlocker::new(sample_rate),
@@ -676,6 +695,12 @@ impl VoiceManager {
         let age = self.note_counter;
         // A fresh press owns the note again; it is no longer the pedal's
         self.sustained[note as usize] = false;
+        // Onto the channel's key stack. Whether another key was already
+        // down is what makes a mono note legato.
+        let keys = self.held_keys.entry(channel).or_default();
+        keys.retain(|&k| k != note);
+        let key_held = !keys.is_empty();
+        keys.push(note);
 
         // Glide starts from the most recently played note, mono-synth
         // style — EXCEPT within a chord: notes struck together (within
@@ -689,13 +714,9 @@ impl VoiceManager {
             .unwrap_or(false);
         let glide_from = if is_chord { None } else { self.last_note_cv };
         self.last_note_on_sample = self.samples_rendered;
-        self.last_note_cv = Some((note as f32 - 69.0) / 12.0);
+        self.last_note_cv = Some(crate::voice::note_cv(note));
 
-        let chan_params = if channel > 0 {
-            self.channel_params.get(&channel).copied()
-        } else {
-            None
-        };
+        let chan_params = self.channel_patch(channel);
 
         // Unison: a note may claim several voice CARDS at once. Each card
         // is a distinct circuit — its own V/oct tolerances, drift walk,
@@ -714,18 +735,24 @@ impl VoiceManager {
         let note_position = stereo_position(age);
         let count = (unison_count.round() as usize).clamp(1, 4);
 
-        // Retrigger every card already holding this note on this channel.
-        let mut retriggered = false;
-        for voice in self.voices.iter_mut() {
-            if voice.is_held() && voice.note == Some(note) && voice.channel() == channel {
-                if let Some(p) = &chan_params {
-                    voice.apply_params(p);
+        // Mono: the channel's one card stack takes the note. Poly:
+        // retrigger every card already holding this note on this channel.
+        let reused = if self.is_mono(channel) {
+            self.mono_note_on(note, velocity, age, glide_from, channel, key_held)
+        } else {
+            let mut retriggered = false;
+            for voice in self.voices.iter_mut() {
+                if voice.is_held() && voice.note == Some(note) && voice.channel() == channel {
+                    if let Some(p) = &chan_params {
+                        voice.apply_params(p);
+                    }
+                    voice.trigger(note, velocity, age, glide_from);
+                    retriggered = true;
                 }
-                voice.trigger(note, velocity, age, glide_from);
-                retriggered = true;
             }
-        }
-        if retriggered {
+            retriggered
+        };
+        if reused {
             let shift = chan_params
                 .as_ref()
                 .map_or(self.params.pitch_shift, |p| p.pitch_shift);
@@ -808,6 +835,75 @@ impl VoiceManager {
         }
     }
 
+    /// The channel's own patch snapshot; None for the live panel
+    /// (channel 0), whose voices follow `self.params`.
+    fn channel_patch(&self, channel: u16) -> Option<ParamValues> {
+        if channel > 0 {
+            self.channel_params.get(&channel).copied()
+        } else {
+            None
+        }
+    }
+
+    fn is_mono(&self, channel: u16) -> bool {
+        self.channel_patch(channel)
+            .map_or(self.params.mono, |p| p.mono)
+    }
+
+    /// A mono channel's sounding card stack, by its age: the newest strike
+    /// still active there (every card of a unison stack shares one age).
+    fn mono_stack_age(&self, channel: u16) -> Option<u64> {
+        self.voices
+            .iter()
+            .filter(|v| v.channel() == channel && v.is_active())
+            .map(|v| v.age())
+            .max()
+    }
+
+    /// A note on a mono channel, SH-101 style: the channel's one card
+    /// stack takes the new pitch — no fresh card, no steal discharge.
+    /// With another of the channel's keys still down (`key_held`) the
+    /// gate never dropped, so the move is legato and neither envelope
+    /// re-strikes; otherwise it is a new gate, and both envelopes
+    /// re-attack from the charge their caps still hold (a detached line
+    /// flows without dipping). Returns false when the channel has no card
+    /// sounding, leaving the note to ordinary allocation.
+    fn mono_note_on(
+        &mut self,
+        note: u8,
+        velocity: f32,
+        age: u64,
+        glide_from: Option<f32>,
+        channel: u16,
+        key_held: bool,
+    ) -> bool {
+        let Some(stack) = self.mono_stack_age(channel) else {
+            return false;
+        };
+        let chan_params = self.channel_patch(channel);
+        for voice in self
+            .voices
+            .iter_mut()
+            .filter(|v| v.channel() == channel && v.is_active())
+        {
+            if voice.age() != stack {
+                // A card still sounding from before mono was switched
+                // on: the channel owns one stack now
+                voice.release();
+                continue;
+            }
+            if let Some(p) = &chan_params {
+                voice.apply_params(p);
+            }
+            if key_held && voice.is_held() {
+                voice.legato(note, age, glide_from);
+            } else {
+                voice.restrike(note, velocity, age, glide_from);
+            }
+        }
+        true
+    }
+
     /// Release a note on one specific channel only.
     pub fn note_off_channel(&mut self, note: u8, channel: u16) {
         // Drum voices are one-shots fired by their trigger pulse; the
@@ -824,41 +920,73 @@ impl VoiceManager {
         if channel == VOX_CHANNEL {
             self.vox.note_off(note);
         }
-        if self.pedal_down {
-            if self
-                .voices
-                .iter()
-                .any(|v| v.is_held() && v.note == Some(note) && v.channel() == channel)
-            {
-                self.sustained[note as usize] = true;
-            }
-            return;
-        }
-        for voice in self.voices.iter_mut() {
-            if voice.is_held() && voice.note == Some(note) && voice.channel() == channel {
-                voice.release();
-            }
+        if !self.key_up(note, channel) {
+            self.release_note(note, |ch| ch == channel);
         }
     }
 
+    /// The panel keyboard's key-up. Channel 0's key stack hears it first
+    /// (a mono panel may slur back to a key still down); otherwise the
+    /// note lets go on every channel holding it.
     pub fn note_off(&mut self, note: u8) {
-        // While the sustain pedal is down, released keys keep ringing; the
-        // release is deferred until the pedal lifts
+        if !self.key_up(note, 0) {
+            self.release_note(note, |_| true);
+        }
+    }
+
+    /// Let go of every gated card sounding `note` on the channels `on`
+    /// selects. While the sustain pedal is down, released keys keep
+    /// ringing: the release is deferred until the pedal lifts.
+    fn release_note(&mut self, note: u8, on: impl Fn(u16) -> bool) {
+        let mut cards = self
+            .voices
+            .iter_mut()
+            .filter(|v| v.is_held() && v.note == Some(note) && on(v.channel()));
         if self.pedal_down {
-            if self
-                .voices
-                .iter()
-                .any(|v| v.is_held() && v.note == Some(note))
-            {
+            if cards.next().is_some() {
                 self.sustained[note as usize] = true;
             }
             return;
         }
-        for voice in self.voices.iter_mut() {
-            if voice.is_held() && voice.note == Some(note) {
-                voice.release();
-            }
+        for voice in cards {
+            voice.release();
         }
+    }
+
+    /// Take `note` off `channel`'s key stack. On a mono channel, lifting
+    /// the SOUNDING key while others are still down returns the voice,
+    /// legato, to the newest of them (last-note priority): the gate stays
+    /// high, only the CV moves. Returns true when it did; otherwise the
+    /// caller releases the note as usual — a mono channel's last key up
+    /// (pedal-aware), a held key that was not sounding (nothing holds
+    /// it), or any key on a poly channel.
+    fn key_up(&mut self, note: u8, channel: u16) -> bool {
+        let Some(keys) = self.held_keys.get_mut(&channel) else {
+            return false;
+        };
+        keys.retain(|&k| k != note);
+        let Some(back_to) = keys.last().copied() else {
+            return false;
+        };
+        if !self.is_mono(channel) {
+            return false;
+        }
+        let Some(stack) = self.mono_stack_age(channel) else {
+            return false;
+        };
+        let from = Some(crate::voice::note_cv(note));
+        let mut moved = false;
+        for voice in self.voices.iter_mut().filter(|v| {
+            v.is_held() && v.channel() == channel && v.age() == stack && v.note == Some(note)
+        }) {
+            voice.legato(back_to, stack, from);
+            moved = true;
+        }
+        if moved {
+            // The hold capacitor now carries the key it fell back to
+            self.last_note_cv = Some(crate::voice::note_cv(back_to));
+        }
+        moved
     }
 
     /// Pitch bend in semitones (a wheel typically spans +/-2). Slewed in
@@ -901,6 +1029,10 @@ impl VoiceManager {
 
     pub fn set_output(&mut self, output: f32) {
         self.params.output = Param::Output.clamp(output);
+    }
+
+    pub fn set_width(&mut self, width: f32) {
+        self.params.width = Param::Width.clamp(width);
     }
 
     pub fn set_waveform(&mut self, waveform: Waveform) {
@@ -987,6 +1119,20 @@ impl VoiceManager {
         self.params.filter_release = release;
         for voice in &self.voices {
             voice.filter_env.set_release(release);
+        }
+    }
+
+    pub fn set_vel_amp(&mut self, depth: f32) {
+        self.params.vel_amp = Param::VelAmp.clamp(depth);
+        for voice in self.voices.iter_mut().filter(|v| v.channel() == 0) {
+            voice.set_vel_amp(self.params.vel_amp);
+        }
+    }
+
+    pub fn set_vel_filter(&mut self, octaves: f32) {
+        self.params.vel_filter = Param::VelFilter.clamp(octaves);
+        for voice in self.voices.iter_mut().filter(|v| v.channel() == 0) {
+            voice.set_vel_filter(self.params.vel_filter);
         }
     }
 
@@ -1161,6 +1307,13 @@ impl VoiceManager {
         for voice in &mut self.voices {
             voice.set_glide_rate(rate);
         }
+    }
+
+    /// Mono voice mode for the panel. Nothing is cut when it flips: the
+    /// key stack is consulted only while the channel is mono, so notes
+    /// already sounding release by whichever rule holds at their key-up.
+    pub fn set_mono(&mut self, on: bool) {
+        self.params.mono = on;
     }
 
     pub fn set_lfo_rate(&mut self, rate: f32) {
@@ -1473,6 +1626,13 @@ impl VoiceManager {
                 .process_with_send(left, right, send_cho.0 * g, send_cho.1 * g);
         let (left, right) = self.tape.process(left, right);
 
+        // Master width: scale the side signal of the finished mix, smoothed
+        // like the output trim so automating it never clicks.
+        self.width_gain += (self.params.width - self.width_gain) * self.output_smooth_k;
+        let mid = 0.5 * (left + right);
+        let side = 0.5 * (left - right) * self.width_gain;
+        let (left, right) = (mid + side, mid - side);
+
         // Arrangement output sits after every effect return. Its short
         // de-clicking slew permits a decisive stop without leaving the
         // reverb tank audible or hard-truncating a non-zero sample.
@@ -1683,6 +1843,49 @@ fn soft_limit(x: f32) -> f32 {
 mod tests {
     use super::*;
 
+    /// Width scales only the side signal of the finished mix: 0 folds it to
+    /// mono, and a narrower image keeps the mid untouched.
+    #[test]
+    fn width_scales_the_side_and_keeps_the_mid() {
+        let take = |width: f32| {
+            let mut vm = VoiceManager::new(48000.0, 8);
+            vm.warm_up();
+            crate::patch::load(&mut vm, crate::patch::FACTORY[0].1).unwrap();
+            vm.set_spread(0.8);
+            vm.set_chorus_depth(0.6);
+            vm.set_width(width);
+            for n in [48, 55, 60, 64, 67, 71] {
+                vm.note_on(n, 0.8);
+            }
+            let (mut m2, mut s2) = (0.0f64, 0.0f64);
+            for i in 0..48000 {
+                let (l, r) = vm.render_next();
+                if i > 4800 {
+                    m2 += ((l + r) * (l + r)) as f64;
+                    s2 += ((l - r) * (l - r)) as f64;
+                }
+            }
+            (m2, s2)
+        };
+        let (m_full, s_full) = take(1.0);
+        let (m_half, s_half) = take(0.5);
+        let (_, s_mono) = take(0.0);
+        assert!(s_full > 1e-3 * m_full, "the reference take must be stereo");
+        assert!(
+            s_mono < 1e-9 * m_full,
+            "width 0 must be mono: side {s_mono}"
+        );
+        let ratio = s_half / s_full;
+        assert!(
+            (ratio - 0.25).abs() < 0.03,
+            "width 0.5 must quarter the side power: {ratio}"
+        );
+        assert!(
+            (m_half / m_full - 1.0).abs() < 0.01,
+            "width must leave the mid alone"
+        );
+    }
+
     /// Spread 0 keeps every note dead center (exactly mono); spread up fans
     /// a chord across both speakers, balanced about the middle.
     #[test]
@@ -1711,7 +1914,10 @@ mod tests {
         let (l2, r2, side) = chord(0.7);
         assert!(side > 0.05, "spread 0.7 barely widened the chord: {side}");
         let balance = 10.0 * (l2 / r2).log10();
-        assert!(balance.abs() < 1.5, "chord leans {balance:.2} dB to one side");
+        assert!(
+            balance.abs() < 1.5,
+            "chord leans {balance:.2} dB to one side"
+        );
     }
 
     /// Successive notes land spread across the field and balance about the
@@ -1721,7 +1927,9 @@ mod tests {
         for start in 1..200u64 {
             let p: Vec<f32> = (start..start + 4).map(stereo_position).collect();
             let mean = p.iter().sum::<f32>() / 4.0;
-            let (lo, hi) = p.iter().fold((1f32, -1f32), |(a, b), &x| (a.min(x), b.max(x)));
+            let (lo, hi) = p
+                .iter()
+                .fold((1f32, -1f32), |(a, b), &x| (a.min(x), b.max(x)));
             // the golden-ratio sequence's worst four-note mean is 0.382
             assert!(mean.abs() < 0.39, "notes {start}..+4 lean {mean}");
             assert!(hi - lo > 1.0, "notes {start}..+4 bunch up: {p:?}");
@@ -2227,5 +2435,316 @@ mod tests {
             (1.10..1.145).contains(&ratio),
             "bend +2 st should raise pitch ~12%: base period {base}, bent {bent}, ratio {ratio}"
         );
+    }
+
+    // --- Velocity response and mono voice mode ---------------------------
+
+    /// The new controls at their defaults are the engine as it was: a
+    /// render with `vel_amp 0.7`, `vel_filter 0.8` and `mono 0` written
+    /// out must match one where they are absent, sample for sample, on
+    /// the panel and on a song channel alike.
+    #[test]
+    fn default_velocity_and_mono_render_bit_identically() {
+        let render = |extra: &str| {
+            let mut vm = VoiceManager::new(48000.0, 8);
+            vm.warm_up();
+            crate::patch::load(&mut vm, crate::patch::FACTORY[1].1).unwrap();
+            crate::patch::apply(&mut vm, extra).unwrap();
+            let track = format!("cutoff 2500\nfilter_env 2\nglide 0.05\n{extra}");
+            vm.set_channel_params(1, crate::song::params_from_patch(&track).unwrap());
+            let mut out = Vec::new();
+            // Overlaps, a detached re-press, and a range of velocities
+            let score: [(u8, f32, u16, bool); 10] = [
+                (48, 0.3, 0, true),
+                (60, 0.9, 1, true),
+                (55, 0.6, 0, true),
+                (64, 1.0, 1, true),
+                (48, 0.0, 0, false),
+                (60, 0.0, 1, false),
+                (60, 0.45, 1, true),
+                (55, 0.0, 0, false),
+                (64, 0.0, 1, false),
+                (60, 0.0, 1, false),
+            ];
+            for (note, vel, ch, on) in score {
+                if on {
+                    vm.note_on_channel(note, vel, ch);
+                } else {
+                    vm.note_off_channel(note, ch);
+                }
+                for _ in 0..3000 {
+                    let (l, r) = vm.render_next();
+                    out.push((l.to_bits(), r.to_bits()));
+                }
+            }
+            out
+        };
+        let absent = render("");
+        assert!(
+            absent.iter().any(|&(l, _)| f32::from_bits(l).abs() > 1e-3),
+            "the reference render is silent"
+        );
+        assert!(
+            absent == render("vel_amp 0.7\nvel_filter 0.8\nmono 0\n"),
+            "the defaults written out changed the render"
+        );
+    }
+
+    /// A panel voice with a contour slow enough to watch every stage,
+    /// switched to mono.
+    fn mono_panel() -> VoiceManager {
+        let mut vm = VoiceManager::new(48000.0, 8);
+        vm.warm_up();
+        crate::patch::load(&mut vm, crate::patch::FACTORY[0].1).unwrap();
+        vm.set_attack(0.02);
+        vm.set_decay(0.1);
+        vm.set_sustain(0.6);
+        vm.set_release(0.6);
+        vm.set_mono(true);
+        vm
+    }
+
+    fn run(vm: &mut VoiceManager, seconds: f32) {
+        for _ in 0..(seconds * vm.sample_rate()) as usize {
+            vm.render_next();
+        }
+    }
+
+    /// The cards sounding (gated or ringing out), by index.
+    fn sounding(vm: &VoiceManager) -> Vec<usize> {
+        (0..vm.voices.len())
+            .filter(|&i| vm.voices[i].is_active())
+            .collect()
+    }
+
+    /// The one card a mono channel may have sounding.
+    fn mono_card(vm: &VoiceManager) -> usize {
+        let cards = sounding(vm);
+        assert_eq!(
+            cards.len(),
+            1,
+            "a mono channel must own one card: {cards:?}"
+        );
+        cards[0]
+    }
+
+    /// Mono legato: a note struck while another key is down moves the
+    /// pitch and nothing else. Neither envelope re-strikes, so the level
+    /// holds through the slur.
+    #[test]
+    fn mono_legato_moves_the_pitch_without_retriggering() {
+        use crate::envelope::EnvelopeStage;
+        let mut vm = mono_panel();
+        vm.note_on(60, 0.8);
+        run(&mut vm, 0.5);
+        let i = mono_card(&vm);
+        let before = vm.voices[i].envelope.level_for_test();
+        assert!(vm.voices[i].envelope.stage_for_test() == EnvelopeStage::Sustain);
+
+        vm.note_on(64, 0.8); // 60 still down
+        assert_eq!(mono_card(&vm), i, "legato must stay on the same card");
+        assert_eq!(vm.voices[i].note, Some(64));
+        assert!(
+            vm.voices[i].envelope.stage_for_test() == EnvelopeStage::Sustain,
+            "legato re-struck the amp envelope"
+        );
+        assert!(
+            !matches!(
+                vm.voices[i].filter_env.stage_for_test(),
+                EnvelopeStage::Attack | EnvelopeStage::Steal
+            ),
+            "legato re-struck the filter envelope"
+        );
+        for _ in 0..2400 {
+            vm.render_next();
+            let level = vm.voices[i].envelope.level_for_test();
+            assert!(
+                (level - before).abs() < 1e-3,
+                "the level moved through a slur: {before} -> {level}"
+            );
+        }
+    }
+
+    /// Mono, detached: the next note re-strikes the SAME card, and its
+    /// attack charges on from the release's level. No steal discharge, so
+    /// no dip — and never a second card.
+    #[test]
+    fn mono_restrike_charges_on_from_the_release() {
+        use crate::envelope::EnvelopeStage;
+        let mut vm = mono_panel();
+        vm.note_on(60, 0.8);
+        run(&mut vm, 0.4);
+        vm.note_off(60);
+        run(&mut vm, 0.1);
+        let i = mono_card(&vm);
+        assert!(vm.voices[i].envelope.stage_for_test() == EnvelopeStage::Release);
+        let before = vm.voices[i].envelope.level_for_test();
+        assert!(before > 0.1, "expected a ringing release, got {before}");
+
+        vm.note_on(62, 0.8);
+        assert_eq!(
+            mono_card(&vm),
+            i,
+            "a detached note must re-strike the same card"
+        );
+        assert_eq!(vm.voices[i].note, Some(62));
+        assert!(
+            vm.voices[i].envelope.stage_for_test() == EnvelopeStage::Attack,
+            "a detached note must re-strike the envelope"
+        );
+        // Through the whole attack (it then turns into the decay)
+        let mut prev = before;
+        while vm.voices[i].envelope.stage_for_test() == EnvelopeStage::Attack {
+            vm.render_next();
+            assert_eq!(mono_card(&vm), i);
+            let level = vm.voices[i].envelope.level_for_test();
+            assert!(level >= prev, "the re-strike dipped: {prev} -> {level}");
+            prev = level;
+        }
+        assert!(prev >= 1.0, "the attack never completed: {prev}");
+    }
+
+    /// Last-note priority: lifting the sounding key falls back, legato, to
+    /// the newest key still down; lifting a key that is not sounding only
+    /// takes it off the stack; the last key up releases the voice.
+    #[test]
+    fn mono_note_stack_returns_to_the_held_key() {
+        use crate::envelope::EnvelopeStage;
+        let mut vm = mono_panel();
+        for n in [60, 64, 67] {
+            vm.note_on(n, 0.8);
+            run(&mut vm, 0.05);
+        }
+        run(&mut vm, 0.3);
+        let i = mono_card(&vm);
+        assert_eq!(vm.voices[i].note, Some(67));
+
+        vm.note_off(67);
+        assert_eq!(mono_card(&vm), i);
+        assert_eq!(
+            vm.voices[i].note,
+            Some(64),
+            "must fall back to the newest held key"
+        );
+        assert!(vm.voices[i].is_held());
+        assert!(
+            vm.voices[i].envelope.stage_for_test() == EnvelopeStage::Sustain,
+            "the fall-back must be legato"
+        );
+
+        vm.note_off(60); // held, not sounding
+        assert_eq!(vm.voices[i].note, Some(64));
+        assert!(vm.voices[i].is_held(), "lifting a silent key cut the voice");
+
+        vm.note_off(64);
+        assert_eq!(mono_card(&vm), i);
+        assert!(
+            !vm.voices[i].is_held(),
+            "the last key up must release the voice"
+        );
+        assert!(vm.voices[i].envelope.stage_for_test() == EnvelopeStage::Release);
+    }
+
+    /// The sustain pedal holds the mono gate open exactly where it would
+    /// hold a poly key: the keys still decide the pitch, and the pedal's
+    /// lift lets the voice go.
+    #[test]
+    fn mono_keeps_the_sustain_pedal() {
+        let mut vm = mono_panel();
+        vm.set_sustain_pedal(true);
+        vm.note_on(60, 0.8);
+        run(&mut vm, 0.2);
+        vm.note_off(60);
+        run(&mut vm, 0.1);
+        let i = mono_card(&vm);
+        assert!(vm.voices[i].is_held(), "the pedal must hold the lifted key");
+
+        // No key down: a new gate, re-struck on the same card
+        let before = vm.voices[i].envelope.level_for_test();
+        vm.note_on(64, 0.8);
+        vm.render_next();
+        assert_eq!(mono_card(&vm), i);
+        assert!(vm.voices[i].envelope.level_for_test() >= before);
+
+        vm.note_on(67, 0.8); // 64 down: legato
+        vm.note_off(67);
+        assert_eq!(
+            vm.voices[i].note,
+            Some(64),
+            "the stack still steers the pitch"
+        );
+        vm.note_off(64);
+        assert!(
+            vm.voices[i].is_held(),
+            "the pedal must hold the last key too"
+        );
+
+        vm.set_sustain_pedal(false);
+        assert!(sounding(&vm).iter().all(|&c| !vm.voices[c].is_held()));
+    }
+
+    /// Mono off is the polysynth, untouched: overlapping notes take their
+    /// own cards, lifting one leaves the other alone, and a detached note
+    /// goes to a fresh card.
+    #[test]
+    fn poly_allocation_is_unchanged() {
+        let mut vm = mono_panel();
+        vm.set_mono(false);
+        vm.note_on(60, 0.8);
+        run(&mut vm, 0.1);
+        vm.note_on(64, 0.8);
+        run(&mut vm, 0.1);
+        assert_eq!(sounding(&vm).len(), 2);
+        vm.note_off(64);
+        let held: Vec<_> = vm.voices.iter().filter(|v| v.is_held()).collect();
+        assert_eq!(held.len(), 1);
+        assert_eq!(
+            held[0].note,
+            Some(60),
+            "poly has no note stack to fall back on"
+        );
+        vm.note_off(60);
+        run(&mut vm, 0.05);
+        vm.note_on(62, 0.8);
+        assert_eq!(
+            sounding(&vm).len(),
+            3,
+            "a detached poly note takes a fresh card"
+        );
+    }
+
+    /// Mono switched on or off in the middle of held notes (per-track
+    /// automation) must leave nothing stuck: every key-up still finds
+    /// the card it owes a release.
+    #[test]
+    fn switching_mono_mid_phrase_leaves_no_stuck_notes() {
+        let held = |vm: &VoiceManager| vm.voices.iter().filter(|v| v.is_held()).count();
+        let mut vm = VoiceManager::new(48000.0, 8);
+        vm.set_channel_params(1, crate::song::params_from_patch("sustain 0.8\n").unwrap());
+
+        // Poly chord, then mono arrives under it
+        vm.note_on_channel(60, 0.8, 1);
+        vm.note_on_channel(64, 0.8, 1);
+        run(&mut vm, 0.1);
+        assert_eq!(held(&vm), 2);
+        vm.set_channel_param(1, Param::MonoSel, 1.0);
+        vm.note_on_channel(67, 0.8, 1);
+        assert_eq!(held(&vm), 1, "mono owns one card");
+        vm.note_off_channel(67, 1);
+        assert_eq!(held(&vm), 1, "67 up falls back to 64, still down");
+        for n in [60, 64] {
+            vm.note_off_channel(n, 1);
+        }
+        assert_eq!(held(&vm), 0, "a key-up was lost switching mono on");
+
+        // Mono phrase, then poly returns before the keys lift
+        vm.note_on_channel(60, 0.8, 1);
+        vm.note_on_channel(64, 0.8, 1);
+        assert_eq!(held(&vm), 1);
+        vm.set_channel_param(1, Param::MonoSel, 0.0);
+        for n in [60, 64] {
+            vm.note_off_channel(n, 1);
+        }
+        assert_eq!(held(&vm), 0, "a key-up was lost switching mono off");
     }
 }
