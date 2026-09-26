@@ -1,0 +1,133 @@
+# The Last Warm Room — a lullaby that slowly goes wrong.
+#
+# Everything is the Cloud preset: a low drone, slow chords, and a ghost
+# voice in mono that sighs between notes on a long glide, most often across
+# a tritone. No high leads, nothing that pings. The unease is structural
+# rather than loud: the chords sag flat against a drone that stays put, the
+# tape warps harder as it goes, a felt-muffled heartbeat skips, and the
+# germanium sits at 30-50% until the one moment it is allowed to break,
+# after which everything is cut out from under the room and only its
+# reverb is left. The ending detunes downward and never resolves.
+#
+# 60 bpm, so a beat is a second and the arithmetic below is in seconds.
+
+bpm 60
+gate 0.97
+tail 4
+
+# --- the bus, from the Cloud preset (per-track patches carry only the voice)
+automate volume
+0.393
+automate spring
+0
+automate chorus_mode
+0
+automate reverb_tone
+3500
+automate reverb_pre
+0.02
+automate tape_flutter
+0.346
+automate tape_age
+0.44
+
+# Germanium: 30-50% as the piece darkens, then the one moment it matters.
+automate fuzz
+0.30 R:18 0.40:6@smooth 0.50:6@smooth 0.86:2@exp R:1.9 0.30:0.1@step R:2 0.36:6@smooth
+
+# The tape warps harder as the piece goes wrong, relaxes after the cut,
+# then sags again as the last chord dies.
+automate tape_wow
+0.34 R:16 0.62:14@smooth R:4 0.22:2@smooth 0.52:6@smooth
+automate tape_drive
+0.34 R:26 0.55:6@smooth R:2 0.30:0.1@step
+
+# The room: it swallows the cut — wetter and longer the instant the
+# instruments are pulled out, so the silence is the reverb's.
+automate reverb_wet
+0.38 R:33.9 0.62:0.1 R:4 0.45:4@smooth
+automate reverb_decay
+0.75 R:33.9 0.88:0.1
+
+# --- the heart: a 909 kick tuned into the floor, under a felt blanket.
+automate bd_level
+0.3
+automate bd_tune
+0.08
+automate bd_decay
+0.62
+automate bd_sweep
+0.12
+automate bd_attack
+0.05
+automate bd_drive
+0
+automate dr_drive
+0
+automate dr_tone
+0.08
+
+# --- drone: the one thing that never moves in pitch.
+track drone vel=0.95 gain=2 patch=cloud reverb_send=0.15
+D2:34 R:2 D2:6@0.6
+
+automate drone.release
+3 R:33.95 0.04:0.05 R:2 3:0.05
+
+# --- pad: beautiful, then darker, then flat against the drone.
+track pad vel=0.5 patch=cloud reverb_send=0.25
+>6
+[D3 F3 A3 E4]:6
+[Bb2 D3 F3 A3 E4]:6
+[G2 Bb2 D3 F#3 A3]:6
+[Eb3 G3 Bb3 D4 A4]:6
+[D3 Eb3 F3 A3 C4]:4@0.72
+R:2
+[D3 F3 A3 E4]:6@0.3
+
+automate pad.glide
+0.3
+# The break has to land, not bloom: the one chord that strikes fast.
+automate pad.attack
+3.84 R:29.9 0.3:0.1@step R:4.1 3.84:0.05@step
+automate pad.release
+3 R:33.95 0.04:0.05 R:2 3:0.05
+automate pad.cutoff
+870 R:28 2600:4@exp R:2 700:0.05
+automate pad.pitch_shift
+0 R:20 -0.32:10@smooth R:4 0:0.05@step R:2 -0.7:6@smooth
+
+# --- ghost: one voice in mono, sighing on a long glide. Mid register.
+track ghost vel=0.42 patch=cloud reverb_send=0.4
+>10
+A3:2.5 Eb4:2 D4:1.5 R:2
+F4:2 E4:1.5 Bb3:2.5 R:2
+A3:2 G#3:2
+D4:4
+R:4
+E4:2@0.3 Eb4:2@0.3
+
+automate ghost.mono
+1
+automate ghost.glide
+1.1
+automate ghost.attack
+1.2
+automate ghost.release
+2.5 R:33.95 0.04:0.05 R:2 2.5:0.05
+automate ghost.cutoff
+700 R:26 1400:4@exp R:2 700:0.05
+
+# --- heart: lub-dub, a skipped beat as things turn, racing into the
+# break, one lone beat in the silence, then slowing until it stops.
+track heart kit=909 vel=0.5 gain=0.6 reverb_send=0.45
+>4
+(BD:0.28@0.55 BD:0.72@0.28)x14
+R:1
+(BD:0.28@0.6 BD:0.72@0.3)x7
+(BD:0.25@0.7 BD:0.25@0.35 BD:0.25@0.72 BD:0.25@0.36)x8
+R:1
+BD:0.28@0.5 BD:0.72@0.25
+BD:0.28@0.45 BD:1.72@0.22
+BD:0.28@0.4 BD:2.72@0.2
+BD:1@0.3

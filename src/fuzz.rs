@@ -6,7 +6,7 @@
 // paper measures from real AC128/OC44 devices ("the imperfect nature of
 // the transistors, whose saturating behavior is slightly asymmetric").
 //
-// Modeled as a biased soft-knee waveshaper: u = g*(x + BIAS), y = tanh(u),
+// Modeled as a biased soft-knee waveshaper: u = g*x + BIAS, y = tanh(u),
 // with the tanh evaluated through first-order antiderivative antialiasing
 // (Parker et al.). The stage's resting output tanh(g*BIAS) is subtracted
 // exactly, and a DC blocker takes the program-dependent shift that
@@ -15,9 +15,23 @@
 
 use crate::adaa::AdaaTanh;
 
-/// Record-bias asymmetry: pushes the operating point off-center so the
-/// clipping is uneven and even harmonics appear.
-const BIAS: f32 = 0.14;
+/// The operating point's offset from center, in the shaper's own units:
+/// it makes the clipping uneven, so even harmonics appear. 0.9 puts the
+/// near rail close enough that a line at the mid knob (0.3-0.5) clips on
+/// that side first — H2 around -17 dB at 0.35, the warmth the pedal is
+/// for — while the far side still passes the whole swing. It is the DC
+/// bias the resistors set, so it sits OUTSIDE the gain: the fuzz control
+/// is Q2's emitter bypass, which changes the AC gain and leaves the
+/// operating point where it was. It used to ride inside the gain
+/// (u = g*(x + BIAS)), which at the top of the knob parked the stage
+/// against its rail (tanh(31 * 0.14) = 0.9996) before any signal arrived:
+/// the pedal gated everything but the loudest peaks, taking a quiet line
+/// down 35 dB at 0.86 and 55 dB at full fuzz.
+const BIAS: f32 = 0.9;
+
+/// The bus level a line typically reaches the pedal at (peak, of full
+/// scale): the point the make-up holds level around.
+const NOMINAL: f32 = 0.1;
 
 struct DcBlock {
     x1: f32,
@@ -91,19 +105,25 @@ impl Fuzz {
         // Perceptual gain taper: gentle grit low on the knob, screaming
         // germanium saturation at the top
         let g = 1.0 + w * w * 40.0;
-        // Make-up keeps small-signal loudness roughly constant as g rises
-        let makeup = 0.85 / (g * 0.7).tanh().max(0.3);
+        // Make-up holds a line at the bus's nominal level at the same
+        // loudness as the knob turns: the stage's peak-to-peak swing for a
+        // sine of that amplitude about the operating point, divided back
+        // out. Quieter lines come up (the fuzz's
+        // sustain) and louder ones are flattened (its compression), which
+        // is the pedal; the level stays where the player left it.
+        let a = g * 0.7 * NOMINAL;
+        let makeup = 2.0 * NOMINAL / ((BIAS + a).tanh() - (BIAS - a).tanh());
         // Short crossfade near zero so engaging the knob never clicks
         let fade = (w * 50.0).min(1.0);
         // The bias point's resting output. Left for the DC blocker, it
         // stepped in at full size whenever the pedal engaged (the blocker
         // starts from rest and passes a step whole) and moved with every
         // turn of the knob: engaging on silence thumped at -12 dBFS.
-        let rest = (g * BIAS).tanh();
+        let rest = BIAS.tanh();
 
         let mut out = [left, right];
         for (ch, sample) in out.iter_mut().enumerate() {
-            let u = g * (*sample * 0.7 + BIAS);
+            let u = g * *sample * 0.7 + BIAS;
             if !self.engaged {
                 self.adaa[ch].seed(u);
             }
@@ -120,6 +140,34 @@ impl Fuzz {
 mod tests {
     use super::*;
     use std::f32::consts::TAU;
+
+    /// The fuzz control is gain, not bias: a quiet line must come through
+    /// the top of the knob at roughly the level it went in (sustain lifts
+    /// it, never gates it), and a line at the bus's nominal level must
+    /// keep its loudness across the whole sweep.
+    #[test]
+    fn full_fuzz_sustains_a_quiet_line_instead_of_gating_it() {
+        let gain_db = |amp: f32, knob: f32| {
+            let mut f = Fuzz::new(48000.0);
+            f.set_amount(knob);
+            let (mut e, mut n) = (0.0f64, 0);
+            for i in 0..48000 {
+                let x = amp * (TAU * 220.0 * i as f32 / 48000.0).sin();
+                let (l, _) = f.process(x, x);
+                if i > 24000 {
+                    e += (l * l) as f64;
+                    n += 1;
+                }
+            }
+            20.0 * ((e / n as f64).sqrt() / (amp as f64 / 2f64.sqrt())).log10()
+        };
+        for knob in [0.2, 0.5, 0.86, 1.0] {
+            let quiet = gain_db(0.03, knob);
+            assert!(quiet > -1.5, "knob {knob}: a quiet line lost {quiet:.1} dB");
+            let nominal = gain_db(NOMINAL, knob);
+            assert!(nominal.abs() < 2.0, "knob {knob}: nominal level moved {nominal:.1} dB");
+        }
+    }
 
     #[test]
     fn bypass_at_zero() {
