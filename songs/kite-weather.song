@@ -1,0 +1,153 @@
+# Kite Weather
+#
+# A warm, faded afternoon heard through a worn cassette. No drums.
+#
+# Everything plays through the same tired tape: heavy wow, hiss, dulled
+# highs, pads of two slightly detuned oscillators through the Juno chorus.
+# The harmony is major and a little sad — Dmaj9, F#m7, Gmaj9, then the turn
+# to G minor with a sixth that makes the whole thing ache — and the tune is
+# simple enough to have been hummed, sitting low, sliding between notes.
+#
+#   bars 1-8    pad, a soft bass floor, a few distant plucks
+#   bars 9-16   the tune
+#   bars 17-24  the tune answers higher; the plucks fill in; the pad opens;
+#               at bar 20 the tape sags and every voice sags with it
+#   bars 25-28  thinning out, and the tape slows to a stop
+#
+# 4/4 at 88 bpm; bar n starts at beat 4*(n-1).
+
+bpm 88
+gate 0.95
+tail 4
+
+# --- the tape everything lives on
+automate tape_wow
+0.42 R:76 0.6:2@smooth 0.42:4@smooth R:26 0.55:4@smooth
+automate tape_flutter
+0.1
+automate tape_age
+0.5
+automate tape_drive
+0.35
+automate chorus_mode
+2
+automate chorus_rate
+0.5
+automate chorus_depth
+0.45
+automate chorus_hiss
+0.6
+automate spring
+0.05
+automate reverb_wet
+0.3
+automate reverb_decay
+0.78
+automate reverb_tone
+3000
+automate width
+1.1
+automate fuzz
+0
+
+# A light parallel squeeze, the way a whole cassette dub sits together.
+automate comp_in
+1
+automate comp_threshold
+-28
+automate comp_ratio
+0
+automate comp_attack
+4
+automate comp_release
+4
+automate comp_makeup
+2
+automate comp_mix
+0.4
+
+# --- pad: Kaini, two saws a few cents apart, slow in and slow out
+track pad vel=0.5 patch=kaini reverb_send=0.3
+([D3 F#3 A3 C#4 E4]:8 [F#3 A3 C#4 E4]:8 [G3 B3 D4 F#4 A4]:8 [G3 Bb3 D4 E4]:8)x3
+[D3 F#3 A3 C#4 E4]:16
+
+# the pad breathes in over the first eight bars and back out at the end
+automate pad.gain
+0.2 0.6:32@smooth R:64 0.38:16@smooth
+automate pad.attack
+1.4
+automate pad.release
+2.5
+automate pad.osc2_level
+0.6
+automate pad.detune
+11
+automate pad.cutoff
+600 R:64 1000:16@smooth R:16 520:16@smooth
+
+# --- bass: Kaini, mono, a sub underneath, roots held long
+track bass vel=0.55 patch=kaini gain=0.8
+# the floor arrives at bar 5, once the pad has breathed in
+R:16 G2:8 G2:8
+(D2:8 F#2:8 G2:8 G2:8)x2
+D2:16
+
+automate bass.mono
+1
+automate bass.sub
+0.45
+automate bass.attack
+0.3
+automate bass.release
+1.5
+automate bass.cutoff
+380
+
+# --- plucks: Bocuma, a distant music box that never quite rings
+track pluck vel=0.3 len=0.5 patch=bocuma pan=-0.35 reverb_send=0.4
+# 1-8: a few notes on the beat
+(D3 R E4@0.25 R C#4 R A3@0.22 R D3 R E4@0.25 R C#4 R A3@0.22 R F#3 R E4@0.25 R C#4 R A3@0.22 R F#3 R E4@0.25 R C#4 R A3@0.22 R G3 R F#4@0.25 R D4 R A3@0.22 R G3 R F#4@0.25 R D4 R A3@0.22 R G3 R E4@0.25 R D4 R Bb3@0.22 R G3 R E4@0.25 R D4 R Bb3@0.22 R)
+# 9-16: the same, while the tune sings
+(D3 R E4@0.25 R C#4 R A3@0.22 R D3 R E4@0.25 R C#4 R A3@0.22 R F#3 R E4@0.25 R C#4 R A3@0.22 R F#3 R E4@0.25 R C#4 R A3@0.22 R G3 R F#4@0.25 R D4 R A3@0.22 R G3 R F#4@0.25 R D4 R A3@0.22 R G3 R E4@0.25 R D4 R Bb3@0.22 R G3 R E4@0.25 R D4 R Bb3@0.22 R)
+# 17-24: filling in to eighths
+(D3@0.34 A3 E4@0.3 F#4 C#4@0.3 A3 E4 A3 D3@0.34 A3 E4@0.3 F#4 C#4@0.3 A3 E4 A3 F#3@0.34 C#4 E4@0.3 A4 E4@0.3 C#4 A3 E4 F#3@0.34 C#4 E4@0.3 A4 E4@0.3 C#4 A3 E4 G3@0.34 D4 F#4@0.3 A4 B3@0.3 D4 A4 F#4 G3@0.34 D4 F#4@0.3 A4 B3@0.3 D4 A4 F#4 G3@0.34 D4 E4@0.3 Bb3 D4@0.3 E4 G4 D4 G3@0.34 D4 E4@0.3 Bb3 D4@0.3 E4 G4 D4)
+# 25-28: a few last notes
+D3@0.25 R R R E4@0.2 R R R R R C#4@0.18 R R R R R
+R R A3@0.15 R R R R R R R R R R R R R
+
+automate pluck.vel_filter
+1.4
+
+# --- the tune: Kaini B, mono, low, sliding
+track tune vel=0.55 patch=kaini-b gain=1.8 reverb_send=0.22
+>32
+# 9-16
+A4:1.5 F#4:0.5 E4:1 D4:1 E4:3 R:1
+F#4:1.5 A4:0.5 E4:2 C#4:3 R:1
+B3:1 D4:1 F#4:1.5 E4:0.5 D4:3 R:1
+Bb3:1.5 D4:0.5 E4:2 D4:3 R:1
+# 17-24: the answer, a little higher
+F#4:1.5@0.6 A4:0.5@0.6 B4:1@0.65 A4:1@0.6 F#4:3@0.6 R:1
+E4:1.5@0.6 F#4:0.5 A4:2@0.65 E4:3@0.6 R:1
+D4:1 F#4:1 A4:1.5@0.55 G4:0.5 F#4:3@0.6 R:1
+G4:1.5@0.6 Bb4:0.5@0.65 A4:2@0.65 D4:4@0.55
+# 25-28
+A4:2@0.45 F#4:2@0.42 E4:4@0.4 D4:8@0.38
+
+automate tune.glide
+0.11
+automate tune.lfo_rate
+4.6
+automate tune.lfo_pitch
+5
+
+# --- the tape sags at bar 20 and every voice sags with it; at the end it
+# slows to a stop. One curve, laid on each track.
+automate pad.pitch_shift
+0 R:76 -0.6:0.75@smooth 0:1.25@smooth R:30 -3:4@smooth
+automate bass.pitch_shift
+0 R:76 -0.6:0.75@smooth 0:1.25@smooth R:30 -3:4@smooth
+automate pluck.pitch_shift
+0 R:76 -0.6:0.75@smooth 0:1.25@smooth R:30 -3:4@smooth
+automate tune.pitch_shift
+0 R:76 -0.6:0.75@smooth 0:1.25@smooth R:30 -3:4@smooth
