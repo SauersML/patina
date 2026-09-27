@@ -9,8 +9,8 @@ is then broken on purpose:
   snare_verb  that snare with a long, dark room baked onto it — the song
               plays it reversed, so it swells up INTO the downbeat
   hat         a closed hat, hard-clipped (the song crushes it further)
-  clank       the rimshot ring-modulated against an off-key 173 Hz tone:
-              a metal sound that doesn't belong to the key
+  clank       the rimshot ring-modulated against E (164.81 Hz): a metal
+              sound centred on the song's key
 
     python scripts/kite-weather-kit.py [--patina target/release/patina]
 
@@ -92,6 +92,6 @@ hat = np.clip(2.5 * hat / np.abs(hat).max(), -1, 1)
 save('hat', fit(hat, 0.15, fade=0.01))
 
 rim = bounce('RS', [('rs_tune', 0.3)])
-ring = rim * np.sin(2 * np.pi * 173.0 * np.arange(len(rim)) / SR)
+ring = rim * np.sin(2 * np.pi * 164.81 * np.arange(len(rim)) / SR)   # E3: the ring sits on the key
 clank = np.tanh(3 * (0.6 * ring + 0.4 * rim) / np.abs(rim).max())
 save('clank', fit(clank, 0.5))
