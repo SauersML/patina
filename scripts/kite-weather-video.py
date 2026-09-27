@@ -38,6 +38,8 @@ ap.add_argument('--fps', type=int, default=30)
 ap.add_argument('--width', type=int, default=1920)
 ap.add_argument('--height', type=int, default=1080)
 ap.add_argument('--stills', default='', help='comma-separated seconds: write PNGs instead of a video')
+ap.add_argument('--start-frame', type=int, default=0, help='render from this frame on (to finish or patch a render)')
+ap.add_argument('--video-only', action='store_true', help='write the picture alone; the soundtrack is added afterwards')
 A = ap.parse_args()
 
 FPS, W, H = A.fps, A.width, A.height
@@ -487,17 +489,29 @@ if A.stills:
         Image.frombytes('RGB', (W, H), frame(i)).transpose(Image.FLIP_TOP_BOTTOM).save(f'{A.out}_{float(s_):05.1f}s.png')
     raise SystemExit
 
+# The picture is written first and the soundtrack added afterwards, from
+# finished files. Muxing the audio live with -shortest let ffmpeg read the
+# whole soundtrack at once and close the file when the (slow) picture was
+# still ~22 s short: at ~5 s a frame, the queue gave up on it.
+video = A.out if A.video_only else A.out + '.video.mp4'
 ff = subprocess.Popen([
     'ffmpeg', '-y', '-loglevel', 'error',
     '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', f'{W}x{H}', '-r', str(FPS), '-i', '-',
-    '-i', A.audio,
-    '-vf', 'vflip', '-c:v', 'libx264', '-preset', 'slow', '-crf', '15', '-pix_fmt', 'yuv420p',
-    '-c:a', 'aac', '-b:a', '320k', '-shortest', '-movflags', '+faststart', A.out,
+    '-vf', 'vflip', '-c:v', 'libx264', '-preset', 'slow', '-crf', '15', '-pix_fmt', 'yuv420p', video,
 ], stdin=subprocess.PIPE)
-for i in range(N):
+import time
+t_start = time.time()
+for i in range(A.start_frame, N):
     ff.stdin.write(frame(i))
-    if i % (FPS * 10) == 0:
-        print(f'{T[i]:5.1f}s / {DUR:.1f}s', flush=True)
+    done = i - A.start_frame + 1
+    if done % FPS == 0:
+        rate = (time.time() - t_start) / done
+        print(f'{T[i]:5.1f}s / {DUR:.1f}s   {rate:.2f} s/frame   ~{rate * (N - 1 - i) / 60:.0f} min left', flush=True)
 ff.stdin.close()
 ff.wait()
+if not A.video_only:
+    subprocess.run(['ffmpeg', '-y', '-loglevel', 'error', '-i', video, '-i', A.audio, '-map', '0:v', '-map', '1:a',
+                    '-c:v', 'copy', '-c:a', 'aac', '-b:a', '320k', '-movflags', '+faststart', A.out], check=True)
+    import os
+    os.remove(video)
 print('wrote', A.out)
