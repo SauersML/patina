@@ -1,0 +1,187 @@
+# Paper Boats in a Thunderstorm
+#
+# Everything the Bocuma and Kaini voices were not asked to be: fast,
+# lopsided, bright with accents, and in a hurry. 7/8, grouped 2+2+3.
+#
+#   bars 1-8    rain: Bocuma plucks patter; velocity is weather — accents
+#               open the filter (vel_filter up), soft drops stay dark.
+#               Kaini B (mono) sings in at bar 5.
+#   bars 9-16   the storm: the tempo leans forward 132 -> 150, a mono
+#               Kaini bass and a brushed 909 kit arrive, the germanium
+#               climbs, the melody fights through accents and a rising run
+#               to one screamed note that bends down — then half a beat of
+#               nothing.
+#   bars 17-22  the calm: 72 bpm. Bocuma chords bloom and fade the way
+#               that voice was built to; the melody comes back as a
+#               lullaby on wide glides, and the rain thins out.
+#   bar 23      the last thunder, far away, under a line that glides down
+#               an octave.
+#
+# A 7/8 bar is 3.5 beats: bar n starts at beat 3.5*(n-1).
+
+bpm 132
+gate 0.9
+tail 5
+
+automate bpm
+132 R:28 150:26@smooth R:2 72:0.01@step R:21 60:6@smooth
+
+# --- the bus: one room for every voice
+automate chorus_mode
+2
+automate chorus_rate
+0.4
+automate chorus_depth
+0.25
+automate chorus_hiss
+0.4
+automate spring
+0.12
+automate width
+1.2
+automate tape_flutter
+0.06
+automate tape_age
+0.3
+automate tape_drive
+0.3
+automate tape_wow
+0.25 R:28 0.18:4@smooth R:24 0.45:2@smooth R:19 0.6:6@smooth
+automate reverb_wet
+0.24 R:28 0.16:4@smooth R:24 0.42:0.01@step R:27
+automate reverb_decay
+0.7 R:56 0.86:0.01@step R:27
+
+# Germanium: nothing in the rain, a swelling edge through the storm,
+# gone the instant the storm is.
+automate fuzz
+0 R:28 0.25:14@smooth 0.55:12@smooth R:1.5 0:0.5@step R:27
+
+# The bus compressor, parallel: glue under the storm, air in the calm.
+automate comp_in
+1
+automate comp_threshold
+-24
+automate comp_ratio
+1
+automate comp_attack
+3
+automate comp_release
+4
+automate comp_makeup
+3
+automate comp_mix
+0.55
+
+# --- the kit: brushed, dark, a little driven
+automate bd_tune
+0.3 R:76.8 0.04:0.1@step
+automate bd_decay
+0.35 R:76.8 1.0:0.1@step
+automate bd_level
+0.8 R:76.8 0.3:0.1@step
+# distant thunder has no click
+automate bd_attack
+0.5 R:76.8 0:0.1@step
+automate sd_tone
+0.4
+automate sd_snappy
+0.55
+automate hh_level
+0.5
+automate ch_decay
+0.25
+automate oh_decay
+0.35
+automate dr_tone
+0.55
+automate dr_drive
+0.15
+
+# --- rain: Bocuma plucks, 2+2+3 in eighths
+track rain vel=0.5 len=0.5 patch=bocuma reverb_send=0.25
+# bars 1-8: Em9 Em9 Cmaj7#11 Cmaj7#11, twice
+(E3@0.7 B3@0.35 G4@0.6 B3@0.3 F#4@0.65 D4@0.3 B3@0.35 E3@0.7 B3@0.35 G4@0.6 B3@0.3 F#4@0.65 D4@0.3 B3@0.35 C3@0.7 G3@0.35 E4@0.6 G3@0.3 F#4@0.65 B3@0.3 G3@0.35 C3@0.7 G3@0.35 E4@0.6 G3@0.3 F#4@0.65 B3@0.3 G3@0.35)x2
+# bars 9-16: the storm — Em C Am B, twice, harder
+(E3@0.85 B3@0.4 G4@0.75 B3@0.35 F#4@0.8 D4@0.35 B3@0.45 C3@0.85 G3@0.4 E4@0.75 G3@0.35 F#4@0.8 B3@0.35 G3@0.45 A2@0.85 E3@0.4 C4@0.75 E3@0.35 B3@0.8 G3@0.35 E3@0.45 B2@0.85 F#3@0.4 D4@0.75 F#3@0.35 A3@0.8 F#3@0.35 D3@0.45)
+E3@0.9 B3@0.45 G4@0.8 B3@0.4 F#4@0.85 D4@0.4 B3@0.5
+C3@0.9 G3@0.45 E4@0.8 G3@0.4 F#4@0.85 B3@0.4 G3@0.5
+A2@0.95 E3@0.5 C4@0.85 E3@0.45 B3@0.9 G3@0.45 E3@0.5
+B2@1.0 F#3@0.5 D4@0.9 F#3@0.5 A3@0.95 F#3@0.5 R
+# bars 17-22: the calm — the rain thins to a few drops
+C3@0.3 R E4@0.22 R F#4@0.28 R R
+R G3@0.2 R R B3@0.25 R R
+A2@0.28 R C4@0.2 R R B3@0.24 R
+R R E3@0.18 R G3@0.2 R R
+E3@0.25 R R G3@0.18 R R F#4@0.2
+R R R B3@0.15 R R R
+
+automate rain.vel_filter
+2.2
+automate rain.vel_amp
+0.85
+
+# --- lead: Kaini B, mono — it slides wherever notes touch
+track lead vel=0.6 patch=kaini-b gain=1.6 reverb_send=0.2
+>14
+R:0.5 B3:0.5@0.5 E4:1@0.8 F#4:0.5@0.55 G4:1@0.75
+F#4:0.5@0.5 E4:0.5@0.45 B3:2.5@0.7
+R:0.5 B3:0.5@0.5 E4:1@0.8 F#4:0.5@0.55 G4:0.5@0.6 A4:0.5@0.85
+B4:2@0.9 A4:0.5@0.5 G4:1@0.6
+# the storm
+E4:0.5@0.9 E4:0.5@0.5 G4:0.5@0.7 E4:0.5@0.4 B4:1.5@1.0
+A4:0.5@0.6 G4:0.5@0.5 F#4:0.5@0.6 E4:0.5@0.45 D4:1.5@0.8
+E4:0.5@0.9 E4:0.5@0.5 G4:0.5@0.7 B4:0.5@0.8 D5:1.5@1.0
+C5:1@0.8 B4:0.5@0.6 A4:2@0.9
+B4:0.5@0.9 B4:0.5@0.5 D5:0.5@0.7 B4:0.5@0.45 E5:1.5@1.0
+D5:0.5@0.7 C5:0.5@0.6 B4:0.5@0.65 A4:0.5@0.6 G4:1.5@0.85
+F#4:0.5@0.7 G4:0.5@0.75 A4:0.5@0.8 B4:0.5@0.85 C5:0.5@0.9 D5:0.5@0.95 E5:0.5@1.0
+E5:3@1.0 R:0.5
+# the calm: the same song, as a lullaby
+R:1 B3:1@0.35 E4:1.5@0.45
+F#4:1@0.4 G4:2.5@0.5
+F#4:1@0.35 E4:1@0.3 B3:1.5@0.4
+R:1 B3:0.5@0.3 E4:1@0.4 F#4:1@0.45
+G4:1.5@0.5 A4:1@0.55 B4:1@0.6
+B4:3.5@0.5
+E4:2@0.4 E3:4@0.35
+
+automate lead.vel_filter
+1.6
+automate lead.glide
+0.07 R:56 0.35:0.01@step R:21 1.2:0.01@step
+# the scream bends down a whole tone; the last held note sags
+automate lead.pitch_shift
+0 R:52.5 -2:3@smooth 0:0.01@step R:17.49 -0.3:3.5@smooth 0:0.01@step
+
+# --- bass: Kaini, mono, with weight — storm only
+track bass vel=0.8 len=0.5 patch=kaini gain=1.2
+>28
+(E2@0.9 E2@0.5 G2@0.7 E2@0.4 B1@0.8 D2@0.5 E2@0.6 C2@0.9 C2@0.5 E2@0.7 C2@0.4 G1@0.8 B1@0.5 C2@0.6 A1@0.9 A1@0.5 C2@0.7 A1@0.4 E1@0.8 G1@0.5 A1@0.6 B1@0.9 B1@0.5 D2@0.7 B1@0.4 F#1@0.8 A1@0.5 B1@0.6)
+E2@0.9 E2@0.5 G2@0.7 E2@0.4 B1@0.8 D2@0.5 E2@0.6
+C2@0.9 C2@0.5 E2@0.7 C2@0.4 G1@0.8 B1@0.5 C2@0.6
+A1@0.9 A1@0.5 C2@0.7 A1@0.4 E1@0.8 G1@0.5 A1@0.6
+B1@1.0 B1@0.5 D2@0.75 B1@0.45 F#1@0.9 A1@0.6 R
+
+automate bass.mono
+1
+automate bass.sub
+0.4
+automate bass.glide
+0.03
+
+# --- the kit: storm, then one far thunder
+track kit kit=909 len=0.5 gain=0.45 reverb_send=0.15
+>28
+([BD CH]@0.9 CH@0.35 [SD CH]@0.75 CH@0.3 [BD CH]@0.7 BD@0.45 [SD OH]@0.85)x7
+SD@0.5 SD@0.6 SD@0.7 SD@0.8 SD@0.9 [BD SD]@1.0 R
+>77
+BD:4@0.28
+
+# --- bloom: Bocuma chords in the calm, each one blooming and fading
+track bloom vel=0.5 patch=bocuma reverb_send=0.4
+>56
+[C3 G3 B3 F#4]:7@0.55
+[A2 E3 G3 B3 C4]:7@0.5
+[E2 B2 G3 F#4]:7@0.45
+[E2 B2 G3 D4 F#4]:6@0.4
