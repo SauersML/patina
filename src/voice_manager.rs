@@ -346,7 +346,7 @@ impl DcBlocker {
 /// `duck` is the sidechain — every kick trigger snaps the envelope to 1,
 /// the strip's gain dips by `duck * env`, and `duck_release` sets how
 /// fast it breathes back.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct ChannelMix {
     pub gain: f32,
     pub pan: f32,
@@ -358,6 +358,8 @@ pub struct ChannelMix {
     cur_gain: f32,
     cur_pan: f32,
     duck_env: f32,
+    /// The strip's own compressor (`comp=`), out when None.
+    comp: Option<Box<crate::buscomp::BusComp>>,
 }
 
 /// A song track owns its modulation oscillator. Live panel voices still
@@ -401,7 +403,32 @@ impl ChannelMix {
             cur_gain: 1.0,
             cur_pan: 0.0,
             duck_env: 0.0,
+            comp: None,
         }
+    }
+
+    /// Put the strip's compressor in at `threshold` dBFS (0 = out). The
+    /// voicing is a channel compressor on a drum loop: 4:1 with the fastest
+    /// attack (0.1 ms) so it catches the hits' peaks — a drum's peak lives in
+    /// its first millisecond, and anything slower lets it through while the
+    /// body is clamped, which makes the part spikier, not denser (measured:
+    /// 1 ms raised a 909 loop's crest from 11.6 to 15.5 dB) — program-
+    /// dependent release so the room and tails come back up between hits,
+    /// and make-up for about a third of the threshold.
+    fn set_comp(&mut self, threshold: f32, sample_rate: f32) {
+        if threshold >= -0.01 {
+            self.comp = None;
+            return;
+        }
+        let comp = self
+            .comp
+            .get_or_insert_with(|| Box::new(crate::buscomp::BusComp::new(sample_rate)));
+        comp.set_threshold(threshold);
+        comp.set_ratio(1);
+        comp.set_attack(0);
+        comp.set_release(4);
+        comp.set_makeup((-threshold * 0.33).min(12.0));
+        comp.set_engaged(true);
     }
 }
 
@@ -412,7 +439,7 @@ fn duck_decay_for(release_secs: f32, sample_rate: f32) -> f32 {
 /// Pass one channel's contribution through its mixer strip: ducked gain,
 /// constant-center balance pan, and taps into the three send buses.
 fn strip(
-    mixes: &HashMap<u16, ChannelMix>,
+    mixes: &mut HashMap<u16, ChannelMix>,
     ch: u16,
     l: f32,
     r: f32,
@@ -420,11 +447,21 @@ fn strip(
     rev: &mut (f32, f32),
     cho: &mut (f32, f32),
 ) -> (f32, f32) {
-    let Some(m) = mixes.get(&ch) else {
+    let Some(m) = mixes.get_mut(&ch) else {
         return (l, r);
     };
     let g = m.cur_gain * (1.0 - m.duck * m.duck_env);
     let (mut l, mut r) = (l * g, r * g);
+    // the strip's compressor sits after the fader and before pan and sends,
+    // so the rooms hear the compressed part
+    if let Some(c) = m.comp.as_mut() {
+        // Strips run in volts; the compressor's threshold is dBFS at the bus
+        // (after the summing amp converts volts to sample units at unity
+        // volume). Detecting in volts read every part ~20 dB hot.
+        const TO_BUS: f32 = 0.7 / PROGRAM_V;
+        let (cl, cr) = c.process(l * TO_BUS, r * TO_BUS);
+        (l, r) = (cl / TO_BUS, cr / TO_BUS);
+    }
     if m.cur_pan > 0.0 {
         l *= 1.0 - m.cur_pan;
     } else {
@@ -637,6 +674,7 @@ impl VoiceManager {
             P::ChorusSend => m.cho_send = value,
             P::DuckAmount => m.duck = value,
             P::DuckRelease => m.duck_decay = duck_decay_for(value, sr),
+            P::TrackComp => m.set_comp(value, sr),
             _ => {}
         }
     }
@@ -652,6 +690,7 @@ impl VoiceManager {
                 | P::ChorusSend
                 | P::DuckAmount
                 | P::DuckRelease
+                | P::TrackComp
         ) {
             self.set_track_mix(channel, param, value);
             return;
@@ -1545,7 +1584,7 @@ impl VoiceManager {
                 carrier += l + r;
             } else if self.solo.map_or(true, |s| s == ch) {
                 let (l, r) = strip(
-                    &self.channel_mix,
+                    &mut self.channel_mix,
                     ch,
                     l,
                     r,
@@ -1564,7 +1603,7 @@ impl VoiceManager {
         let vox_out = self.vox.process(carrier);
         if self.solo.map_or(true, |s| s == VOX_CHANNEL) {
             let (vl, vr) = strip(
-                &self.channel_mix,
+                &mut self.channel_mix,
                 VOX_CHANNEL,
                 vox_out,
                 vox_out,
@@ -1584,7 +1623,7 @@ impl VoiceManager {
         let (dl, dr) = self.drums.render_next();
         if self.solo.map_or(true, |s| s == DRUM_CHANNEL) {
             let (dl, dr) = strip(
-                &self.channel_mix,
+                &mut self.channel_mix,
                 DRUM_CHANNEL,
                 dl,
                 dr,
@@ -1612,7 +1651,7 @@ impl VoiceManager {
             let ch = crate::sampler::SAMPLER_CHANNEL_BASE + i as u16;
             if self.solo.map_or(true, |s| s == ch) {
                 let (sl, sr) = strip(
-                    &self.channel_mix,
+                    &mut self.channel_mix,
                     ch,
                     sl,
                     sr,
@@ -1935,6 +1974,44 @@ fn soft_limit(x: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A strip's own compressor (`comp=`): out is bit-identical to no
+    /// compressor at all, and in, it makes the part denser (lower crest).
+    #[test]
+    fn a_track_compressor_densifies_its_part_and_out_is_transparent() {
+        let take = |comp: Option<f32>| {
+            let mut vm = VoiceManager::new(48000.0, 8);
+            vm.warm_up();
+            if let Some(t) = comp {
+                vm.set_track_mix(DRUM_CHANNEL, crate::song::Param::TrackComp, t);
+            }
+            let mut out = Vec::new();
+            for i in 0..96000 {
+                if i % 12000 == 0 {
+                    vm.note_on_channel(36, 1.0, DRUM_CHANNEL);
+                    vm.note_on_channel(42, 0.5, DRUM_CHANNEL);
+                }
+                out.push(vm.render_next().0);
+            }
+            out
+        };
+        let crest = |x: &[f32]| {
+            let peak = x.iter().fold(0f32, |m, v| m.max(v.abs()));
+            let rms = (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt();
+            20.0 * (peak / rms).log10()
+        };
+        let (dry, off, on) = (take(None), take(Some(0.0)), take(Some(-30.0)));
+        assert_eq!(dry, off, "comp 0 must leave the strip untouched");
+        // judged in steady state: the detector starts from rest, so the very
+        // first hit is always let through at full level
+        let (dry, on) = (&dry[24000..], &on[24000..]);
+        let rms = |x: &[f32]| 20.0 * (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt().log10();
+        assert!(
+            crest(on) < crest(dry) - 1.0,
+            "compressed crest {:.1} dB (rms {:.1}) vs dry {:.1} dB (rms {:.1})",
+            crest(on), rms(on), crest(dry), rms(dry)
+        );
+    }
 
     /// Width scales only the side signal of the finished mix: 0 folds it to
     /// mono, and a narrower image keeps the mid untouched.

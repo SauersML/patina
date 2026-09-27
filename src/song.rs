@@ -425,6 +425,10 @@ param_table! {
     ChorusSend:      "chorus_send",    None,      (0.0, 1.0, Lin);
     DuckAmount:      "duck",           None,      (0.0, 1.0, Lin);
     DuckRelease:     "duck_release",   None,      (0.02, 2.0, Lin);
+    // A compressor on the track's own strip: threshold in dBFS, 0 = out.
+    // The bus compressor glues the mix; this one shapes one part (a
+    // drum loop) before it reaches the bus, the way a console channel does.
+    TrackComp:       "comp",           None,      (-48.0, 0.0, Lin);
     // Global chorus insert mix override (the mode switch re-derives it)
     ChorusMix:       "chorus_mix",     None,      (0.0, 1.0, Lin);
 }
@@ -617,7 +621,8 @@ impl Param {
             | Param::SpringSend
             | Param::ChorusSend
             | Param::DuckAmount
-            | Param::DuckRelease => vm.set_track_mix(0, self, value),
+            | Param::DuckRelease
+            | Param::TrackComp => vm.set_track_mix(0, self, value),
             Param::ChorusMix => vm.set_chorus_mix(value),
             Param::WaveformSel => vm.set_waveform(waveform_from_value(value)),
             Param::Detune => vm.set_detune(value),
@@ -768,7 +773,8 @@ impl Param {
             | P::SpringSend
             | P::ChorusSend
             | P::DuckAmount
-            | P::DuckRelease => true,
+            | P::DuckRelease
+            | P::TrackComp => true,
             P::SmpPitch
             | P::SmpStart
             | P::SmpGain
@@ -1375,6 +1381,7 @@ fn parse_song(text: &str) -> Result<Song, String> {
                                     | Param::ChorusSend
                                     | Param::DuckAmount
                                     | Param::DuckRelease
+                                    | Param::TrackComp
                             )
                         )
                     }) {

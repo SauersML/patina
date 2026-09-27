@@ -324,6 +324,7 @@ impl GainCell {
     }
 }
 
+#[derive(Clone)]
 pub struct BusComp {
     sample_rate: f32,
 

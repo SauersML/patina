@@ -344,6 +344,7 @@ const EXCLUDED: &[Param] = &[
     Param::ChorusSend,
     Param::DuckAmount,
     Param::DuckRelease,
+    Param::TrackComp,
     Param::ChorusMix,
 ];
 
