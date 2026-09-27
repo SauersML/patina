@@ -17,6 +17,8 @@ is then broken on purpose:
               of tiny sparks, each a resonant click, crushed
   wind        eight seconds of wind across an open cut: noise through slowly
               wandering band-passes, gusting, made to loop
+  aeolian_*   wind singing in the wires: noise through narrow resonators
+              tuned to one chord's notes, in slow gusts — one per chord
   break       one bar at 76 bpm built from the hits above — a swung,
               syncopated groove with ghost notes and a small room baked on,
               then destroyed: wavefolded, hard-clipped, 5-bit, ~8 kHz. The song slices it into sixteen pads and
@@ -204,3 +206,28 @@ xf = SR
 loopable = out[:n].copy()
 loopable[:xf] = loopable[:xf] * np.linspace(0, 1, xf) + out[n:n + xf] * np.linspace(1, 0, xf)
 save('wind', fit(loopable, secs, fade=0.001))
+
+
+# --- the wires singing: an aeolian chord per harmony. Noise through a bank of
+# narrow two-pole resonators, one per chord tone (and its octave), gusting.
+import scipy.signal as sps
+def hz(name):
+    names = {'C': 0, 'C#': 1, 'D': 2, 'D#': 3, 'E': 4, 'F': 5, 'F#': 6, 'G': 7, 'G#': 8, 'A': 9, 'Bb': 10, 'B': 11}
+    return 440.0 * 2 ** ((names[name[:-1]] + 12 * (int(name[-1]) + 1) - 69) / 12)
+AEOLIAN = {'em9': ['E3', 'B3', 'D4', 'F#4', 'G4', 'B4'], 'cmaj7s11': ['C3', 'G3', 'B3', 'E4', 'F#4', 'B4'],
+           'am9': ['A2', 'E3', 'G3', 'B3', 'C4', 'E4'], 'bm11': ['B2', 'F#3', 'A3', 'D4', 'E4', 'A4']}
+dur = 4.6
+n = int(dur * SR)
+tt = np.arange(n) / SR
+for name, notes in AEOLIAN.items():
+    src = rng.standard_normal(n)
+    out = np.zeros(n)
+    for k, note in enumerate(notes):
+        f0 = hz(note)
+        r = np.exp(-np.pi * (f0 / 90.0) / SR)       # bandwidth ~ f0/90: a sung tone, still breathy
+        b, a = [1 - r], [1, -2 * r * np.cos(2 * np.pi * f0 / SR), r * r]
+        tone = sps.lfilter(b, a, src)
+        gust = 0.6 + 0.4 * np.sin(2 * np.pi * rng.uniform(0.15, 0.4) * tt + rng.uniform(0, 6))
+        out += tone / (np.abs(tone).max() + 1e-9) * gust * (1.0 if k < 3 else 0.7)
+    env = np.minimum(1, tt / 1.4) * np.minimum(1, (dur - tt) / 1.2)   # breathes in, breathes out
+    save(f'aeolian_{name}', fit(out * env, dur, fade=0.01))

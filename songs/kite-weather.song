@@ -1,51 +1,49 @@
 # Kite Weather
 #
-# Walking alone down a right-of-way beneath the power lines: wind across the
-# open cut, the lines buzzing overhead and singing as you pass each pylon,
-# the fizz of corona discharge, and chords far away.
+# Walking alone down a right-of-way beneath the power lines.
 #
-# Chords only. No melody anywhere: every bit of expression lives in how the
-# chords are played and shaped — filters that breathe open on each chord and
-# snap shut, a pad that pumps against a groove it never hears, stabs whose
-# velocity is their colour, dynamics that swell and drain by section.
+# Chords only, and the chords ARE the piece: nothing plays a tune. Three
+# voices — low, middle, top — enter one after another inside each bar, so
+# every chord unfolds from the bottom up; long attacks and releases let one
+# chord dissolve into the next; each voice has its own phrase-long swells
+# and filter arcs, so the harmony breathes in four-bar phrases rather than
+# pulsing bar by bar. The drums set the pace of the walk and the chords
+# pump against them, deeper as the walk goes on.
 #
-# The harmony is one loop over a low E that never moves: E minor, F major
-# over E, E minor, B-flat major over E — in tune, and pulling against the
-# floor. The drums are a single bar built from Patina's own 909, destroyed
-# (wavefolded, hard-clipped, 5-bit, ~8 kHz) and sliced into sixteen pads:
-# the song plays it as recorded, chops and flips it, stutters it into rolls,
-# and plays it backwards in the break. A tom tuned to E plays the chord tones.
+# The harmony sits on a low E that never leaves: Em9, Cmaj7#11, Am9, Bm11,
+# the voices moving by step and common tone. Overhead the lines buzz on E,
+# and the wind singing in the wires is tuned — each chord's notes, gusting.
 #
-#   bars 1-4    the pad alone, each chord swelling open
-#   bars 5-12   the chopped break, the tuned toms, the pedal, off-beat stabs;
-#               the pad pumps with the groove
-#   bars 13-15  the break: reversed bars, a tom heartbeat, the pad closed
-#               down to a resonant whine
-#   bar 16      nothing but the wind, and a reversed swell rising through it
-#   bars 17-24  everything, harder: wider filter swings, flipped chops, grit
-#   bars 25-28  the drums go; the chords close down; the tritone is cut
+#   bars 1-4    the low voice alone, a few sparks, the lines, the wires
+#   bars 5-12   the walk: the chopped break, the middle voice, then the top;
+#               the chord starts to run as a blooming stream
+#   bars 13-15  under the line: the top drops out, the middle goes dark and
+#               resonant, the wires sing loudest, the lines swell
+#   bar 16      only the wires singing
+#   bars 17-24  the walk again, everything open, the longest crescendo
+#   bars 25-28  walking away: the voices leave from the top down
 #
-# Build the samples first: python scripts/kite-weather-kit.py (renders/kite-kit/).
+# Build the sounds first: python scripts/kite-weather-kit.py (renders/kite-kit/).
 # 4/4 at 76 bpm; bar n starts at beat 4*(n-1).
 
 bpm 76
-gate 0.95
-tail 4
+gate 0.97
+tail 5
 
 automate tape_wow
 0.05
 automate tape_flutter
 0.02
 automate tape_age
-0.35
+0.3
 automate tape_drive
 0.35
 automate chorus_mode
 2
 automate chorus_rate
-0.4
+0.35
 automate chorus_depth
-0.25
+0.3
 automate chorus_hiss
 0.3
 automate spring
@@ -53,11 +51,11 @@ automate spring
 automate reverb_wet
 0.3
 automate reverb_decay
-0.82
+0.86
 automate reverb_tone
-2800
+3200
 automate width
-1.15
+1.2
 automate comp_in
 1
 automate comp_threshold
@@ -71,44 +69,85 @@ automate comp_release
 automate comp_makeup
 2
 automate comp_mix
-0.5
+0.45
 automate fuzz
 0
-# the chorus is a send, not the bus: chords go through it, drums stay dry
+# the chorus is a send: the chords go through it, the drums stay dry
 automate chorus_mix
 0
-automate tape_drive
-0.35 R:64 0.6:2@smooth R:30 0.35:8@smooth
 
-# --- pad: Kaini, a saw and a saw an octave up (in tune, no detune)
-track pad vel=0.55 patch=kaini chorus_send=0.6 reverb_send=0.3 duck=0.75 duck_release=0.32
-([E3 B3 E4 G4]:4 [F3 A3 C4 E4]:4 [E3 G3 B3 E4]:4 [F3 Bb3 D4 F4]:4)x3
-[E3 B3 E4 G4]:4 [F3 A3 C4 E4]:4 [E3 G3 B3 E4]:4
-R:4
-([E3 B3 E4 G4]:4 [F3 A3 C4 E4]:4 [E3 G3 B3 E4]:4 [F3 Bb3 D4 F4]:4)x3
-automate pad.attack
+# --- the low voice: roots and fifths, first in, last out
+track low vel=0.55 patch=kaini chorus_send=0.5 reverb_send=0.3 pan=0 duck=0.01 duck_release=0.35
+[E3 B3]:4 [C3 G3]:4 [A2 E3]:4 [B2 F#3]:4 [E3 B3]:4 [C3 G3]:4 [A2 E3]:4 [B2 F#3]:4 [E3 B3]:4 [C3 G3]:4 [A2 E3]:4 [B2 F#3]:4 [E3 B3]:4 [C3 G3]:4 [A2 E3]:4 R:4 [E3 B3]:4 [C3 G3]:4 [A2 E3]:4 [B2 F#3]:4 [E3 B3]:4 [C3 G3]:4 [A2 E3]:4 [B2 F#3]:4 [E3 B3]:4 [C3 G3]:4 [A2 E3]:4 [B2 F#3]:4
+automate low.attack
+1.2
+automate low.release
+3.5
+automate low.osc2_level
+0
+automate low.key_track
 0.4
-automate pad.osc2_level
+automate low.filter_env
+0
+automate low.resonance
 0.5
-automate pad.osc2_pitch
+automate low.gain
+0 0.55:12@smooth R:4 0.68:12@smooth 0.56:4@smooth 0.78:12@smooth 0.6:4@smooth 0.5:4@smooth R:12 0.8:8@smooth 0.72:4@smooth 0.92:16@smooth 0.7:4@smooth 0:16@smooth
+automate low.cutoff
+420 R:16 700:16@smooth 900:16@smooth 380:4@smooth R:12 1000:16@smooth 1300:12@smooth 800:4@smooth 400:16@smooth
+
+# --- the middle voice: thirds and sevenths, half a beat behind; it carries the colour
+track mid vel=0.55 patch=kaini chorus_send=0.5 reverb_send=0.35 pan=-0.3 duck=0.01 duck_release=0.35
+R:16.5 [D4 F#4]:4 [B3 E4]:4 [G3 C4]:4 [A3 D4]:4 [D4 F#4]:4 [B3 E4]:4 [G3 C4]:4 [A3 D4]:4 [D4 F#4]:4 [B3 E4]:4 [G3 C4]:4 R:4 [D4 F#4]:4 [B3 E4]:4 [G3 C4]:4 [A3 D4]:4 [D4 F#4]:4 [B3 E4]:4 [G3 C4]:4 [A3 D4]:4 [D4 F#4]:4 [B3 E4]:4 [G3 C4]:4 [A3 D4]:4
+automate mid.attack
+0.9
+automate mid.release
+3
+automate mid.osc2_level
+0.45
+automate mid.osc2_pitch
 12
-automate pad.detune
-0
-automate pad.key_track
+automate mid.key_track
 0.5
-automate pad.filter_env
+automate mid.filter_env
 0
-automate pad.resonance
-0.7
-automate pad.cutoff
-260 700:3@exp 260:1@exp 850:3@exp 260:1@exp 1000:3@exp 260:1@exp 1150:3@exp 260:1@exp 1500:3@exp 320:1@exp 1500:3@exp 320:1@exp 1500:3@exp 320:1@exp 1500:3@exp 320:1@exp 1500:3@exp 320:1@exp 1500:3@exp 320:1@exp 1500:3@exp 320:1@exp 1500:3@exp 320:1@exp 420:3@exp 240:1@exp 420:3@exp 240:1@exp 420:3@exp 240:1@exp R:4 2600:3@exp 380:1@exp 2600:3@exp 380:1@exp 2600:3@exp 380:1@exp 2600:3@exp 380:1@exp 2600:3@exp 380:1@exp 2600:3@exp 380:1@exp 2600:3@exp 380:1@exp 2600:3@exp 380:1@exp 1300:3@exp 300:1@exp 1020:3@exp 300:1@exp 740:3@exp 300:1@exp 460:3@exp 300:1@exp
-# closed down to a resonant whine in the break, open again for the return
-automate pad.resonance
-0.7 R:48 2.2:8@smooth R:4 0.8:4@smooth
-automate pad.release
-1.6 R:59.9 0.06:0.1@step R:3.9 1.6:0.1@step R:47.9 0.06:0.1@step
-automate pad.gain
-0.2 0.55:14@smooth R:34 0.42:4@smooth R:12 0.6:2@smooth R:30 0.4:14@smooth
+automate mid.gain
+0 R:16 0.63:4@smooth 0.882:12@smooth 0.756:4@smooth 1.08:8@smooth 0.693:4@smooth 0.567:4@smooth R:12 1.01:4@smooth 1.21:24@smooth 0.882:4@smooth 0:10@smooth
+automate mid.cutoff
+600 R:16 1400:16@smooth 2000:12@smooth 1200:4@smooth 500:4@smooth R:12 1800:8@smooth 3000:20@smooth 1600:4@smooth 500:12@smooth
+automate mid.resonance
+0.6 R:48 1.8:6@smooth R:6 0.6:4@smooth
+
+# --- the top voice: one note, gliding between chords a beat and a quarter behind; the last to arrive, the first to leave
+track top vel=0.55 patch=kaini chorus_send=0.5 reverb_send=0.45 pan=0.35 duck=0.01 duck_release=0.35
+R:25.25 E4:4 E4:4 G4:4 F#4:4 E4:4 E4:4 R:16 G4:4 F#4:4 E4:4 E4:4 G4:4 F#4:4 E4:4 E4:4 G4:4
+automate top.mono
+1
+automate top.glide
+0.18
+automate top.attack
+1.4
+automate top.release
+3.5
+automate top.osc2_level
+0.3
+automate top.osc2_pitch
+12
+automate top.key_track
+0.6
+automate top.filter_env
+0
+automate top.gain
+0 R:24 0.634:8@smooth 0.874:12@smooth 0:4@smooth R:16 0.775:8@smooth 1.16:20@smooth 0.705:4@smooth 0:6@smooth
+automate top.cutoff
+900 R:24 1800:8@smooth 2600:12@smooth 1500:4@smooth R:16 2200:8@smooth 3600:20@smooth 2000:8@smooth
+# the chords pump against the walk: not at all at first, deeper the second time, never under the line
+automate low.duck
+0 R:16 0.5:0.01@step R:31.99 0:0.01@step R:15.99 0.68:0.01@step R:31.99 0:4@smooth
+automate mid.duck
+0 R:16 0.5:0.01@step R:31.99 0:0.01@step R:15.99 0.68:0.01@step R:31.99 0:4@smooth
+automate top.duck
+0 R:16 0.5:0.01@step R:31.99 0:0.01@step R:15.99 0.68:0.01@step R:31.99 0:4@smooth
 
 # --- the pedal: Kaini, mono, a sub underneath; it never leaves E
 track bass vel=0.6 patch=kaini gain=0.85 duck=0.35 duck_release=0.25
@@ -124,59 +163,18 @@ automate bass.release
 automate bass.cutoff
 380
 
-# --- stabs: Bocuma chords on the off-beats; a hard stab blooms bright, a soft one stays dark
-track stab vel=0.5 patch=bocuma chorus_send=0.4 reverb_send=0.35 pan=-0.2
-R:4 R:4 R:4 R:4 R:0.5 [E4 G4 B4]:0.25@0.35 R:1.25 [E4 G4 B4]:0.25@0.24 R:0.75 [E4 G4 B4]:0.5@0.44 R:0.5 R:0.5 [F4 A4 C5]:0.25@0.39 R:1.25 [F4 A4 C5]:0.25@0.27 R:0.75 [F4 A4 C5]:0.5@0.48 R:0.5 R:0.5 [E4 G4 B4]:0.25@0.42 R:1.25 [E4 G4 B4]:0.25@0.29 R:0.75 [E4 G4 B4]:0.5@0.53 R:0.5 R:0.5 [F4 Bb4 D5]:0.25@0.45 R:1.25 [F4 Bb4 D5]:0.25@0.32 R:0.75 [F4 Bb4 D5]:0.5@0.57 R:0.5 R:0.5 [E4 G4 B4]:0.25@0.49 R:1.25 [E4 G4 B4]:0.25@0.34 R:0.75 [E4 G4 B4]:0.5@0.61 R:0.5 R:0.5 [F4 A4 C5]:0.25@0.53 R:1.25 [F4 A4 C5]:0.25@0.37 R:0.75 [F4 A4 C5]:0.5@0.66 R:0.5 R:0.5 [E4 G4 B4]:0.25@0.56 R:1.25 [E4 G4 B4]:0.25@0.39 R:0.75 [E4 G4 B4]:0.5@0.70 R:0.5 R:0.5 [F4 Bb4 D5]:0.25@0.59 R:1.25 [F4 Bb4 D5]:0.25@0.42 R:0.75 [F4 Bb4 D5]:0.5@0.74 R:0.5 R:0.5 [E4 G4 B4]:0.25@0.22 R:1.25 [E4 G4 B4]:0.25@0.15 R:0.75 [E4 G4 B4]:0.5@0.28 R:0.5 R:0.5 [F4 A4 C5]:0.25@0.22 R:1.25 [F4 A4 C5]:0.25@0.15 R:0.75 [F4 A4 C5]:0.5@0.28 R:0.5 R:0.5 [E4 G4 B4]:0.25@0.22 R:1.25 [E4 G4 B4]:0.25@0.15 R:0.75 [E4 G4 B4]:0.5@0.28 R:0.5 R:4 R:0.5 [E4 G4 B4]:0.25@0.50 R:1.25 [E4 G4 B4]:0.25@0.35 R:0.75 [E4 G4 B4]:0.5@0.62 R:0.5 R:0.5 [F4 A4 C5]:0.25@0.54 R:1.25 [F4 A4 C5]:0.25@0.38 R:0.75 [F4 A4 C5]:0.5@0.68 R:0.5 R:0.5 [E4 G4 B4]:0.25@0.58 R:1.25 [E4 G4 B4]:0.25@0.41 R:0.75 [E4 G4 B4]:0.5@0.72 R:0.5 R:0.5 [F4 Bb4 D5]:0.25@0.62 R:1.25 [F4 Bb4 D5]:0.25@0.43 R:0.75 [F4 Bb4 D5]:0.5@0.78 R:0.5 R:0.5 [E4 G4 B4]:0.25@0.66 R:1.25 [E4 G4 B4]:0.25@0.46 R:0.75 [E4 G4 B4]:0.5@0.83 R:0.5 R:0.5 [F4 A4 C5]:0.25@0.70 R:1.25 [F4 A4 C5]:0.25@0.49 R:0.75 [F4 A4 C5]:0.5@0.88 R:0.5 R:0.5 [E4 G4 B4]:0.25@0.74 R:1.25 [E4 G4 B4]:0.25@0.52 R:0.75 [E4 G4 B4]:0.5@0.93 R:0.5 R:0.5 [F4 Bb4 D5]:0.25@0.78 R:1.25 [F4 Bb4 D5]:0.25@0.55 R:0.75 [F4 Bb4 D5]:0.5@0.98 R:0.5 R:4 R:4 R:4 R:4
-automate stab.vel_filter
-2.8
-automate stab.vel_amp
-0.9
+# --- the wires singing: each chord's notes in the wind, one breath per bar
+track wire1 sample=renders/kite-kit/aeolian_em9.wav root=C3 fixed mode=oneshot gain=0.55 pan=-0.45 reverb_send=0.4
+R:15.5 C3:4@0.45 R:12 C3:4@0.45 R:12 C3:4@0.85 R:12 C3:4@0.5 R:12 C3:4@0.5 R:12 C3:4@0.62
+track wire2 sample=renders/kite-kit/aeolian_cmaj7s11.wav root=C3 fixed mode=oneshot gain=0.55 pan=0.45 reverb_send=0.4
+R:19.5 C3:4@0.45 R:12 C3:4@0.45 R:12 C3:4@0.85 R:12 C3:4@0.5 R:12 C3:4@0.5 R:12 C3:4@0.56
+track wire3 sample=renders/kite-kit/aeolian_am9.wav root=C3 fixed mode=oneshot gain=0.55 pan=-0.3 reverb_send=0.4
+R:7.5 C3:4@0.35 R:12 C3:4@0.45 R:12 C3:4@0.45 R:12 C3:4@0.85 R:12 C3:4@0.5 R:12 C3:4@0.5 R:12 C3:4@0.5
+track wire4 sample=renders/kite-kit/aeolian_bm11.wav root=C3 fixed mode=oneshot gain=0.55 pan=0.3 reverb_send=0.4
+R:11.5 C3:4@0.4 R:12 C3:4@0.45 R:12 C3:4@0.45 R:12 C3:4@0.75 R:12 C3:4@0.5 R:12 C3:4@0.5 R:12 C3:4@0.44
 
-# --- the break: one destroyed bar in sixteen slices (C3 = slice 1 ... D#4 = slice 16)
-track break sample=renders/kite-kit/break.wav root=C3 chop=16 gain=0.2
->16
-C3:0.25@1 C#3:0.25@0.75 D3:0.25@0.75 D#3:0.25@0.75 E3:0.25@0.95 F3:0.25@0.75 F#3:0.25@0.75 G3:0.25@0.75 G#3:0.25@0.75 A3:0.25@0.75 A#3:0.25@0.75 B3:0.25@0.75 C4:0.25@1 C#4:0.25@0.75 D4:0.25@0.75 D#4:0.25@0.75 C3:0.25@1 C#3:0.25@0.75 C3:0.25@0.75 D#3:0.25@0.75 E3:0.25@0.95 F3:0.25@0.75 E3:0.25@0.75 G3:0.25@0.75 C3:0.25@0.75 A3:0.25@0.75 A#3:0.25@0.75 D#3:0.25@0.75 C4:0.25@1 C#4:0.25@0.75 E3:0.25@0.75 D#4:0.25@0.75 C3:0.25@1 C#3:0.25@0.75 D3:0.25@0.75 D#3:0.25@0.75 E3:0.25@0.95 F3:0.25@0.75 F#3:0.25@0.75 G3:0.25@0.75 G#3:0.25@0.75 A3:0.25@0.75 A#3:0.25@0.75 B3:0.25@0.75 C4:0.25@1 C#4:0.25@0.75 D4:0.25@0.75 D#4:0.25@0.75 C3:0.25@0.45 C3:0.25@0.485 D#3:0.25@0.52 D#3:0.25@0.555 C4:0.25@0.59 C4:0.25@0.625 C4:0.25@0.66 C4:0.25@0.695 E3:0.25@0.73 E3:0.25@0.765 C4:0.25@0.8 C4:0.25@0.835 C4:0.25@0.87 C#4:0.25@0.905 D4:0.25@0.94 D#4:0.25@0.975 C3:0.25@1 C#3:0.25@0.75 D3:0.25@0.75 D#3:0.25@0.75 E3:0.25@0.95 F3:0.25@0.75 F#3:0.25@0.75 G3:0.25@0.75 G#3:0.25@0.75 A3:0.25@0.75 A#3:0.25@0.75 B3:0.25@0.75 C4:0.25@1 C#4:0.25@0.75 D4:0.25@0.75 D#4:0.25@0.75 C3:0.25@1 C#3:0.25@0.75 C3:0.25@0.75 D#3:0.25@0.75 E3:0.25@0.95 F3:0.25@0.75 E3:0.25@0.75 G3:0.25@0.75 C3:0.25@0.75 A3:0.25@0.75 A#3:0.25@0.75 D#3:0.25@0.75 C4:0.25@1 C#4:0.25@0.75 E3:0.25@0.75 D#4:0.25@0.75 C3:0.25@1 C#3:0.25@0.75 D3:0.25@0.75 D#3:0.25@0.75 E3:0.25@0.95 F3:0.25@0.75 F#3:0.25@0.75 G3:0.25@0.75 G#3:0.25@0.75 A3:0.25@0.75 A#3:0.25@0.75 B3:0.25@0.75 C4:0.25@1 C#4:0.25@0.75 D4:0.25@0.75 D#4:0.25@0.75 C3:0.25@0.45 C3:0.25@0.485 D#3:0.25@0.52 D#3:0.25@0.555 C4:0.25@0.59 C4:0.25@0.625 C4:0.25@0.66 C4:0.25@0.695 E3:0.25@0.73 E3:0.25@0.765 C4:0.25@0.8 C4:0.25@0.835 C4:0.25@0.87 C#4:0.25@0.905 D4:0.25@0.94 D#4:0.25@0.975
-R:16
-C3:0.25@1 D#3:0.25@0.75 D3:0.25@0.75 D#3:0.25@0.75 C4:0.25@0.95 F3:0.25@0.75 F#3:0.25@0.75 A3:0.25@0.75 C3:0.25@0.75 A3:0.25@0.75 A#3:0.25@0.75 B3:0.25@0.75 E3:0.25@1 C#4:0.25@0.75 C4:0.25@0.75 D#4:0.25@0.75 C3:0.25@1 C#3:0.25@0.75 C3:0.25@0.75 D#3:0.25@0.75 E3:0.25@0.95 F3:0.25@0.75 E3:0.25@0.75 G3:0.25@0.75 C3:0.25@0.75 A3:0.25@0.75 A#3:0.25@0.75 D#3:0.25@0.75 C4:0.25@1 C#4:0.25@0.75 E3:0.25@0.75 D#4:0.25@0.75 C3:0.25@1 D#3:0.25@0.75 D3:0.25@0.75 D#3:0.25@0.75 C4:0.25@0.95 F3:0.25@0.75 F#3:0.25@0.75 A3:0.25@0.75 C3:0.25@0.75 A3:0.25@0.75 A#3:0.25@0.75 B3:0.25@0.75 E3:0.25@1 C#4:0.25@0.75 C4:0.25@0.75 D#4:0.25@0.75 C3:0.25@0.45 C3:0.25@0.485 D#3:0.25@0.52 D#3:0.25@0.555 C4:0.25@0.59 C4:0.25@0.625 C4:0.25@0.66 C4:0.25@0.695 E3:0.25@0.73 E3:0.25@0.765 C4:0.25@0.8 C4:0.25@0.835 C4:0.25@0.87 C#4:0.25@0.905 D4:0.25@0.94 D#4:0.25@0.975 C3:0.25@1 D#3:0.25@0.75 D3:0.25@0.75 D#3:0.25@0.75 C4:0.25@0.95 F3:0.25@0.75 F#3:0.25@0.75 A3:0.25@0.75 C3:0.25@0.75 A3:0.25@0.75 A#3:0.25@0.75 B3:0.25@0.75 E3:0.25@1 C#4:0.25@0.75 C4:0.25@0.75 D#4:0.25@0.75 C3:0.25@1 C#3:0.25@0.75 C3:0.25@0.75 D#3:0.25@0.75 E3:0.25@0.95 F3:0.25@0.75 E3:0.25@0.75 G3:0.25@0.75 C3:0.25@0.75 A3:0.25@0.75 A#3:0.25@0.75 D#3:0.25@0.75 C4:0.25@1 C#4:0.25@0.75 E3:0.25@0.75 D#4:0.25@0.75 C3:0.25@1 D#3:0.25@0.75 D3:0.25@0.75 D#3:0.25@0.75 C4:0.25@0.95 F3:0.25@0.75 F#3:0.25@0.75 A3:0.25@0.75 C3:0.25@0.75 A3:0.25@0.75 A#3:0.25@0.75 B3:0.25@0.75 E3:0.25@1 C#4:0.25@0.75 C4:0.25@0.75 D#4:0.25@0.75 C3:0.25@0.45 C3:0.25@0.485 D#3:0.25@0.52 D#3:0.25@0.555 C4:0.25@0.59 C4:0.25@0.625 C4:0.25@0.66 C4:0.25@0.695 E3:0.25@0.73 E3:0.25@0.765 C4:0.25@0.8 C4:0.25@0.835 C4:0.25@0.87 C#4:0.25@0.905 D4:0.25@0.94 D#4:0.25@0.975
-C3:0.25@1 C#3:0.25@0.75 D3:0.25@0.75 D#3:0.25@0.75 E3:0.25@0.95 F3:0.25@0.75 F#3:0.25@0.75 G3:0.25@0.75 G#3:0.25@0.75 A3:0.25@0.75 A#3:0.25@0.75 B3:0.25@0.75 C4:0.25@1 C#4:0.25@0.75 D4:0.25@0.75 D#4:0.25@0.75 C3:0.25@1 C#3:0.25@0.75 C3:0.25@0.75 D#3:0.25@0.75 E3:0.25@0.95 F3:0.25@0.75 E3:0.25@0.75 G3:0.25@0.75 C3:0.25@0.7 C3:0.25@0.75 C3:0.25@0.75 C3:0.25@0.75 C3:0.25@0.75 C3:0.25@0.75 C3:0.25@0.75 C3:0.25@0.75
-R:8
-automate break.reverb_send
-0.12 R:45.9 0.8:0.1@step R:2 0.12:0.1@step R:45.8 0.8:0.1@step R:2 0.12:0.1@step
-track brev sample=renders/kite-kit/break.wav root=C3 fixed reverse mode=oneshot gain=0.2 reverb_send=0.5
->48
-(C3:4@0.8)x3
-track tom sample=renders/kite-kit/tom.wav root=E2 mode=oneshot gain=0.5 pan=0.2 reverb_send=0.25
->16
-(E2:0.75 G2:0.75 B2:0.5 R:0.5 E2:0.5 G2:1 F2:0.75 A2:0.75 C3:0.5 R:0.5 F2:0.5 A2:1 E2:0.75 B2:0.75 G2:0.5 R:0.5 E2:0.5 B1:1 F2:0.75 Bb2:0.75 D3:0.5 R:0.5 Bb2:0.5 F2:1)x2
-(E2:4@0.6)x3
-R:4
-(E2:0.75 G2:0.75 B2:0.5 R:0.5 E2:0.5 G2:1 F2:0.75 A2:0.75 C3:0.5 R:0.5 F2:0.5 A2:1 E2:0.75 B2:0.75 G2:0.5 R:0.5 E2:0.5 B1:1 F2:0.75 Bb2:0.75 D3:0.5 R:0.5 Bb2:0.5 F2:1)x2
-R:16
-track swell sample=renders/kite-kit/snare_verb.wav root=C3 fixed reverse mode=oneshot gain=0.7 vel=0.8 reverb_send=0.3
-R:14.2267 C3:1.773@0.8 R:46.227 C3:1.773@0.9
-
-# --- the key: a 909 kick at zero level. It is never heard; it only tells
-# the pad and the pedal when to duck, on the break's own kicks.
-automate bd_level
-0
-track key kit=909 len=1
->16
-(BD:0.75@1 BD:0.75@1 BD:0.75@1 BD:0.25@1 BD:1.5@1)x8
-R:16
-(BD:0.75@1 BD:0.75@1 BD:0.75@1 BD:0.25@1 BD:1.5@1)x8
-R:16
-
-# --- the place: walking alone down a right-of-way, under the lines
-# the wind across the open cut: never stops, not even when the music does
-track wind sample=renders/kite-kit/wind.wav root=C3 fixed loop xfade=0.5 gain=0.7 reverb_send=0.1
-C3:112
-automate wind.smp_gain
-0.9 R:8 0.55:8@smooth R:30 0.9:4@smooth R:14 0.5:4@smooth R:28 1:12@smooth
-automate wind.smp_cutoff
-900 2200:3@smooth 900:5@smooth 3200:3@smooth 900:5@smooth 2200:3@smooth 900:5@smooth 2200:3@smooth 900:5@smooth 3200:3@smooth 900:5@smooth 2200:3@smooth 900:5@smooth 2200:3@smooth 900:5@smooth 3200:3@smooth 900:5@smooth 2200:3@smooth 900:5@smooth 2200:3@smooth 900:5@smooth 3200:3@smooth 900:5@smooth 2200:3@smooth 900:5@smooth 2200:3@smooth 900:5@smooth 3200:3@smooth 900:5@smooth
-
-# the lines themselves: a narrow pulse, buzzing on E — tuned, not mains
-track hum vel=0.5 patch=kaini gain=0.9 reverb_send=0.25
+# --- the lines overhead: a narrow pulse buzzing on E, singing as you pass each pylon
+track hum vel=0.5 patch=kaini gain=0.55 reverb_send=0.25
 [E2 E3]:112
 automate hum.waveform
 1
@@ -201,10 +199,61 @@ automate hum.glide
 automate hum.cutoff
 240 R:8 1300:6@smooth 240:10@smooth R:16 1300:6@smooth 240:10@smooth 2400:6@smooth R:4 260:2@smooth R:12 1300:6@smooth 240:10@smooth
 automate hum.gain
-0 0.8:12@smooth R:34 1.4:4@smooth R:9.9 0:0.1@step R:3.9 0.8:0.1@step R:32 0:16@smooth
+0 0.7:12@smooth R:34 1.3:4@smooth R:9.9 0:0.1@step R:3.9 0.7:0.1@step R:32 0:16@smooth
 
-# corona crackle: flickering on the off-beats, thick under the line
-track crackle sample=renders/kite-kit/crackle.wav root=C3 fixed mode=oneshot gain=0.5 reverb_send=0.35
-R:17.75 C3:0.25@0.37 R:2.75 C3:0.25@0.45 R:1.75 C3:0.25@0.68 R:3.75 C3:0.25@0.57 R:0.5 C3:0.25@0.59 R:1 C3:0.25@0.41 R:0.75 C3:0.25@0.69 R:2.75 C3:0.25@0.44 R:1.75 C3:0.25@0.57 R:0.5 C3:0.25@0.64 R:2 C3:0.25@0.52 R:3.75 C3:0.25@0.59 R:0.75 C3:0.25@0.54 R:3.75 C3:0.25@0.49 R:1.25 C3:0.25@0.63 R:0.5 C3:0.25@0.86 C3:0.25@0.57 C3:0.25@0.91 C3:0.25@1 C3:0.25@0.7 R:0.5 C3:0.25@0.78 C3:0.25@0.72 R:0.25 C3:0.25@0.81 C3:0.25@0.8 R:0.25 C3:0.25@0.89 C3:0.25@0.73 C3:0.25@0.87 C3:0.25@0.7 R:0.25 C3:0.25@0.85 R:1.75 C3:0.25@0.63 R:0.25 C3:0.25@1 C3:0.25@0.61 C3:0.25@0.94 R:0.25 C3:0.25@0.68 C3:0.25@0.76 C3:0.25@0.65 R:0.25 C3:0.25@0.79 C3:0.25@0.77 R:0.25 C3:0.25@0.75 C3:0.25@0.55 C3:0.25@0.7 C3:0.25@0.84 C3:0.25@0.95 R:4.75 C3:0.25@0.55 R:0.75 C3:0.25@0.52 R:0.75 C3:0.25@0.45 R:0.5 C3:0.25@0.39 R:1 C3:0.25@0.53 R:0.75 C3:0.25@0.67 R:5.5 C3:0.25@0.56 R:1 C3:0.25@0.37 R:0.75 C3:0.25@0.37 R:0.75 C3:0.25@0.39 R:1.75 C3:0.25@0.53 R:1.75 C3:0.25@0.46 R:0.5 C3:0.25@0.41 R:3.75 C3:0.25@0.36 R:1 C3:0.25@0.67 R:2.5 C3:0.25@0.51 R:3 C3:0.25@0.5 R:0.5 C3:0.25@0.47
+# --- a few sparks as you step onto the cut, and then no more
+track crackle sample=renders/kite-kit/crackle.wav root=C3 fixed mode=oneshot gain=0.5 reverb_send=0.4
+R:1.75 C3:0.25@0.5 C3:0.25@0.35 R:3.25 C3:0.25@0.6 R:3.5 C3:0.25@0.4 C3:0.25@0.55 R:4 C3:0.25@0.45
 automate crackle.pan
-0 R:17.75 -0.4:0.01@step R:2.99 0.33:0.01@step R:1.99 -0.61:0.01@step R:3.99 -0.55:0.01@step R:0.74 0.41:0.01@step R:1.24 0.3:0.01@step R:0.99 -0.02:0.01@step R:2.99 0.28:0.01@step R:1.99 -0.16:0.01@step R:0.74 0.22:0.01@step R:2.24 0.31:0.01@step R:3.99 -0.07:0.01@step R:0.99 -0.47:0.01@step R:3.99 0.14:0.01@step R:1.49 -0.02:0.01@step R:0.74 0.15:0.01@step R:0.24 -0.4:0.01@step R:0.24 0.31:0.01@step R:0.24 0.29:0.01@step R:0.24 0.35:0.01@step R:0.74 0.66:0.01@step R:0.24 -0.23:0.01@step R:0.49 -0.32:0.01@step R:0.24 -0.3:0.01@step R:0.49 -0.44:0.01@step R:0.24 0.52:0.01@step R:0.24 0.33:0.01@step R:0.24 -0.4:0.01@step R:0.49 0.4:0.01@step R:1.99 -0.14:0.01@step R:0.49 -0.69:0.01@step R:0.24 -0.06:0.01@step R:0.24 0.08:0.01@step R:0.49 0.4:0.01@step R:0.24 0.04:0.01@step R:0.24 0.33:0.01@step R:0.49 0.06:0.01@step R:0.24 -0.61:0.01@step R:0.49 -0.61:0.01@step R:0.24 -0.07:0.01@step R:0.24 0.03:0.01@step R:0.24 -0.59:0.01@step R:0.24 0.53:0.01@step R:4.99 0.47:0.01@step R:0.99 0.3:0.01@step R:0.99 -0.22:0.01@step R:0.74 0.58:0.01@step R:1.24 0.03:0.01@step R:0.99 0.65:0.01@step R:5.74 0.18:0.01@step R:1.24 -0.39:0.01@step R:0.99 0.3:0.01@step R:0.99 -0.58:0.01@step R:1.99 0.1:0.01@step R:1.99 0.57:0.01@step R:0.74 -0.14:0.01@step R:3.99 0.14:0.01@step R:1.24 0.5:0.01@step R:2.74 0.58:0.01@step R:3.24 0.36:0.01@step R:0.74 0.5:0.01@step
+-0.5 R:5.4 0.55:0.01@step R:3.79 -0.2:0.01@step R:4.49 0.4:0.01@step
+
+# --- the break: one destroyed bar in sixteen slices (C3 = slice 1 ... D#4 = slice 16)
+track break sample=renders/kite-kit/break.wav root=C3 chop=16 gain=0.16
+>16
+C3:0.25@1 C#3:0.25@0.75 D3:0.25@0.75 D#3:0.25@0.75 E3:0.25@0.95 F3:0.25@0.75 F#3:0.25@0.75 G3:0.25@0.75 G#3:0.25@0.75 A3:0.25@0.75 A#3:0.25@0.75 B3:0.25@0.75 C4:0.25@1 C#4:0.25@0.75 D4:0.25@0.75 D#4:0.25@0.75 C3:0.25@1 C#3:0.25@0.75 C3:0.25@0.75 D#3:0.25@0.75 E3:0.25@0.95 F3:0.25@0.75 E3:0.25@0.75 G3:0.25@0.75 C3:0.25@0.75 A3:0.25@0.75 A#3:0.25@0.75 D#3:0.25@0.75 C4:0.25@1 C#4:0.25@0.75 E3:0.25@0.75 D#4:0.25@0.75 C3:0.25@1 C#3:0.25@0.75 D3:0.25@0.75 D#3:0.25@0.75 E3:0.25@0.95 F3:0.25@0.75 F#3:0.25@0.75 G3:0.25@0.75 G#3:0.25@0.75 A3:0.25@0.75 A#3:0.25@0.75 B3:0.25@0.75 C4:0.25@1 C#4:0.25@0.75 D4:0.25@0.75 D#4:0.25@0.75 C3:0.25@0.45 C3:0.25@0.485 D#3:0.25@0.52 D#3:0.25@0.555 C4:0.25@0.59 C4:0.25@0.625 C4:0.25@0.66 C4:0.25@0.695 E3:0.25@0.73 E3:0.25@0.765 C4:0.25@0.8 C4:0.25@0.835 C4:0.25@0.87 C#4:0.25@0.905 D4:0.25@0.94 D#4:0.25@0.975 C3:0.25@1 C#3:0.25@0.75 D3:0.25@0.75 D#3:0.25@0.75 E3:0.25@0.95 F3:0.25@0.75 F#3:0.25@0.75 G3:0.25@0.75 G#3:0.25@0.75 A3:0.25@0.75 A#3:0.25@0.75 B3:0.25@0.75 C4:0.25@1 C#4:0.25@0.75 D4:0.25@0.75 D#4:0.25@0.75 C3:0.25@1 C#3:0.25@0.75 C3:0.25@0.75 D#3:0.25@0.75 E3:0.25@0.95 F3:0.25@0.75 E3:0.25@0.75 G3:0.25@0.75 C3:0.25@0.75 A3:0.25@0.75 A#3:0.25@0.75 D#3:0.25@0.75 C4:0.25@1 C#4:0.25@0.75 E3:0.25@0.75 D#4:0.25@0.75 C3:0.25@1 C#3:0.25@0.75 D3:0.25@0.75 D#3:0.25@0.75 E3:0.25@0.95 F3:0.25@0.75 F#3:0.25@0.75 G3:0.25@0.75 G#3:0.25@0.75 A3:0.25@0.75 A#3:0.25@0.75 B3:0.25@0.75 C4:0.25@1 C#4:0.25@0.75 D4:0.25@0.75 D#4:0.25@0.75 C3:0.25@0.45 C3:0.25@0.485 D#3:0.25@0.52 D#3:0.25@0.555 C4:0.25@0.59 C4:0.25@0.625 C4:0.25@0.66 C4:0.25@0.695 E3:0.25@0.73 E3:0.25@0.765 C4:0.25@0.8 C4:0.25@0.835 C4:0.25@0.87 C#4:0.25@0.905 D4:0.25@0.94 D#4:0.25@0.975
+R:16
+C3:0.25@1 D#3:0.25@0.75 D3:0.25@0.75 D#3:0.25@0.75 C4:0.25@0.95 F3:0.25@0.75 F#3:0.25@0.75 A3:0.25@0.75 C3:0.25@0.75 A3:0.25@0.75 A#3:0.25@0.75 B3:0.25@0.75 E3:0.25@1 C#4:0.25@0.75 C4:0.25@0.75 D#4:0.25@0.75 C3:0.25@1 C#3:0.25@0.75 C3:0.25@0.75 D#3:0.25@0.75 E3:0.25@0.95 F3:0.25@0.75 E3:0.25@0.75 G3:0.25@0.75 C3:0.25@0.75 A3:0.25@0.75 A#3:0.25@0.75 D#3:0.25@0.75 C4:0.25@1 C#4:0.25@0.75 E3:0.25@0.75 D#4:0.25@0.75 C3:0.25@1 D#3:0.25@0.75 D3:0.25@0.75 D#3:0.25@0.75 C4:0.25@0.95 F3:0.25@0.75 F#3:0.25@0.75 A3:0.25@0.75 C3:0.25@0.75 A3:0.25@0.75 A#3:0.25@0.75 B3:0.25@0.75 E3:0.25@1 C#4:0.25@0.75 C4:0.25@0.75 D#4:0.25@0.75 C3:0.25@0.45 C3:0.25@0.485 D#3:0.25@0.52 D#3:0.25@0.555 C4:0.25@0.59 C4:0.25@0.625 C4:0.25@0.66 C4:0.25@0.695 E3:0.25@0.73 E3:0.25@0.765 C4:0.25@0.8 C4:0.25@0.835 C4:0.25@0.87 C#4:0.25@0.905 D4:0.25@0.94 D#4:0.25@0.975 C3:0.25@1 D#3:0.25@0.75 D3:0.25@0.75 D#3:0.25@0.75 C4:0.25@0.95 F3:0.25@0.75 F#3:0.25@0.75 A3:0.25@0.75 C3:0.25@0.75 A3:0.25@0.75 A#3:0.25@0.75 B3:0.25@0.75 E3:0.25@1 C#4:0.25@0.75 C4:0.25@0.75 D#4:0.25@0.75 C3:0.25@1 C#3:0.25@0.75 C3:0.25@0.75 D#3:0.25@0.75 E3:0.25@0.95 F3:0.25@0.75 E3:0.25@0.75 G3:0.25@0.75 C3:0.25@0.75 A3:0.25@0.75 A#3:0.25@0.75 D#3:0.25@0.75 C4:0.25@1 C#4:0.25@0.75 E3:0.25@0.75 D#4:0.25@0.75 C3:0.25@1 D#3:0.25@0.75 D3:0.25@0.75 D#3:0.25@0.75 C4:0.25@0.95 F3:0.25@0.75 F#3:0.25@0.75 A3:0.25@0.75 C3:0.25@0.75 A3:0.25@0.75 A#3:0.25@0.75 B3:0.25@0.75 E3:0.25@1 C#4:0.25@0.75 C4:0.25@0.75 D#4:0.25@0.75 C3:0.25@0.45 C3:0.25@0.485 D#3:0.25@0.52 D#3:0.25@0.555 C4:0.25@0.59 C4:0.25@0.625 C4:0.25@0.66 C4:0.25@0.695 E3:0.25@0.73 E3:0.25@0.765 C4:0.25@0.8 C4:0.25@0.835 C4:0.25@0.87 C#4:0.25@0.905 D4:0.25@0.94 D#4:0.25@0.975
+C3:0.25@1 C#3:0.25@0.75 D3:0.25@0.75 D#3:0.25@0.75 E3:0.25@0.95 F3:0.25@0.75 F#3:0.25@0.75 G3:0.25@0.75 G#3:0.25@0.75 A3:0.25@0.75 A#3:0.25@0.75 B3:0.25@0.75 C4:0.25@1 C#4:0.25@0.75 D4:0.25@0.75 D#4:0.25@0.75 C3:0.25@1 C#3:0.25@0.75 C3:0.25@0.75 D#3:0.25@0.75 E3:0.25@0.95 F3:0.25@0.75 E3:0.25@0.75 G3:0.25@0.75 C3:0.25@0.7 C3:0.25@0.75 C3:0.25@0.75 C3:0.25@0.75 C3:0.25@0.75 C3:0.25@0.75 C3:0.25@0.75 C3:0.25@0.75
+R:8
+automate break.reverb_send
+0.12 R:45.9 0.8:0.1@step R:2 0.12:0.1@step R:45.8 0.8:0.1@step R:2 0.12:0.1@step
+track brev sample=renders/kite-kit/break.wav root=C3 fixed reverse mode=oneshot gain=0.2 reverb_send=0.5
+>48
+(C3:4@0.8)x3
+track tom sample=renders/kite-kit/tom.wav root=E2 mode=oneshot gain=0.4 pan=0.2 reverb_send=0.25
+>16
+(E2:0.75 G2:0.75 B2:0.5 R:0.5 E2:0.5 G2:1 C2:0.75 E2:0.75 G2:0.5 R:0.5 C2:0.5 E2:1 A1:0.75 C2:0.75 E2:0.5 R:0.5 A1:0.5 C2:1 B1:0.75 D2:0.75 F#2:0.5 R:0.5 B1:0.5 D2:1)x2
+(E2:4@0.6)x3
+R:4
+(E2:0.75 G2:0.75 B2:0.5 R:0.5 E2:0.5 G2:1 C2:0.75 E2:0.75 G2:0.5 R:0.5 C2:0.5 E2:1 A1:0.75 C2:0.75 E2:0.5 R:0.5 A1:0.5 C2:1 B1:0.75 D2:0.75 F#2:0.5 R:0.5 B1:0.5 D2:1)x2
+R:16
+track swell sample=renders/kite-kit/snare_verb.wav root=C3 fixed reverse mode=oneshot gain=0.7 vel=0.8 reverb_send=0.3
+R:14.2267 C3:1.773@0.8 R:46.227 C3:1.773@0.9
+
+# --- the key: a 909 kick at zero level; it only tells the chords when to duck
+automate bd_level
+0
+track key kit=909 len=1
+>16
+(BD:0.75@1 BD:0.75@1 BD:0.75@1 BD:0.25@1 BD:1.5@1)x8
+R:16
+(BD:0.75@1 BD:0.75@1 BD:0.75@1 BD:0.25@1 BD:1.5@1)x8
+R:16
+
+# --- the flow: the chord broken into a running stream on the Kaini voice. No tune —
+# every note is a chord tone, and every strike blooms open and sinks, so the harmony
+# itself moves. Accents fall 3+3+2; the phrases swell over four bars, bigger the
+# second time, and the velocity is the colour (a harder strike blooms brighter).
+track flow vel=0.4 patch=kaini gain=1.75 chorus_send=0.35 reverb_send=0.32 pan=-0.12 duck=0.4 duck_release=0.3
+R:16 E3:0.25@0.46 B3:0.25@0.34 D4:0.25@0.34 F#4:0.25@0.50 G4:0.25@0.32 F#4:0.25@0.33 D4:0.25@0.49 B3:0.25@0.34 E3:0.25@0.49 B3:0.25@0.34 D4:0.25@0.35 F#4:0.25@0.49 G4:0.25@0.35 F#4:0.25@0.34 D4:0.25@0.47 B3:0.25@0.35 C3:0.25@0.54 G3:0.25@0.44 B3:0.25@0.42 E4:0.25@0.58 F#4:0.25@0.43 E4:0.25@0.43 B3:0.25@0.55 G3:0.25@0.41 C3:0.25@0.58 G3:0.25@0.44 B3:0.25@0.44 E4:0.25@0.58 F#4:0.25@0.42 E4:0.25@0.40 B3:0.25@0.55 G3:0.25@0.42 A2:0.25@0.63 E3:0.25@0.50 G3:0.25@0.52 C4:0.25@0.65 B3:0.25@0.50 C4:0.25@0.48 G3:0.25@0.65 E3:0.25@0.49 A2:0.25@0.64 E3:0.25@0.49 G3:0.25@0.50 C4:0.25@0.64 B3:0.25@0.48 C4:0.25@0.50 G3:0.25@0.65 E3:0.25@0.51 B2:0.25@0.56 F#3:0.25@0.44 A3:0.25@0.41 D4:0.25@0.56 E4:0.25@0.44 D4:0.25@0.42 A3:0.25@0.56 F#3:0.25@0.40 B2:0.25@0.55 F#3:0.25@0.40 A3:0.25@0.40 D4:0.25@0.57 E4:0.25@0.44 D4:0.25@0.40 A3:0.25@0.57 F#3:0.25@0.42 E3:0.25@0.54 B3:0.25@0.39 D4:0.25@0.42 F#4:0.25@0.55 G4:0.25@0.40 F#4:0.25@0.40 D4:0.25@0.56 B3:0.25@0.42 E3:0.25@0.54 B3:0.25@0.40 D4:0.25@0.41 F#4:0.25@0.53 G4:0.25@0.41 F#4:0.25@0.40 D4:0.25@0.54 B3:0.25@0.42 C3:0.25@0.62 G3:0.25@0.47 B3:0.25@0.47 E4:0.25@0.60 F#4:0.25@0.49 E4:0.25@0.48 B3:0.25@0.62 G3:0.25@0.48 C3:0.25@0.62 G3:0.25@0.50 B3:0.25@0.47 E4:0.25@0.62 F#4:0.25@0.48 E4:0.25@0.50 B3:0.25@0.64 G3:0.25@0.48 A2:0.25@0.72 E3:0.25@0.58 G3:0.25@0.55 C4:0.25@0.72 B3:0.25@0.54 C4:0.25@0.57 G3:0.25@0.71 E3:0.25@0.56 A2:0.25@0.70 E3:0.25@0.58 G3:0.25@0.58 C4:0.25@0.72 B3:0.25@0.56 C4:0.25@0.54 G3:0.25@0.69 E3:0.25@0.56 B2:0.25@0.60 F#3:0.25@0.49 A3:0.25@0.48 D4:0.25@0.62 E4:0.25@0.46 D4:0.25@0.46 A3:0.25@0.62 F#3:0.25@0.50 B2:0.25@0.60 F#3:0.25@0.49 A3:0.25@0.47 D4:0.25@0.63 E4:0.25@0.49 D4:0.25@0.50 A3:0.25@0.63 F#3:0.25@0.49 R:16 E3:0.25@0.58 B3:0.25@0.45 D4:0.25@0.46 F#4:0.25@0.61 G4:0.25@0.48 F#4:0.25@0.46 D4:0.25@0.61 B3:0.25@0.44 E3:0.25@0.59 B3:0.25@0.46 D4:0.25@0.48 F#4:0.25@0.62 G4:0.25@0.46 F#4:0.25@0.44 D4:0.25@0.61 B3:0.25@0.48 C3:0.25@0.75 G3:0.25@0.62 B3:0.25@0.59 E4:0.25@0.74 F#4:0.25@0.62 E4:0.25@0.60 B3:0.25@0.72 G3:0.25@0.58 C3:0.25@0.72 G3:0.25@0.62 B3:0.25@0.58 E4:0.25@0.73 F#4:0.25@0.59 E4:0.25@0.61 B3:0.25@0.72 G3:0.25@0.60 A2:0.25@0.87 E3:0.25@0.73 G3:0.25@0.73 C4:0.25@0.86 B3:0.25@0.76 C4:0.25@0.74 G3:0.25@0.90 E3:0.25@0.72 A2:0.25@0.88 E3:0.25@0.74 G3:0.25@0.73 C4:0.25@0.88 B3:0.25@0.75 C4:0.25@0.72 G3:0.25@0.87 E3:0.25@0.72 B2:0.25@0.76 F#3:0.25@0.58 A3:0.25@0.60 D4:0.25@0.76 E4:0.25@0.60 D4:0.25@0.61 A3:0.25@0.72 F#3:0.25@0.61 B2:0.25@0.76 F#3:0.25@0.58 A3:0.25@0.60 D4:0.25@0.75 E4:0.25@0.60 D4:0.25@0.62 A3:0.25@0.72 F#3:0.25@0.62 E3:0.25@0.67 B3:0.25@0.54 D4:0.25@0.54 F#4:0.25@0.66 G4:0.25@0.53 F#4:0.25@0.53 D4:0.25@0.67 B3:0.25@0.54 E3:0.25@0.69 B3:0.25@0.54 D4:0.25@0.54 F#4:0.25@0.67 G4:0.25@0.54 F#4:0.25@0.52 D4:0.25@0.69 B3:0.25@0.55 C3:0.25@0.84 G3:0.25@0.70 B3:0.25@0.67 E4:0.25@0.84 F#4:0.25@0.70 E4:0.25@0.69 B3:0.25@0.82 G3:0.25@0.69 C3:0.25@0.84 G3:0.25@0.69 B3:0.25@0.70 E4:0.25@0.81 F#4:0.25@0.66 E4:0.25@0.68 B3:0.25@0.82 G3:0.25@0.68 A2:0.25@0.94 E3:0.25@0.83 G3:0.25@0.82 C4:0.25@0.95 B3:0.25@0.81 C4:0.25@0.81 G3:0.25@0.95 E3:0.25@0.82 A2:0.25@0.94 E3:0.25@0.81 G3:0.25@0.84 C4:0.25@0.94 B3:0.25@0.83 C4:0.25@0.83 G3:0.25@0.95 E3:0.25@0.80 B2:0.25@0.83 F#3:0.25@0.68 A3:0.25@0.67 D4:0.25@0.84 E4:0.25@0.67 D4:0.25@0.67 A3:0.25@0.81 F#3:0.25@0.66 B2:0.25@0.82 F#3:0.25@0.70 A3:0.25@0.69 D4:0.25@0.82 E4:0.25@0.66 D4:0.25@0.66 A3:0.25@0.80 F#3:0.25@0.66 E3:0.25@0.47 B3:0.25@0.32 D4:0.25@0.34 F#4:0.25@0.45 G4:0.25@0.33 F#4:0.25@0.33 D4:0.25@0.47 B3:0.25@0.33 E3:0.25@0.48 B3:0.25@0.31 D4:0.25@0.31 F#4:0.25@0.46 G4:0.25@0.34 F#4:0.25@0.34 D4:0.25@0.47 B3:0.25@0.34 C3:0.25@0.41 G3:0.25@0.28 B3:0.25@0.25 E4:0.25@0.42 F#4:0.25@0.25 E4:0.25@0.27 B3:0.25@0.40 G3:0.25@0.24 C3:0.25@0.41 G3:0.25@0.25 B3:0.25@0.28 E4:0.25@0.41 F#4:0.25@0.24 E4:0.25@0.27 B3:0.25@0.39 G3:0.25@0.28 A2:0.25@0.34 E3:0.25@0.19 G3:0.25@0.20 C4:0.25@0.35 B3:0.25@0.18 C4:0.25@0.21 G3:0.25@0.32 E3:0.25@0.18 A2:0.25@0.33 E3:0.25@0.21 G3:0.25@0.21 C4:0.25@0.32 B3:0.25@0.20 C4:0.25@0.19 G3:0.25@0.33 E3:0.25@0.19 B2:0.25@0.28 F#3:0.25@0.13 A3:0.25@0.12 D4:0.25@0.28 E4:0.25@0.15 D4:0.25@0.16 A3:0.25@0.29 F#3:0.25@0.13 B2:0.25@0.27 F#3:0.25@0.12 A3:0.25@0.12 D4:0.25@0.27 E4:0.25@0.14 D4:0.25@0.13 A3:0.25@0.27 F#3:0.25@0.16
+automate flow.vel_filter
+1.4
+automate flow.vel_amp
+0.85
+# every strike blooms and sinks INSIDE its sixteenth
+automate flow.filter_decay
+0.22
+automate flow.filter_env
+1.3
+automate flow.cutoff
+680
