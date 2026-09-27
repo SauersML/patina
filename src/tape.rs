@@ -117,6 +117,14 @@ const CROSSTALK: f32 = 0.02;
 /// ramp of a dropout, not a filter coefficient. Was a hard-coded
 /// 0.004/sample, which is this at 48 kHz.
 const DROPOUT_RAMP_S: f32 = 0.0052;
+/// Playback head + preamp noise, per sample, entering after the tape (so
+/// it rides the playback EQ but not the dropouts). Calibrated to sit ~12 dB
+/// under a fresh tape's hiss, the usual gap between a Type I tape's floor
+/// and the deck electronics behind it.
+const HEAD_NOISE: f32 = 3.55e-5;
+/// The range a dropout's depth is drawn from (see `sample_dropout_depth`).
+const DROPOUT_DEPTH_MIN: f32 = 0.05;
+const DROPOUT_DEPTH_MAX: f32 = 0.85;
 /// Print-through: adjacent-wind echo delay and base level.
 const PRINT_DELAY_S: f32 = 1.35;
 const PRINT_LEVEL: f32 = 0.0035;
@@ -184,6 +192,9 @@ pub struct Tape {
     /// The reel's own PRNG: dropout schedule and depth. Separate from the
     /// oxide's so a dropout never perturbs the Barkhausen noise stream.
     reel_rng: Rng,
+    /// The playback head and preamp's own noise stream: electrical, after
+    /// the tape, so a dropout can dull the hiss but never silence the deck.
+    head_rng: Rng,
     /// Per-sample ramp coefficient for the tape lifting off / settling back
     /// onto the head. A real dropout is a mechanical event with a duration;
     /// derived from the rate so it stays ~5 ms instead of halving at 96 kHz.
@@ -317,6 +328,7 @@ impl Tape {
             down2: [Halfband::new(); 2],
             down3: [Halfband::new(); 2],
             reel_rng: Rng::new(crate::rng::seed(0x2EE1_C0DE)),
+            head_rng: Rng::new(crate::rng::seed(0x4EAD_0015)),
             dropout_k: crate::smoothing::approach(DROPOUT_RAMP_S, sample_rate),
             dropout_env: 1.0,
             dropout_target: 1.0,
@@ -438,6 +450,21 @@ impl Tape {
         self.wallace_stale = true;
     }
 
+    /// How far the next dropout lifts the tape (0 = contact, 1 = the full
+    /// SPACING_DROPOUT_UM, with the level dipping by the same fraction).
+    /// Real dropouts are heavy-tailed: most are a fleck of dust or shed
+    /// oxide that dulls the top for a moment, and only a few are a crease
+    /// that pulls the whole signal down. The draw used to be uniform over
+    /// 0.25..0.85, so a typical dropout halved the tape signal and took the
+    /// hiss with it — on a worn reel, the noise audibly cut out every few
+    /// seconds. Cubing the draw keeps the same range but puts the median at
+    /// ~0.15 (~1.4 dB, ~1.2 um of lift, a few dB off the top octave) and
+    /// leaves a deep lift (> 0.5) about one time in six.
+    fn sample_dropout_depth(&mut self) -> f32 {
+        let u = self.reel_rng.range(0.0, 1.0);
+        DROPOUT_DEPTH_MIN + (DROPOUT_DEPTH_MAX - DROPOUT_DEPTH_MIN) * u * u * u
+    }
+
     /// Poisson arrival time for the next oxide dropout, in samples.
     /// Drawn from the deck's own reel PRNG: this is reached from `process`
     /// every time a dropout ends, so it must not touch a thread-local.
@@ -548,7 +575,7 @@ impl Tape {
         } else if self.next_dropout != f32::MAX {
             self.next_dropout -= 1.0;
             if self.next_dropout <= 0.0 {
-                self.dropout_target = 1.0 - self.reel_rng.range(0.25, 0.85);
+                self.dropout_target = 1.0 - self.sample_dropout_depth();
                 self.dropout_remaining = self.reel_rng.range(0.002, 0.045) * self.sample_rate;
             }
         }
@@ -703,7 +730,9 @@ impl Tape {
         let tape_signal = with_echo * self.dropout_env;
 
         // --- Playback head: gap flux averaging, bump; playback amp: EQ, DC ---
-        let gapped = self.gap_average(ch, tape_signal);
+        // The head and preamp add their own noise after the tape: it is
+        // there whether or not the tape is touching the head.
+        let gapped = self.gap_average(ch, tape_signal) + self.head_rng.bipolar() * HEAD_NOISE;
         let bumped = self.head_bump[ch].process(gapped);
         let de_emphasized = self.playback_eq[ch].process(bumped);
         self.dc_block[ch].process(de_emphasized)
@@ -1766,6 +1795,52 @@ mod tests {
             silent_floor,
             modulated
         );
+    }
+
+    /// Dropouts are mostly shallow with a rare deep one — never a uniform
+    /// spread that makes the typical dropout gut the signal.
+    /// The head and preamp keep hissing while the tape lifts: the deepest
+    /// dropout the reel can draw dulls the floor, it never silences the deck.
+    #[test]
+    fn a_deep_dropout_leaves_the_deck_noise_floor() {
+        let floor = |lift: bool| {
+            let mut tape = Tape::new(48000.0);
+            tape.set_drive(0.3);
+            tape.set_age(0.5);
+            tape.next_dropout = f32::MAX;
+            for _ in 0..24000 {
+                tape.process(0.0, 0.0);
+            }
+            if lift {
+                tape.dropout_target = 1.0 - DROPOUT_DEPTH_MAX;
+                tape.dropout_remaining = 48000.0;
+            }
+            let mut e = 0.0f64;
+            for i in 0..24000 {
+                let (l, _) = tape.process(0.0, 0.0);
+                if i > 4800 {
+                    e += (l * l) as f64;
+                }
+            }
+            10.0 * (e / 19199.0).log10()
+        };
+        let (normal, lifted) = (floor(false), floor(true));
+        let drop = normal - lifted;
+        assert!(drop > 3.0, "a deep dropout should dull the hiss: {drop:.1} dB");
+        assert!(drop < 18.0, "the deck's own noise must remain under a dropout: {drop:.1} dB");
+    }
+
+    #[test]
+    fn dropouts_are_mostly_shallow_and_rarely_deep() {
+        let mut tape = Tape::new(48000.0);
+        let depths: Vec<f32> = (0..4000).map(|_| tape.sample_dropout_depth()).collect();
+        let mut sorted = depths.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let median = sorted[sorted.len() / 2];
+        let deep = depths.iter().filter(|&&d| d > 0.5).count() as f32 / depths.len() as f32;
+        assert!(depths.iter().all(|&d| (DROPOUT_DEPTH_MIN..=DROPOUT_DEPTH_MAX).contains(&d)));
+        assert!(median < 0.22, "typical dropout too deep: median {median}");
+        assert!((0.08..0.28).contains(&deep), "deep dropouts should be rare, not absent: {deep}");
     }
 
     #[test]
