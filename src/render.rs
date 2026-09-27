@@ -100,11 +100,14 @@ pub fn render_stems(song: &crate::song::Song, dir: &str) -> Result<()> {
     let mut done: Vec<u16> = Vec::new();
     let mut table: Vec<(String, f32, f32, f32)> = Vec::new();
     for (name, channel) in &song.tracks {
-        // group channels that mix as one strip
+        // Every track is its own strip, sample tracks included (each tape
+        // slot mixes on its own channel); only the 909 board is one strip
+        // under every kit track. Sample tracks used to be folded onto the
+        // deck's base channel, which a solo matches for slot 0 alone: the
+        // first sample track's stem was written and every other sample
+        // track silently got none.
         let key = if *channel == crate::drums::DRUM_CHANNEL {
             crate::drums::DRUM_CHANNEL
-        } else if *channel >= crate::sampler::SAMPLER_CHANNEL_BASE {
-            crate::sampler::SAMPLER_CHANNEL_BASE
         } else {
             *channel
         };
@@ -281,6 +284,53 @@ mod tests {
             meter.push(frame);
         }
         meter
+    }
+
+    /// Every sample track is its own strip, so `render_stems` must write a
+    /// stem for each — the second tape slot's stem holding the second slot.
+    #[test]
+    fn each_sample_track_solos_to_its_own_audio() {
+        let dir = std::env::temp_dir().join(format!("patina-stems-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = |name: &str, hz: f32| {
+            let n = 24000usize;
+            let mut d = Vec::new();
+            d.extend_from_slice(b"RIFF");
+            d.extend_from_slice(&(36 + n as u32 * 2).to_le_bytes());
+            d.extend_from_slice(b"WAVEfmt ");
+            d.extend_from_slice(&16u32.to_le_bytes());
+            d.extend_from_slice(&1u16.to_le_bytes());
+            d.extend_from_slice(&1u16.to_le_bytes());
+            d.extend_from_slice(&48000u32.to_le_bytes());
+            d.extend_from_slice(&96000u32.to_le_bytes());
+            d.extend_from_slice(&2u16.to_le_bytes());
+            d.extend_from_slice(&16u16.to_le_bytes());
+            d.extend_from_slice(b"data");
+            d.extend_from_slice(&(n as u32 * 2).to_le_bytes());
+            for i in 0..n {
+                let x = (std::f32::consts::TAU * hz * i as f32 / 48000.0).sin() * 12000.0;
+                d.extend_from_slice(&(x as i16).to_le_bytes());
+            }
+            let path = dir.join(name);
+            std::fs::write(&path, d).unwrap();
+            path.to_str().unwrap().to_string()
+        };
+        let (a, b) = (wav("a.wav", 220.0), wav("b.wav", 330.0));
+        let song = crate::song::parse_song_text(&format!(
+            "bpm 120\ntrack one sample={a} root=C3\nC3:1\ntrack two sample={b} root=C3\n>2\nC3:1\n"
+        ))
+        .unwrap();
+        let stems = dir.join("stems");
+        render_stems(&song, stems.to_str().unwrap()).unwrap();
+        let energy = |name: &str| {
+            let path = stems.join(format!("{name}.wav"));
+            let data = crate::sampler::load_wav_stereo(path.to_str().unwrap())
+                .unwrap_or_else(|e| panic!("no stem for sample track '{name}': {e}"));
+            data.left.iter().map(|x| (*x as f64).powi(2)).sum::<f64>()
+        };
+        assert!(energy("one") > 1.0, "the first sample track's stem must hold its audio");
+        assert!(energy("two") > 1.0, "the second sample track's stem must hold its audio");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
