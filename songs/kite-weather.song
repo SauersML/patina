@@ -1,28 +1,32 @@
 # Kite Weather
 #
-# A warm, faded afternoon heard through a worn cassette. No drums.
+# A catchy song that is quietly wrong. The hook is four bars you could hum
+# after one listen; everything around it is slightly off.
 #
-# Everything plays through the same tired tape: heavy wow, hiss, dulled
-# highs, pads of two slightly detuned oscillators through the Juno chorus.
-# The harmony is major and a little sad — Dmaj9, F#m7, Gmaj9, then the turn
-# to G minor with a sixth that makes the whole thing ache — and the tune is
-# simple enough to have been hummed, sitting low, sliding between notes.
+#   catchy      a dotted, skipping hook over Dmaj9 F#m7 Gmaj9 Gm6, a steady
+#               half-time beat of sampled, crushed drums
+#   unsettling  a ghost double of the hook, 35 cents flat and a sixteenth
+#               late; the first pass ends on C# over G minor; the bass walks
+#               up a tritone into every loop; reversed snare-reverb swells;
+#               a ring-modulated clank in no key; and at the end of every
+#               loop the tape sags and every voice sags with it
 #
-#   bars 1-8    pad, a soft bass floor, a few distant plucks
-#   bars 9-16   the tune
-#   bars 17-24  the tune answers higher; the plucks fill in; the pad opens;
-#               at bar 20 the tape sags and every voice sags with it
-#   bars 25-28  thinning out, and the tape slows to a stop
+#   bars 1-4    pad, a loose music box, one clank, a swell into the beat
+#   bars 5-12   beat, bass, the hook twice
+#   bars 13-16  the break: a heartbeat kick, the out-of-tune ghost alone
+#   bars 17-24  everything, the ghost doubling, the germanium up
+#   bars 25-28  the beat falls apart layer by layer; the tape stops
 #
+# Drums are samples bounced from Patina's own 909 and broken on purpose by
+# scripts/kite-weather-kit.py (run it first; it writes renders/kite-kit/).
 # 4/4 at 88 bpm; bar n starts at beat 4*(n-1).
 
 bpm 88
 gate 0.95
 tail 4
 
-# --- the tape everything lives on
 automate tape_wow
-0.42 R:76 0.6:2@smooth 0.42:4@smooth R:26 0.55:4@smooth
+0.42
 automate tape_flutter
 0.1
 automate tape_age
@@ -38,117 +42,136 @@ automate chorus_depth
 automate chorus_hiss
 0.6
 automate spring
-0.05
+0.08
 automate reverb_wet
 0.3
 automate reverb_decay
-0.78
+0.8
 automate reverb_tone
 3000
 automate width
 1.1
-automate fuzz
-0
-
-# A light parallel squeeze, the way a whole cassette dub sits together.
 automate comp_in
 1
 automate comp_threshold
--28
+-24
 automate comp_ratio
-0
+1
 automate comp_attack
-4
+3
 automate comp_release
 4
 automate comp_makeup
 2
 automate comp_mix
-0.4
+0.5
+# germanium: a little grit, more when everything plays, easing out
+automate fuzz
+0.1 R:64 0.32:4@smooth R:28 0.15:8@smooth
 
-# --- pad: Kaini, two saws a few cents apart, slow in and slow out
+# --- pad: Kaini, two saws a few cents apart, a chord a bar
 track pad vel=0.5 patch=kaini reverb_send=0.3
-([D3 F#3 A3 C#4 E4]:8 [F#3 A3 C#4 E4]:8 [G3 B3 D4 F#4 A4]:8 [G3 Bb3 D4 E4]:8)x3
-[D3 F#3 A3 C#4 E4]:16
-
-# the pad breathes in over the first eight bars and back out at the end
-automate pad.gain
-0.2 0.6:32@smooth R:64 0.38:16@smooth
+([D3 F#3 A3 C#4 E4]:4 [F#3 A3 C#4 E4]:4 [G3 B3 D4 F#4 A4]:4 [G3 Bb3 D4 E4]:4)x7
 automate pad.attack
-1.4
+0.9
 automate pad.release
-2.5
+2
 automate pad.osc2_level
 0.6
 automate pad.detune
 11
+automate pad.gain
+0.25 0.55:16@smooth R:32 0.4:2@smooth R:12 0.55:2@smooth R:32 0.3:16@smooth
 automate pad.cutoff
-600 R:64 1000:16@smooth R:16 520:16@smooth
+560 R:64 900:8@smooth R:24 480:16@smooth
+automate pad.pitch_shift
+0 R:15 -0.55:0.5@smooth 0:0.5@smooth R:15 -0.55:0.5@smooth 0:0.5@smooth R:15 -0.55:0.5@smooth 0:0.5@smooth R:15 -0.55:0.5@smooth 0:0.5@smooth R:15 -0.55:0.5@smooth 0:0.5@smooth R:15 -0.55:0.5@smooth 0:0.5@smooth R:12 -3:4@smooth
 
-# --- bass: Kaini, mono, a sub underneath, roots held long
-track bass vel=0.55 patch=kaini gain=0.8
-# the floor arrives at bar 5, once the pad has breathed in
-R:16 G2:8 G2:8
-(D2:8 F#2:8 G2:8 G2:8)x2
-D2:16
-
+# --- bass: Kaini, mono, a sub; walks up a tritone into every loop
+track bass vel=0.6 patch=kaini gain=0.85
+R:16
+(D2:4 F#2:4 G2:4 G1:2 C#2:2)x6
 automate bass.mono
 1
 automate bass.sub
 0.45
 automate bass.attack
-0.3
+0.02
 automate bass.release
-1.5
+0.6
 automate bass.cutoff
-380
+420
+automate bass.glide
+0.08
+automate bass.pitch_shift
+0 R:15 -0.55:0.5@smooth 0:0.5@smooth R:15 -0.55:0.5@smooth 0:0.5@smooth R:15 -0.55:0.5@smooth 0:0.5@smooth R:15 -0.55:0.5@smooth 0:0.5@smooth R:15 -0.55:0.5@smooth 0:0.5@smooth R:15 -0.55:0.5@smooth 0:0.5@smooth R:12 -3:4@smooth
 
-# --- plucks: Bocuma, a distant music box that never quite rings — played
-# by hand: every note a few ms early or late and a touch softer or harder
+# --- music box: Bocuma plucks, played by hand
 track pluck vel=0.3 len=0.5 patch=bocuma pan=-0.35 reverb_send=0.4
-# 1-8: a few notes on the beat
-(D3@0.27~+0.009 R E4@0.25~+0.001 R C#4@0.28~+0.011 R A3@0.24~+0.003 R D3@0.32~+0.014 R E4@0.26~+0.014 R C#4@0.32~-0.004 R A3@0.20~-0.016 R F#3@0.31~-0.007 R E4@0.28~+0.002 R C#4@0.27~-0.004 R A3@0.21~+0.008 R F#3@0.29~+0.019 R E4@0.28~-0.017 R C#4@0.28~-0.002 R A3@0.20~-0.021 R G3@0.29~-0.020 R F#4@0.23~+0.002 R D4@0.31~-0.012 R A3@0.20~-0.004 R G3@0.32~+0.001 R F#4@0.24~-0.005 R D4@0.27~+0.016 R A3@0.22~-0.030 R G3@0.33~-0.003 R E4@0.25~+0.023 R D4@0.33~+0.006 R Bb3@0.25~+0.001 R G3@0.32~+0.012 R E4@0.26~+0.011 R D4@0.28~+0.017 R Bb3@0.22~-0.000 R)
-# 9-16: the same, while the tune sings
-(D3@0.29~+0.000 R E4@0.22~-0.007 R C#4@0.28~-0.008 R A3@0.25~-0.010 R D3@0.32~-0.012 R E4@0.25~+0.028 R C#4@0.33~+0.011 R A3@0.21~-0.007 R F#3@0.33~+0.006 R E4@0.26~+0.011 R C#4@0.32~+0.010 R A3@0.22~-0.000 R F#3@0.28~-0.016 R E4@0.22~+0.002 R C#4@0.30~-0.001 R A3@0.22~+0.015 R G3@0.30~+0.011 R F#4@0.24~-0.005 R D4@0.31~+0.017 R A3@0.22~+0.012 R G3@0.31~-0.001 R F#4@0.23~+0.002 R D4@0.29~+0.005 R A3@0.22~-0.016 R G3@0.30~+0.012 R E4@0.28~-0.004 R D4@0.29~-0.030 R Bb3@0.25~-0.003 R G3@0.29~-0.010 R E4@0.27~+0.012 R D4@0.33~-0.006 R Bb3@0.24~+0.002 R)
-# 17-24: filling in to eighths
-(D3@0.31~+0.013 A3@0.31~-0.023 E4@0.28~+0.006 F#4@0.32~-0.011 C#4@0.32~+0.004 A3@0.28~+0.000 E4@0.27~-0.007 A3@0.28~+0.007 D3@0.32~-0.003 A3@0.27~-0.016 E4@0.27~-0.030 F#4@0.32~-0.013 C#4@0.29~-0.013 A3@0.27~-0.006 E4@0.29~+0.003 A3@0.33~-0.015 F#3@0.37~-0.019 C#4@0.31~+0.015 E4@0.31~+0.006 A4@0.31~-0.001 E4@0.27~+0.013 C#4@0.27~-0.010 A3@0.31~-0.021 E4@0.32~-0.004 F#3@0.34~-0.010 C#4@0.32~-0.009 E4@0.28~+0.003 A4@0.29~+0.000 E4@0.32~+0.004 C#4@0.28~+0.012 A3@0.30~+0.004 E4@0.29~-0.002 G3@0.35~+0.010 D4@0.27~-0.014 F#4@0.33~+0.005 A4@0.32~-0.026 B3@0.31~-0.012 D4@0.32~+0.000 A4@0.28~+0.000 F#4@0.28~-0.006 G3@0.37~-0.017 D4@0.31~-0.002 F#4@0.30~-0.013 A4@0.27~-0.003 B3@0.31~+0.012 D4@0.31~-0.002 A4@0.31~+0.021 F#4@0.30~+0.002 G3@0.37~-0.024 D4@0.28~+0.006 E4@0.33~-0.002 Bb3@0.33~+0.024 D4@0.28~+0.005 E4@0.32~-0.006 G4@0.33~-0.000 D4@0.33~+0.010 G3@0.36~+0.024 D4@0.32~+0.000 E4@0.33~+0.002 Bb3@0.31~-0.005 D4@0.31~-0.002 E4@0.28~-0.005 G4@0.27~-0.023 D4@0.30~+0.002)
-# 25-28: a few last notes
-D3@0.25~+0.018 R R R E4@0.18~-0.006 R R R R R C#4@0.19~-0.002 R R R R R
-R R A3@0.17~-0.005 R R R R R R R R R R R R R
-
+(D3 R E4@0.25 R C#4 R A3@0.22 R F#3 R E4@0.25 R C#4 R A3@0.22 R G3 R F#4@0.25 R D4 R A3@0.22 R G3 R E4@0.25 R D4 R Bb3@0.22 R)x4
+(D3@0.34 A3 E4@0.3 F#4 C#4@0.3 A3 E4 A3 F#3@0.34 C#4 E4@0.3 A4 E4@0.3 C#4 A3 E4 G3@0.34 D4 F#4@0.3 A4 B3@0.3 D4 A4 F#4 G3@0.34 D4 E4@0.3 Bb3 D4@0.3 E4 G4 D4)x2
+(D3 R E4@0.25 R C#4 R A3@0.22 R F#3 R E4@0.25 R C#4 R A3@0.22 R G3 R F#4@0.25 R D4 R A3@0.22 R G3 R E4@0.25 R D4 R Bb3@0.22 R)
 automate pluck.vel_filter
 1.4
+automate pluck.pitch_shift
+0 R:15 -0.55:0.5@smooth 0:0.5@smooth R:15 -0.55:0.5@smooth 0:0.5@smooth R:15 -0.55:0.5@smooth 0:0.5@smooth R:15 -0.55:0.5@smooth 0:0.5@smooth R:15 -0.55:0.5@smooth 0:0.5@smooth R:15 -0.55:0.5@smooth 0:0.5@smooth R:12 -3:4@smooth
 
-# --- the tune: Kaini B, mono, low, sliding
+# --- the hook: Kaini B, mono, sliding
 track tune vel=0.55 patch=kaini-b gain=1.8 reverb_send=0.22
->32
-# 9-16
-A4:1.5 F#4:0.5 E4:1 D4:1 E4:3 R:1
-F#4:1.5 A4:0.5 E4:2 C#4:3 R:1
-B3:1 D4:1 F#4:1.5 E4:0.5 D4:3 R:1
-Bb3:1.5 D4:0.5 E4:2 D4:3 R:1
-# 17-24: the answer, a little higher
-F#4:1.5@0.6 A4:0.5@0.6 B4:1@0.65 A4:1@0.6 F#4:3@0.6 R:1
-E4:1.5@0.6 F#4:0.5 A4:2@0.65 E4:3@0.6 R:1
-D4:1 F#4:1 A4:1.5@0.55 G4:0.5 F#4:3@0.6 R:1
-G4:1.5@0.6 Bb4:0.5@0.65 A4:2@0.65 D4:4@0.55
-# 25-28
-A4:2@0.45 F#4:2@0.42 E4:4@0.4 D4:8@0.38
-
+>16
+A4:0.75 F#4:0.25 A4:0.5 B4:0.5 A4:1 F#4:1 E4:0.75 C#4:0.25 E4:0.5 F#4:0.5 E4:2 D4:0.75 B3:0.25 D4:0.5 E4:0.5 F#4:1 D4:1 Bb3:0.75 D4:0.25 E4:0.5 D4:0.5 C#4:2 A4:0.75 F#4:0.25 A4:0.5 B4:0.5 A4:1 F#4:1 E4:0.75 C#4:0.25 E4:0.5 F#4:0.5 E4:2 D4:0.75 B3:0.25 D4:0.5 E4:0.5 F#4:1 D4:1 Bb3:0.75 D4:0.25 E4:0.5 G4:0.5 F#4:2
+R:16
+A4:0.75 F#4:0.25 A4:0.5 B4:0.5 A4:1 F#4:1 E4:0.75 C#4:0.25 E4:0.5 F#4:0.5 E4:2 D4:0.75 B3:0.25 D4:0.5 E4:0.5 F#4:1 D4:1 Bb3:0.75 D4:0.25 E4:0.5 D4:0.5 C#4:2 A4:0.75 F#4:0.25 A4:0.5 B4:0.5 A4:1 F#4:1 E4:0.75 C#4:0.25 E4:0.5 F#4:0.5 E4:2 D4:0.75 B3:0.25 D4:0.5 E4:0.5 F#4:1 D4:1 Bb3:0.75 D4:0.25 E4:0.5 G4:0.5 F#4:2
+A4:0.75 F#4:0.25 A4:0.5 B4:0.5 A4:2 R:4 D4:0.75 B3:0.25 D4:0.5 E4:0.5 F#4:2@0.4 R:4
 automate tune.glide
 0.11
 automate tune.lfo_rate
 4.6
 automate tune.lfo_pitch
 5
-
-# --- the tape sags at bar 20 and every voice sags with it; at the end it
-# slows to a stop. One curve, laid on each track.
-automate pad.pitch_shift
-0 R:76 -0.6:0.75@smooth 0:1.25@smooth R:30 -3:4@smooth
-automate bass.pitch_shift
-0 R:76 -0.6:0.75@smooth 0:1.25@smooth R:30 -3:4@smooth
-automate pluck.pitch_shift
-0 R:76 -0.6:0.75@smooth 0:1.25@smooth R:30 -3:4@smooth
 automate tune.pitch_shift
-0 R:76 -0.6:0.75@smooth 0:1.25@smooth R:30 -3:4@smooth
+0 R:15 -0.55:0.5@smooth 0:0.5@smooth R:15 -0.55:0.5@smooth 0:0.5@smooth R:15 -0.55:0.5@smooth 0:0.5@smooth R:15 -0.55:0.5@smooth 0:0.5@smooth R:15 -0.55:0.5@smooth 0:0.5@smooth R:15 -0.55:0.5@smooth 0:0.5@smooth R:12 -3:4@smooth
+
+# --- the ghost: the hook again, 35 cents flat — alone in the break, then a sixteenth behind
+track ghost vel=0.5 patch=kaini-b gain=1.1 pan=0.3 reverb_send=0.45
+>48
+A4:0.75 F#4:0.25 A4:0.5 B4:0.5 A4:1 F#4:1 E4:0.75 C#4:0.25 E4:0.5 F#4:0.5 E4:2 D4:0.75 B3:0.25 D4:0.5 E4:0.5 F#4:1 D4:1 Bb3:0.75 D4:0.25 E4:0.5 D4:0.5 C#4:2
+R:0.25
+A4:0.75 F#4:0.25 A4:0.5 B4:0.5 A4:1 F#4:1 E4:0.75 C#4:0.25 E4:0.5 F#4:0.5 E4:2 D4:0.75 B3:0.25 D4:0.5 E4:0.5 F#4:1 D4:1 Bb3:0.75 D4:0.25 E4:0.5 D4:0.5 C#4:2 A4:0.75 F#4:0.25 A4:0.5 B4:0.5 A4:1 F#4:1 E4:0.75 C#4:0.25 E4:0.5 F#4:0.5 E4:2 D4:0.75 B3:0.25 D4:0.5 E4:0.5 F#4:1 D4:1 Bb3:0.75 D4:0.25 E4:0.5 G4:0.5 F#4:2
+automate ghost.glide
+0.2
+automate ghost.gain
+1.3 R:63 0.7:1@smooth
+automate ghost.pitch_shift
+-0.35 R:15 -0.9:0.5@smooth -0.35:0.5@smooth R:15 -0.9:0.5@smooth -0.35:0.5@smooth R:15 -0.9:0.5@smooth -0.35:0.5@smooth R:15 -0.9:0.5@smooth -0.35:0.5@smooth R:15 -0.9:0.5@smooth -0.35:0.5@smooth R:15 -0.9:0.5@smooth -0.35:0.5@smooth R:12 -3.35:4@smooth
+
+# --- drums: sampled, broken, and wet
+track kick sample=renders/kite-kit/kick.wav root=C3 fixed mode=oneshot gain=0.5 vel=0.9
+>16
+(C3:1.5 C3:2.5 C3:1.5 C3:2.5 C3:1.5 C3:2.5 C3:0.75 C3:2.5 C3:0.75)x2
+(C3:4@0.55)x4
+(C3:1.5 C3:2.5 C3:1.5 C3:2.5 C3:1.5 C3:2.5 C3:0.75 C3:2.5 C3:0.75)x2
+C3:1.5 C3:2.5 C3:1.5 C3:2.5 C3:4 C3:4@0.5
+automate kick.reverb_send
+0.1
+track snare sample=renders/kite-kit/snare.wav root=C3 fixed mode=oneshot gain=0.55 vel=0.85
+>16
+(R:2 C3:2)x8
+R:16
+(R:2 C3:2)x8
+(R:2 C3:2)x2
+# dub throws at the ends of the big sections
+automate snare.reverb_send
+0.45 R:45.9 0.95:0.1@step R:2 0.45:0.1@step R:45.8 0.95:0.1@step R:2 0.45:0.1@step
+track swell sample=renders/kite-kit/snare_verb.wav root=C3 fixed reverse mode=oneshot gain=0.7 vel=0.8 reverb_send=0.3
+R:13.95 C3:2.05 R:45.95 C3:2.05 R:29.95 C3:2.05
+track hats sample=renders/kite-kit/hat.wav root=C3 fixed mode=oneshot bits=8 rate=11025 gain=2 pan=0.25 len=0.25
+>16
+(C3@0.9 C3@0.45 C3@0.65 C3@0.4)x32
+R:16
+(C3@0.9 C3@0.45 C3@0.65 C3@0.4)x32
+(C3@0.9 C3@0.45 C3@0.65 C3@0.4)x4
+automate hats.reverb_send
+0.12
+track clank sample=renders/kite-kit/clank.wav root=C3 mode=oneshot gain=1.0 pan=0.45 reverb_send=0.6
+R:10.5 G2:0.5@0.45 R:38.5 G2:0.5@0.45 R:1.25 F#2:0.5@0.5 R:1.75 G2:0.5@0.45 R:1.75 G2:0.5@0.45 R:1.25 F#2:0.5@0.5 R:1.25 G2:0.5@0.45 R:1.75 G2:0.5@0.45 R:1.75 F#2:0.5@0.5 R:5.25 G2:0.5@0.45 R:7.5 G2:0.5@0.45 R:7.5 F#2:0.5@0.5 R:7.5 G2:0.5@0.45 R:7.5 G2:0.5@0.45
