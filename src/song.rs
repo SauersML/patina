@@ -32,7 +32,7 @@
 //                                # Mixer-strip options set the track's desk
 //                                # channel at bar one: gain= pan= (-1..1)
 //                                # reverb_send= spring_send= chorus_send=
-//                                # (0..1, into the shared tanks at unity)
+//                                # echo_send= (0..1, into the shared tanks at unity)
 //                                # duck= (kick-keyed sidechain depth) and
 //                                # duck_release= (seconds back to full).
 //     E5:2 D5 C5 R:4 [C4 E4 G4]:2@0.6  | A4
@@ -156,6 +156,14 @@
 // filter_decay, filter_sustain, filter_release, reverb_decay, reverb_wet,
 // chorus_mode (0=off..4=IV, use plain sets), chorus_rate, chorus_depth,
 // tape_wow, tape_flutter, tape_drive, tape_age.
+//
+// The echo (echo.rs; a clean stereo delay before the reverb, so repeats
+// sit in the same room as the notes they answer): echo (0..1 insert
+// level; per track use `echo_send=`), echo_time (seconds, 0.02..2.5 —
+// 60/bpm is a quarter note), echo_feedback (0..0.95), echo_tone (Hz,
+// the loop lowpass: each repeat a little darker), echo_pingpong (0..1,
+// repeats alternate sides). A fixed 120 Hz high-pass in the loop thins
+// each repeat so echoes never pile up under the music.
 //
 // The mix-bus compressor (buscomp.rs; SSL G-series bus comp, printing to
 // the tape): comp_in (0 = out, 1 = in; plain sets), comp_threshold (dBFS
@@ -343,6 +351,13 @@ param_table! {
     ReverbWet:       "reverb_wet",     Some(91),  (0.0, 1.0, Lin);
     ReverbTone:      "reverb_tone",    None,      (800.0, 12000.0, Log);
     ReverbPre:       "reverb_pre",     None,      (0.0, 0.08, Lin);
+    // The echo (echo.rs): insert level, time in seconds, feedback, the
+    // loop lowpass, and how far repeats cross sides
+    EchoWet:         "echo",           None,      (0.0, 1.0, Lin);
+    EchoTime:        "echo_time",      None,      (0.02, 2.5, Log);
+    EchoFeedback:    "echo_feedback",  None,      (0.0, 0.95, Lin);
+    EchoTone:        "echo_tone",      None,      (500.0, 12000.0, Log);
+    EchoPingPong:    "echo_pingpong",  None,      (0.0, 1.0, Lin);
     Unison:          "unison",         None,      (1.0, 4.0, Step);
     UnisonDetune:    "unison_detune",  None,      (0.0, 40.0, Lin);
     // Stereo spread of the voice cards (0 = every note centered)
@@ -423,6 +438,7 @@ param_table! {
     ReverbSend:      "reverb_send",    None,      (0.0, 1.0, Lin);
     SpringSend:      "spring_send",    None,      (0.0, 1.0, Lin);
     ChorusSend:      "chorus_send",    None,      (0.0, 1.0, Lin);
+    EchoSend:        "echo_send",      None,      (0.0, 1.0, Lin);
     DuckAmount:      "duck",           None,      (0.0, 1.0, Lin);
     DuckRelease:     "duck_release",   None,      (0.02, 2.0, Lin);
     // A compressor on the track's own strip: threshold in dBFS, 0 = out.
@@ -545,6 +561,11 @@ impl Param {
             Param::ReverbWet => v.reverb_wet,
             Param::ReverbTone => v.reverb_tone,
             Param::ReverbPre => v.reverb_pre,
+            Param::EchoWet => v.echo,
+            Param::EchoTime => v.echo_time,
+            Param::EchoFeedback => v.echo_feedback,
+            Param::EchoTone => v.echo_tone,
+            Param::EchoPingPong => v.echo_pingpong,
             Param::Unison => v.unison,
             Param::UnisonDetune => v.unison_detune,
             Param::Spread => v.spread,
@@ -620,6 +641,7 @@ impl Param {
             | Param::ReverbSend
             | Param::SpringSend
             | Param::ChorusSend
+            | Param::EchoSend
             | Param::DuckAmount
             | Param::DuckRelease
             | Param::TrackComp => vm.set_track_mix(0, self, value),
@@ -682,6 +704,11 @@ impl Param {
             Param::ReverbWet => vm.set_reverb_wet(value),
             Param::ReverbTone => vm.set_reverb_tone(value),
             Param::ReverbPre => vm.set_reverb_pre(value),
+            Param::EchoWet => vm.set_echo(value),
+            Param::EchoTime => vm.set_echo_time(value),
+            Param::EchoFeedback => vm.set_echo_feedback(value),
+            Param::EchoTone => vm.set_echo_tone(value),
+            Param::EchoPingPong => vm.set_echo_pingpong(value),
             Param::Unison => vm.set_unison(value),
             Param::UnisonDetune => vm.set_unison_detune(value),
             Param::Spread => vm.set_spread(value),
@@ -772,6 +799,7 @@ impl Param {
             | P::ReverbSend
             | P::SpringSend
             | P::ChorusSend
+            | P::EchoSend
             | P::DuckAmount
             | P::DuckRelease
             | P::TrackComp => true,
@@ -1379,6 +1407,7 @@ fn parse_song(text: &str) -> Result<Song, String> {
                                     | Param::ReverbSend
                                     | Param::SpringSend
                                     | Param::ChorusSend
+                                    | Param::EchoSend
                                     | Param::DuckAmount
                                     | Param::DuckRelease
                                     | Param::TrackComp
@@ -1579,6 +1608,7 @@ fn parse_song(text: &str) -> Result<Song, String> {
                                     match param {
                                         Param::ReverbWet => ", or this track's reverb_send",
                                         Param::SpringWet => ", or this track's spring_send",
+                                        Param::EchoWet => ", or this track's echo_send",
                                         _ => "",
                                     }
                                 )));

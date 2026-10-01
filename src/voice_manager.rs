@@ -9,6 +9,7 @@ use crate::reverb::Reverb;
 use crate::sampler::{slot_for_channel, SamplerBank, SamplerSlot};
 use crate::song::Param;
 use crate::spring::SpringReverb;
+use crate::echo::Echo;
 use crate::substrate::{SlewLimiter, Substrate};
 use crate::tape::Tape;
 use crate::voice::Voice;
@@ -93,6 +94,13 @@ pub struct ParamValues {
     pub reverb_wet: f32,
     pub reverb_tone: f32,
     pub reverb_pre: f32,
+    /// The echo (echo.rs): insert level, time (s), feedback, loop
+    /// lowpass (Hz), ping-pong crossfeed.
+    pub echo: f32,
+    pub echo_time: f32,
+    pub echo_feedback: f32,
+    pub echo_tone: f32,
+    pub echo_pingpong: f32,
     pub unison: f32,
     pub unison_detune: f32,
     /// How far the voice cards fan out across the stereo field, 0..1.
@@ -243,6 +251,11 @@ impl Default for ParamValues {
             reverb_wet: 0.5,
             reverb_tone: 5500.0,
             reverb_pre: 0.012,
+            echo: 0.0,
+            echo_time: 0.5,
+            echo_feedback: 0.35,
+            echo_tone: 3000.0,
+            echo_pingpong: 0.0,
             unison: 1.0,
             unison_detune: 12.0,
             spread: 0.0,
@@ -342,7 +355,7 @@ impl DcBlocker {
 }
 
 /// One track's mixer strip. `gain`/`pan` sit between the voice and the
-/// bus; the sends feed the spring, reverb and chorus tanks directly; and
+/// bus; the sends feed the spring, echo, reverb and chorus directly; and
 /// `duck` is the sidechain — every kick trigger snaps the envelope to 1,
 /// the strip's gain dips by `duck * env`, and `duck_release` sets how
 /// fast it breathes back.
@@ -353,6 +366,7 @@ pub struct ChannelMix {
     pub rev_send: f32,
     pub spr_send: f32,
     pub cho_send: f32,
+    pub echo_send: f32,
     pub duck: f32,
     duck_decay: f32,
     cur_gain: f32,
@@ -398,6 +412,7 @@ impl ChannelMix {
             rev_send: 0.0,
             spr_send: 0.0,
             cho_send: 0.0,
+            echo_send: 0.0,
             duck: 0.0,
             duck_decay: duck_decay_for(0.18, sample_rate),
             cur_gain: 1.0,
@@ -436,16 +451,23 @@ fn duck_decay_for(release_secs: f32, sample_rate: f32) -> f32 {
     (-1.0 / (release_secs.max(0.01) * sample_rate)).exp()
 }
 
+/// The effect-send buses, accumulated in volts like the main bus.
+#[derive(Clone, Copy, Default)]
+struct SendBus {
+    spring: (f32, f32),
+    echo: (f32, f32),
+    reverb: (f32, f32),
+    chorus: (f32, f32),
+}
+
 /// Pass one channel's contribution through its mixer strip: ducked gain,
-/// constant-center balance pan, and taps into the three send buses.
+/// constant-center balance pan, and taps into the send buses.
 fn strip(
     mixes: &mut HashMap<u16, ChannelMix>,
     ch: u16,
     l: f32,
     r: f32,
-    spr: &mut (f32, f32),
-    rev: &mut (f32, f32),
-    cho: &mut (f32, f32),
+    sends: &mut SendBus,
 ) -> (f32, f32) {
     let Some(m) = mixes.get_mut(&ch) else {
         return (l, r);
@@ -467,12 +489,14 @@ fn strip(
     } else {
         r *= 1.0 + m.cur_pan;
     }
-    spr.0 += l * m.spr_send;
-    spr.1 += r * m.spr_send;
-    rev.0 += l * m.rev_send;
-    rev.1 += r * m.rev_send;
-    cho.0 += l * m.cho_send;
-    cho.1 += r * m.cho_send;
+    let tap = |bus: &mut (f32, f32), amount: f32| {
+        bus.0 += l * amount;
+        bus.1 += r * amount;
+    };
+    tap(&mut sends.spring, m.spr_send);
+    tap(&mut sends.echo, m.echo_send);
+    tap(&mut sends.reverb, m.rev_send);
+    tap(&mut sends.chorus, m.cho_send);
     (l, r)
 }
 
@@ -496,6 +520,7 @@ pub struct VoiceManager {
     noise_source: NoiseSource,
     noise_gain: f32, // smoothed
     spring: SpringReverb,
+    echo: Echo,
     lfo: Lfo,
     substrate: Substrate,
     prev_current: f32,
@@ -578,6 +603,7 @@ impl VoiceManager {
             noise_source: NoiseSource::new(sample_rate),
             noise_gain: 0.0,
             spring: SpringReverb::new(sample_rate),
+            echo: Echo::new(sample_rate),
             lfo: Lfo::new(sample_rate),
             substrate: Substrate::new(sample_rate),
             prev_current: 0.0,
@@ -672,6 +698,7 @@ impl VoiceManager {
             P::ReverbSend => m.rev_send = value,
             P::SpringSend => m.spr_send = value,
             P::ChorusSend => m.cho_send = value,
+            P::EchoSend => m.echo_send = value,
             P::DuckAmount => m.duck = value,
             P::DuckRelease => m.duck_decay = duck_decay_for(value, sr),
             P::TrackComp => m.set_comp(value, sr),
@@ -688,6 +715,7 @@ impl VoiceManager {
                 | P::ReverbSend
                 | P::SpringSend
                 | P::ChorusSend
+            | P::EchoSend
                 | P::DuckAmount
                 | P::DuckRelease
                 | P::TrackComp
@@ -1552,10 +1580,7 @@ impl VoiceManager {
 
         let mut left = 0.0;
         let mut right = 0.0;
-        // Per-channel effect-send buses, accumulated in volts like the bus
-        let mut send_spr = (0.0f32, 0.0f32);
-        let mut send_rev = (0.0f32, 0.0f32);
-        let mut send_cho = (0.0f32, 0.0f32);
+        let mut sends = SendBus::default();
         // Voices on the vox channel never reach the bus directly: they
         // are the vocoder's carrier, and only what the speech lets
         // through comes back
@@ -1588,9 +1613,7 @@ impl VoiceManager {
                     ch,
                     l,
                     r,
-                    &mut send_spr,
-                    &mut send_rev,
-                    &mut send_cho,
+                    &mut sends,
                 );
                 left += l;
                 right += r;
@@ -1607,9 +1630,7 @@ impl VoiceManager {
                 VOX_CHANNEL,
                 vox_out,
                 vox_out,
-                &mut send_spr,
-                &mut send_rev,
-                &mut send_cho,
+                &mut sends,
             );
             left += vl;
             right += vr;
@@ -1627,9 +1648,7 @@ impl VoiceManager {
                 DRUM_CHANNEL,
                 dl,
                 dr,
-                &mut send_spr,
-                &mut send_rev,
-                &mut send_cho,
+                &mut sends,
             );
             left += dl;
             right += dr;
@@ -1655,9 +1674,7 @@ impl VoiceManager {
                     ch,
                     sl,
                     sr,
-                    &mut send_spr,
-                    &mut send_rev,
-                    &mut send_cho,
+                    &mut sends,
                 );
                 left += sl;
                 right += sr;
@@ -1680,20 +1697,26 @@ impl VoiceManager {
         left *= g;
         right *= g;
 
-        // Fuzz first (a pedal in front of everything), then parallel reverb
-        // and chorus — each fed its per-track
-        // send bus at unity alongside the global knob; tape sits last, as
-        // if the whole mix were bounced to cassette
+        // Fuzz first (a pedal in front of everything), then the spring, the
+        // echo, the reverb and the chorus — each fed its per-track send bus
+        // at unity alongside the global knob. The echo sits before the
+        // reverb so its repeats are in the same room as the notes they
+        // answer. Tape sits last, as if the whole mix were bounced to
+        // cassette.
+        let s = sends;
         let (left, right) = self.fuzz.process(left, right);
         let (left, right) =
             self.spring
-                .process_with_send(left, right, send_spr.0 * g, send_spr.1 * g);
+                .process_with_send(left, right, s.spring.0 * g, s.spring.1 * g);
+        let (left, right) = self
+            .echo
+            .process_with_send(left, right, s.echo.0 * g, s.echo.1 * g);
         let (left, right) =
             self.reverb
-                .process_with_send(left, right, send_rev.0 * g, send_rev.1 * g);
+                .process_with_send(left, right, s.reverb.0 * g, s.reverb.1 * g);
         let (left, right) =
             self.chorus
-                .process_with_send(left, right, send_cho.0 * g, send_cho.1 * g);
+                .process_with_send(left, right, s.chorus.0 * g, s.chorus.1 * g);
         // The bus compressor sits where the console's does: across the mix
         // bus AFTER the effect returns have come back onto it and BEFORE
         // the two-track — here, the cassette. So it glues the whole mix,
@@ -1747,6 +1770,31 @@ impl VoiceManager {
     pub fn set_reverb_pre(&mut self, seconds: f32) {
         self.params.reverb_pre = Param::ReverbPre.clamp(seconds);
         self.reverb.set_pre(self.params.reverb_pre);
+    }
+
+    pub fn set_echo(&mut self, wet: f32) {
+        self.params.echo = Param::EchoWet.clamp(wet);
+        self.echo.set_wet(self.params.echo);
+    }
+
+    pub fn set_echo_time(&mut self, seconds: f32) {
+        self.params.echo_time = Param::EchoTime.clamp(seconds);
+        self.echo.set_time(self.params.echo_time);
+    }
+
+    pub fn set_echo_feedback(&mut self, feedback: f32) {
+        self.params.echo_feedback = Param::EchoFeedback.clamp(feedback);
+        self.echo.set_feedback(self.params.echo_feedback);
+    }
+
+    pub fn set_echo_tone(&mut self, cutoff: f32) {
+        self.params.echo_tone = Param::EchoTone.clamp(cutoff);
+        self.echo.set_tone(self.params.echo_tone);
+    }
+
+    pub fn set_echo_pingpong(&mut self, amount: f32) {
+        self.params.echo_pingpong = Param::EchoPingPong.clamp(amount);
+        self.echo.set_pingpong(self.params.echo_pingpong);
     }
 
     pub fn set_unison(&mut self, v: f32) {

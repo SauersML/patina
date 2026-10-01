@@ -69,6 +69,11 @@ reverb_wet 0
 reverb_decay 0.5
 reverb_tone 5500
 reverb_pre 0.012
+echo 0
+echo_time 0.5
+echo_feedback 0.35
+echo_tone 3000
+echo_pingpong 0
 chorus_mode 0
 chorus_rate 0.5
 chorus_depth 0.3

@@ -39,6 +39,7 @@ pub mod adaa;
 pub mod buscomp;
 pub mod chorus;
 pub mod drums;
+pub mod echo;
 pub mod envelope;
 pub mod filter;
 pub mod fuzz;

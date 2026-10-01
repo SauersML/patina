@@ -394,7 +394,7 @@ impl EditorState {
         });
         ui.add_space(6.0);
 
-        // Row 4 — space (fuzz/spring/reverb) + chorus + tape + bus compressor
+        // Row 4 — space (fuzz/spring/reverb) + echo + chorus + tape + bus compressor
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
                 card(ui, "Space", tex.as_mut(), None, |ui| {
@@ -405,6 +405,17 @@ impl EditorState {
                         self.pknob(ui, "reverb_wet", Some("Rvb Mix"), false);
                         self.pknob(ui, "reverb_tone", Some("Rvb Tone"), false);
                         self.pknob(ui, "reverb_pre", Some("Rvb Pre"), false);
+                    });
+                })
+            });
+            ui.vertical(|ui| {
+                card(ui, "Echo", tex.as_mut(), None, |ui| {
+                    ui.horizontal(|ui| {
+                        self.pknob(ui, "echo", Some("Mix"), false);
+                        self.pknob(ui, "echo_time", Some("Time"), false);
+                        self.pknob(ui, "echo_feedback", Some("Fdbk"), false);
+                        self.pknob(ui, "echo_tone", Some("Tone"), false);
+                        self.pknob(ui, "echo_pingpong", Some("Ping"), false);
                     });
                 })
             });

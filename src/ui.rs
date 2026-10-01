@@ -118,6 +118,9 @@ pub struct SynthUI {
     fuzz: f32,
     noise: f32,
     spring: f32,
+    echo: f32,
+    echo_time: f32,
+    echo_feedback: f32,
     glide: f32,
     sub: f32,
     osc2_wave: Waveform,
@@ -288,6 +291,9 @@ impl SynthUI {
             fuzz: 0.0,
             noise: 0.0,
             spring: 0.0,
+            echo: 0.0,
+            echo_time: 0.5,
+            echo_feedback: 0.35,
             glide: 0.0,
             sub: 0.0,
             osc2_wave: Waveform::Sawtooth,
@@ -403,6 +409,9 @@ impl SynthUI {
         vm.set_fuzz(self.fuzz);
         vm.set_noise(self.noise);
         vm.set_spring(self.spring);
+        vm.set_echo(self.echo);
+        vm.set_echo_time(self.echo_time);
+        vm.set_echo_feedback(self.echo_feedback);
         vm.set_glide(self.glide);
         vm.set_sub(self.sub);
         vm.set_osc_wave(1, self.osc2_wave);
@@ -584,6 +593,9 @@ impl SynthUI {
             self.fuzz = p.fuzz;
             self.noise = p.noise;
             self.spring = p.spring;
+            self.echo = p.echo;
+            self.echo_time = p.echo_time;
+            self.echo_feedback = p.echo_feedback;
             self.glide = p.glide;
             self.sub = p.sub;
             self.osc2_wave = p.osc2_wave;
@@ -1420,6 +1432,30 @@ impl SynthUI {
                             "Spring",
                             Param::SpringWet,
                             &mut self.spring,
+                            fmt_pct,
+                        );
+                        param_knob(
+                            ui,
+                            &self.voice_manager,
+                            "Echo",
+                            Param::EchoWet,
+                            &mut self.echo,
+                            fmt_pct,
+                        );
+                        param_knob(
+                            ui,
+                            &self.voice_manager,
+                            "Time",
+                            Param::EchoTime,
+                            &mut self.echo_time,
+                            fmt_time,
+                        );
+                        param_knob(
+                            ui,
+                            &self.voice_manager,
+                            "Repeat",
+                            Param::EchoFeedback,
+                            &mut self.echo_feedback,
                             fmt_pct,
                         );
                     });

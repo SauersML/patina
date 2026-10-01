@@ -292,6 +292,11 @@ const PRESENTATION: &[Row] = &[
     flt (Param::CompMakeup,    "Bus Compressor Make-Up",   Plain(" dB")),
     flt (Param::CompMix,       "Bus Compressor Mix",       Percent),
     flt (Param::CompScHpf,     "Bus Compressor Sidechain High-Pass", Hertz),
+    flt (Param::EchoWet,       "Echo Mix",       Percent),
+    flt (Param::EchoTime,      "Echo Time",      Seconds),
+    flt (Param::EchoFeedback,  "Echo Feedback",  Percent),
+    flt (Param::EchoTone,      "Echo Tone",      Hertz),
+    flt (Param::EchoPingPong,  "Echo Ping-Pong", Percent),
 ];
 
 /// Parameters that are NOT host-automation knobs and are deliberately kept
@@ -342,6 +347,7 @@ const EXCLUDED: &[Param] = &[
     Param::ReverbSend,
     Param::SpringSend,
     Param::ChorusSend,
+    Param::EchoSend,
     Param::DuckAmount,
     Param::DuckRelease,
     Param::TrackComp,
@@ -584,6 +590,7 @@ mod tests {
     fn init_is_dry() {
         for p in [
             Param::ReverbWet,
+            Param::EchoWet,
             Param::SpringWet,
             Param::FuzzAmount,
             Param::ChorusModeSel,
