@@ -177,6 +177,24 @@ impl Oscillator {
         pulse_width: f32,
         sync: Option<f32>,
     ) -> f32 {
+        self.step(common_drift, pitch_mult, pulse_width, sync, true, true)
+    }
+
+    /// One sample of the core. The ramp, drift walk, duty and sync state
+    /// always advance, exactly as in `next_sample`, so a silent converter
+    /// stays phase- and drift-identical to an audible one; `wave` and
+    /// `sub` only decide whether the (costly, stateless) output stages are
+    /// evaluated. With `wave` false the return value is 0; with `sub`
+    /// false `sub()` keeps its previous value.
+    pub fn step(
+        &mut self,
+        common_drift: f32,
+        pitch_mult: f32,
+        pulse_width: f32,
+        sync: Option<f32>,
+        wave: bool,
+        sub: bool,
+    ) -> f32 {
         let frequency = f32::from_bits(self.frequency.load(Ordering::Relaxed));
 
         // Small individual drift; the larger, shared component comes in from
@@ -229,12 +247,15 @@ impl Oscillator {
         // never drift against it; bandlimited with its own polyBLEP
         self.sub_phase += dt * 0.5;
         self.sub_phase %= 1.0;
-        {
+        if sub {
             let ts = self.sub_phase as f32;
             let dts = (dt * 0.5) as f32;
             let naive = if ts < 0.5 { 1.0 } else { -1.0 };
             self.last_sub =
                 PROGRAM_V * (naive - self.polyblep(ts, dts) + self.polyblep((ts + 0.5) % 1.0, dts));
+        }
+        if !wave {
+            return 0.0;
         }
 
         let t = self.phase as f32;

@@ -1,0 +1,205 @@
+# Tidal Arp
+#
+# Berlin-school ambient: a soft arpeggio whose filter is the story. 92 bpm,
+# 4/4, D major pentatonic over a loop that never resolves.
+#
+#   harmony  Gmaj9 | Em9 | Bm11 | A6sus4, four bars each; twice Cmaj9#11
+#            (the borrowed flat seventh) stands in for Em9.
+#   arp      seven notes in eighths — A E B F# D A E — against an
+#            eight-eighth bar, so its accents slide one step every bar and
+#            only line up again every seven bars. Every note is from D
+#            pentatonic, so it sits right over every chord, the borrowed
+#            one included.
+#   arp 2    five notes in dotted eighths (3 against 2), higher, for the
+#            middle third.
+#   filter   the arp starts muted and round, opens over three minutes to
+#            its brightest, and closes again — the whole piece is that
+#            one slow breath.
+#
+# Sound: one square per arp note (no detuned pair to beat), a soft filter
+# envelope that rounds each note instead of plucking it; the echo, a
+# dotted eighth behind, ping-pongs the arp across the field. Reverb by
+# send only; pads behind; no chorus, no wow.
+#
+# bar n starts at beat 4*(n-1). 112 bars.
+
+bpm 92
+gate 0.9
+tail 12
+
+section L1 0..64
+section L2 64..128
+section L3 128..192
+section L4 192..256
+section L5 256..320
+section L6 320..384
+section L7 384..448
+
+# ------------------------------------------------------------------ arp
+
+track arp vel=0.5 patch=init gain=0.7 pan=-0.2 echo_send=0.35 reverb_send=0.15
+(A3:0.5@0.58 E4:0.5@0.42 B4:0.5@0.5 F#4:0.5@0.45 D5:0.5@0.56 A4:0.5@0.42 E4:0.5@0.46)x128
+automate arp.waveform
+1
+automate arp.pulse_width
+0.42
+automate arp.attack
+0.02
+automate arp.decay
+0.4
+automate arp.sustain
+0.5
+automate arp.release
+0.45
+automate arp.filter_env
+0.8
+automate arp.filter_attack
+0.03
+automate arp.filter_decay
+0.4
+automate arp.filter_sustain
+0.3
+automate arp.filter_release
+0.3
+automate arp.key_track
+0.5
+automate arp.vel_filter
+1.0
+automate arp.hpf
+150
+automate arp.resonance
+0.3 R:128 0.55:144@smooth 0.35:176@smooth
+automate arp.cutoff
+350 700:64@exp 1600:128@exp 2600:80@smooth R:16 1400:64@smooth 450:96@exp
+
+# ---------------------------------------------------------------- arp 2
+
+track arp2 vel=0.45 patch=init gain=0.38 pan=0.4 echo_send=0.45 reverb_send=0.25
+R:128
+(F#5:0.75@0.5 E5:0.75@0.4 B4:0.75@0.45 A5:0.75@0.5 D5:0.75@0.42)x51
+automate arp2.waveform
+3
+automate arp2.attack
+0.03
+automate arp2.decay
+0.6
+automate arp2.sustain
+0.35
+automate arp2.release
+0.8
+automate arp2.cutoff
+1800 R:128 2800:96@smooth 1500:96@smooth
+automate arp2.resonance
+0.15
+automate arp2.key_track
+0.5
+automate arp2.hpf
+300
+automate arp2.gain
+0 R:128 0.38:32@smooth R:120 0:40@smooth
+
+# ----------------------------------------------------------------- pads
+
+track pads vel=0.5 patch=init gain=0.42 reverb_send=0.3
+([B2 F#3 A3 D4]:16 [B2 D3 F#3 G3]:16 [A2 D3 E3 F#3]:16 [D3 E3 F#3 A3]:16)x3
+[B2 F#3 A3 D4]:16 [B2 E3 F#3 G3]:16 [A2 D3 E3 F#3]:16 [D3 E3 F#3 A3]:16
+[B2 F#3 A3 D4]:16 [B2 D3 F#3 G3]:16 [A2 D3 E3 F#3]:16 [D3 E3 F#3 A3]:16
+[B2 F#3 A3 D4]:16 [B2 E3 F#3 G3]:16 [A2 D3 E3 F#3]:16 [D3 E3 F#3 A3]:16
+[B2 F#3 A3 D4]:16 [B2 D3 F#3 G3]:16 [A2 D3 E3 F#3]:16 [D3 E3 F#3 A3]:16
+automate pads.attack
+2.5
+automate pads.decay
+3
+automate pads.sustain
+0.9
+automate pads.release
+3.5
+automate pads.hpf
+160
+automate pads.resonance
+0.1
+automate pads.key_track
+0.4
+automate pads.spread
+0.6
+automate pads.cutoff
+500 900:128@smooth 1300:144@smooth 600:176@smooth
+
+# ----------------------------------------------------------------- bass
+
+track bass vel=0.55 patch=init gain=0.95
+R:64
+(G1:16 E2:16 B1:16 A1:16)x2
+G1:16 C2:16 B1:16 A1:16
+G1:16 E2:16 B1:16 A1:16
+G1:16 C2:16 B1:16 A1:16
+G1:16 E2:16 B1:16 A1:16
+automate bass.osc3_wave
+0
+automate bass.osc3_pitch
+-12
+automate bass.osc3_level
+0.55
+automate bass.cutoff
+300
+automate bass.resonance
+0.2
+automate bass.key_track
+0.4
+automate bass.attack
+0.6
+automate bass.decay
+3
+automate bass.sustain
+0.85
+automate bass.release
+2
+automate bass.hpf
+30
+automate bass.gain
+0 R:64 0.95:16@smooth R:320 0:48@smooth
+
+# ----------------------------------------------------------------- room
+
+automate volume
+0.5
+automate reverb_wet
+0
+automate reverb_decay
+0.8
+automate reverb_tone
+5500
+automate reverb_pre
+0.03
+automate echo
+0
+automate echo_time
+0.489
+automate echo_feedback
+0.38 R:128 0.5:144@smooth 0.35:176@smooth
+automate echo_tone
+2200
+automate echo_pingpong
+0.8
+automate chorus_mode
+0
+automate tape_wow
+0
+automate tape_flutter
+0
+automate tape_age
+0
+automate tape_drive
+0.1
+automate width
+1.1
+automate spring
+0
+automate fuzz
+0
+automate noise
+0
+automate comp_in
+0
+automate output
+0 0.55:8@smooth 0.95:264@smooth R:16 0.5:144@smooth 0:16@smooth

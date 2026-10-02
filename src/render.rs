@@ -97,29 +97,63 @@ impl Meter {
 /// (peak / RMS / LUFS) so measured mixing needs no hand math.
 pub fn render_stems(song: &crate::song::Song, dir: &str) -> Result<()> {
     std::fs::create_dir_all(dir)?;
-    let mut done: Vec<u16> = Vec::new();
-    let mut table: Vec<(String, f32, f32, f32)> = Vec::new();
+    // One job per strip: every track is its own strip, sample tracks
+    // included (each tape slot mixes on its own channel); only the 909
+    // board is one strip under every kit track. Sample tracks used to be
+    // folded onto the deck's base channel, which a solo matches for slot 0
+    // alone: the first sample track's stem was written and every other
+    // sample track silently got none.
+    let mut jobs: Vec<(String, u16)> = Vec::new();
     for (name, channel) in &song.tracks {
-        // Every track is its own strip, sample tracks included (each tape
-        // slot mixes on its own channel); only the 909 board is one strip
-        // under every kit track. Sample tracks used to be folded onto the
-        // deck's base channel, which a solo matches for slot 0 alone: the
-        // first sample track's stem was written and every other sample
-        // track silently got none.
         let key = if *channel == crate::drums::DRUM_CHANNEL {
             crate::drums::DRUM_CHANNEL
         } else {
             *channel
         };
-        if done.contains(&key) {
+        if jobs.iter().any(|(_, k)| *k == key) {
             continue;
         }
-        done.push(key);
-        let path = format!("{}/{}.wav", dir.trim_end_matches('/'), name);
-        println!("stem: {} (channel {})", path, key);
-        let mut frames = crate::song::render_offline_solo(song, 48000.0, Some(key));
-        let (peak, rms, lufs) = write_wav(&path, &mut frames, false)?;
-        println!("peak concurrent voices: {}/64", frames.peak_voices());
+        jobs.push((name.clone(), key));
+    }
+    // Each stem is a whole independent bounce, so they run side by side,
+    // one per core (each renders its cards serially); results are reported
+    // in track order whatever order they finish in.
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(jobs.len())
+        .max(1);
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let results: Vec<std::sync::Mutex<Option<Result<(f32, f32, f32, usize)>>>> =
+        jobs.iter().map(|_| std::sync::Mutex::new(None)).collect();
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            scope.spawn(|| {
+                crate::voice_manager::prefer_performance_cores();
+                loop {
+                    let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some((name, key)) = jobs.get(i) else {
+                        break;
+                    };
+                    let path = format!("{}/{}.wav", dir.trim_end_matches('/'), name);
+                    let mut frames = crate::song::render_offline_solo(song, 48000.0, Some(*key));
+                    let out = write_wav(&path, &mut frames, false)
+                        .map(|(peak, rms, lufs)| (peak, rms, lufs, frames.peak_voices()));
+                    *results[i].lock().unwrap() = Some(out);
+                }
+            });
+        }
+    });
+    let mut table: Vec<(String, f32, f32, f32)> = Vec::new();
+    for ((name, key), result) in jobs.iter().zip(results) {
+        let (peak, rms, lufs, voices) = result.into_inner().unwrap().expect("every stem ran")?;
+        println!(
+            "stem: {}/{}.wav (channel {}), peak concurrent voices: {}/64",
+            dir.trim_end_matches('/'),
+            name,
+            key,
+            voices
+        );
         table.push((name.clone(), peak, rms, lufs));
     }
     println!(
@@ -182,9 +216,11 @@ pub fn export_events(song: &crate::song::Song, path: &str) -> Result<()> {
 }
 
 pub fn render_to_wav(song: &crate::song::Song, path: &str, normalize: bool) -> Result<()> {
+    crate::voice_manager::prefer_performance_cores();
     println!("Rendering {} events...", song.events.len());
     let start = std::time::Instant::now();
-    let mut frames = crate::song::render_offline(song, 48000.0);
+    let mut frames =
+        crate::song::render_offline(song, 48000.0).with_card_lanes(crate::song::card_lanes());
     let seconds = frames.len() as f64 / 48000.0;
     let (peak, rms, lufs) = write_wav(path, &mut frames, normalize)?;
     println!("peak concurrent voices: {}/64", frames.peak_voices());

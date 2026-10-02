@@ -577,6 +577,11 @@ impl Voice {
     /// Clear the last coupling delta when the card sleeps. The manager
     /// uses this before channel lookups; direct voice rendering uses the
     /// same rule, including the performance-line override.
+    /// Whether `skip_if_idle` would put this card to sleep (read-only).
+    pub(crate) fn is_sleeping(&self) -> bool {
+        !self.held && self.envelope.is_idle() && self.cv_override.is_none()
+    }
+
     pub(crate) fn skip_if_idle(&mut self) -> bool {
         if !self.held && self.envelope.is_idle() && self.cv_override.is_none() {
             self.prefilter_delta = 0.0;
@@ -679,15 +684,28 @@ impl Voice {
             self.fm_mean = 1.0;
             1.0
         };
-        let o1 =
-            self.oscs[0].next_sample(self.common_drift, pitch_mult * fm_mult, pulse_width, None);
+        // Every core always steps (phase, drift and sync stay exactly as if
+        // heard); only the output stages of a converter nobody can hear are
+        // skipped. Osc 2 is heard through its level, the FM bus, or the ring
+        // modulator; osc 3 only through its level; the sub only through its.
+        let o1 = self.oscs[0].step(
+            self.common_drift,
+            pitch_mult * fm_mult,
+            pulse_width,
+            None,
+            true,
+            self.sub_level > 0.0,
+        );
         let sync = if self.sync_on {
             self.oscs[0].wrap_frac()
         } else {
             None
         };
-        let o2 = self.oscs[1].next_sample(self.common_drift, pitch_mult, pulse_width, sync);
-        let o3 = self.oscs[2].next_sample(self.common_drift, pitch_mult, pulse_width, None);
+        let o2_heard =
+            self.osc_level[0] > 0.0 || self.fm_amount > 1e-4 || self.ring_amount > 1e-4;
+        let o2 = self.oscs[1].step(self.common_drift, pitch_mult, pulse_width, sync, o2_heard, false);
+        let o3_heard = self.osc_level[1] > 0.0;
+        let o3 = self.oscs[2].step(self.common_drift, pitch_mult, pulse_width, None, o3_heard, false);
         self.prev_osc2 = (o2 / (0.9 * PROGRAM_V)).clamp(-1.0, 1.0);
 
         // Ring modulator (ARP: "the product of the two input voltages

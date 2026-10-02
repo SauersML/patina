@@ -247,8 +247,10 @@ mod tests {
     }
 
     fn peak_index(xs: impl Iterator<Item = f32>) -> (usize, f32) {
-        xs.enumerate()
-            .fold((0, 0.0), |(bi, bv), (i, v)| if v.abs() > bv { (i, v.abs()) } else { (bi, bv) })
+        xs.enumerate().fold(
+            (0, 0.0),
+            |(bi, bv), (i, v)| if v.abs() > bv { (i, v.abs()) } else { (bi, bv) },
+        )
     }
 
     #[test]
@@ -272,7 +274,10 @@ mod tests {
             echo.set_tone(12_000.0);
             let n = ((t + 0.2) * sr) as usize;
             let out: Vec<f32> = (0..n)
-                .map(|i| echo.process_with_send(0.0, 0.0, (i == 0) as u8 as f32, 0.0).0)
+                .map(|i| {
+                    echo.process_with_send(0.0, 0.0, (i == 0) as u8 as f32, 0.0)
+                        .0
+                })
                 .collect();
             let (i, _) = peak_index(out.into_iter());
             let want = t * sr;

@@ -10,11 +10,15 @@ use crate::sampler::{slot_for_channel, SamplerBank, SamplerSlot};
 use crate::song::Param;
 use crate::spring::SpringReverb;
 use crate::echo::Echo;
-use crate::substrate::{SlewLimiter, Substrate};
+use crate::substrate::{SlewLimiter, Substrate, SubstrateState};
 use crate::tape::Tape;
 use crate::voice::Voice;
 use crate::vox::{Syllable, VoxBox, VOX_CHANNEL};
 use std::collections::{HashMap, VecDeque};
+use std::cell::UnsafeCell;
+use std::hash::{BuildHasherDefault, Hasher};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 
 /// Capacitive trace-to-trace coupling between adjacent voice cards. The
 /// coupling differentiates (it is a capacitor), so the bleed is presence-
@@ -354,6 +358,31 @@ impl DcBlocker {
     }
 }
 
+/// Channel ids are small integers from the song parser, looked up for
+/// every voice on every sample (strip, LFO, patch). SipHash — built to
+/// resist adversarial keys — cost ~4% of a whole render doing it; a
+/// golden-ratio multiply spreads the id across the hash bits the table
+/// uses, and makes iteration order deterministic run to run.
+#[derive(Default)]
+pub struct ChannelHasher(u64);
+
+impl Hasher for ChannelHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = (self.0.rotate_left(8) ^ b as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        }
+    }
+    fn write_u16(&mut self, n: u16) {
+        self.0 = (self.0 ^ n as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    }
+}
+
+/// A map keyed by channel id.
+pub type ChannelMap<V> = HashMap<u16, V, BuildHasherDefault<ChannelHasher>>;
+
 /// One track's mixer strip. `gain`/`pan` sit between the voice and the
 /// bus; the sends feed the spring, echo, reverb and chorus directly; and
 /// `duck` is the sidechain — every kick trigger snaps the envelope to 1,
@@ -463,7 +492,7 @@ struct SendBus {
 /// Pass one channel's contribution through its mixer strip: ducked gain,
 /// constant-center balance pan, and taps into the send buses.
 fn strip(
-    mixes: &mut HashMap<u16, ChannelMix>,
+    mixes: &mut ChannelMap<ChannelMix>,
     ch: u16,
     l: f32,
     r: f32,
@@ -498,6 +527,212 @@ fn strip(
     tap(&mut sends.reverb, m.rev_send);
     tap(&mut sends.chorus, m.cho_send);
     (l, r)
+}
+
+/// What one card reads this sample, gathered serially before any card runs.
+#[derive(Clone, Copy, Default)]
+struct CardIn {
+    pitch_mult: f32,
+    cutoff_mod: f32,
+    pwm_mod: f32,
+    bleed: f32,
+}
+
+/// The per-sample values every card shares.
+#[derive(Clone, Copy)]
+struct CardShared {
+    noise: f32,
+    substrate: SubstrateState,
+    vox_cv: Option<f32>,
+}
+
+/// One card for one sample: exactly the body of the serial loop. `None`
+/// when the card is asleep.
+#[inline]
+fn run_card(voice: &mut Voice, input: CardIn, shared: &CardShared) -> Option<(f32, f32)> {
+    if voice.channel() == VOX_CHANNEL {
+        voice.set_cv_override(shared.vox_cv);
+    }
+    if voice.skip_if_idle() {
+        return None;
+    }
+    Some(voice.render_next(
+        shared.noise,
+        input.pitch_mult,
+        input.cutoff_mod,
+        input.pwm_mod,
+        shared.substrate,
+        input.bleed,
+    ))
+}
+
+#[derive(Clone, Copy)]
+struct CardJob {
+    voices: *mut Voice,
+    inputs: *const CardIn,
+    outputs: *mut Option<(f32, f32)>,
+    len: usize,
+    shared: CardShared,
+}
+
+struct PoolShared {
+    epoch: AtomicUsize,
+    done: AtomicUsize,
+    quit: AtomicBool,
+    lanes: usize,
+    job: UnsafeCell<Option<CardJob>>,
+}
+
+// SAFETY: `job` is written only by the owning thread between rounds (no
+// worker reads it until the next epoch is published with Release), and each
+// worker dereferences only the cards of its own lane, disjoint from every
+// other lane's, until it reports done.
+unsafe impl Sync for PoolShared {}
+unsafe impl Send for PoolShared {}
+
+/// Cards on several cores, for offline bounces. Within one sample the cards
+/// do not read one another (see `render_next`), so lane k renders cards
+/// k, k+lanes, k+2*lanes, ... into their own output slots, and the owner
+/// sums the slots in voice order afterwards: the result is bit-identical to
+/// the serial loop. Workers spin between samples, which is right for a
+/// render that keeps them fed and wrong for an audio callback, so only the
+/// offline renderer ever builds one.
+pub struct CardPool {
+    shared: Arc<PoolShared>,
+    workers: Vec<std::thread::JoinHandle<()>>,
+}
+
+/// Render one lane's cards of a published job.
+///
+/// # Safety
+/// `job`'s pointers must be valid for `job.len` elements, and no other
+/// thread may touch the cards or output slots of this lane meanwhile.
+unsafe fn run_lane(job: &CardJob, lane: usize, lanes: usize) {
+    let mut i = lane;
+    while i < job.len {
+        unsafe {
+            let voice = &mut *job.voices.add(i);
+            *job.outputs.add(i) = run_card(voice, *job.inputs.add(i), &job.shared);
+        }
+        i += lanes;
+    }
+}
+
+/// Ask the scheduler for this thread to run as user-interactive work. On
+/// Apple silicon that is what keeps a lane on a performance core; a lane
+/// left on an efficiency core runs at a third of the speed and every
+/// other lane waits for it at the end of each sample.
+pub fn prefer_performance_cores() {
+    #[cfg(target_os = "macos")]
+    {
+        const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
+        extern "C" {
+            fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
+        }
+        // SAFETY: plain libpthread call on the current thread
+        unsafe {
+            pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+        }
+    }
+}
+
+fn card_worker(shared: &PoolShared, lane: usize) {
+    let mut seen = 0usize;
+    loop {
+        let mut spins = 0u32;
+        let epoch = loop {
+            let e = shared.epoch.load(Ordering::Acquire);
+            if e != seen {
+                break e;
+            }
+            if shared.quit.load(Ordering::Acquire) {
+                return;
+            }
+            // Stay hot across the owner's serial bus work (a few us per
+            // sample): a yielded thread costs far more to wake than it
+            // saves. Only a long gap (the render stalled) yields.
+            spins = spins.saturating_add(1);
+            if spins < 1 << 24 {
+                std::hint::spin_loop();
+            } else {
+                std::thread::yield_now();
+            }
+        };
+        seen = epoch;
+        // SAFETY: published before the epoch this thread just acquired
+        let job = unsafe { *shared.job.get() };
+        if let Some(job) = job {
+            unsafe { run_lane(&job, lane, shared.lanes) };
+        }
+        shared.done.fetch_add(1, Ordering::Release);
+    }
+}
+
+impl CardPool {
+    /// `lanes` threads in all: this one plus `lanes - 1` workers.
+    pub fn new(lanes: usize) -> Self {
+        prefer_performance_cores();
+        let lanes = lanes.max(2);
+        let shared = Arc::new(PoolShared {
+            epoch: AtomicUsize::new(0),
+            done: AtomicUsize::new(0),
+            quit: AtomicBool::new(false),
+            lanes,
+            job: UnsafeCell::new(None),
+        });
+        let workers = (1..lanes)
+            .map(|lane| {
+                let s = Arc::clone(&shared);
+                std::thread::Builder::new()
+                    .name(format!("patina-cards-{lane}"))
+                    .spawn(move || {
+                        prefer_performance_cores();
+                        card_worker(&s, lane)
+                    })
+                    .expect("spawn card worker")
+            })
+            .collect();
+        Self { shared, workers }
+    }
+
+    fn run(
+        &self,
+        voices: &mut [Voice],
+        inputs: &[CardIn],
+        outputs: &mut [Option<(f32, f32)>],
+        shared: CardShared,
+    ) {
+        let len = voices.len().min(inputs.len()).min(outputs.len());
+        let job = CardJob {
+            voices: voices.as_mut_ptr(),
+            inputs: inputs.as_ptr(),
+            outputs: outputs.as_mut_ptr(),
+            len,
+            shared,
+        };
+        // SAFETY: every worker reported done for the previous round before
+        // the last call returned, and none reads the job again until the
+        // epoch below is published.
+        unsafe { *self.shared.job.get() = Some(job) };
+        self.shared.done.store(0, Ordering::Relaxed);
+        self.shared.epoch.fetch_add(1, Ordering::Release);
+        // SAFETY: lane 0 is this thread's; the borrows above outlive the
+        // wait below, which holds until every worker has finished.
+        unsafe { run_lane(&job, 0, self.shared.lanes) };
+        let want = self.shared.lanes - 1;
+        while self.shared.done.load(Ordering::Acquire) != want {
+            std::hint::spin_loop();
+        }
+    }
+}
+
+impl Drop for CardPool {
+    fn drop(&mut self) {
+        self.shared.quit.store(true, Ordering::Release);
+        for w in self.workers.drain(..) {
+            let _ = w.join();
+        }
+    }
 }
 
 pub struct VoiceManager {
@@ -541,20 +776,25 @@ pub struct VoiceManager {
     /// Every key down on each channel, oldest first. On a mono channel
     /// this is the SH-101's note stack: last-note priority, and lifting
     /// the sounding key falls back to the newest key still down.
-    held_keys: HashMap<u16, Vec<u8>>,
+    held_keys: ChannelMap<Vec<u8>>,
     note_counter: u64,
     /// Sample clock, for the chord-detection window on glide.
     samples_rendered: u64,
     last_note_on_sample: u64,
     /// Per-song-channel parameter snapshots (the per-track patches).
-    channel_params: HashMap<u16, ParamValues>,
-    channel_lfos: HashMap<u16, ChannelLfo>,
+    channel_params: ChannelMap<ParamValues>,
+    channel_lfos: ChannelMap<ChannelLfo>,
     /// Per-track mixer strip: gain, pan, effect sends, sidechain duck.
     /// Channels absent from the map pass through untouched.
-    channel_mix: HashMap<u16, ChannelMix>,
+    channel_mix: ChannelMap<ChannelMix>,
     /// Solo one channel (stem bounces): every other channel still
     /// renders — oscillators free-run — but never reaches the bus.
     solo: Option<u16>,
+    /// Offline bounces may render the cards on several cores (see
+    /// CardPool); the audio callback never does.
+    card_pool: Option<CardPool>,
+    card_in: Vec<CardIn>,
+    card_out: Vec<Option<(f32, f32)>>,
     pub params: ParamValues,
     pub scope: VecDeque<f32>,
     gain: f32, // smoothed master gain
@@ -584,9 +824,9 @@ impl VoiceManager {
         carrier.release = 0.12;
         carrier.key_track = 0.0;
         carrier.sub = 0.3;
-        let mut channel_params = HashMap::new();
+        let mut channel_params = ChannelMap::default();
         channel_params.insert(VOX_CHANNEL, carrier);
-        let mut channel_lfos = HashMap::new();
+        let mut channel_lfos = ChannelMap::default();
         channel_lfos.insert(VOX_CHANNEL, ChannelLfo::new(sample_rate, &carrier));
         Self {
             voices: (0..num_voices)
@@ -616,14 +856,17 @@ impl VoiceManager {
             mod_wheel: 0.0,
             pedal_down: false,
             sustained: [false; 128],
-            held_keys: HashMap::new(),
+            held_keys: ChannelMap::default(),
             note_counter: 0,
             samples_rendered: 0,
             last_note_on_sample: u64::MAX,
             channel_params,
             channel_lfos,
-            channel_mix: HashMap::new(),
+            channel_mix: ChannelMap::default(),
             solo: None,
+            card_pool: None,
+            card_in: Vec::new(),
+            card_out: Vec::new(),
             params,
             scope: VecDeque::with_capacity(SCOPE_LEN),
             gain: params.volume,
@@ -1588,23 +1831,51 @@ impl VoiceManager {
         // The performance line: when a vox pitch curve is playing, it IS
         // the carrier's pitch — portamento, scoops and vibrato included
         let vox_cv = self.vox.pitch_cv();
-        for (i, voice) in self.voices.iter_mut().enumerate() {
-            let bleed = deltas[(i + n - 1) % n.max(1)] * CROSSTALK;
-            if voice.channel() == VOX_CHANNEL {
-                voice.set_cv_override(vox_cv);
-            }
-            if voice.skip_if_idle() {
+        // Gather what each waking card needs this sample. Every coupling
+        // BETWEEN cards runs through last sample's state (the bleed deltas,
+        // the rail sag), already read above — so from here the cards are
+        // independent of one another, and may render on several cores.
+        let count = self.voices.len();
+        self.card_in.resize(count, CardIn::default());
+        self.card_out.resize(count, None);
+        for (i, voice) in self.voices.iter().enumerate() {
+            if voice.channel() != VOX_CHANNEL && voice.is_sleeping() {
                 continue;
             }
-            let ch = voice.channel();
             let (pitch_mult, cutoff_mod, pwm_mod) = self
                 .channel_lfos
-                .get(&ch)
+                .get(&voice.channel())
                 .map_or((panel_pitch_mult, lfo_cutoff_oct, pw_offset), |channel| {
                     channel.modulation
                 });
-            let (l, r) =
-                voice.render_next(noise, pitch_mult, cutoff_mod, pwm_mod, substrate, bleed);
+            self.card_in[i] = CardIn {
+                pitch_mult,
+                cutoff_mod,
+                pwm_mod,
+                bleed: deltas[(i + n - 1) % n.max(1)] * CROSSTALK,
+            };
+        }
+        let shared = CardShared {
+            noise,
+            substrate,
+            vox_cv,
+        };
+        match &self.card_pool {
+            Some(pool) => pool.run(&mut self.voices, &self.card_in, &mut self.card_out, shared),
+            None => {
+                for i in 0..count {
+                    self.card_out[i] = run_card(&mut self.voices[i], self.card_in[i], &shared);
+                }
+            }
+        }
+        // Sum in voice order on this thread, as the serial loop always
+        // did: the strips (their compressors, the sends) and the bus see
+        // exactly the same sequence of additions.
+        for i in 0..count {
+            let Some((l, r)) = self.card_out[i] else {
+                continue;
+            };
+            let ch = self.voices[i].channel();
             if ch == VOX_CHANNEL {
                 carrier += l + r;
             } else if self.solo.map_or(true, |s| s == ch) {
@@ -1770,6 +2041,12 @@ impl VoiceManager {
     pub fn set_reverb_pre(&mut self, seconds: f32) {
         self.params.reverb_pre = Param::ReverbPre.clamp(seconds);
         self.reverb.set_pre(self.params.reverb_pre);
+    }
+
+    /// Render the cards on `lanes` threads (1 = the serial loop). Offline
+    /// bounces only: the workers spin between samples.
+    pub fn set_card_lanes(&mut self, lanes: usize) {
+        self.card_pool = (lanes > 1).then(|| CardPool::new(lanes));
     }
 
     pub fn set_echo(&mut self, wet: f32) {

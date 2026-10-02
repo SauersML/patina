@@ -1170,6 +1170,13 @@ pub struct OfflineRender<'a> {
 }
 
 impl OfflineRender<'_> {
+    /// Render this bounce's voice cards on `lanes` threads (see
+    /// `VoiceManager::set_card_lanes`). Bit-identical to the serial loop.
+    pub fn with_card_lanes(mut self, lanes: usize) -> Self {
+        self.vm.set_card_lanes(lanes);
+        self
+    }
+
     pub fn peak_voices(&self) -> usize {
         self.peak_voices
     }
@@ -1206,6 +1213,20 @@ impl Iterator for OfflineRender<'_> {
 
 impl ExactSizeIterator for OfflineRender<'_> {}
 impl std::iter::FusedIterator for OfflineRender<'_> {}
+
+/// Threads a full offline bounce renders its voice cards on: the
+/// `PATINA_LANES` environment variable, default 1. Measured on an M5 Pro,
+/// 4 lanes bounce ~1.3x faster for ~3x the CPU (the lanes spin through
+/// every sample's serial bus work), so it is opt-in for when wall time
+/// matters more than heat. Stems run serially inside and in parallel with
+/// one another instead (see `render_stems`).
+pub fn card_lanes() -> usize {
+    std::env::var("PATINA_LANES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(1)
+        .max(1)
+}
 
 /// Stream a song through the full engine, including its configured tail.
 pub fn render_offline(song: &Song, sample_rate: f32) -> OfflineRender<'_> {
@@ -2969,6 +2990,30 @@ mod tests {
             .filter(|e| matches!(e.kind, EventKind::NoteOn { .. }))
             .count();
         assert_eq!(ons, 3);
+    }
+
+    /// Cards rendered on several threads and summed in voice order must be
+    /// the serial render, sample for sample: the pool is a speedup, never a
+    /// different instrument.
+    #[test]
+    fn parallel_cards_are_bit_identical() {
+        let song = parse_song(
+            "bpm 120\ntail 0.5\n\
+             track pad patch=tidewater\n[C3 E3 G3 B3]:4 [F3 A3 C4]:4\n\
+             track lead patch=init echo_send=0.3\n(C5:0.5 G4:0.5 E5:1)x4\n\
+             automate cutoff\n400 3000:8@exp\n",
+        )
+        .unwrap();
+        let serial: Vec<(f32, f32)> = render_offline(&song, 48000.0).collect();
+        let parallel: Vec<(f32, f32)> =
+            render_offline(&song, 48000.0).with_card_lanes(3).collect();
+        assert_eq!(serial.len(), parallel.len());
+        for (i, (s, p)) in serial.iter().zip(&parallel).enumerate() {
+            assert!(
+                s.0.to_bits() == p.0.to_bits() && s.1.to_bits() == p.1.to_bits(),
+                "sample {i}: serial {s:?} vs parallel {p:?}"
+            );
+        }
     }
 
     /// `( ... )xN` groups expand to N repetitions; `>B` seeks the track

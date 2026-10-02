@@ -1,0 +1,246 @@
+# Postcard
+#
+# Db major, 3/4, 63 bpm. Bass on the downbeat, chord on beat two, the
+# melody entering after the beat — the lilt of a slow waltz that never
+# quite starts. Two bars a chord.
+#
+#   loop  Gbmaj7 | Db/F | Ebm9 | Ab7sus4      IV - I6 - ii9 - Vsus: it
+#         never cadences; the sus chord leans back into IV, so the seam
+#         of the loop is never heard.
+#   B     Bbm9 | Gbmaj7 | Cbmaj7#11 | Ab7sus4 | Bbm9 | Gbmaj7 | Ebm9 | Absus
+#         one borrowed chord (Cb, the flat seventh) is the whole surprise
+#         budget, and the melody's one climax (Db6) sits on it.
+#
+# The melody is one motif — a pickup that leaps up a sixth onto a long
+# note and sighs down a step — stated, re-coloured over a new chord, then
+# answered. Phrase peaks climb Ab5, Bb5, then Db6 once. Phrase endings go
+# open (Eb, the 2nd), half-closed (F, the 3rd); only the last statement
+# lands on Db, and even then the harmony stays on IV.
+#
+# Fog to clarity: the first statement is filtered and echoing, the second
+# is clear, the last carries an octave halo; the coda keeps only the motif.
+#
+#   0:00 intro (pads + bass)   0:23 A    1:09 A (clear)   1:55 B
+#   2:41 A (halo)              3:27 coda
+#
+# Effects: the reverb is send-only (pads wet, lead nearly dry, bass dry);
+# the lead's space is a dark echo a dotted quarter behind it. No chorus,
+# no wow, no vibrato: everything stays in tune.
+#
+# 63 bpm, 3 beats a bar; bar n starts at beat 3*(n-1).
+
+bpm 63
+gate 0.95
+tail 10
+
+section INTRO 0..24
+section A1 24..72
+section A2 72..120
+section B 120..168
+section A3 168..216
+section CODA 216..246
+
+# ------------------------------------------------------------------ lead
+
+track lead vel=0.6 patch=init gain=0.62 echo_send=0.35 reverb_send=0.12
+R:24 R:1
+# A1 (foggy)
+Ab4:1@0.5 F5:3@0.66 Eb5:1@0.55 | Gb5:2@0.66 F5:1@0.58 | Eb5:1@0.55 Db5:2@0.6 | R:1 Ab4:1@0.5 F5:3@0.64 Gb5:1@0.56 | Ab5:2@0.68 Gb5:1@0.58 | Eb5:4@0.6
+Ab4:1@0.5 F5:3@0.64 Eb5:1@0.55 | Gb5:1@0.58 Ab5:1@0.62 Bb5:4@0.72 | Ab5:2@0.64 Gb5:1@0.56 | F5:2@0.6 Db5:1@0.52 | Eb5:3@0.58 | F5:4@0.6
+# A2 (clear)
+Ab4:1@0.5 F5:3@0.66 Eb5:1@0.55 | Gb5:2@0.66 F5:1@0.58 | Eb5:1@0.55 Db5:2@0.6 | R:1 Ab4:1@0.5 F5:3@0.64 Gb5:1@0.56 | Ab5:2@0.68 Gb5:1@0.58 | Eb5:4@0.6
+Ab4:1@0.5 F5:3@0.64 Eb5:1@0.55 | Gb5:1@0.58 Ab5:1@0.62 Bb5:4@0.72 | Ab5:2@0.64 Gb5:1@0.56 | F5:2@0.6 Db5:1@0.52 | Eb5:3@0.58 | F5:4@0.6
+# B: the motif up a step over Bbm9, sequenced over Gb, the climax on Cb
+C5:1@0.52 Ab5:3@0.66 F5:1@0.56 | R:1 Db5:1@0.54 Bb5:3@0.7 Ab5:1@0.58 | Bb5:3@0.68 | Db6:2@0.78 Bb5:1@0.62 | Ab5:2@0.64 Gb5:1@0.56 | Eb5:3@0.58
+R:1 Ab4:1@0.48 F5:3@0.6 Db5:1@0.52 | Eb5:2@0.56 Db5:1@0.5 | Bb4:3@0.54 | R:3 | R:1 Bb4:1@0.46 Db5:1@0.5 | Eb5:3@0.56 | R:3
+# A3 (with its octave), ending home on Db
+R:1
+Ab4:1@0.5 F5:3@0.66 Eb5:1@0.55 | Gb5:2@0.66 F5:1@0.58 | Eb5:1@0.55 Db5:2@0.6 | R:1 Ab4:1@0.5 F5:3@0.64 Gb5:1@0.56 | Ab5:2@0.68 Gb5:1@0.58 | Eb5:4@0.6
+Ab4:1@0.5 F5:3@0.64 Eb5:1@0.55 | Gb5:1@0.58 Ab5:1@0.62 Bb5:4@0.72 | Ab5:2@0.64 Gb5:1@0.56 | F5:2@0.6 Gb5:1@0.54 | F5:2@0.58 Eb5:1@0.52 | Db5:4@0.6
+# coda: the motif alone, slower, left hanging on F over Gbmaj7
+R:2 R:3 | R:1 Ab4:2@0.46 | F5:6@0.54 | Eb5:3@0.48 | R:6 | F5:6@0.46
+automate lead.osc2_wave
+2
+automate lead.osc2_level
+0.8
+automate lead.detune
+3
+automate lead.osc3_wave
+3
+automate lead.osc3_pitch
+12
+automate lead.osc3_level
+0 R:168 0.22:3@smooth R:45 0:3@smooth
+automate lead.attack
+0.03
+automate lead.decay
+1
+automate lead.sustain
+0.9
+automate lead.release
+0.6
+automate lead.hpf
+180
+automate lead.resonance
+0.18
+automate lead.key_track
+0.8
+automate lead.filter_env
+1.0
+automate lead.filter_attack
+0.15
+automate lead.filter_decay
+1.5
+automate lead.filter_sustain
+0.55
+automate lead.filter_release
+0.6
+automate lead.cutoff
+1100 R:72 1900:6@smooth R:42 2300:6@smooth R:42 2100:6@smooth R:42 1300:12@smooth
+automate lead.echo_send
+0.38 R:72 0.2:6@smooth R:90 0.24:6@smooth R:42 0.42:6@smooth
+
+# ------------------------------------------------------------------ pads
+
+track pads vel=0.5 patch=init gain=0.5 reverb_send=0.4
+R:1
+# INTRO + A1 + A2: the loop five times
+([Bb3 Db4 F4]:6 [Ab3 Db4 F4]:6 [Gb3 Bb3 Db4 F4]:6 [Gb3 Ab3 Db4 Eb4]:6)x5
+# B
+[Ab3 C4 Db4 F4]:6 [Bb3 Db4 F4]:6 [Gb3 Bb3 Eb4 F4]:6 [Gb3 Ab3 Db4 Eb4]:6
+[Ab3 C4 Db4 F4]:6 [Bb3 Db4 F4]:6 [Gb3 Bb3 Db4 F4]:6 [Gb3 Ab3 Db4 Eb4]:6
+# A3
+([Bb3 Db4 F4]:6 [Ab3 Db4 F4]:6 [Gb3 Bb3 Db4 F4]:6 [Gb3 Ab3 Db4 Eb4]:6)x2
+# coda
+[Bb3 Db4 F4]:6 [Ab3 Db4 F4]:6 [Gb3 Bb3 Db4 F4]:6 [Gb3 Ab3 Db4 Eb4]:6 [Bb3 Db4 F4]:5
+automate pads.osc2_wave
+2
+automate pads.osc2_level
+0.8
+automate pads.detune
+4
+automate pads.attack
+1.0
+automate pads.decay
+2
+automate pads.sustain
+0.85
+automate pads.release
+2.2
+automate pads.hpf
+220
+automate pads.resonance
+0.15
+automate pads.key_track
+0.5
+automate pads.spread
+0.5
+automate pads.filter_env
+0.4
+automate pads.filter_attack
+1.5
+automate pads.filter_decay
+3
+automate pads.filter_sustain
+0.7
+automate pads.filter_release
+2
+automate pads.cutoff
+450 1100:24@exp R:96 1500:12@smooth R:36 1250:12@smooth R:36 700:30@smooth
+automate pads.gain
+0.42 0.5:24@smooth R:96 0.58:12@smooth R:36 0.5:12@smooth R:36 0.36:30@smooth
+
+# ------------------------------------------------------------------ bass
+
+track bass vel=0.55 patch=init gain=1.05
+(Gb2:6 F2:6 Eb2:6 Ab1:6)x5
+Bb1:6 Gb2:6 B1:6 Ab1:6 Bb1:6 Gb2:6 Eb2:6 Ab1:6
+(Gb2:6 F2:6 Eb2:6 Ab1:6)x2
+Gb2:6 F2:6 Eb2:6 Ab1:6 Gb2:6
+automate bass.osc3_wave
+0
+automate bass.osc3_pitch
+-12
+automate bass.osc3_level
+0.55
+automate bass.detune
+2
+automate bass.cutoff
+420
+automate bass.resonance
+0.2
+automate bass.key_track
+0.4
+automate bass.filter_env
+0.4
+automate bass.filter_attack
+0.01
+automate bass.filter_decay
+1.2
+automate bass.filter_sustain
+0.4
+automate bass.attack
+0.04
+automate bass.decay
+2
+automate bass.sustain
+0.8
+automate bass.release
+0.5
+automate bass.hpf
+30
+
+# ------------------------------------------------------------------ room
+
+automate volume
+0.5
+automate reverb_wet
+0
+automate reverb_decay
+0.78
+automate reverb_tone
+4500
+automate reverb_pre
+0.05
+automate echo
+0
+automate echo_time
+1.43
+automate echo_feedback
+0.33
+automate echo_tone
+2200
+automate echo_pingpong
+0.5
+automate chorus_mode
+0
+automate tape_wow
+0
+automate tape_flutter
+0
+automate tape_age
+0
+automate tape_drive
+0.12
+automate width
+1.1
+automate spring
+0
+automate fuzz
+0
+automate noise
+0
+automate comp_in
+1
+automate comp_threshold
+-18
+automate comp_ratio
+0
+automate comp_attack
+5
+automate comp_release
+4
+automate comp_mix
+1
+automate output
+0 0.9:6@smooth R:230 0:10@smooth

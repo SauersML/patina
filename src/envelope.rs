@@ -61,6 +61,13 @@ pub struct Envelope {
     /// Sustain-tracking coefficient for `SUSTAIN_TRACK_TAU_S` at this rate.
     sustain_track_k: f32,
     sample_rate: f32,
+    /// Per-stage coefficients memoized on the bits of the inputs they are
+    /// computed from (attack time + overshoot, decay time, release time),
+    /// so the exp/ln run when a knob moves, not on every sample. The
+    /// cached value is the same expression of the same inputs: exact.
+    attack_k: (u64, f32),
+    decay_k: (u32, f32),
+    release_k: (u32, f32),
 }
 
 impl Envelope {
@@ -76,6 +83,9 @@ impl Envelope {
             steal_step: 0.0,
             sustain_track_k: crate::voice::smoothing_coef(SUSTAIN_TRACK_TAU_S, sample_rate),
             sample_rate,
+            attack_k: (u64::MAX, 0.0),
+            decay_k: (u32::MAX, 0.0),
+            release_k: (u32::MAX, 0.0),
         }
     }
 
@@ -104,11 +114,16 @@ impl Envelope {
                 }
             }
             EnvelopeStage::Attack => {
-                let attack_time = f32::from_bits(self.attack.load(Ordering::Relaxed));
-                let target = f32::from_bits(self.overshoot.load(Ordering::Relaxed));
-                // speed = ln(target / (target - 1)) so 0 -> 1 takes ~attack_time
-                let speed = (target / (target - 1.0)).ln();
-                let k = self.coef(attack_time, speed);
+                let attack_bits = self.attack.load(Ordering::Relaxed);
+                let target_bits = self.overshoot.load(Ordering::Relaxed);
+                let target = f32::from_bits(target_bits);
+                let key = (attack_bits as u64) << 32 | target_bits as u64;
+                if self.attack_k.0 != key {
+                    // speed = ln(target / (target - 1)) so 0 -> 1 takes ~attack_time
+                    let speed = (target / (target - 1.0)).ln();
+                    self.attack_k = (key, self.coef(f32::from_bits(attack_bits), speed));
+                }
+                let k = self.attack_k.1;
                 self.current_level += (target - self.current_level) * k;
                 if self.current_level >= 1.0 {
                     self.current_level = 1.0;
@@ -116,9 +131,12 @@ impl Envelope {
                 }
             }
             EnvelopeStage::Decay => {
-                let decay_time = f32::from_bits(self.decay.load(Ordering::Relaxed));
+                let decay_bits = self.decay.load(Ordering::Relaxed);
                 let sustain_level = f32::from_bits(self.sustain.load(Ordering::Relaxed));
-                let k = self.coef(decay_time, 4.0);
+                if self.decay_k.0 != decay_bits {
+                    self.decay_k = (decay_bits, self.coef(f32::from_bits(decay_bits), 4.0));
+                }
+                let k = self.decay_k.1;
                 self.current_level += (sustain_level - self.current_level) * k;
                 if (self.current_level - sustain_level).abs() < 1e-4 {
                     self.current_level = sustain_level;
@@ -131,8 +149,11 @@ impl Envelope {
                 self.current_level += (sustain_level - self.current_level) * self.sustain_track_k;
             }
             EnvelopeStage::Release => {
-                let release_time = f32::from_bits(self.release.load(Ordering::Relaxed));
-                let k = self.coef(release_time, 4.0);
+                let release_bits = self.release.load(Ordering::Relaxed);
+                if self.release_k.0 != release_bits {
+                    self.release_k = (release_bits, self.coef(f32::from_bits(release_bits), 4.0));
+                }
+                let k = self.release_k.1;
                 self.current_level -= self.current_level * k;
                 if self.current_level < 1e-4 {
                     self.current_level = 0.0;
