@@ -92,7 +92,7 @@ impl DisplaySnapshot {
     fn capture(&mut self, vm: &VoiceManager) {
         self.params = vm.params;
         self.notes = vm.held_note_states();
-        self.drums = vm.drums.activity();
+        self.drums = vm.drum_activity();
         self.voices_active = vm.voices.iter().any(|voice| voice.is_active());
         self.comp_gr = vm.comp_gain_reduction_db();
         let (a, b) = vm.scope.as_slices();
@@ -2151,6 +2151,7 @@ impl SynthUI {
                     .unwrap_or(0.7);
                 let vel = (base_vel * (0.6 + 0.6 * depth)).clamp(0.1, 1.0);
                 if let Some(note) = crate::drums::note_from_name(name) {
+                    // The pads play the live board (board 0)
                     self.voice_manager.lock().note_on_channel(
                         note,
                         vel,
@@ -2299,7 +2300,7 @@ impl SynthUI {
         }
 
         // The right-hand 909 pads: K L ; ' over , . / — one-shots on the
-        // drum channel, Shift is the accent line
+        // live board's channel (board 0), Shift is the accent line
         let shift = ctx.input(|i| i.modifiers.shift);
         for &(name, _, key, base_vel, _) in PAD_TOP.iter().chain(PAD_BOTTOM.iter()) {
             if ctx.input(|i| i.key_pressed(key)) && !chord && !self.pressed_drum_keys.contains(&key)

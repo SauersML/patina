@@ -155,7 +155,8 @@ fn handle_message(vm: &Arc<Mutex<VoiceManager>>, state: &Arc<Mutex<PortState>>, 
         return;
     };
     // GM convention: channel 10 (0-indexed 9) is the drum channel — those
-    // notes hit the 909 board's trigger inputs instead of the keyboard voices.
+    // notes hit the live 909 board's (board 0's) trigger inputs instead of
+    // the keyboard voices.
     let drums = channel.as_int() == 9;
     match message {
         MidiMessage::NoteOn { key, vel } => {

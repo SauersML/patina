@@ -1,6 +1,6 @@
 use crate::buscomp::BusComp;
 use crate::chorus::{Chorus, ChorusMode};
-use crate::drums::{DrumMachine, DrumVoice, DRUM_CHANNEL};
+use crate::drums::{kit_for_channel, DrumMachine, DrumVoice, DRUM_CHANNEL};
 use crate::fuzz::Fuzz;
 use crate::lfo::Lfo;
 use crate::noise::NoiseSource;
@@ -196,6 +196,35 @@ impl ParamValues {
             release: 0.3,
             ..Self::default()
         }
+    }
+
+    /// The panel position of one 909 knob; None for anything else.
+    pub(crate) fn drum_knob_mut(&mut self, param: Param) -> Option<&mut f32> {
+        Some(match param {
+            Param::BdLevel => &mut self.bd_level,
+            Param::BdTune => &mut self.bd_tune,
+            Param::BdAttack => &mut self.bd_attack,
+            Param::BdDecay => &mut self.bd_decay,
+            Param::BdSweep => &mut self.bd_sweep,
+            Param::BdDrive => &mut self.bd_drive,
+            Param::SdLevel => &mut self.sd_level,
+            Param::SdTune => &mut self.sd_tune,
+            Param::SdTone => &mut self.sd_tone,
+            Param::SdSnappy => &mut self.sd_snappy,
+            Param::SdDecay => &mut self.sd_decay,
+            Param::RsLevel => &mut self.rs_level,
+            Param::RsTune => &mut self.rs_tune,
+            Param::CpLevel => &mut self.cp_level,
+            Param::CpDecay => &mut self.cp_decay,
+            Param::HhLevel => &mut self.hh_level,
+            Param::HhTune => &mut self.hh_tune,
+            Param::HhMetal => &mut self.hh_metal,
+            Param::ChDecay => &mut self.ch_decay,
+            Param::OhDecay => &mut self.oh_decay,
+            Param::DrumDrive => &mut self.dr_drive,
+            Param::DrumTone => &mut self.dr_tone,
+            _ => return None,
+        })
     }
 }
 
@@ -737,9 +766,15 @@ impl Drop for CardPool {
 
 pub struct VoiceManager {
     pub voices: Vec<Voice>,
-    /// The rhythm section: one 909-style analog drum board sharing the
+    /// The rhythm section: 909-style analog drum boards sharing the
     /// chassis, the output bus, and the effects with the keyboard voices.
+    /// This is board 0 on DRUM_CHANNEL: the live board (panel pads, MIDI
+    /// channel 10, the plugin) and a song's first kit track.
     pub drums: DrumMachine,
+    /// Every further kit track's own board, keyed by its channel
+    /// (`drums::kit_channel`) and kept in kit order, so the bus sums the
+    /// boards in the same order every run.
+    kits: Vec<(u16, DrumMachine)>,
     /// The voice box: a formant speech synthesizer driving a channel
     /// vocoder whose carrier is the vox-channel synth voices.
     pub vox: VoxBox,
@@ -833,6 +868,7 @@ impl VoiceManager {
                 .map(|i| Voice::new(sample_rate, i))
                 .collect(),
             drums: DrumMachine::new(sample_rate),
+            kits: Vec::new(),
             vox: VoxBox::new(sample_rate),
             sampler: SamplerBank::new(sample_rate),
             reverb: Reverb::new(sample_rate),
@@ -976,6 +1012,10 @@ impl VoiceManager {
                 return;
             }
         }
+        // A kit track's 909 knobs turn its own board, no other
+        if kit_for_channel(channel).is_some() && self.set_kit_knob(channel, param, value) {
+            return;
+        }
         let mut p = self
             .channel_params
             .get(&channel)
@@ -999,12 +1039,13 @@ impl VoiceManager {
     }
 
     pub fn note_on_channel(&mut self, note: u8, velocity: f32, channel: u16) {
-        // The rhythm section is not a keyboard voice: a drum-channel note
-        // is a trigger pulse onto the 909 board's trigger bus, velocity
-        // riding the accent line
-        if channel == DRUM_CHANNEL {
-            // The kick is the sidechain source: every BD trigger snaps
-            // the duck envelope of every strip that asked to be ducked.
+        // The rhythm section is not a keyboard voice: a kit-channel note
+        // is a trigger pulse onto that kit's 909 board's trigger bus,
+        // velocity riding the accent line
+        if kit_for_channel(channel).is_some() {
+            // The kick is the sidechain source: every BD trigger, on any
+            // kit's board, snaps the duck envelope of every strip that
+            // asked to be ducked.
             // Ask the board which voice this note strikes rather than
             // re-deriving the GM row here — the hand-written test used to
             // miss the reserved low sliver's kick (note 0), which is the
@@ -1017,7 +1058,9 @@ impl VoiceManager {
                     }
                 }
             }
-            self.drums.trigger_note(note, velocity);
+            if let Some(board) = self.kit_board(channel) {
+                board.trigger_note(note, velocity);
+            }
             return;
         }
         // Sampler notes start playback heads on their slot's reel; they
@@ -1249,7 +1292,7 @@ impl VoiceManager {
     pub fn note_off_channel(&mut self, note: u8, channel: u16) {
         // Drum voices are one-shots fired by their trigger pulse; the
         // gate's falling edge does nothing on the hardware either
-        if channel == DRUM_CHANNEL {
+        if kit_for_channel(channel).is_some() {
             return;
         }
         if let Some(slot) = slot_for_channel(channel) {
@@ -1924,6 +1967,15 @@ impl VoiceManager {
             left += dl;
             right += dr;
         }
+        // Every further kit track's board, each through its own strip
+        for (ch, board) in self.kits.iter_mut() {
+            let (dl, dr) = board.render_next();
+            if self.solo.map_or(true, |s| s == *ch) {
+                let (dl, dr) = strip(&mut self.channel_mix, *ch, dl, dr, &mut sends);
+                left += dl;
+                right += dr;
+            }
+        }
 
         // The tape deck too: same bus, same volts, same rail load — and
         // its varispeed follows the shared bend/vibrato bus, so the pitch
@@ -2181,114 +2233,114 @@ impl VoiceManager {
 
     // --- The rhythm section's panel ---------------------------------------
 
-    pub fn set_bd_level(&mut self, v: f32) {
-        self.params.bd_level = Param::BdLevel.clamp(v);
-        self.drums.set_bd_level(self.params.bd_level);
+    /// A 909 knob, unaddressed: the live panel, a patch line, a MIDI CC,
+    /// or unscoped song automation (`automate bd_tune`). It turns the
+    /// panel and every kit's board, as un-addressed sampler automation
+    /// reaches every tape slot.
+    pub fn set_drum_knob(&mut self, param: Param, v: f32) {
+        let v = param.clamp(v);
+        let Some(knob) = self.params.drum_knob_mut(param) else {
+            return;
+        };
+        *knob = v;
+        turn_knob(&mut self.drums, param, v);
+        for (_, board) in self.kits.iter_mut() {
+            turn_knob(board, param, v);
+        }
     }
 
-    pub fn set_bd_tune(&mut self, v: f32) {
-        self.params.bd_tune = Param::BdTune.clamp(v);
-        self.drums.set_bd_tune(self.params.bd_tune);
+    /// A 909 knob addressed to one kit track (`automate beat.bd_tune`):
+    /// that track's board alone. Board 0 is the panel's board, so its
+    /// knobs still show on the panel. False for anything not a 909 knob.
+    fn set_kit_knob(&mut self, channel: u16, param: Param, v: f32) -> bool {
+        let v = param.clamp(v);
+        let Some(knob) = self.params.drum_knob_mut(param) else {
+            return false;
+        };
+        if channel == DRUM_CHANNEL {
+            *knob = v;
+        }
+        if let Some(board) = self.kit_board(channel) {
+            turn_knob(board, param, v);
+        }
+        true
     }
 
-    pub fn set_bd_attack(&mut self, v: f32) {
-        self.params.bd_attack = Param::BdAttack.clamp(v);
-        self.drums.set_bd_attack(self.params.bd_attack);
+    /// The board a kit channel plays (None for any other channel). Boards
+    /// past the first are built on first use, starting where the panel's
+    /// knobs stand, as board 0 does.
+    fn kit_board(&mut self, channel: u16) -> Option<&mut DrumMachine> {
+        if channel == DRUM_CHANNEL {
+            return Some(&mut self.drums);
+        }
+        let index = kit_for_channel(channel)?;
+        let at = match self.kits.binary_search_by_key(&channel, |(c, _)| *c) {
+            Ok(at) => at,
+            Err(at) => {
+                let mut board = DrumMachine::board(self.sample_rate, index);
+                for def in crate::song::PARAM_DEFS {
+                    if let Some(v) = def.param.read(&self.params) {
+                        turn_knob(&mut board, def.param, v);
+                    }
+                }
+                self.kits.insert(at, (channel, board));
+                at
+            }
+        };
+        Some(&mut self.kits[at].1)
     }
 
-    pub fn set_bd_decay(&mut self, v: f32) {
-        self.params.bd_decay = Param::BdDecay.clamp(v);
-        self.drums.set_bd_decay(self.params.bd_decay);
+    /// Give a kit channel its board before playback starts (the song
+    /// player registers every kit track), so no board is built mid-song.
+    pub fn add_kit(&mut self, channel: u16) {
+        let _ = self.kit_board(channel);
     }
 
-    pub fn set_bd_sweep(&mut self, v: f32) {
-        self.params.bd_sweep = Param::BdSweep.clamp(v);
-        self.drums.set_bd_sweep(self.params.bd_sweep);
+    /// How many 909 boards the engine runs (board 0 always).
+    pub fn kit_boards(&self) -> usize {
+        1 + self.kits.len()
     }
 
-    pub fn set_bd_drive(&mut self, v: f32) {
-        self.params.bd_drive = Param::BdDrive.clamp(v);
-        self.drums.set_bd_drive(self.params.bd_drive);
+    /// The panel pads' LEDs: each voice's VCA on whichever board rings
+    /// loudest, so a song's second and third kits light the pads too.
+    pub fn drum_activity(&self) -> [f32; 6] {
+        let mut levels = self.drums.activity();
+        for (_, board) in &self.kits {
+            for (level, other) in levels.iter_mut().zip(board.activity()) {
+                *level = level.max(other);
+            }
+        }
+        levels
     }
+}
 
-    pub fn set_sd_level(&mut self, v: f32) {
-        self.params.sd_level = Param::SdLevel.clamp(v);
-        self.drums.set_sd_level(self.params.sd_level);
-    }
-
-    pub fn set_sd_tune(&mut self, v: f32) {
-        self.params.sd_tune = Param::SdTune.clamp(v);
-        self.drums.set_sd_tune(self.params.sd_tune);
-    }
-
-    pub fn set_sd_tone(&mut self, v: f32) {
-        self.params.sd_tone = Param::SdTone.clamp(v);
-        self.drums.set_sd_tone(self.params.sd_tone);
-    }
-
-    pub fn set_sd_snappy(&mut self, v: f32) {
-        self.params.sd_snappy = Param::SdSnappy.clamp(v);
-        self.drums.set_sd_snappy(self.params.sd_snappy);
-    }
-
-    pub fn set_sd_decay(&mut self, v: f32) {
-        self.params.sd_decay = Param::SdDecay.clamp(v);
-        self.drums.set_sd_decay(self.params.sd_decay);
-    }
-
-    pub fn set_rs_level(&mut self, v: f32) {
-        self.params.rs_level = Param::RsLevel.clamp(v);
-        self.drums.set_rs_level(self.params.rs_level);
-    }
-
-    pub fn set_rs_tune(&mut self, v: f32) {
-        self.params.rs_tune = Param::RsTune.clamp(v);
-        self.drums.set_rs_tune(self.params.rs_tune);
-    }
-
-    pub fn set_cp_level(&mut self, v: f32) {
-        self.params.cp_level = Param::CpLevel.clamp(v);
-        self.drums.set_cp_level(self.params.cp_level);
-    }
-
-    pub fn set_cp_decay(&mut self, v: f32) {
-        self.params.cp_decay = Param::CpDecay.clamp(v);
-        self.drums.set_cp_decay(self.params.cp_decay);
-    }
-
-    pub fn set_hh_level(&mut self, v: f32) {
-        self.params.hh_level = Param::HhLevel.clamp(v);
-        self.drums.set_hh_level(self.params.hh_level);
-    }
-
-    pub fn set_hh_tune(&mut self, v: f32) {
-        self.params.hh_tune = Param::HhTune.clamp(v);
-        self.drums.set_hh_tune(self.params.hh_tune);
-    }
-
-    pub fn set_hh_metal(&mut self, v: f32) {
-        self.params.hh_metal = Param::HhMetal.clamp(v);
-        self.drums.set_hh_metal(self.params.hh_metal);
-    }
-
-    pub fn set_ch_decay(&mut self, v: f32) {
-        self.params.ch_decay = Param::ChDecay.clamp(v);
-        self.drums.set_ch_decay(self.params.ch_decay);
-    }
-
-    pub fn set_oh_decay(&mut self, v: f32) {
-        self.params.oh_decay = Param::OhDecay.clamp(v);
-        self.drums.set_oh_decay(self.params.oh_decay);
-    }
-
-    pub fn set_drum_drive(&mut self, v: f32) {
-        self.params.dr_drive = Param::DrumDrive.clamp(v);
-        self.drums.set_drive(self.params.dr_drive);
-    }
-
-    pub fn set_drum_tone(&mut self, v: f32) {
-        self.params.dr_tone = Param::DrumTone.clamp(v);
-        self.drums.set_tone(self.params.dr_tone);
+/// Turn one of a 909 board's panel knobs. Anything not a 909 knob is
+/// left alone.
+fn turn_knob(board: &mut DrumMachine, param: Param, v: f32) {
+    match param {
+        Param::BdLevel => board.set_bd_level(v),
+        Param::BdTune => board.set_bd_tune(v),
+        Param::BdAttack => board.set_bd_attack(v),
+        Param::BdDecay => board.set_bd_decay(v),
+        Param::BdSweep => board.set_bd_sweep(v),
+        Param::BdDrive => board.set_bd_drive(v),
+        Param::SdLevel => board.set_sd_level(v),
+        Param::SdTune => board.set_sd_tune(v),
+        Param::SdTone => board.set_sd_tone(v),
+        Param::SdSnappy => board.set_sd_snappy(v),
+        Param::SdDecay => board.set_sd_decay(v),
+        Param::RsLevel => board.set_rs_level(v),
+        Param::RsTune => board.set_rs_tune(v),
+        Param::CpLevel => board.set_cp_level(v),
+        Param::CpDecay => board.set_cp_decay(v),
+        Param::HhLevel => board.set_hh_level(v),
+        Param::HhTune => board.set_hh_tune(v),
+        Param::HhMetal => board.set_hh_metal(v),
+        Param::ChDecay => board.set_ch_decay(v),
+        Param::OhDecay => board.set_oh_decay(v),
+        Param::DrumDrive => board.set_drive(v),
+        Param::DrumTone => board.set_tone(v),
+        _ => {}
     }
 }
 

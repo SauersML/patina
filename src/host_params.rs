@@ -399,7 +399,8 @@ fn init_value(param: Param) -> f32 {
 }
 
 /// Route one MIDI note-on to the keyboard voices or, on GM channel 10
-/// (0-indexed 9), the 909 board. Velocity is 0..1.
+/// (0-indexed 9), the live 909 board (board 0; a song's further kit
+/// tracks have boards of their own). Velocity is 0..1.
 /// Channel 10 is the GM drum convention, but hosts built around software
 /// instruments (Logic) give the user no way to choose a MIDI channel — so
 /// the board also always answers the reserved sliver at the bottom of the

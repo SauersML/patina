@@ -41,6 +41,13 @@
 //     BD SD:0.5 [BD CH] OH@0.6   # rhythm section. Tokens are drum names
 //                                # (BD SD RS CP CH OH) or GM notes; velocity
 //                                # is the accent bus (@1 = full accent).
+//                                # Every kit=909 track is a 909 board of
+//                                # its own: its knobs (`automate
+//                                # beat.hh_tune`), strip and stem are its
+//                                # alone. kit=<track> plays an earlier kit
+//                                # track's board instead: one machine, one
+//                                # strip, one stem, and a closed hat on one
+//                                # track still chokes the other's open hat.
 //
 //   track choir vox              # a vox track: notes play the CARRIER
 //     [A2 E3 A3]:2=HH-EH-L-OW    # (the synth chord) while the lyric drives
@@ -117,7 +124,7 @@
 //   touch only the snare), `automate bass.duck`. `automate chorus_mix`
 //   overrides the mode switch's insert mix (0 = bus dry, sends only).
 //   A track prefix needs a control the track owns: its voice, its strip,
-//   its tape slot, the 909 board on a kit track, the voice box on a vox
+//   its tape slot, a kit track's own 909 board, the voice box on a vox
 //   track. The bus circuits under every track (noise, reverb_wet, spring,
 //   chorus, tape, volume) refuse one; automate them unscoped.
 //
@@ -177,7 +184,9 @@
 // bd_attack, bd_decay, bd_sweep, bd_drive, sd_level, sd_tune, sd_tone,
 // sd_snappy, sd_decay, rs_level, rs_tune, cp_level, cp_decay, hh_level,
 // hh_tune, hh_metal, ch_decay, oh_decay, dr_drive, dr_tone (bus lowpass:
-// 1 = wire, 0 = felt blanket — the dusty-kit knob).
+// 1 = wire, 0 = felt blanket — the dusty-kit knob). Per kit track via
+// `automate <track>.<knob>` (that track's board alone), or unscoped to
+// turn every kit's board at once, as the panel does.
 //
 // The tape deck (per sampler track via `automate <track>.<param>`, or
 // global to all slots): smp_pitch (semitones, -48..48 — four octaves of
@@ -381,9 +390,11 @@ param_table! {
     CompMakeup:      "comp_makeup",    None,      (0.0, 15.0, Lin);
     CompMix:         "comp_mix",       None,      (0.0, 1.0, Lin);
     CompScHpf:       "comp_sc_hpf",    None,      (20.0, 400.0, Log);
-    // The rhythm section: one shared 909 board, so like the effects and
-    // the LFO these are bus-level parameters — unitless 0..1 panel knob
-    // rotations; the circuits map them onto their electrical ranges
+    // The rhythm section: the 909 panel. Unscoped (the panel, MIDI CCs,
+    // patches, `automate bd_tune`) a knob turns every kit's board; scoped
+    // (`automate beat.bd_tune`) it turns that kit track's board alone.
+    // Unitless 0..1 panel knob rotations; the circuits map them onto
+    // their electrical ranges
     BdLevel:         "bd_level",       Some(20),  (0.0, 1.0, Lin);
     BdTune:          "bd_tune",        Some(21),  (0.0, 1.0, Lin);
     BdAttack:        "bd_attack",      Some(22),  (0.0, 1.0, Lin);
@@ -737,28 +748,28 @@ impl Param {
             Param::CompMakeup => vm.set_comp_makeup(value),
             Param::CompMix => vm.set_comp_mix(value),
             Param::CompScHpf => vm.set_comp_sc_hpf(value),
-            Param::BdLevel => vm.set_bd_level(value),
-            Param::BdTune => vm.set_bd_tune(value),
-            Param::BdAttack => vm.set_bd_attack(value),
-            Param::BdDecay => vm.set_bd_decay(value),
-            Param::BdSweep => vm.set_bd_sweep(value),
-            Param::BdDrive => vm.set_bd_drive(value),
-            Param::SdLevel => vm.set_sd_level(value),
-            Param::SdTune => vm.set_sd_tune(value),
-            Param::SdTone => vm.set_sd_tone(value),
-            Param::SdSnappy => vm.set_sd_snappy(value),
-            Param::SdDecay => vm.set_sd_decay(value),
-            Param::RsLevel => vm.set_rs_level(value),
-            Param::RsTune => vm.set_rs_tune(value),
-            Param::CpLevel => vm.set_cp_level(value),
-            Param::CpDecay => vm.set_cp_decay(value),
-            Param::HhLevel => vm.set_hh_level(value),
-            Param::HhTune => vm.set_hh_tune(value),
-            Param::HhMetal => vm.set_hh_metal(value),
-            Param::ChDecay => vm.set_ch_decay(value),
-            Param::OhDecay => vm.set_oh_decay(value),
-            Param::DrumDrive => vm.set_drum_drive(value),
-            Param::DrumTone => vm.set_drum_tone(value),
+            Param::BdLevel
+            | Param::BdTune
+            | Param::BdAttack
+            | Param::BdDecay
+            | Param::BdSweep
+            | Param::BdDrive
+            | Param::SdLevel
+            | Param::SdTune
+            | Param::SdTone
+            | Param::SdSnappy
+            | Param::SdDecay
+            | Param::RsLevel
+            | Param::RsTune
+            | Param::CpLevel
+            | Param::CpDecay
+            | Param::HhLevel
+            | Param::HhTune
+            | Param::HhMetal
+            | Param::ChDecay
+            | Param::OhDecay
+            | Param::DrumDrive
+            | Param::DrumTone => vm.set_drum_knob(self, value),
             Param::VoxLevel => vm.set_vox_level(value),
             Param::VoxDry => vm.set_vox_dry(value),
             Param::VoxBreath => vm.set_vox_breath(value),
@@ -832,7 +843,7 @@ impl Param {
             | P::ChDecay
             | P::OhDecay
             | P::DrumDrive
-            | P::DrumTone => channel == crate::drums::DRUM_CHANNEL,
+            | P::DrumTone => crate::drums::kit_for_channel(channel).is_some(),
             P::VoxLevel
             | P::VoxDry
             | P::VoxBreath
@@ -1146,6 +1157,11 @@ fn register_channels(vm: &mut VoiceManager, song: &Song) {
     for (i, p) in song.channels.iter().enumerate() {
         vm.set_channel_params((i + 1) as u16, *p);
     }
+    // Every kit track's board exists from the first sample, as board 0
+    // always has, so unscoped drum automation at beat 0 reaches them all
+    for &(_, channel) in &song.tracks {
+        vm.add_kit(channel);
+    }
     if let Some((samples, rate)) = &song.vox_wav {
         vm.set_vox_wav(samples, *rate);
     }
@@ -1310,6 +1326,8 @@ fn parse_song(text: &str) -> Result<Song, String> {
     // `wav_at=`: the beat the vox recording's clock is anchored to
     let mut vox_wav_at: Option<f64> = None;
     let mut samplers: Vec<crate::sampler::SamplerSlot> = Vec::new();
+    // `kit=909` tracks so far: each one is a 909 board of its own
+    let mut kit_boards = 0usize;
     // Named beat ranges (`section CH1 144..180`), for seeks and `during`
     let mut sections: std::collections::HashMap<String, (f64, f64)> =
         std::collections::HashMap::new();
@@ -1440,19 +1458,41 @@ fn parse_song(text: &str) -> Result<Song, String> {
                             .map_err(|_| err(format!("invalid {} '{}'", k, v)))?;
                         mix_opts.push((Param::from_name(k).unwrap(), value));
                     } else if let Some(kit) = opt.strip_prefix("kit=") {
-                        // A drum track: notes route to the rhythm section
-                        // (there is one board, so no per-track patches
-                        // here). Any other name used to play the 909 too,
-                        // so `kit=808` or a kit patch's name sounded like
-                        // it had been honored.
-                        if kit != "909" {
-                            return Err(err(format!(
-                                "unknown kit '{}': the rhythm section is one 909 board \
-                                 (kit=909); shape it with bd_/sd_/hh_ automation",
-                                kit
-                            )));
-                        }
-                        channel = crate::drums::DRUM_CHANNEL;
+                        // A drum track: `kit=909` gives the track a 909
+                        // board of its own on its own channel (the first
+                        // on DRUM_CHANNEL), so its knobs, strip and stem
+                        // are its alone. `kit=<track>` plays an earlier
+                        // kit track's board instead: one machine, one
+                        // strip, one stem, and the closed hat still
+                        // chokes the open one across the two tracks. Any
+                        // other name used to play the 909 too, so
+                        // `kit=808` sounded like it had been honored.
+                        channel = if kit == "909" {
+                            if kit_boards == crate::drums::MAX_KITS {
+                                return Err(err(format!(
+                                    "too many kit=909 tracks (max {}); kit=<track> \
+                                     shares an earlier kit track's board",
+                                    crate::drums::MAX_KITS
+                                )));
+                            }
+                            kit_boards += 1;
+                            crate::drums::kit_channel(kit_boards - 1)
+                        } else {
+                            track_channels
+                                .iter()
+                                .find(|(t, c)| {
+                                    t == kit && crate::drums::kit_for_channel(*c).is_some()
+                                })
+                                .map(|(_, c)| *c)
+                                .ok_or_else(|| {
+                                    err(format!(
+                                        "unknown kit '{}': kit=909 gives the track its own \
+                                         909 board, kit=<track> shares the board of a kit \
+                                         track defined above",
+                                        kit
+                                    ))
+                                })?
+                        };
                     } else if opt == "vox" {
                         // The voice box: notes play the vocoder's carrier,
                         // `=lyric` suffixes drive the formant voice
@@ -1738,7 +1778,7 @@ fn parse_song(text: &str) -> Result<Song, String> {
                 } => {
                     let swing = *swing;
                     let (vel, len, channel) = (*vel, *len, *channel);
-                    let drums = channel == crate::drums::DRUM_CHANNEL;
+                    let drums = crate::drums::kit_for_channel(channel).is_some();
                     let line = expand_groups(line).map_err(err)?;
                     for token in tokenize(&line).map_err(err)? {
                         if token == "|" {
@@ -3219,7 +3259,7 @@ mod tests {
         assert!(all_drum, "kit= tracks must route every note to the board");
         // Drum names outside a kit= track stay errors
         assert!(parse_song("bpm 120\ntrack a\nBD\n").is_err());
-        // There is one board; another kit name is refused, not ignored
+        // Another kit name is refused, not ignored
         assert!(parse_song("bpm 120\ntrack beat kit=808\nBD\n").is_err());
 
         let frames: Vec<_> = render_offline(&song, 48000.0).collect();
@@ -3229,8 +3269,8 @@ mod tests {
         assert!(peak > 0.05, "the beat should be audible, peak={peak}");
     }
 
-    /// Drum knobs are ordinary parameters: patch lines, automation, and
-    /// the live panel all reach the same board.
+    /// Drum knobs are ordinary parameters: unscoped automation lands on
+    /// the live panel (and every kit's board) like a patch line or a knob.
     #[test]
     fn drum_params_automate_globally() {
         let song = parse_song(
@@ -3250,6 +3290,206 @@ mod tests {
             "bd_drive automation should land on the shared panel, got {}",
             vm.params.bd_drive
         );
+    }
+
+    /// One stem's samples, bit for bit: `channel` soloed through the
+    /// full engine.
+    fn stem_bits(song: &Song, channel: u16) -> Vec<(u32, u32)> {
+        render_offline_solo(song, 48000.0, Some(channel))
+            .map(|(l, r)| (l.to_bits(), r.to_bits()))
+            .collect()
+    }
+
+    fn channel_of(song: &Song, track: &str) -> u16 {
+        song.tracks.iter().find(|(t, _)| t == track).unwrap().1
+    }
+
+    /// Every `kit=909` track is a 909 board of its own: the first on the
+    /// drum channel, the next on the kit block. A track's drum knob
+    /// automation, pan and level reach its own board and strip and no
+    /// other: track b's hat tuning leaves track a's stem bit-identical,
+    /// while unscoped automation still turns every board.
+    #[test]
+    fn each_kit_track_owns_its_board_and_strip() {
+        let song = |a_tune: f32, b_tune: f32, b_gain: f32, unscoped: Option<f32>| {
+            let mut text = format!(
+                "bpm 120\ntail 0.5\n\
+                 track a kit=909 len=0.25 pan=-0.8\nR (CH CH OH CH)x4\n\
+                 track b kit=909 len=0.25 pan=0.8 gain={b_gain}\nR (CH CH OH CH)x4\n\
+                 automate a.hh_tune\n{a_tune}\n\
+                 automate b.hh_tune\n{b_tune}\n"
+            );
+            if let Some(v) = unscoped {
+                text += &format!("automate hh_tune\n{v}\n");
+            }
+            parse_song(&text).unwrap()
+        };
+        let base = song(0.2, 0.2, 1.0, None);
+        let (a, b) = (channel_of(&base, "a"), channel_of(&base, "b"));
+        assert_eq!(a, crate::drums::DRUM_CHANNEL, "the first kit plays board 0");
+        assert_eq!(
+            b,
+            crate::drums::kit_channel(1),
+            "the second kit has a board of its own"
+        );
+        // Each track's notes and knob lane carry its own channel
+        for e in &base.events {
+            match e.kind {
+                EventKind::Param {
+                    param: Param::HhTune,
+                    channel,
+                    ..
+                } => {
+                    assert!(channel == a || channel == b)
+                }
+                EventKind::NoteOn { channel, .. } => assert!(channel == a || channel == b),
+                _ => {}
+            }
+        }
+        let retuned_b = song(0.2, 0.9, 1.0, None);
+        let retuned_a = song(0.9, 0.2, 1.0, None);
+        assert!(
+            stem_bits(&base, a) == stem_bits(&retuned_b, a),
+            "b.hh_tune reached track a's board"
+        );
+        assert!(
+            stem_bits(&base, b) != stem_bits(&retuned_b, b),
+            "b.hh_tune did not retune track b"
+        );
+        assert!(
+            stem_bits(&base, a) != stem_bits(&retuned_a, a),
+            "a.hh_tune did not retune track a"
+        );
+        assert!(
+            stem_bits(&base, b) == stem_bits(&retuned_a, b),
+            "a.hh_tune reached track b's board"
+        );
+        // Two kits tuned apart render a different mix than the swap
+        let mix = |s: &Song| -> Vec<(u32, u32)> {
+            render_offline(s, 48000.0)
+                .map(|(l, r)| (l.to_bits(), r.to_bits()))
+                .collect()
+        };
+        assert!(mix(&retuned_a) != mix(&retuned_b));
+        // Unscoped hh_tune turns both boards (it lands after the scoped
+        // lanes at beat 0, so both stems move)
+        let global = song(0.2, 0.2, 1.0, Some(0.9));
+        assert!(stem_bits(&base, a) != stem_bits(&global, a));
+        assert!(stem_bits(&base, b) != stem_bits(&global, b));
+        // Pan and level are the track's own: a sits left, b right, and
+        // b's gain=0 silences b alone
+        let balance = |bits: &[(u32, u32)]| {
+            bits.iter().fold((0.0f64, 0.0f64), |(l, r), &(x, y)| {
+                let (x, y) = (f32::from_bits(x) as f64, f32::from_bits(y) as f64);
+                (l + x * x, r + y * y)
+            })
+        };
+        let (al, ar) = balance(&stem_bits(&base, a));
+        let (bl, br) = balance(&stem_bits(&base, b));
+        assert!(al > 4.0 * ar, "track a should sit left: L {al} R {ar}");
+        assert!(br > 4.0 * bl, "track b should sit right: L {bl} R {br}");
+        let muted = song(0.2, 0.2, 0.0, None);
+        let (ml, mr) = balance(&stem_bits(&muted, b));
+        assert!(
+            ml + mr < (bl + br) * 1e-4,
+            "gain=0 must silence track b: {}",
+            ml + mr
+        );
+        assert!(
+            stem_bits(&muted, a) == stem_bits(&base, a),
+            "b's gain reached track a"
+        );
+    }
+
+    /// Board 0 is the live panel's board: a knob addressed to the first
+    /// kit shows on the panel, one addressed to a later kit does not, and
+    /// an unaddressed knob moves the panel and every board.
+    #[test]
+    fn kit_knobs_reach_the_panel_only_from_board_zero() {
+        let mut vm = VoiceManager::new(48000.0, 4);
+        let second = crate::drums::kit_channel(1);
+        vm.add_kit(second);
+        vm.set_channel_param(second, Param::BdTune, 0.9);
+        assert_eq!(
+            vm.params.bd_tune, 0.35,
+            "a later kit's knob moved the panel"
+        );
+        vm.set_channel_param(crate::drums::DRUM_CHANNEL, Param::BdTune, 0.7);
+        assert_eq!(vm.params.bd_tune, 0.7);
+        Param::BdTune.apply(&mut vm, 0.1);
+        assert_eq!(vm.params.bd_tune, 0.1);
+        assert_eq!(vm.kit_boards(), 2);
+    }
+
+    /// A one-kit song is the old single shared board: its kit plays board
+    /// 0 on the drum channel, no further board is built, and the render is
+    /// bit-identical to sending all its drum-knob automation unscoped (on
+    /// the shared board, scoped and unscoped were the same knob).
+    #[test]
+    fn a_one_kit_song_renders_as_the_one_shared_board() {
+        let text = "bpm 118\ntail 1\n\
+             track bass len=0.5 duck=0.6\n(C2 C2 Eb2 G2)x4\n\
+             track beat kit=909 len=0.25 gain=0.8 pan=0.3 reverb_send=0.35 echo_send=0.2 comp=-18\n\
+             (BD CH CH CH SD CH [CH BD] OH RS CH CH CP SD CH OH CH)x2\n\
+             automate beat.bd_tune\n0.2 0.8:8@lin\n\
+             automate beat.oh_decay\n0.3 0.9:8@smooth\n\
+             automate beat.pan\n0.3 -0.3:8@lin\n\
+             automate dr_drive\n0.0 0.6:8@lin\n";
+        let song = parse_song(text).unwrap();
+        assert_eq!(channel_of(&song, "beat"), crate::drums::DRUM_CHANNEL);
+        let mut vm = VoiceManager::new(48000.0, 8);
+        register_channels(&mut vm, &song);
+        assert_eq!(vm.kit_boards(), 1, "a one-kit song built a second board");
+        let unscoped = parse_song(
+            &text
+                .replace("automate beat.bd_tune", "automate bd_tune")
+                .replace("automate beat.oh_decay", "automate oh_decay"),
+        )
+        .unwrap();
+        let mix = |s: &Song| -> Vec<(u32, u32)> {
+            render_offline(s, 48000.0)
+                .map(|(l, r)| (l.to_bits(), r.to_bits()))
+                .collect()
+        };
+        let scoped = mix(&song);
+        assert!(scoped.iter().any(|&(l, _)| f32::from_bits(l).abs() > 1e-3));
+        assert!(
+            scoped == mix(&unscoped),
+            "the one kit no longer sounds like the shared board"
+        );
+    }
+
+    /// `kit=<track>` plays an earlier kit track's board: same channel (so
+    /// the closed hat on one track still chokes the open hat on the
+    /// other), one strip, one stem. It must name a kit track above.
+    #[test]
+    fn kit_names_an_earlier_kit_track_to_share_its_board() {
+        let song = parse_song(
+            "bpm 120\ntrack hats kit=909 len=0.25\nCH CH CH CH\n\
+             track lead\nC4\n\
+             track open kit=hats len=0.5\nR OH\n\
+             track perc kit=909\nRS\n",
+        )
+        .unwrap();
+        assert_eq!(channel_of(&song, "open"), channel_of(&song, "hats"));
+        assert_eq!(channel_of(&song, "perc"), crate::drums::kit_channel(1));
+        assert!(
+            parse_song("bpm 120\ntrack open kit=hats\nOH\n").is_err(),
+            "no such track"
+        );
+        assert!(
+            parse_song("bpm 120\ntrack lead\nC4\ntrack open kit=lead\nOH\n").is_err(),
+            "lead is not a kit track"
+        );
+        // Sixteen boards, then a clear refusal
+        let many: String = (0..crate::drums::MAX_KITS)
+            .map(|i| format!("track k{i} kit=909\nBD\n"))
+            .collect();
+        assert!(parse_song(&format!("bpm 120\n{many}")).is_ok());
+        let err = parse_song(&format!("bpm 120\n{many}track one_more kit=909\nBD\n"))
+            .err()
+            .unwrap();
+        assert!(err.contains("too many kit=909 tracks"), "{err}");
     }
 
     /// Write a WAV fixture (PCM16 or float32, mono) to the temp dir.

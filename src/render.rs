@@ -89,31 +89,26 @@ impl Meter {
 
 /// One wav per track channel, soloed through the same engine: what each
 /// instrument contributed, with its own sends ringing in the shared tanks.
-/// Channels that share a strip (all `kit=` tracks, all sampler tracks)
-/// bounce once under the first track's name.
+/// Tracks that share a channel (vox tracks, a `kit=<track>` playing an
+/// earlier kit track's board) bounce once under the first track's name.
 ///
 /// Stems are NOT normalized — they are measurement files, written at the
 /// exact gain the mix hears, and each is reported as a level-table row
 /// (peak / RMS / LUFS) so measured mixing needs no hand math.
 pub fn render_stems(song: &crate::song::Song, dir: &str) -> Result<()> {
     std::fs::create_dir_all(dir)?;
-    // One job per strip: every track is its own strip, sample tracks
-    // included (each tape slot mixes on its own channel); only the 909
-    // board is one strip under every kit track. Sample tracks used to be
-    // folded onto the deck's base channel, which a solo matches for slot 0
-    // alone: the first sample track's stem was written and every other
-    // sample track silently got none.
+    // One job per strip: every track is its own strip, sample tracks and
+    // kit tracks included (each tape slot and each 909 board mixes on its
+    // own channel). Sample tracks used to be folded onto the deck's base
+    // channel, which a solo matches for slot 0 alone: the first sample
+    // track's stem was written and every other sample track silently got
+    // none; every kit track used to share one board and one stem.
     let mut jobs: Vec<(String, u16)> = Vec::new();
     for (name, channel) in &song.tracks {
-        let key = if *channel == crate::drums::DRUM_CHANNEL {
-            crate::drums::DRUM_CHANNEL
-        } else {
-            *channel
-        };
-        if jobs.iter().any(|(_, k)| *k == key) {
+        if jobs.iter().any(|(_, k)| k == channel) {
             continue;
         }
-        jobs.push((name.clone(), key));
+        jobs.push((name.clone(), *channel));
     }
     // Each stem is a whole independent bounce, so they run side by side,
     // one per core (each renders its cards serially); results are reported
@@ -366,6 +361,55 @@ mod tests {
         };
         assert!(energy("one") > 1.0, "the first sample track's stem must hold its audio");
         assert!(energy("two") > 1.0, "the second sample track's stem must hold its audio");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Every `kit=909` track is its own board and strip, so each writes
+    /// its own stem holding its own hits; a `kit=<track>` that plays an
+    /// earlier kit's board rides that track's stem.
+    #[test]
+    fn each_kit_track_gets_its_own_stem() {
+        let dir = std::env::temp_dir().join(format!("patina-kit-stems-{}", std::process::id()));
+        // One voice per track, each struck at its own beat: kick on 0,
+        // snare on 1, rim on 2 (and the shared track's open hat on 3)
+        let song = crate::song::parse_song_text(
+            "bpm 120\ntail 0.5\n\
+             track one kit=909\nBD R:3\n\
+             track two kit=909\nR SD R:2\n\
+             track three kit=909\nR:2 RS R\n\
+             track shared kit=one\nR:3 OH\n",
+        )
+        .unwrap();
+        render_stems(&song, dir.to_str().unwrap()).unwrap();
+        // Energy per half-second window (one beat at 120 bpm)
+        let beats = |name: &str| -> Vec<f64> {
+            let path = dir.join(format!("{name}.wav"));
+            let data = crate::sampler::load_wav_stereo(path.to_str().unwrap())
+                .unwrap_or_else(|e| panic!("no stem for kit track '{name}': {e}"));
+            data.left
+                .chunks(24000)
+                .zip(data.right.chunks(24000))
+                .map(|(l, r)| l.iter().chain(r).map(|x| (*x as f64).powi(2)).sum())
+                .collect()
+        };
+        for (name, beat) in [("one", 0), ("two", 1), ("three", 2)] {
+            let e = beats(name);
+            assert!(e[beat] > 1.0, "{name}'s stem must hold its hit: {e:?}");
+            // nothing before its own hit: the other boards are not in it
+            for (b, &x) in e.iter().enumerate().take(beat) {
+                assert!(x < e[beat] * 1e-6, "{name}'s stem heard beat {b}: {e:?}");
+            }
+        }
+        // the shared track's open hat lands in track one's stem
+        let one = beats("one");
+        assert!(
+            one[3] > one[2] * 10.0,
+            "kit=one should ride one's stem: {one:?}"
+        );
+        assert!(
+            !dir.join("shared.wav").exists(),
+            "a shared board bounces once"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

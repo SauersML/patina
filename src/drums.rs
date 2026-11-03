@@ -55,7 +55,37 @@ use crate::adaa::AdaaTanh;
 use crate::hpf::HighPassLadder;
 
 /// The reserved song/MIDI channel that routes notes to the drum board.
+/// It is board 0: the live board (panel pads, MIDI channel 10, the low
+/// sliver, the plugin) and the first `kit=` track in a song.
 pub const DRUM_CHANNEL: u16 = u16::MAX;
+
+/// Every `kit=909` track in a song gets a 909 board of its own, with its
+/// own knobs, its own desk strip and its own stem. Board 0 sits on
+/// DRUM_CHANNEL; boards 1.. sit on a reserved block just below the tape
+/// deck's (`kit_channel`).
+pub const MAX_KITS: usize = 16;
+pub const KIT_CHANNEL_BASE: u16 = crate::sampler::SAMPLER_CHANNEL_BASE - (MAX_KITS as u16 - 1);
+
+/// The channel kit board `index` plays on (0 = DRUM_CHANNEL).
+pub fn kit_channel(index: usize) -> u16 {
+    assert!(index < MAX_KITS, "kit board {index} out of range");
+    if index == 0 {
+        DRUM_CHANNEL
+    } else {
+        KIT_CHANNEL_BASE + (index - 1) as u16
+    }
+}
+
+/// Which kit board a song/MIDI channel plays, if it is one.
+pub fn kit_for_channel(channel: u16) -> Option<usize> {
+    if channel == DRUM_CHANNEL {
+        Some(0)
+    } else if (KIT_CHANNEL_BASE..crate::sampler::SAMPLER_CHANNEL_BASE).contains(&channel) {
+        Some((channel - KIT_CHANNEL_BASE) as usize + 1)
+    } else {
+        None
+    }
+}
 
 /// The six voices on the board.
 ///
@@ -840,6 +870,20 @@ impl DrumMachine {
         }
     }
 
+    /// Kit board `index` (one per kit track). Board 0 is exactly `new`;
+    /// every further board draws its own noise, as a second machine's
+    /// shift registers would, so two kits striking together thicken
+    /// rather than stack one sample-identical hit.
+    pub fn board(sample_rate: f32, index: usize) -> Self {
+        let mut board = Self::new(sample_rate);
+        if index > 0 {
+            let n = index as u32;
+            board.noise_rng = crate::rng::seed(board.noise_rng.wrapping_add(n));
+            board.hats.rng = crate::rng::seed(board.hats.rng.wrapping_add(n));
+        }
+        board
+    }
+
     /// Trigger by note number, either route; velocity is the accent
     /// voltage. Notes the board doesn't own are ignored.
     pub fn trigger_note(&mut self, note: u8, velocity: f32) {
@@ -1016,6 +1060,39 @@ mod tests {
 
     fn render(dm: &mut DrumMachine, n: usize) -> Vec<f32> {
         (0..n).map(|_| dm.render_next().0).collect()
+    }
+
+    /// Each kit board has one channel, the block collides with nothing
+    /// else reserved, and board 0 is the live board's channel.
+    #[test]
+    fn kit_channels_round_trip_inside_their_own_block() {
+        assert_eq!(kit_channel(0), DRUM_CHANNEL);
+        for i in 0..MAX_KITS {
+            let ch = kit_channel(i);
+            assert_eq!(kit_for_channel(ch), Some(i));
+            assert_eq!(crate::sampler::slot_for_channel(ch), None);
+            assert_ne!(ch, crate::vox::VOX_CHANNEL);
+        }
+        assert_eq!(kit_for_channel(KIT_CHANNEL_BASE - 1), None);
+        assert_eq!(kit_for_channel(crate::sampler::SAMPLER_CHANNEL_BASE), None);
+        assert_eq!(kit_for_channel(crate::vox::VOX_CHANNEL), None);
+        assert_eq!(kit_for_channel(0), None);
+    }
+
+    /// Board 0 is the stock board sample for sample; a further board
+    /// draws different noise, so the same snare on two boards differs.
+    #[test]
+    fn extra_boards_draw_their_own_noise() {
+        let snare = |index: usize| {
+            let mut dm = DrumMachine::board(SR, index);
+            dm.trigger(DrumVoice::Snare, 1.0);
+            render(&mut dm, 4800)
+        };
+        let mut stock = DrumMachine::new(SR);
+        stock.trigger(DrumVoice::Snare, 1.0);
+        assert_eq!(snare(0), render(&mut stock, 4800));
+        assert_ne!(snare(1), snare(0));
+        assert_ne!(snare(2), snare(1));
     }
 
     fn goertzel(samples: &[f32], freq: f32) -> f32 {

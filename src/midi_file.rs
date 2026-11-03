@@ -147,8 +147,9 @@ pub fn parse_midi(bytes: &[u8], voice: ParamValues) -> Result<Song, String> {
 }
 
 /// MIDI channel -> song channel, allocated on first use: channel 10 is the
-/// drum board, every other channel a private song channel (like a bare
-/// `track` in a .song) carrying the chosen voice.
+/// drum board (board 0, like a .song's first `kit=909` track), every
+/// other channel a private song channel (like a bare `track` in a .song)
+/// carrying the chosen voice.
 struct ChannelMap {
     voice: ParamValues,
     ids: [Option<u16>; 16],
