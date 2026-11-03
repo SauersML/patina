@@ -166,7 +166,7 @@ track beat kit=909 len=0.25 vel=0.64 reverb_send=0.12
   SD:0.3333@0.12 SD:0.3333@0.2 SD:0.3333@0.27 SD:1@0.33 SD:0.3333@0.15 SD:0.3333@0.21 SD:0.3333@0.27 SD:0.3333@0.33 SD:0.3333@0.39 SD:0.3333@0.45
 
 # ---- hats: density edited bar by bar, one velocity -------------------
-track hats kit=909 len=0.5 vel=0.64
+track hats kit=beat len=0.5 vel=0.64
   >P2
   (CH:0.5)x8
   (CH:0.5)x8

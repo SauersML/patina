@@ -235,7 +235,7 @@ track beat kit=909 len=0.25 vel=0.64 reverb_send=0.1
   R:4
 
 # ---- hats: broken cells, pairs at most, triplets where they earn it --
-track hats kit=909 len=0.5 vel=0.4
+track hats kit=beat len=0.5 vel=0.4
   >P3
   CH:1@0.62 CH:0.5 CH:0.5 CH:1 CH:0.5 CH:0.5
   CH:0.75 CH:0.75 CH:0.5 CH:0.75 CH:0.75 CH:0.5

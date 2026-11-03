@@ -116,7 +116,7 @@ track hats kit=909 len=0.5 vel=0.8
   (CH:0.5@0.7 CH:0.5@0.45)x4 (CH:0.5@0.7 CH:0.5@0.45)x3 CH:0.5@0.7 OH:0.5@0.55
 
 # ---- kick/snare: boom-bap placement, structured-velocity rolls --------
-track beat kit=909 len=0.25 vel=0.9
+track beat kit=hats len=0.25 vel=0.9
   >GROOVE
   (BD:1@0.9 SD:0.75@0.75 BD:0.75@0.7 BD:0.5@0.85 SD:1@0.8)x7
   BD:1@0.9 SD:0.75@0.75 BD:0.75@0.7 BD:0.5@0.85 SD:0.25@0.2 SD:0.25@0.35 SD:0.25@0.55 SD:0.25@0.8

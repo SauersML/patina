@@ -32,7 +32,7 @@ track kick kit=909 vel=0.95
   BD BD BD BD | BD BD BD BD | BD BD BD BD | BD:2 BD:2@0.6
 
 # ---- hats: offbeat opens, sixteenth closes carrying the drive ------------
-track hats kit=909 len=0.5 vel=0.55
+track hats kit=kick len=0.5 vel=0.55
   R:16
 # bars 5-8: closed eighths sneak in
   CH@0.35 CH CH@0.35 CH CH@0.35 CH CH@0.35 CH | CH@0.35 CH CH@0.35 CH CH@0.35 CH CH@0.35 CH
@@ -66,7 +66,7 @@ track hats kit=909 len=0.5 vel=0.55
   CH@0.35 CH@0.25 CH@0.35 CH@0.25 CH@0.35 CH@0.25 CH@0.35 CH@0.25 | CH@0.3 R CH@0.3 R CH@0.25 R OH:2@0.5
 
 # ---- backbeat: clap on 2 and 4, snare layers in at the drop --------------
-track backbeat kit=909
+track backbeat kit=kick
   R:16
   R CP@0.8 R CP@0.8 | R CP@0.8 R CP@0.8 | R CP@0.8 R CP@0.8 | R CP@0.8 R CP@0.8
   R CP@0.8 R CP@0.8 | R CP@0.8 R CP@0.8 | R CP@0.8 R CP@0.8 | R CP@0.8 R CP@0.8
@@ -87,7 +87,7 @@ track backbeat kit=909
   R CP@0.7 R CP@0.7 | R CP@0.6 R CP@0.6 | R CP@0.5 R R:1 | R CP@0.4 R:2
 
 # ---- rim: ghost notes riding the drop's second half ----------------------
-track rim kit=909 len=0.5 vel=0.45
+track rim kit=kick len=0.5 vel=0.45
   R:224
   R:96
   R R R RS R R RS R | R R R RS R R R RS | R R R RS R R RS R | R R R RS R R R R

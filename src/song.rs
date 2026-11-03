@@ -3459,6 +3459,52 @@ mod tests {
         );
     }
 
+    /// What the old shared board did, `kit=<track>` still does: a sharing
+    /// track's strip options land on the one shared strip (wherever they
+    /// are written, the render is the same), and a closed hat on one track
+    /// chokes the open hat ringing on the other. On separate boards the
+    /// open hat rings on through the closed hit.
+    #[test]
+    fn a_shared_board_keeps_the_strip_and_the_hat_choke() {
+        let mix = |text: &str| -> Vec<(u32, u32)> {
+            render_offline(&parse_song(text).unwrap(), 48000.0)
+                .map(|(l, r)| (l.to_bits(), r.to_bits()))
+                .collect()
+        };
+        let on_second = mix("bpm 120\ntail 0.5\ntrack a kit=909\nBD R\n\
+                             track b kit=a reverb_send=0.3 pan=0.4\nR SD\n");
+        let on_first = mix(
+            "bpm 120\ntail 0.5\ntrack a kit=909 reverb_send=0.3 pan=0.4\nBD R\n\
+             track b kit=a\nR SD\n",
+        );
+        assert!(
+            on_second == on_first,
+            "a sharing track's strip options missed the shared strip"
+        );
+        // A long open hat at 0 on one track, a short closed hat at 0.1 s
+        // on another, the reverb dry: 0.2-0.5 s holds whatever the open
+        // hat still rings
+        let tail = |second: &str| {
+            let song = parse_song(&format!(
+                "bpm 120\ntail 0.5\nautomate reverb_wet\n0\nautomate oh_decay\n1\n\
+                 automate ch_decay\n0\ntrack open kit=909\nOH:2\n\
+                 track closed {second}\nR:0.2 CH:1.8\n"
+            ))
+            .unwrap();
+            render_offline(&song, 48000.0)
+                .skip(9600)
+                .take(14400)
+                .map(|(l, r)| (l as f64).powi(2) + (r as f64).powi(2))
+                .sum::<f64>()
+        };
+        let (choked, ringing) = (tail("kit=open"), tail("kit=909"));
+        assert!(
+            ringing > 100.0 * choked,
+            "the closed hat should choke the shared board's open hat: \
+             choked {choked:.3e} vs separate boards {ringing:.3e}"
+        );
+    }
+
     /// `kit=<track>` plays an earlier kit track's board: same channel (so
     /// the closed hat on one track still chokes the open hat on the
     /// other), one strip, one stem. It must name a kit track above.

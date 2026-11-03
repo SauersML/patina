@@ -163,7 +163,7 @@ track beat kit=909 len=0.25 vel=0.64
   SD:0.3333@0.12 SD:0.3333@0.2 SD:0.3333@0.27 SD:1@0.33 SD:0.3333@0.15 SD:0.3333@0.21 SD:0.3333@0.27 SD:0.3333@0.33 SD:0.3333@0.39 SD:0.3333@0.45
 
 # ---- hats: straight 8ths, ONE velocity, a 16th-insert bar each 4th ---
-track hats kit=909 len=0.5 vel=0.64
+track hats kit=beat len=0.5 vel=0.64
   (CH:0.5)x8
   (CH:0.5)x8
   (CH:0.5)x8

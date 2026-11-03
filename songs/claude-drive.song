@@ -154,7 +154,7 @@ BD@0.95 . . . . . . . . . . . . . . .
 BD@0.95 . . . . . . . . . . . . . . .
 . . . . . . . . . . . . . . . .
 
-track snare kit=909 vel=0.8 len=0.25 reverb_send=0.3
+track snare kit=kick vel=0.8 len=0.25 reverb_send=0.3
 >B
 . . . . . . . . SD@0.95 . . . . . SD@0.32 .
 . . . . . . . . SD@0.95 . . . . SD@0.32 . .
@@ -204,7 +204,7 @@ track snare kit=909 vel=0.8 len=0.25 reverb_send=0.3
 . . . . . . . . . . . . . . . .
 . . . . . . . . SD:0.125@0.4 SD:0.125@0.9 . . . . . . .
 
-track hats kit=909 vel=0.5 len=0.25
+track hats kit=kick vel=0.5 len=0.25
 >B
 CH@0.55 CH@0.3 CH@0.55 CH@0.3 CH@0.55 CH@0.3 OH@0.6 CH@0.3 CH@0.55 CH@0.3 CH@0.55 CH@0.3 CH@0.55 CH@0.3 CH@0.55 CH@0.3
 CH@0.55 . CH@0.55 CH@0.3 CH@0.55 . OH@0.6 CH@0.3 CH@0.55 CH@0.3 CH@0.55 . CH@0.55 CH@0.3 CH:0.125@0.5 CH:0.125@0.5 CH@0.3
