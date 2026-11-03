@@ -141,9 +141,9 @@ def bb(bar_idx):
 # ---------------------------------------------------------------- tracks
 
 kick  = Track("track kick kit=909 vel=0.9 len=0.25")
-snare = Track("track snare kit=909 vel=0.8 len=0.25")
-hats  = Track("track hats kit=909 vel=0.5 len=0.25")
-clock = Track("track clock kit=909 vel=0.3 len=0.25")
+snare = Track("track snare kit=kick vel=0.8 len=0.25")
+hats  = Track("track hats kit=kick vel=0.5 len=0.25")
+clock = Track("track clock kit=kick vel=0.3 len=0.25")
 bass  = Track("track bass patch=acidline vel=0.8 len=0.25")
 lead  = Track("track lead patch=nostalgia-lead vel=0.8 len=0.5")
 pad   = Track("track pad patch=dreampad vel=0.45 len=1")

@@ -206,7 +206,7 @@ pad    = Track("track pad patch=dreampad vel=0.42 gain=0.85 chorus_send=0.7")
 pad2   = Track("track pad2 patch=softpad vel=0.36 gain=0.8 pan=0.2 chorus_send=0.7")
 ground = Track("track ground patch=drone vel=0.5 gain=0.85 duck=0.2 duck_release=0.3")
 kick   = Track("track kick kit=909 vel=0.5")
-hats   = Track("track hats kit=909 vel=0.3")
+hats   = Track("track hats kit=kick vel=0.3")
 
 tracks = {name: Track(header) for name, header, _, _, _ in VOICES}
 

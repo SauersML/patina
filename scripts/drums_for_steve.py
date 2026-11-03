@@ -132,8 +132,8 @@ def bb(bar):
 # ---------------------------------------------------------------- tracks
 
 kick  = Track("track kick kit=909 vel=0.8 len=0.25")
-snare = Track("track snare kit=909 vel=0.7 len=0.25")
-hats  = Track("track hats kit=909 vel=0.4 len=0.25")
+snare = Track("track snare kit=kick vel=0.7 len=0.25")
+hats  = Track("track hats kit=kick vel=0.4 len=0.25")
 m1    = Track("track m1 patch=musicbox vel=0.6 len=0.25")
 m2    = Track("track m2 patch=mallet vel=0.55 len=0.25")
 bell  = Track("track bell patch=glintbell vel=0.5 len=0.5")
