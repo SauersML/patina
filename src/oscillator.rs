@@ -92,6 +92,10 @@ pub struct Oscillator {
     /// If this core wrapped during the last step: fraction of the sample
     /// period elapsed SINCE the wrap (for slaving another core to it).
     last_wrap_frac: Option<f32>,
+    /// The frequency the core actually ran at on its last step (drift,
+    /// modulation and tolerances included) — what the supersaw bank
+    /// tracks so its seven saws stay locked to this oscillator.
+    last_hz: f32,
 }
 
 use crate::rng::unipolar as rand01;
@@ -128,6 +132,7 @@ impl Oscillator {
             curvature,
             hz_offset,
             mix: [0.0; 4],
+            last_hz: frequency,
         }
     }
 
@@ -216,6 +221,7 @@ impl Oscillator {
             (frequency * self.freq_mult * (1.0 + self.drift + common_drift) * pitch_mult + f_off)
                 .max(0.01);
         self.duty = (pulse_width + self.duty_error * self.trim()).clamp(0.03, 0.97);
+        self.last_hz = detuned_frequency;
 
         let dt = detuned_frequency as f64 / self.sample_rate as f64;
         self.phase += dt;
@@ -482,6 +488,20 @@ impl Oscillator {
     /// The sub square computed during the last `next_sample` call.
     pub fn sub(&self) -> f32 {
         self.last_sub
+    }
+
+    /// The frequency this core ran at on its last step, in Hz.
+    pub fn last_hz(&self) -> f32 {
+        self.last_hz
+    }
+
+    /// Restart the ramp (key sync): `phase` 0.25 puts the triangle and
+    /// sine at their rising zero crossing, so a synced kick starts from
+    /// silence the same way on every hit. The sub divider restarts with it.
+    pub fn reset_phase(&mut self, phase: f64) {
+        self.phase = phase.rem_euclid(1.0);
+        self.sub_phase = 0.5 * self.phase;
+        self.last_wrap_frac = None;
     }
 
     pub fn set_frequency(&self, frequency: f32) {

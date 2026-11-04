@@ -193,6 +193,25 @@
 // varispeed, enough for a tape-stop swoop), smp_start (0..1
 // needle-drop point), smp_gain (0..2), smp_pan (-1..1), smp_attack,
 // smp_release (seconds), smp_cutoff (Hz, 20000 = open), smp_res (0..1).
+//
+// Kick-bass, walls and risers (voice-card knobs, so per track via
+// `automate <track>.<param>` like cutoff): pitch_env (semitones, -48..96:
+// every gated note STARTS this far above its own pitch and dives onto it;
+// 0 = off), pitch_env_time (seconds of the dive, 0.001..4),
+// pitch_env_curve (-1..1: 0 = straight in octaves, + = fast drop and a
+// long settle — the kick's snap, - = slow start, fast landing). The tail
+// holds the note's pitch, so the kick is also the bass, and the dive and
+// the tail (decay, cutoff) shape separately. key_sync (1 = every gate
+// restarts the oscillators at one phase, so every hit clicks alike).
+// shaper (dB of drive, 0..48, into a waveshaper between the mixer and the
+// ladder, so the ladder is its post-filter; 0 = out), shaper_mode (0
+// tanh, 1 hard clip, 2 sine wavefolder). supersaw (0..1, crossfades
+// oscillator 1 into seven detuned saws), supersaw_detune (0..1 spread),
+// supersaw_mix (0..1, the six side saws against the centre one),
+// osc1_level (0..1, oscillator 1 into the mixer). noise_osc (0..1, the
+// card's own white noise ahead of the drive and ladder), noise_cutoff
+// (Hz, 20..20000, its own resonant filter), noise_res (0..1), noise_mode
+// (0 lowpass, 1 bandpass, 2 highpass). Switches take plain sets.
 
 use std::sync::Arc;
 use std::thread;
@@ -458,6 +477,35 @@ param_table! {
     TrackComp:       "comp",           None,      (-48.0, 0.0, Lin);
     // Global chorus insert mix override (the mode switch re-derives it)
     ChorusMix:       "chorus_mix",     None,      (0.0, 1.0, Lin);
+    // The kick-bass voice (voice.rs): a pitch envelope fired by every
+    // gate — the note starts `pitch_env` semitones from its own pitch
+    // and lands on it after `pitch_env_time` s along `pitch_env_curve`
+    // (0 straight, + dives early, - late); the tail holds the note.
+    // `key_sync` restarts the oscillators on every gate. `shaper` drives
+    // a waveshaper between the mixer and the ladder (dB, 0 = out;
+    // `shaper_mode` 0 tanh, 1 hard clip, 2 sine fold), so the ladder
+    // is the post-filter.
+    PitchEnv:        "pitch_env",      None,      (-48.0, 96.0, Lin);
+    PitchEnvTime:    "pitch_env_time", None,      (0.001, 4.0, Log);
+    PitchEnvCurve:   "pitch_env_curve", None,     (-1.0, 1.0, Lin);
+    KeySync:         "key_sync",       None,      (0.0, 1.0, Step);
+    ShaperDrive:     "shaper",         None,      (0.0, 48.0, Lin);
+    ShaperModeSel:   "shaper_mode",    None,      (0.0, 2.0, Step);
+    // Walls and risers (sources.rs): seven detuned saws crossfaded over
+    // oscillator 1, and each card's own filtered noise (cutoff Hz,
+    // resonance, mode 0 lowpass / 1 bandpass / 2 highpass)
+    Supersaw:        "supersaw",       None,      (0.0, 1.0, Lin);
+    // Oscillator 1's level into the mixer (osc 2 and 3 have theirs);
+    // 0 leaves a card to its noise oscillator, sub or other oscillators
+    Osc1Level:       "osc1_level",     None,      (0.0, 1.0, Lin);
+    SupersawDetune:  "supersaw_detune", None,     (0.0, 1.0, Lin);
+    SupersawMix:     "supersaw_mix",   None,      (0.0, 1.0, Lin);
+    NoiseOsc:        "noise_osc",      None,      (0.0, 1.0, Lin);
+    NoiseCutoff:     "noise_cutoff",   None,      (20.0, 20000.0, Log);
+    NoiseRes:        "noise_res",      None,      (0.0, 1.0, Lin);
+    NoiseModeSel:    "noise_mode",     None,      (0.0, 2.0, Step);
+    // The shape of a note bend (`C4:2>G3`): 0 straight, + early, - late
+    BendCurve:       "bend_curve",     None,      (-1.0, 1.0, Lin);
 }
 
 pub(crate) fn waveform_from_value(value: f32) -> Waveform {
@@ -624,6 +672,21 @@ impl Param {
             Param::VoxVibrato => v.vox_vibrato,
             Param::VoxModeSel => v.vox_mode,
             Param::VoxIntonation => v.vox_intonation,
+            Param::PitchEnv => v.pitch_env,
+            Param::PitchEnvTime => v.pitch_env_time,
+            Param::PitchEnvCurve => v.pitch_env_curve,
+            Param::KeySync => v.key_sync,
+            Param::ShaperDrive => v.shaper,
+            Param::ShaperModeSel => v.shaper_mode,
+            Param::Supersaw => v.supersaw,
+            Param::Osc1Level => v.osc1_level,
+            Param::SupersawDetune => v.supersaw_detune,
+            Param::SupersawMix => v.supersaw_mix,
+            Param::NoiseOsc => v.noise_osc,
+            Param::NoiseCutoff => v.noise_cutoff,
+            Param::NoiseRes => v.noise_res,
+            Param::NoiseModeSel => v.noise_mode,
+            Param::BendCurve => v.bend_curve,
             _ => return None,
         })
     }
@@ -787,6 +850,21 @@ impl Param {
             | Param::SmpRelease
             | Param::SmpCutoff
             | Param::SmpRes => vm.set_sampler_all(self, value),
+            Param::PitchEnv
+            | Param::PitchEnvTime
+            | Param::PitchEnvCurve
+            | Param::KeySync
+            | Param::ShaperDrive
+            | Param::ShaperModeSel
+            | Param::Supersaw
+            | Param::Osc1Level
+            | Param::SupersawDetune
+            | Param::SupersawMix
+            | Param::NoiseOsc
+            | Param::NoiseCutoff
+            | Param::NoiseRes
+            | Param::NoiseModeSel
+            | Param::BendCurve => vm.set_source_param(self, value),
         }
     }
 
@@ -925,6 +1003,22 @@ impl Param {
             Param::UnisonDetune => p.unison_detune = value,
             // Spread is voice-level too: where THIS track's notes sit
             Param::Spread => p.spread = value,
+            // The kick-bass, wall and riser controls are the card's own
+            Param::PitchEnv => p.pitch_env = self.clamp(value),
+            Param::PitchEnvTime => p.pitch_env_time = self.clamp(value),
+            Param::PitchEnvCurve => p.pitch_env_curve = self.clamp(value),
+            Param::KeySync => p.key_sync = self.clamp(value).round(),
+            Param::ShaperDrive => p.shaper = self.clamp(value),
+            Param::ShaperModeSel => p.shaper_mode = self.clamp(value).round(),
+            Param::Supersaw => p.supersaw = self.clamp(value),
+            Param::Osc1Level => p.osc1_level = self.clamp(value),
+            Param::SupersawDetune => p.supersaw_detune = self.clamp(value),
+            Param::SupersawMix => p.supersaw_mix = self.clamp(value),
+            Param::NoiseOsc => p.noise_osc = self.clamp(value),
+            Param::NoiseCutoff => p.noise_cutoff = self.clamp(value),
+            Param::NoiseRes => p.noise_res = self.clamp(value),
+            Param::NoiseModeSel => p.noise_mode = self.clamp(value).round(),
+            Param::BendCurve => p.bend_curve = self.clamp(value),
             _ => return false,
         }
         true

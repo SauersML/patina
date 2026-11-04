@@ -1,0 +1,22 @@
+# Riser — each card's own noise through a resonant bandpass, with a
+# faint supersaw underneath for pitch (oscillator 1 turned down to 0.2).
+# Sweep the band up over a build:
+#   automate riser.noise_cutoff
+#   300 9000:16@exp
+waveform 2
+osc1_level 0.2
+supersaw 1
+supersaw_detune 0.5
+supersaw_mix 0.8
+osc2_level 0
+osc3_level 0
+noise_osc 1
+noise_mode 1
+noise_cutoff 300
+noise_res 0.75
+cutoff 16000
+resonance 0
+attack 2
+decay 1
+sustain 1
+release 1.5

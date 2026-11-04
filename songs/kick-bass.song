@@ -1,0 +1,73 @@
+# Kick-Bass — 150 bpm, F minor. A demo of the kick that is also the bass,
+# the supersaw wall and the noise riser.
+#
+# The kick track plays the BASSLINE: every hit dives four octaves onto its
+# note (pitch_env, pitch_env_time, pitch_env_curve), key sync restarts it
+# at the same phase each time, 30 dB of drive squares it off, and the
+# ladder after the drive is the post-filter. The tail holds the note, so
+# F1 / G#1 / C2 under the chords is the harmony. The dive and the tail
+# shape separately: automate the dive (kick.pitch_env_time) without
+# touching the tail (kick.decay, kick.cutoff).
+#
+#   beats  0-16   BUILD   the kick alone, a riser sweeping its own noise
+#   beats 16-48   DROP    the superwall opens; at 32 the wavefolder kick
+#                         (rawkick) takes the line and screeches
+#   beats 48-64   BOOM    808 kicks, long, the tail ringing on the note
+
+bpm 150
+gate 0.9
+tail 2
+
+section BUILD 0..16
+section DROP 16..48
+section BOOM 48..64
+
+automate reverb_wet
+0.12
+automate reverb_decay
+0.7
+automate tape_drive
+0.25
+automate comp_in
+1
+automate comp_threshold
+-16
+automate hh_level
+0.55
+
+track kick patch=hardkick vel=0.95 gain=1.2
+(F1 F1 F1 F1 | F1 F1 G#1 F1 | F1 F1 F1 F1 | C2 C2 G#1 D#1)
+(F1 F1 F1 F1 | C#2 C#2 C#2 C#2 | G#1 G#1 G#1 G#1 | D#1 D#1 D#1 D#2)
+
+# the dive gets longer through the build, then snaps tight for the drop
+automate kick.pitch_env_time
+0.06 0.14:15@smooth 0.1:1@step
+
+# the second half of the drop hands the line to the wavefolder kick,
+# its drive climbing into the screech
+track screech patch=rawkick vel=0.9 gain=0.9
+>32 (F1 F1 F1 F1 | C#2 C#2 C#2 C#2 | G#1 G#1 G#1 G#1 | D#1 D#1 D#1 D#2)
+automate screech.shaper
+26 >32 26 38:16@smooth
+
+track boom patch=kick808 vel=0.9 gain=1.4
+>BOOM F1:3 F1:1 | C#2:4 | G#1:2 G#1:2 | D#1:4
+
+track hats kit=909 len=0.5 gain=0.8
+>4 (R CH R CH R CH R OH)x15
+
+track claps kit=hats len=1
+>DROP (R CP R CP)x8
+
+track wall patch=superwall vel=0.55 gain=0.5 reverb_send=0.3
+>DROP [F3 G#3 C4 F4]:8 [C#3 F3 G#3 C#4]:8 [G#2 C3 D#3 G#3]:8 [D#3 G3 A#3 D#4]:8
+[F3 G#3 C4 F4]:16
+automate wall.supersaw_detune
+0.2 >DROP 0.2 0.55:32@smooth
+automate wall.cutoff
+900 >DROP 900 6000:8@exp R:24 1200:16@exp
+
+track riser patch=riser vel=0.7 gain=0.8 reverb_send=0.4
+[F3]:16
+automate riser.noise_cutoff
+300 9000:16@exp

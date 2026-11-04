@@ -1,0 +1,33 @@
+# Hardkick — the kick that is also the bass. A sine starts four octaves
+# above the note and dives onto it in 120 ms (fast at first: curve 0.6),
+# key sync restarts it at its zero crossing so every hit punches alike,
+# 30 dB of tanh squares it off, and the ladder after the drive is the
+# post-filter: a filter envelope opens it for the click and lets it close
+# to a dark, buzzing tail that holds the note's pitch for as long as the
+# key is held. Play the bassline on it: F1, G#1, C2...
+waveform 0
+osc2_level 0
+osc3_level 0
+circuit 1
+key_sync 1
+pitch_env 48
+pitch_env_time 0.12
+pitch_env_curve 0.6
+shaper 30
+shaper_mode 0
+cutoff 900
+resonance 0.4
+drive 1.2
+key_track 0.5
+filter_env 2.5
+filter_attack 0.001
+filter_decay 0.18
+filter_sustain 0.2
+filter_release 0.1
+hpf 28
+attack 0.0005
+decay 0.5
+sustain 0.55
+release 0.06
+vel_amp 0.3
+vel_filter 0.6

@@ -2,6 +2,8 @@ use crate::envelope::Envelope;
 use crate::filter::LadderFilter;
 use crate::hpf::HighPassLadder;
 use crate::oscillator::{CircuitModel, Oscillator, Waveform, PROGRAM_V};
+use crate::shaper::{Shaper, ShaperMode};
+use crate::sources::{NoiseMode, NoiseOsc, SuperSaw};
 use crate::substrate::SubstrateState;
 
 /// How much velocity opens the filter, in octaves at full velocity swing —
@@ -168,7 +170,49 @@ pub struct Voice {
     /// This voice's base pulse width; the manager passes only the LFO's
     /// PWM offset, so different channels can hold different widths.
     pulse_width: f32,
+    /// The pitch envelope (the kick-bass dive): every new gate starts the
+    /// note `pitch_env_oct` octaves away from its own pitch and lands on
+    /// it after `pitch_env_time` seconds, along (1 - x)^power in octave
+    /// space; then the tail holds the note's pitch exactly. 0 = off.
+    pitch_env_oct: f32,
+    pitch_env_power: f32,
+    pitch_env_inc: f32,
+    pitch_env_secs: f32,
+    /// Progress through the dive, 0..1 (1 = landed).
+    pitch_env_x: f32,
+    /// Key sync: every new gate restarts the oscillator cores (and the
+    /// supersaw bank) at a fixed phase, so each hit starts the same way.
+    key_sync: bool,
+    /// The drive stage between the mixer and the ladder (shaper.rs).
+    shaper: Shaper,
+    /// The seven-saw bank on oscillator 1 (sources.rs) and how far it
+    /// replaces oscillator 1's own wave (0 = off).
+    supersaw: SuperSaw,
+    supersaw_amt: f32,
+    /// Oscillator 1's level into the mixer (the supersaw included): 1 is
+    /// the reference every patch was voiced at; 0 leaves a card to its
+    /// other sources (a pure noise riser).
+    osc1_level: f32,
+    supersaw_detune: f32,
+    supersaw_mix: f32,
+    /// This card's own filtered noise (sources.rs).
+    noise_osc: NoiseOsc,
+    /// A note bend (`C4:2>G3` in a song): `bend_oct` octaves reached over
+    /// the note's held length, along 1 - (1 - x)^power; it then holds the
+    /// target. 0 = no bend. Every new note clears it.
+    bend_oct: f32,
+    bend_x: f32,
+    bend_inc: f32,
+    bend_power: f32,
     sample_rate: f32,
+}
+
+/// A curve knob (-1..1) as the exponent of its (1 - x)^p shape: 0 is a
+/// straight line, +1 moves sixteen times faster at the start, -1 holds
+/// back until the end.
+#[inline]
+fn curve_power(curve: f32) -> f32 {
+    (4.0 * curve.clamp(-1.0, 1.0)).exp2()
 }
 
 impl Voice {
@@ -250,6 +294,23 @@ impl Voice {
             substrate_sens,
             prev_prefilter: 0.0,
             prefilter_delta: 0.0,
+            pitch_env_oct: 0.0,
+            pitch_env_power: curve_power(0.5),
+            pitch_env_inc: 1.0,
+            pitch_env_secs: 0.1,
+            pitch_env_x: 1.0,
+            key_sync: false,
+            shaper: Shaper::new(sample_rate),
+            supersaw: SuperSaw::new(seed),
+            supersaw_amt: 0.0,
+            osc1_level: 1.0,
+            supersaw_detune: 0.4,
+            supersaw_mix: 0.6,
+            noise_osc: NoiseOsc::new(sample_rate, seed),
+            bend_oct: 0.0,
+            bend_x: 1.0,
+            bend_inc: 1.0,
+            bend_power: 1.0,
         };
         voice.set_detune(7.0);
         voice
@@ -415,6 +476,64 @@ impl Voice {
             1.0 / (p.glide * self.sample_rate)
         };
         self.set_glide_rate(rate);
+        self.apply_sources(p);
+    }
+
+    /// The kick-bass, wall and riser controls: pitch envelope, key sync,
+    /// drive stage, supersaw bank, noise oscillator, note-bend curve.
+    pub fn apply_sources(&mut self, p: &crate::voice_manager::ParamValues) {
+        self.set_pitch_env(p.pitch_env, p.pitch_env_time, p.pitch_env_curve);
+        self.key_sync = p.key_sync >= 0.5;
+        self.shaper.set_drive_db(p.shaper);
+        self.shaper.set_mode(ShaperMode::from_value(p.shaper_mode));
+        self.supersaw_amt = p.supersaw.clamp(0.0, 1.0);
+        self.osc1_level = p.osc1_level.clamp(0.0, 1.0);
+        self.supersaw_detune = p.supersaw_detune.clamp(0.0, 1.0);
+        self.supersaw_mix = p.supersaw_mix.clamp(0.0, 1.0);
+        self.noise_osc.set_level(p.noise_osc);
+        self.noise_osc.set_cutoff(p.noise_cutoff);
+        self.noise_osc.set_res(p.noise_res);
+        self.noise_osc.set_mode(NoiseMode::from_value(p.noise_mode));
+        self.bend_power = curve_power(p.bend_curve);
+    }
+
+    /// The dive: start `semitones` from the note, land after `seconds`,
+    /// shaped by `curve` (-1..1). Re-set mid-note it keeps its progress.
+    pub fn set_pitch_env(&mut self, semitones: f32, seconds: f32, curve: f32) {
+        self.pitch_env_oct = if semitones.is_finite() {
+            semitones.clamp(-48.0, 96.0) / 12.0
+        } else {
+            0.0
+        };
+        if seconds.is_finite() {
+            self.pitch_env_secs = seconds.clamp(0.001, 4.0);
+        }
+        self.pitch_env_inc = 1.0 / (self.pitch_env_secs * self.sample_rate);
+        self.pitch_env_power = curve_power(if curve.is_finite() { curve } else { 0.0 });
+    }
+
+    /// Bend the sounding note by `semitones` over `seconds` (the note's
+    /// held length), along this card's bend curve.
+    pub fn start_bend(&mut self, semitones: f32, seconds: f32) {
+        if !semitones.is_finite() || !seconds.is_finite() {
+            return;
+        }
+        self.bend_oct = semitones.clamp(-48.0, 48.0) / 12.0;
+        self.bend_x = 0.0;
+        self.bend_inc = 1.0 / (seconds.max(1e-3) * self.sample_rate);
+    }
+
+    /// Diagnostic: the pitch envelope's and the bend's current offsets,
+    /// in octaves.
+    #[cfg(test)]
+    pub(crate) fn pitch_offsets_for_test(&self) -> (f32, f32) {
+        let env = if self.pitch_env_x < 1.0 {
+            self.pitch_env_oct * (1.0 - self.pitch_env_x).powf(self.pitch_env_power)
+        } else {
+            0.0
+        };
+        let bend = self.bend_oct * (1.0 - (1.0 - self.bend_x.min(1.0)).powf(self.bend_power));
+        (env, bend)
     }
 
     pub fn set_unison_cents(&mut self, cents: f32) {
@@ -490,6 +609,9 @@ impl Voice {
     /// what the gate's leading edge sampled — a VCA gain step at every
     /// slurred note would click.
     pub fn legato(&mut self, note: u8, age: u64, glide_from_cv: Option<f32>) {
+        // a new note: the last one's bend does not carry over (the pitch
+        // envelope does not re-fire — the gate never dropped)
+        self.bend_oct = 0.0;
         self.tune(note, glide_from_cv);
         self.age = age;
         self.held = true;
@@ -513,6 +635,16 @@ impl Voice {
             self.pitch_shift_target = 1.0;
         }
         self.tune(note, glide_from_cv);
+        // A new gate fires the pitch envelope from the top and clears any
+        // bend; key sync restarts the cores so every hit starts alike
+        self.pitch_env_x = 0.0;
+        self.bend_oct = 0.0;
+        if self.key_sync {
+            for osc in &mut self.oscs {
+                osc.reset_phase(0.25);
+            }
+            self.supersaw.sync();
+        }
         if reassign {
             self.envelope.note_on_stolen();
             self.filter_env.note_on_stolen();
@@ -660,6 +792,27 @@ impl Voice {
             };
         let pitch_mult =
             pitch_mult * self.pitch_shift_ratio * (1.0 + (substrate.pitch_mult - 1.0) * temp_sens);
+        // The pitch envelope's dive, then the note bend — both in CV
+        // space, on top of everything above (the tail lands exactly on
+        // the note: past x = 1 the factor is gone, not merely 1.0)
+        let pitch_mult = if self.pitch_env_oct != 0.0 && self.pitch_env_x < 1.0 {
+            let off = self.pitch_env_oct * (1.0 - self.pitch_env_x).powf(self.pitch_env_power);
+            self.pitch_env_x += self.pitch_env_inc;
+            pitch_mult * off.exp2()
+        } else {
+            pitch_mult
+        };
+        let pitch_mult = if self.bend_oct != 0.0 {
+            let shape = if self.bend_x >= 1.0 {
+                1.0
+            } else {
+                1.0 - (1.0 - self.bend_x).powf(self.bend_power)
+            };
+            self.bend_x = (self.bend_x + self.bend_inc).min(1.0);
+            pitch_mult * (self.bend_oct * shape).exp2()
+        } else {
+            pitch_mult
+        };
 
         // The voice's coupling graph is acyclic (every stage buffered, as
         // the schematics show), so integrating stages in topological order
@@ -701,6 +854,24 @@ impl Voice {
         } else {
             None
         };
+        // The supersaw bank rides oscillator 1's exact frequency and
+        // crossfades in over its wave
+        let o1 = if self.supersaw_amt > 0.0 {
+            let bank = self.supersaw.render(
+                self.oscs[0].last_hz(),
+                self.sample_rate,
+                self.supersaw_detune,
+                self.supersaw_mix,
+            );
+            o1 + (bank - o1) * self.supersaw_amt
+        } else {
+            o1
+        };
+        let o1 = if self.osc1_level != 1.0 {
+            o1 * self.osc1_level
+        } else {
+            o1
+        };
         let o2_heard =
             self.osc_level[0] > 0.0 || self.fm_amount > 1e-4 || self.ring_amount > 1e-4;
         let o2 = self.oscs[1].step(self.common_drift, pitch_mult, pulse_width, sync, o2_heard, false);
@@ -720,6 +891,11 @@ impl Voice {
         // Volts everywhere: the mixer sums program-level signals into the
         // VCF's summing junction
         let osc = osc_mix * MIXER_GAIN + self.oscs[0].sub() * self.sub_level * 0.9 + noise + bleed;
+        let osc = if self.noise_osc.active() {
+            osc + self.noise_osc.render()
+        } else {
+            osc
+        };
 
         // Remember the pre-filter node for the neighbor's trace capacitance
         self.prefilter_delta = osc - self.prev_prefilter;
@@ -736,7 +912,14 @@ impl Voice {
             + substrate.cutoff_oct * temp_sens;
         let cutoff_mult = mod_oct.exp2();
 
-        let filtered = self.hpf.process(self.filter.process(osc, cutoff_mult));
+        // The drive stage, so the ladder after it is a post-filter
+        let driven = if self.shaper.active() {
+            self.shaper.process(osc)
+        } else {
+            self.shaper.bypassed();
+            osc
+        };
+        let filtered = self.hpf.process(self.filter.process(driven, cutoff_mult));
         // Post-filter DC block (ARP R162 / Moog output coupling): removes
         // the operating-point DC the unipolar and asymmetric pulses push
         // through the ladder, before the VCA can gate it into thumps
@@ -1000,6 +1183,97 @@ mod tests {
                 ((v - 0.5) * 0.8f32).to_bits()
             );
         }
+    }
+
+    /// The kick-bass dive, read straight off oscillator 1's running
+    /// frequency: a card with the pitch envelope against the same card
+    /// without it (same tolerances, same drift walk) must differ by
+    /// exactly the set curve, starting `pitch_env` semitones up and
+    /// landing on the note after `pitch_env_time`, then holding it.
+    #[test]
+    fn the_pitch_envelope_dives_onto_the_note_and_holds_it() {
+        let sr = 48000.0;
+        let (semis, secs, curve) = (48.0f32, 0.12f32, 0.6f32);
+        let run = |env: bool| -> Vec<f32> {
+            let mut v = Voice::new(sr, 3);
+            v.set_waveform(Waveform::Sine);
+            if env {
+                v.set_pitch_env(semis, secs, curve);
+            }
+            v.trigger(29, 1.0, 0, None); // F1
+            (0..(0.3 * sr) as usize)
+                .map(|_| {
+                    v.render_next(0.0, 1.0, 0.0, 0.0, NEUTRAL, 0.0);
+                    v.oscs[0].last_hz()
+                })
+                .collect()
+        };
+        let (dive, flat) = (run(true), run(false));
+        let p = (4.0 * curve).exp2();
+        for (n, (d, f)) in dive.iter().zip(&flat).enumerate() {
+            let x = n as f32 / (secs * sr);
+            let want = if x < 1.0 {
+                (semis / 12.0 * (1.0 - x).powf(p)).exp2()
+            } else {
+                1.0
+            };
+            let got = d / f;
+            assert!(
+                (got / want - 1.0).abs() < 2e-3,
+                "sample {n} ({:.1} ms): ratio {got} vs set {want}",
+                n as f32 / sr * 1000.0
+            );
+            if x >= 1.0 {
+                assert_eq!(d, f, "the tail must sit exactly on the note (sample {n})");
+            }
+        }
+        assert!((dive[0] / flat[0] / 16.0 - 1.0).abs() < 2e-3, "starts 4 octaves up");
+    }
+
+    /// A new gate re-fires the dive; a mono legato move does not.
+    #[test]
+    fn the_dive_fires_on_gates_not_on_legato_moves() {
+        let sr = 48000.0;
+        let mut v = Voice::new(sr, 0);
+        v.set_pitch_env(24.0, 0.05, 0.0);
+        v.trigger(40, 1.0, 0, None);
+        for _ in 0..(0.1 * sr) as usize {
+            v.render_next(0.0, 1.0, 0.0, 0.0, NEUTRAL, 0.0);
+        }
+        assert_eq!(v.pitch_offsets_for_test().0, 0.0, "landed");
+        v.legato(43, 1, None);
+        assert_eq!(v.pitch_offsets_for_test().0, 0.0, "legato keeps the gate");
+        v.restrike(45, 1.0, 2, None);
+        assert!((v.pitch_offsets_for_test().0 - 2.0).abs() < 1e-6, "a new gate dives again");
+    }
+
+    /// Key sync: every hit of a synced card restarts its oscillators at
+    /// the same phase, so two hits a different time apart start alike;
+    /// a free-running card picks up wherever its cores happen to be.
+    #[test]
+    fn key_sync_makes_every_hit_start_alike() {
+        let sr = 48000.0;
+        let first_cycle = |sync: bool, gap: usize| -> Vec<f32> {
+            let mut v = Voice::new(sr, 1);
+            v.set_waveform(Waveform::Sine);
+            v.key_sync = sync;
+            v.trigger(36, 1.0, 0, None);
+            for _ in 0..gap {
+                v.render_next(0.0, 1.0, 0.0, 0.0, NEUTRAL, 0.0);
+            }
+            v.release();
+            v.trigger(36, 1.0, 1, None);
+            // the core's own output, sample by sample from the gate
+            (0..64).map(|_| v.oscs[0].next_sample(0.0, 1.0, 0.5, None)).collect()
+        };
+        let diff = |a: &[f32], b: &[f32]| {
+            a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max)
+        };
+        let (a, b) = (first_cycle(true, 1000), first_cycle(true, 1400));
+        assert!(diff(&a, &b) < 0.01, "synced hits start apart by {}", diff(&a, &b));
+        assert!(a[0].abs() < 0.05, "a synced sine starts at its zero crossing: {}", a[0]);
+        let (c, d) = (first_cycle(false, 1000), first_cycle(false, 1400));
+        assert!(diff(&c, &d) > 0.5, "free-running hits should start apart");
     }
 
     /// One card's output, `seconds` into a held note.

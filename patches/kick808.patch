@@ -1,0 +1,26 @@
+# Kick 808 — a sine that falls an octave onto its note in 50 ms and
+# rings: the boom under trap and witch house. Light tanh (8 dB) rounds
+# it into the speaker; the tail holds the note's pitch, so the bassline
+# IS the kick. Bend the long ones down with `F1:4>-5`.
+waveform 0
+osc2_level 0
+osc3_level 0
+circuit 1
+key_sync 1
+pitch_env 12
+pitch_env_time 0.05
+pitch_env_curve 0.5
+shaper 8
+shaper_mode 0
+cutoff 1400
+resonance 0
+drive 1
+key_track 0.3
+filter_env 0
+hpf 22
+attack 0.0005
+decay 1.6
+sustain 0.35
+release 0.25
+vel_amp 0.4
+vel_filter 0

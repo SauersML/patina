@@ -20,6 +20,7 @@ format for programmatic playback and parameter automation.
 - 🥁 A TR-909 rhythm section built from the service-manual circuits — swept bridged-T kick with click path and waveshaper, twin-shell snare with snappy noise, three-mode rim knock, flam-envelope clap, and a no-samples hi-hat (six-oscillator metal bank through the 909's swept high-pass and choke VCAs) — living on the same volt bus, effects, and power rail as the keyboard voices. Modern range extensions: kick DRIVE from clean sub to full grit, SWEEP depth, rumble-length decays, and an antialiased bus drive. Triggered from drum tracks in songs (`track beat kit=909` with `BD SD RS CP CH OH`; every kit track is a board of its own), MIDI channel 10 (GM map), pads on the panel, or the plugin
 - 🗣️ A voice box: a Klatt-style formant speech synthesizer (glottal pulse + cascade resonators, ARPAbet phonemes) driving a 20-band channel vocoder whose carrier is the synth's own voices, with a VSM-201-style voiced/unvoiced switch that snaps the carrier to noise on consonant frames so words stay legible. Two circuits on the mode switch: the '97 DigiTech Talker "TalkBox" voicing (tube-choked lows, honky mids, instant articulation, amp grit) and a full-range studio board. Lyrics ride the notes in songs (`track choir vox`, `[A2 E3 A3]:2=HH-EH-L-OW`) with per-phoneme duration and dynamics; `wav=` feeds any recorded voice through the same circuit, and `patina --say "HH-AH-L-OW"` speaks from the command line
 - 📼 A tape-deck sampler: any WAV becomes an instrument on the keys (`track keys sample=tape.wav`) — band-limited windowed-sinc playback (Kaiser β=8.6, kernel stretched by the read speed so varispeed doesn't alias in *either* direction), sustain loops with equal-power crossfades (a Mellotron whose tape never runs out), `chop=N` slice pads mapped chromatically (the MPC workflow), `beats=N` tempo-fitting (break-matching solved at parse), a per-slot resonant ZDF lowpass (the SP/Akai filter-sweep sound), vintage converter emulation (`bits=12 rate=26040` is the SP-1200: band-limited decimation at load, truncation, and a zero-order-hold DAC whose imaging spray is the point), reverse transport, gate/one-shot modes, per-note choke (`mono`), and a live-automatable transport: `smp_pitch` is a varispeed knob (tape-stops on demand), `smp_start` scrubs the needle-drop, `smp_cutoff`/`smp_res` sweep the filter, `smp_gain`/`smp_pan`/`smp_attack`/`smp_release` reshape it mid-song. The heads mix onto the same volt bus as everything else — sampler playback sags the power rail, runs through the fuzz/spring/reverb/chorus/tape chain, and bends with the pitch wheel
+- 🥊 Kick-bass on any voice: a per-note pitch envelope (start, time, curve) diving onto the note, key sync, and an antialiased drive stage (tanh, clip, wavefolder) ahead of the ladder as post-filter; plus a seven-saw supersaw bank and a filtered noise oscillator per card for walls and risers
 - 🖥️ Studio-hardware GUI: knobs, ADSR graph, live oscilloscope, keys that light from the engine's real voice state
 - ⌨️ QWERTY keyboard input · 🖱️ click-and-drag keys · 🎹 MIDI input
 - 📜 Text-based song files with per-track sequencing and full parameter automation
@@ -184,6 +185,28 @@ automate keys.smp_pitch          # a varispeed knob, in semitones:
 
 - **Options**: `root=` (key of natural speed), `start=`/`end=` (trim), `loop` or `loop=a:b` + `xfade=` (sustain loop, equal-power crossfade), `chop=N` (slice pads, natural speed, one-shot), `beats=N` (varispeed the region/loop to span exactly N beats at the song tempo — drop a breakbeat in and it locks), `bits=`/`rate=` (vintage converters + un-reconstructed ZOH playback; `bits=12 rate=26040` is the SP-1200, `bits=8` the early Fairlight school), `cutoff=`/`res=` (the slot's resonant lowpass), `mode=gate|oneshot`, `reverse`, `fixed` (no keytracking), `mono`/`choke`, `gain=`, `pan=`, `pitch=`, `attack=`, `release=`, `vel_amt=`.
 - `songs/magnetic-memory.song` is the demo: the instrument sampling its own bounce of *Hold On* — looped tape choir, vocal chops, reverse swells, and a tape-stop ending.
+
+## 🥊 Kick-bass, walls and risers
+
+Every voice card has a pitch envelope, a drive stage, a supersaw bank and
+its own noise oscillator. All of them are knobs like `cutoff`: set them in
+a patch, or automate them per track (`automate kick.pitch_env_time`).
+
+```
+track kick patch=hardkick          # dives 4 octaves onto each note, driven, filtered
+(F1 F1 G#1 F1 | C2 C2 G#1 D#1)     # ...and the tail is the bassline
+
+automate wall.supersaw_detune      # open a supersaw wall
+0.2 0.55:32@smooth
+automate riser.noise_cutoff        # sweep a track's own noise
+300 9000:16@exp
+```
+
+- **Pitch envelope**: `pitch_env` (semitones above the note where each gated note starts, −48..96, 0 = off), `pitch_env_time` (seconds to land, 0.001..4), `pitch_env_curve` (−1..1: 0 is straight in octaves, positive drops fast and settles long). The tail sits on the note's own pitch, so the dive and the tail shape separately. Legato moves glide without re-diving. `key_sync 1` restarts the oscillators at one phase on every gate so every hit clicks the same.
+- **Drive stage**: `shaper` (0..48 dB) into `shaper_mode` 0 tanh, 1 hard clip, 2 sine wavefolder, between the mixer and the ladder, so the ladder is the post-filter. All three curves are antialiased (ADAA); 0 dB is out and costs nothing.
+- **Supersaw**: `supersaw` (0..1) crossfades oscillator 1 into seven polyBLEP saws riding its exact pitch (glide, vibrato, the pitch envelope and bends move all seven), `supersaw_detune` spreads them, `supersaw_mix` brings the six side saws up against the centre at constant loudness. `osc1_level` sets oscillator 1's level in the mixer.
+- **Noise oscillator**: `noise_osc` (0..1) is the card's own white noise through its own resonant filter, `noise_cutoff` (Hz), `noise_res`, `noise_mode` (0 lowpass, 1 bandpass, 2 highpass). Unlike `noise` (one shared source into every voice), each card's noise is its own.
+- Patches: `hardkick` (hardstyle kick-bass), `rawkick` (wavefolded screech), `kick808` (long 808), `superwall`, `riser`. `songs/kick-bass.song` is the demo.
 
 ## 🔌 The Substrate
 

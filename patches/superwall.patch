@@ -1,0 +1,29 @@
+# Superwall — seven detuned saws on oscillator 1, a little noise of
+# each card's own on top, two cards per note spread wide: the wall a
+# hard-techno drop or a trance break opens into. Detune and mix are the
+# two knobs that matter: `supersaw_detune` 0.3 is thick, 0.6 is a swarm.
+waveform 2
+supersaw 1
+supersaw_detune 0.35
+supersaw_mix 0.7
+osc2_level 0
+osc3_level 0
+sub 0.25
+noise_osc 0.08
+noise_mode 2
+noise_cutoff 3000
+unison 2
+unison_detune 6
+spread 0.9
+cutoff 5200
+resonance 0.3
+key_track 0.4
+filter_env 0.8
+filter_attack 0.01
+filter_decay 0.6
+filter_sustain 0.6
+filter_release 0.6
+attack 0.01
+decay 0.6
+sustain 0.85
+release 0.7

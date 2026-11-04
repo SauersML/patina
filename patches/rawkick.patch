@@ -1,0 +1,30 @@
+# Rawkick — the screech-tail hardstyle kick: the same dive as Hardkick,
+# but through the sine wavefolder, so the tail folds into a vowel-like
+# buzz that moves with the drive. Automate `shaper` (24..40 dB) for the
+# screech.
+waveform 0
+osc2_level 0
+osc3_level 0
+circuit 1
+key_sync 1
+pitch_env 54
+pitch_env_time 0.1
+pitch_env_curve 0.7
+shaper 26
+shaper_mode 2
+cutoff 2600
+resonance 0.6
+drive 1.4
+key_track 0.4
+filter_env 1.5
+filter_attack 0.001
+filter_decay 0.25
+filter_sustain 0.3
+filter_release 0.1
+hpf 30
+attack 0.0005
+decay 0.4
+sustain 0.6
+release 0.05
+vel_amp 0.3
+vel_filter 0.4

@@ -170,6 +170,32 @@ pub struct ParamValues {
     /// How much the voice performs its own pitch prosody (accents,
     /// declination, final falls). Low for singing, high for speech.
     pub vox_intonation: f32,
+    // The kick-bass voice: a pitch envelope on every gate (semitones the
+    // note starts from its own pitch, seconds to land, curve -1..1), key
+    // sync (0/1), and the drive stage before the ladder (dB, 0 = out;
+    // curve 0 tanh / 1 clip / 2 fold) — see voice.rs and shaper.rs
+    pub pitch_env: f32,
+    pub pitch_env_time: f32,
+    pub pitch_env_curve: f32,
+    pub key_sync: f32,
+    pub shaper: f32,
+    pub shaper_mode: f32,
+    // Walls and risers (sources.rs): the supersaw bank on oscillator 1
+    // (crossfade, detune, side-saw mix) and the card's own noise
+    // oscillator (level, filter cutoff Hz, resonance, mode 0 LP / 1 BP /
+    // 2 HP)
+    pub supersaw: f32,
+    /// Oscillator 1's mixer level (1 = as every patch was voiced).
+    pub osc1_level: f32,
+    pub supersaw_detune: f32,
+    pub supersaw_mix: f32,
+    pub noise_osc: f32,
+    pub noise_cutoff: f32,
+    pub noise_res: f32,
+    pub noise_mode: f32,
+    /// The shape of a note bend (`C4:2>G3`), -1..1: 0 a straight line in
+    /// pitch, + moves early, - holds and falls late.
+    pub bend_curve: f32,
 }
 
 impl ParamValues {
@@ -342,6 +368,21 @@ impl Default for ParamValues {
             vox_mode: 0.0,
             vox_clarity: 0.0,
             vox_intonation: 0.12,
+            pitch_env: 0.0,
+            pitch_env_time: 0.1,
+            pitch_env_curve: 0.5,
+            key_sync: 0.0,
+            shaper: 0.0,
+            shaper_mode: 0.0,
+            supersaw: 0.0,
+            osc1_level: 1.0,
+            supersaw_detune: 0.4,
+            supersaw_mix: 0.6,
+            noise_osc: 0.0,
+            noise_cutoff: 20000.0,
+            noise_res: 0.0,
+            noise_mode: 0.0,
+            bend_curve: 0.0,
         }
     }
 }
@@ -1690,6 +1731,20 @@ impl VoiceManager {
         };
         for voice in &mut self.voices {
             voice.set_glide_rate(rate);
+        }
+    }
+
+    /// The panel's kick-bass, wall and riser controls (pitch envelope, key
+    /// sync, drive stage, supersaw, noise oscillator, bend curve): one
+    /// path, since each is a plain snapshot value its cards read through
+    /// `Voice::apply_sources`.
+    pub fn set_source_param(&mut self, param: Param, value: f32) {
+        let mut p = self.params;
+        if param.apply_to_params(&mut p, param.clamp(value)) {
+            self.params = p;
+            for voice in self.voices.iter_mut().filter(|v| v.channel() == 0) {
+                voice.apply_sources(&p);
+            }
         }
     }
 

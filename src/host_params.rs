@@ -133,6 +133,9 @@ pub const COMP_IN_NAMES: &[&str] = &["Out", "In"];
 pub const COMP_RATIO_NAMES: &[&str] = &["2:1", "4:1", "10:1"];
 pub const COMP_ATTACK_NAMES: &[&str] = &["0.1 ms", "0.3 ms", "1 ms", "3 ms", "10 ms", "30 ms"];
 pub const COMP_RELEASE_NAMES: &[&str] = &["0.1 s", "0.3 s", "0.6 s", "1.2 s", "Auto"];
+const KEY_SYNC_NAMES: &[&str] = &["Free", "Sync"];
+const SHAPER_NAMES: &[&str] = &["Tanh", "Clip", "Fold"];
+const NOISE_MODE_NAMES: &[&str] = &["Lowpass", "Bandpass", "Highpass"];
 
 /// One presentation row: an engine parameter plus its host cosmetics.
 struct Row {
@@ -297,6 +300,20 @@ const PRESENTATION: &[Row] = &[
     flt (Param::EchoFeedback,  "Echo Feedback",  Percent),
     flt (Param::EchoTone,      "Echo Tone",      Hertz),
     flt (Param::EchoPingPong,  "Echo Ping-Pong", Percent),
+    flt (Param::PitchEnv,       "Pitch Envelope Amount", Plain(" st")),
+    flt (Param::PitchEnvTime,   "Pitch Envelope Time",   Seconds),
+    flt (Param::PitchEnvCurve,  "Pitch Envelope Curve",  Plain("")),
+    sel (Param::KeySync,        "Oscillator Key Sync",   KEY_SYNC_NAMES),
+    flt (Param::ShaperDrive,    "Drive Stage",           Plain(" dB")),
+    sel (Param::ShaperModeSel,  "Drive Stage Curve",     SHAPER_NAMES),
+    flt (Param::Osc1Level,      "Oscillator 1 Level",    Percent),
+    flt (Param::Supersaw,       "Supersaw",              Percent),
+    flt (Param::SupersawDetune, "Supersaw Detune",       Percent),
+    flt (Param::SupersawMix,    "Supersaw Mix",          Percent),
+    flt (Param::NoiseOsc,       "Noise Oscillator",      Percent),
+    flt (Param::NoiseCutoff,    "Noise Filter Cutoff",   Hertz),
+    flt (Param::NoiseRes,       "Noise Filter Resonance", Percent),
+    sel (Param::NoiseModeSel,   "Noise Filter Mode",     NOISE_MODE_NAMES),
 ];
 
 /// Parameters that are NOT host-automation knobs and are deliberately kept
@@ -352,6 +369,9 @@ const EXCLUDED: &[Param] = &[
     Param::DuckRelease,
     Param::TrackComp,
     Param::ChorusMix,
+    // Note bends are written on song notes (`C4:2>G3`); their curve has
+    // nothing to shape in a plugin
+    Param::BendCurve,
 ];
 
 /// THE host parameter table, built from the presentation rows above with

@@ -30,6 +30,23 @@ pulse_width 0.5
 unison 1
 unison_detune 12
 spread 0
+osc1_level 1
+supersaw 0
+supersaw_detune 0.4
+supersaw_mix 0.6
+noise_osc 0
+noise_cutoff 20000
+noise_res 0
+noise_mode 0
+key_sync 0
+
+# Pitch envelope and drive stage (the kick-bass voice) — both out
+pitch_env 0
+pitch_env_time 0.1
+pitch_env_curve 0.5
+shaper 0
+shaper_mode 0
+bend_curve 0
 
 # Modulation (LFO parked, routed nowhere)
 lfo_rate 1
