@@ -1,0 +1,31 @@
+# Tessera — the reed: Reich's clarinets holding the resulting patterns in
+# long tones. A square wave (odd harmonics, the clarinet's spectrum)
+# through a low, key-tracked ladder, with a slow swell in and a long
+# breath out. It never plays a fast note.
+waveform 1
+pulse_width 0.5
+osc2_wave 0
+osc2_pitch 0
+osc2_level 0
+osc3_wave 0
+osc3_pitch 0
+osc3_level 0
+detune 2
+sub 0
+circuit 0
+key_track 0.6
+attack 0.35
+decay 1.0
+sustain 0.85
+release 0.9
+filter_env 0.3
+filter_attack 0.4
+filter_decay 1.0
+filter_sustain 0.6
+filter_release 0.8
+cutoff 1400
+resonance 0.2
+drive 1.0
+saturation 1.0
+hpf 120
+volume 0.35

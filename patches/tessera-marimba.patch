@@ -1,0 +1,35 @@
+# Tessera — the marimba: a sine bar with a triangle body at unison and
+# the bar's tuned fourth partial (+24, 4f) faint on top. All the wood is
+# in the filter: a fast +1.4 octave knock that closes in 80 ms, then the
+# bar rings out dark. No sustain — every note is a strike, so two of
+# them phasing against each other stay legible as separate hands.
+waveform 0
+osc2_wave 0
+osc2_pitch 24
+osc2_level 0.1
+osc3_wave 3
+osc3_pitch 0
+osc3_level 0.25
+detune 1.5
+sub 0
+circuit 1
+key_track 0.7
+osc_fm 0
+sync 0
+ring 0
+glide 0
+attack 0.001
+decay 0.45
+sustain 0.0
+release 0.35
+filter_env 1.4
+filter_attack 0.001
+filter_decay 0.08
+filter_sustain 0.0
+filter_release 0.2
+cutoff 1100
+resonance 0.25
+drive 1.1
+saturation 1.0
+hpf 110
+volume 0.5
