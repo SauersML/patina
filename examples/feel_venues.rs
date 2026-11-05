@@ -19,6 +19,22 @@ fn main() {
             100.0 * (g / table - 1.0)
         );
     }
+    // A 1 m/s² peak sine at 50 Hz through the digital filter at 8 kHz:
+    // its Wk r.m.s. should be 0.707 x the weighting there
+    let fs = 8000.0;
+    let mut w = feel::wk().run(fs);
+    let y: Vec<f64> = (0..(fs * 4.0) as usize)
+        .map(|i| w.process((std::f64::consts::TAU * 50.0 * i as f64 / fs).sin()))
+        .collect();
+    let tail = &y[(fs * 2.0) as usize..];
+    let rms = (tail.iter().map(|v| v * v).sum::<f64>() / tail.len() as f64).sqrt();
+    let expect = std::f64::consts::FRAC_1_SQRT_2 * feel::wk().gain(50.0);
+    println!(
+        "\n50 Hz sine, 1 m/s² peak: Wk r.m.s. {:.4} m/s² (expected {:.4}, {:+.2}%)",
+        rms,
+        expect,
+        100.0 * (rms / expect - 1.0)
+    );
     let freqs = [20.0, 25.0, 31.5, 40.0, 50.0, 63.0, 80.0, 100.0, 125.0];
     for venue in [
         Venue::Field(Field::default()),
