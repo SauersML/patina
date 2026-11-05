@@ -179,9 +179,14 @@
 //   track bell modal=bell                 # to it, or strikes a modal body
 //     C4:2 G4:2                           # (physical.rs; see "Physical
 //                                         # instruments" below)
+//   track pad additive add_partials=256   # 512-partial additive voice
+//     [C3 G3]:8                           # (additive.rs; see "Additive
+//                                         # voice" below)
 //
 // Note-track tokens:
 //   C4  F#3  Eb5  60      note names (C4 = MIDI 60) or raw MIDI numbers
+//   A4+13.7c  C4-30c      a note moved by cents (on top of its tuning)
+//   220hz  261.63Hz       a note at an exact frequency
 //   [C4 E4 G4]            chord (notes start and stop together)
 //   R  or  .              rest (`R:0`, any rest of 1e-6 beats or less,
 //                         is nothing: rounding noise from a generator)
@@ -197,8 +202,10 @@
 //                         [C4>D4 G4]:2 bends one chord note. The track's
 //                         bend_curve (-1..1) shapes the glide: 0 straight
 //                         in pitch, + moves early, - holds and falls
-//                         late. Synth tracks, vox tracks (the carrier)
-//                         and sampler tracks bend; kit hits cannot.
+//                         late. Synth tracks, vox tracks (the carrier),
+//                         sampler and instrument tracks bend; kit hits
+//                         cannot. In a tuning, a note target bends to
+//                         that key's tuned pitch.
 //   |                     bar line, ignored (readability only)
 //   >16  >CH1             a seek, as a token of its own: the lane's
 //                         cursor jumps to beat 16 (or a section's start,
@@ -207,6 +214,30 @@
 //                         vox and instrument tracks, automation, tempo
 //                         and phase lanes. (`->16` is not a seek; its
 //                         error says to write `>16`.)
+//
+// Free tuning (tuning.rs). Every track plays 12-TET at A4 = 440 Hz unless
+// its track line names a tuning: `tuning=NAME`, a built-in (12tet, just,
+// pythagorean, meantone, werckmeister3, edoN such as edo19 or edo31, bp)
+// on C, or a table defined above it:
+//   tuning NAME BASE [root=NOTE] [a4=HZ]
+// BASE is a built-in, cents=c1,c2,...,period or ratios=r1,r2,...,period
+// (the pitches after the root, the last one the period, as Scala lists
+// them), or scl=FILE (a Scala .scl file). Keys map to scale steps one for
+// one up from the root key, which keeps its 12-TET pitch against a4: a
+// 12-note scale lands where its names say (D is the second step from C),
+// an edo19 octave spans 19 keys, bp repeats at the tritave (3:1). Cents
+// and Hz notes work on any pitched track, tuned or not. A tuned note plays
+// the key nearest its pitch that the track is not holding at another pitch
+// and sends the engine its cents: synth, vox (the carrier), sampler and
+// instrument tracks sound them exactly; the voice box's own voice and the
+// drum kits do not take tunings.
+//   tuning dj just root=D4
+//   tuning slendro cents=240,480,720,960,1200
+//   track lute string tuning=dj
+//   D4 F#4 A4 [D4 F#4 A4]:2
+//   track glass modal=glass tuning=edo31
+//   track drone
+//   110hz:16 [110hz 165hz]:16
 //
 // Automation tracks ramp a synth parameter through breakpoints:
 //
@@ -459,8 +490,9 @@
 // (f/f1 - 1)), and for stiffness a cascade of 8 to 32 allpasses fitted so
 // partial k sits at k f0 sqrt(1 + B k^2), B = str_stiff (0..0.01): within
 // 2 cents through the 16th partial up to 0.001 (piano-like), about 8 cents
-// at 0.002; a stiffer low string runs out of loop and stretches less. The excitation enters str_pos of the way
-// from the bridge (0.01..0.5, default 0.13; harmonics with a node there
+// at 0.002; a stiffer low string runs out of loop and stretches less. The
+// excitation enters str_pos of the way from the bridge (0.01..0.5,
+// default 0.13; harmonics with a node there
 // stay out): a pluck (noise one period long, brighter with str_hard and
 // the velocity), a strike (a felt hammer, shorter and brighter with
 // str_hard and the velocity), a bow (stick-slip friction: the velocity is
@@ -487,12 +519,45 @@
 // its own excitation is set too (modal_excite=0 strikes it as well).
 // Notes bend (`C4:2>G3` slides the string's stop, retunes the bank). Every
 // knob is a track option, a lane (`automate wire.str_decay`), or unscoped
-// turns every instrument that has it.
+// turns every instrument that has it. On a sounding bank modal_decay,
+// _damp, _stretch and _bright glide to a new value (~10 ms) and
+// modal_spread pans across ~5 ms; a mode the count or the stretch drops
+// dies away over ~20 ms rather than being cut, so lanes never click. An
+// instrument's output bends under a ceiling of 16x a note's level (a long
+// body driven hard through excite=), untouched below 70% of it.
 //   modes chime 1 2.76:2 5.4:1:0.5
 //   track drums kit=909
 //   track plate modal=plate excite=drums modal_decay=2   # rung by the kit
 //   track wire modal=string modal_excite=2 modal_stretch=0.002 modal_damp=0.2 modal_spread=0.4 attack=0.4
 //   track cello string=bow str_pressure=0.6 str_pos=0.11 attack=0.15
+//
+// Additive voice (additive.rs, Hypha's reference specs/additive.py, matched
+// sample for sample): `track NAME additive` plays up to 512 sine partials
+// a note, the harmonic series unless `additive=NAME` names a table:
+//   partials NAME ratio[:amp[:pan]] ...   (amp 1, pan 0 when left out)
+// Partial k of a note at f0, from its ratio r, amp a and pan p, sounds at
+//   f0 r (1 + add_stretch (r - 1)) 2^(add_spread d_k / 1200)
+// (d_k a fixed random detune in -1..1, add_spread in cents 0..1200), with
+// amplitude a r^-add_tilt (tilt -2..4: 0 flat, 1 saw, 2 dark), the even
+// partials times 1 - add_odd (1 leaves the odd ones, a square), times the
+// comb 1 - add_comb_depth (0.5 + 0.5 cos(2 pi r add_comb_freq +
+// add_comb_phase)) (comb_freq in cycles per harmonic, phase in radians:
+// ramp it to sweep the notches through the spectrum, a phaser on the
+// partials), panned p + add_width (+-1 alternating, scaled 0.5 + 0.5
+// sin(2.4 k)). add_partials (1..512, default 64) sound; partials at or
+// over 0.95 Nyquist drop out, and the total power stays the same whatever
+// the count, tilt and comb do. Every knob glides toward its lane (~15 ms)
+// and is read each 64 samples and glided across them, so any lane runs
+// without clicks or zipper noise; each partial keeps its phase through
+// every change. attack= and release= on the track line are
+// the note's linear gate; velocity scales it. 8 voices. Notes bend, and
+// tunings and cents notes play exactly.
+//   partials organ 1 2:0.5 3:0.3:-0.5 4.2:0.2:0.5
+//   track pad additive add_partials=256 add_tilt=0.7 add_spread=12 attack=1.5 release=3
+//   [C3 G3 D4]:16
+//   automate pad.add_comb_phase
+//   0 25:16
+//   track org additive=organ add_tilt=0
 //
 // The granular engine (granular.rs), on one track's strip (after the
 // glitch insert; track-line options `gran=0.6 gran_size=120` or lanes
@@ -1083,6 +1148,21 @@ param_table! {
     // from the first body (0) to the second (`body=room..cathedral`, 1)
     BodyMix:         "body_mix",       None,      (0.0, 1.0, Lin);
     BodyMorph:       "body_morph",     None,      (0.0, 1.0, Lin);
+    // The additive voice (additive.rs, `track NAME additive`): how many
+    // partials sound, tilt (amp ratio^-tilt: 0 flat, 1 saw, 2 dark),
+    // how far the even partials drop (1 leaves only the odd ones),
+    // inharmonic stretch (ratio (1 + stretch (ratio - 1))), random detune
+    // spread in cents, the comb through the spectrum (depth, cycles per
+    // harmonic, phase in radians: move it to sweep), stereo fan width
+    AddPartials:     "add_partials",   None,      (1.0, 512.0, Step);
+    AddTilt:         "add_tilt",       None,      (-2.0, 4.0, Lin);
+    AddOdd:          "add_odd",        None,      (0.0, 1.0, Lin);
+    AddStretch:      "add_stretch",    None,      (-0.01, 0.05, Lin);
+    AddSpread:       "add_spread",     None,      (0.0, 1200.0, Lin);
+    AddCombDepth:    "add_comb_depth", None,      (0.0, 1.0, Lin);
+    AddCombFreq:     "add_comb_freq",  None,      (0.0, 1.0, Lin);
+    AddCombPhase:    "add_comb_phase", None,      (-10000.0, 10000.0, Lin);
+    AddWidth:        "add_width",      None,      (-1.0, 1.0, Lin);
 }
 
 pub(crate) fn waveform_from_value(value: f32) -> Waveform {
@@ -1568,7 +1648,16 @@ impl Param {
             | Param::ModalHard
             | Param::ModalBurst
             | Param::ModalMute
-            | Param::ExciteGain => vm.set_instrument_all(self, value),
+            | Param::ExciteGain
+            | Param::AddPartials
+            | Param::AddTilt
+            | Param::AddOdd
+            | Param::AddStretch
+            | Param::AddSpread
+            | Param::AddCombDepth
+            | Param::AddCombFreq
+            | Param::AddCombPhase
+            | Param::AddWidth => vm.set_instrument_all(self, value),
         }
     }
 
@@ -2017,6 +2106,14 @@ pub enum EventKind {
         semitones: f32,
         seconds: f64,
     },
+    /// A tuned note's offset: the note-on that follows on `channel` and
+    /// `note` sounds `cents` away from the key's 12-TET pitch (a tuning, a
+    /// `+13.7c` note, a `220hz` note). Sorts right before its note-on.
+    Tune {
+        note: u8,
+        channel: u16,
+        cents: f32,
+    },
     /// The song's beat clock: at this event the song is at `beat`, moving
     /// at `bpm` until the next one. Only songs whose strips ride the beat
     /// (`shape=`) carry these: one at the downbeat, then one wherever the
@@ -2245,6 +2342,11 @@ fn dispatch(vm: &mut VoiceManager, kind: &EventKind) {
         &EventKind::Clock { beat, bpm } => vm.set_song_clock(beat, bpm),
         &EventKind::DuckHit { channel } => vm.duck_hit(channel),
         EventKind::SliceOn { channel, hit } => vm.slice_on(*channel, hit),
+        &EventKind::Tune {
+            note,
+            channel,
+            cents,
+        } => vm.set_note_tune(channel, note, cents),
     }
 }
 
@@ -2579,6 +2681,8 @@ enum TrackMode {
         /// a slice track's (slices, one slice in beats): its tokens are
         /// slice picks, not notes
         slices: Option<(usize, f64)>,
+        /// index into `tunings`: the track's `tuning=`, if any
+        tuning: Option<usize>,
     },
     Automation {
         param: Param,
@@ -2681,6 +2785,13 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
     // `spec_from=` morph sources, resolved like the duck keys once every
     // track is known
     let mut spec_from: Vec<(usize, u16, String)> = Vec::new();
+    let mut partial_sets: std::collections::HashMap<String, crate::additive::PartialSet> =
+        std::collections::HashMap::new();
+    // `tuning NAME ...` tables (and the built-ins tracks name directly),
+    // and every tuned note's key so far, per track: key -> (on, off, Hz)
+    let mut tunings: Vec<(String, crate::tuning::Tuning)> = Vec::new();
+    let mut tuned_keys: std::collections::HashMap<(usize, u8), Vec<(f64, f64, f64)>> =
+        std::collections::HashMap::new();
 
     let mut mode = TrackMode::None;
     let mut track_beat = 0.0_f64;
@@ -2820,6 +2931,47 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                 }
                 if sections.insert(name.to_string(), (a, b)).is_some() {
                     return Err(err(format!("section '{}' defined twice", name)));
+                }
+            }
+            "tuning" => {
+                // `tuning NAME BASE [root=NOTE] [a4=HZ]`: a table for
+                // `tuning=NAME` tracks (tuning.rs)
+                let toks: Vec<&str> = line.split_whitespace().skip(1).collect();
+                let Some((&name, rest)) = toks.split_first() else {
+                    return Err(err("tuning needs a name and a scale: tuning mine just root=D4".into()));
+                };
+                if crate::tuning::Tuning::named(name).is_some() || name.contains('=') {
+                    return Err(err(format!(
+                        "tuning '{}': give the table a name of its own first \
+                         (tuning mine {} ...), then tuning=mine on a track",
+                        name, name
+                    )));
+                }
+                let t = crate::tuning::Tuning::parse(rest, parse_note, |path| {
+                    std::fs::read_to_string(path).map_err(|e| format!("scl={}: {}", path, e))
+                })
+                .map_err(&err)?;
+                if tunings.iter().any(|(n, _)| n == name) {
+                    return Err(err(format!("tuning '{}' defined twice", name)));
+                }
+                tunings.push((name.to_string(), t));
+            }
+            "partials" => {
+                // `partials NAME ratio[:amp[:pan]] ...`: a partial table
+                // for `additive=NAME` tracks
+                let mut it = line.split_whitespace().skip(1);
+                let name = it.next().ok_or_else(|| {
+                    err("partials needs a name and its partials: partials organ 1 2:0.5 3:0.3:-0.5"
+                        .into())
+                })?;
+                let list = it
+                    .map(crate::additive::PartialSet::parse_partial)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(&err)?;
+                let set = crate::additive::PartialSet::from_list(&list)
+                    .map_err(|e| err(format!("partials {}: {}", name, e)))?;
+                if partial_sets.insert(name.to_string(), set).is_some() {
+                    return Err(err(format!("partials '{}' defined twice", name)));
                 }
             }
             "modes" => {
@@ -3068,10 +3220,16 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                 let mut inst_kind: Option<crate::physical::InstrumentKind> = None;
                 let mut inst_excite: Option<String> = None;
                 let mut inst_opts: Vec<(Param, f32)> = Vec::new();
+                let mut track_tuning: Option<usize> = None;
                 // (on an instrument's line, attack= and release= shape its
                 // gate; on a tape track they are the slot's own)
                 let inst_line = line.split_whitespace().skip(2).any(|o| {
-                    o == "string" || o.starts_with("string=") || o == "modal" || o.starts_with("modal=")
+                    o == "string"
+                        || o.starts_with("string=")
+                        || o == "modal"
+                        || o.starts_with("modal=")
+                        || o == "additive"
+                        || o.starts_with("additive=")
                 });
                 for opt in line.split_whitespace().skip(2) {
                     if let Some(v) = opt.strip_prefix("vel=") {
@@ -3159,8 +3317,35 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                                 ))
                             })?;
                         inst_kind = Some(crate::physical::InstrumentKind::Modal(set));
+                    } else if opt == "additive" || opt.starts_with("additive=") {
+                        if inst_kind.is_some() {
+                            return Err(err("a track plays one instrument".into()));
+                        }
+                        let set = match opt.strip_prefix("additive=") {
+                            None => crate::additive::PartialSet::harmonic(),
+                            Some(name) => partial_sets.get(name).cloned().ok_or_else(|| {
+                                err(format!("additive={}: no `partials {}` line above", name, name))
+                            })?,
+                        };
+                        inst_kind = Some(crate::physical::InstrumentKind::Additive(set));
                     } else if let Some(v) = opt.strip_prefix("excite=") {
                         inst_excite = Some(v.to_string());
+                    } else if let Some(v) = opt.strip_prefix("tuning=") {
+                        let i = match tunings.iter().position(|(n, _)| n == v) {
+                            Some(i) => i,
+                            None => {
+                                let t = crate::tuning::Tuning::named(v).ok_or_else(|| {
+                                    err(format!(
+                                        "tuning={}: not a `tuning` line above or a built-in ({})",
+                                        v,
+                                        crate::tuning::BUILTINS.join(" ")
+                                    ))
+                                })?;
+                                tunings.push((v.to_string(), t));
+                                tunings.len() - 1
+                            }
+                        };
+                        track_tuning = Some(i);
                     } else if let Some((k, v)) = opt.split_once('=').filter(|(k, _)| {
                         Param::from_name(k).map_or(false, |p| {
                             crate::physical::is_instrument_param(p)
@@ -3324,8 +3509,14 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                 if let Some(kind) = inst_kind {
                     if smp.is_some() || channel != 0 {
                         return Err(err(
-                            "an instrument track (string, modal=) cannot also be a sample=, \
-                             kit=, vox or patch= track"
+                            "an instrument track (string, modal=, additive) cannot also be a \
+                             sample=, kit=, vox or patch= track"
+                                .into(),
+                        ));
+                    }
+                    if inst_excite.is_some() && !kind.excitable() {
+                        return Err(err(
+                            "excite= drives a string or modal= body; an additive voice has none"
                                 .into(),
                         ));
                     }
@@ -3335,15 +3526,13 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                             crate::physical::MAX_INSTRUMENTS
                         )));
                     }
-                    let is_string = kind == crate::physical::InstrumentKind::String;
                     for &(param, _) in &inst_opts {
-                        if (crate::physical::is_string_param(param) && !is_string)
-                            || (crate::physical::is_modal_param(param) && is_string)
-                        {
+                        if crate::physical::is_instrument_param(param) && !kind.takes(param) {
                             return Err(err(format!(
-                                "{}= belongs to a {} track",
+                                "{}= belongs to a{} {} track",
                                 param.name(),
-                                if is_string { "modal=" } else { "string" }
+                                if crate::physical::param_owner(param) == "additive" { "n" } else { "" },
+                                crate::physical::param_owner(param)
                             )));
                         }
                     }
@@ -3358,9 +3547,9 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                     }
                 } else if let Some((param, _)) = inst_opts.first() {
                     return Err(err(format!(
-                        "unknown track option '{}=' (it belongs to an instrument track: \
-                         string or modal=)",
-                        param.name()
+                        "unknown track option '{}=' (it belongs to an instrument track: {})",
+                        param.name(),
+                        crate::physical::param_owner(*param)
                     )));
                 } else if inst_excite.is_some() {
                     return Err(err(
@@ -3470,6 +3659,12 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                     channels.push(ParamValues::default());
                     channel = channels.len() as u16;
                 }
+                if track_tuning.is_some() && crate::drums::kit_for_channel(channel).is_some() {
+                    return Err(err("a kit track plays drum voices, not pitches: no tuning=".into()));
+                }
+                if track_tuning.is_some() && slice_track.is_some() {
+                    return Err(err("a slice track plays slice picks, not pitches: no tuning=".into()));
+                }
                 if let Some(spec) = shape_spec {
                     let shaper = crate::inserts::Shaper::parse(&spec, shape_beats).map_err(err)?;
                     // one strip per channel: a later shape on a shared
@@ -3515,6 +3710,7 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                     swing,
                     track: track_channels.len() - 1,
                     slices: slice_track,
+                    tuning: track_tuning,
                 };
             }
             "automate" => {
@@ -3575,17 +3771,13 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                             })?;
                         if let Some(param) = Param::from_name(pname) {
                             if let Some(i) = crate::physical::instrument_for_channel(ch) {
-                                let is_string = instruments.get(i).map_or(false, |s| {
-                                    s.kind == crate::physical::InstrumentKind::String
-                                });
-                                if (crate::physical::is_string_param(param) && !is_string)
-                                    || (crate::physical::is_modal_param(param) && is_string)
-                                {
+                                let takes = instruments.get(i).map_or(true, |s| s.kind.takes(param));
+                                if crate::physical::is_instrument_param(param) && !takes {
                                     return Err(err(format!(
                                         "automate '{}': {} belongs to a {} track",
                                         name,
                                         pname,
-                                        if is_string { "modal=" } else { "string" }
+                                        crate::physical::param_owner(param)
                                     )));
                                 }
                             }
@@ -3760,9 +3952,11 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                     swing,
                     track,
                     slices,
+                    tuning,
                 } => {
                     let swing = *swing;
                     let (vel, len, channel, track, slices) = (*vel, *len, *channel, *track, *slices);
+                    let tuning = tuning.map(|i| &tunings[i].1);
                     let first_event = events.len();
                     let drums = crate::drums::kit_for_channel(channel).is_some();
                     let line = expand_groups(line).map_err(err)?;
@@ -3817,8 +4011,9 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                         // `[C4>D4 G4]`, `[..]>-12`); split them off too
                         let (token, bends) = split_bends(&token)
                             .map_err(|m| err(format!("token '{}': {}", token, m)))?;
-                        let (notes, dur, vel, shift) = parse_note_token(&token, vel, len, drums)
-                            .map_err(|m| err(format!("token '{}': {}", token, m)))?;
+                        let (notes, dur, vel, shift, fine) =
+                            parse_note_token(&token, vel, len, drums)
+                                .map_err(|m| err(format!("token '{}': {}", token, m)))?;
                         if !bends.is_empty() {
                             if notes.is_empty() {
                                 return Err(err(format!(
@@ -3872,6 +4067,9 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                             let lead_beats =
                                 crate::vox::onset_lead_ms(&syl) as f64 * 0.001 * bpm / 60.0;
                             let note = *notes.iter().min().unwrap();
+                            let note = note_pitch(note, fine[0], tuning)
+                                .and_then(crate::tuning::nearest_key)
+                                .map_or(note, |(k, _)| k);
                             events.push((
                                 (sound_beat - lead_beats).max(0.0),
                                 1,
@@ -3890,7 +4088,75 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                         // stretches it with everything else.)
                         let gap = ((1.0 - gate) * dur).min(GATE_GAP_MAX_S * bpm / 60.0);
                         let off_beat = sound_beat + dur - gap;
-                        for &note in &notes {
+                        // A tuned note (the track's tuning=, `+13.7c`,
+                        // `220hz`) plays the key nearest its pitch that the
+                        // track is not holding at another pitch, and tells
+                        // the engine the cents from that key's 12-TET pitch
+                        let tuned = tuning.is_some() || fine.iter().any(|f| *f != Fine::Key);
+                        if drums && fine.iter().any(|f| *f != Fine::Key) {
+                            return Err(err(format!(
+                                "token '{}': a drum hit has no pitch to tune",
+                                token
+                            )));
+                        }
+                        let mut keys = notes.clone();
+                        let mut tunes: Vec<Option<f32>> = vec![None; notes.len()];
+                        let mut pitches: Vec<f64> = Vec::with_capacity(notes.len());
+                        for (k, &note) in notes.iter().enumerate() {
+                            if drums {
+                                break;
+                            }
+                            let hz = note_pitch(note, fine[k], tuning).unwrap_or(0.0);
+                            pitches.push(hz);
+                            // a key the track holds at another pitch
+                            let busy = |key: u8| {
+                                tuned_keys.get(&(track, key)).map_or(false, |held| {
+                                    held.iter().any(|&(on, off, f)| {
+                                        on < off_beat && sound_beat < off && (f / hz - 1.0).abs() > 1e-9
+                                    })
+                                })
+                            };
+                            // (a plain note moves off a key a tuned one holds)
+                            if tuned || busy(note) {
+                                let Some((near, _)) = crate::tuning::nearest_key(hz) else {
+                                    return Err(err(format!(
+                                        "token '{}': {:.2} Hz is off the keyboard",
+                                        token, hz
+                                    )));
+                                };
+                                let key = (0..=12i32)
+                                    .flat_map(|d| [d, -d])
+                                    .map(|d| near as i32 + d)
+                                    .find(|&k| (0..=127).contains(&k) && !busy(k as u8))
+                                    .ok_or_else(|| {
+                                        err(format!(
+                                            "token '{}': every key near {:.2} Hz is held at another pitch",
+                                            token, hz
+                                        ))
+                                    })? as u8;
+                                keys[k] = key;
+                                // (a pitch exactly on its key sends none)
+                                let cents = 1200.0
+                                    * (hz / crate::tuning::equal_hz(key as f64, 440.0)).log2();
+                                tunes[k] = (cents.abs() > 1e-6).then_some(cents as f32);
+                            }
+                            tuned_keys
+                                .entry((track, keys[k]))
+                                .or_default()
+                                .push((sound_beat, off_beat, hz));
+                        }
+                        for (k, &note) in keys.iter().enumerate() {
+                            if let Some(cents) = tunes[k] {
+                                events.push((
+                                    sound_beat,
+                                    2,
+                                    EventKind::Tune {
+                                        note,
+                                        channel,
+                                        cents,
+                                    },
+                                ));
+                            }
                             events.push((
                                 sound_beat,
                                 2,
@@ -3901,17 +4167,25 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                                 },
                             ));
                         }
-                        for &note in &notes {
+                        for &note in &keys {
                             events.push((off_beat, 0, EventKind::NoteOff { note, channel }));
                         }
                         // Each bend glides over its note's held length;
                         // `seconds` holds the off beat until the tempo map
                         // turns it into a length below
-                        for (k, &note) in notes.iter().enumerate() {
+                        for (k, &note) in keys.iter().enumerate() {
                             let Some(target) = bends.target(k) else {
                                 continue;
                             };
-                            let semitones = target.semitones_from(note);
+                            // in tune: from the note's own pitch to the
+                            // target's pitch in the track's tuning
+                            let semitones = match target {
+                                BendTarget::Note(t) if tuned => {
+                                    let to = note_pitch(t, Fine::Key, tuning).unwrap_or(pitches[k]);
+                                    (12.0 * (to / pitches[k]).log2()) as f32
+                                }
+                                _ => target.semitones_from(notes[k]),
+                            };
                             if semitones != 0.0 {
                                 events.push((
                                     sound_beat,
@@ -5123,7 +5397,7 @@ fn parse_slice_token(
     };
     // the timing suffixes are the note tokens' own
     let rest = heads.len() == 1 && (heads[0] == "." || heads[0].eq_ignore_ascii_case("r"));
-    let (_, dur, vel, shift) = parse_note_token(&format!("C4{}", tail), default_vel, f64::NAN, false)?;
+    let (_, dur, vel, shift, _) = parse_note_token(&format!("C4{}", tail), default_vel, f64::NAN, false)?;
     if rest {
         return Ok((Vec::new(), dur, vel, 0.0));
     }
@@ -5563,7 +5837,7 @@ fn parse_note_token(
     default_vel: f32,
     default_len: f64,
     drums: bool,
-) -> Result<(Vec<u8>, f64, f32, f64), String> {
+) -> Result<(Vec<u8>, f64, f32, f64, Vec<Fine>), String> {
     let mut s = token;
     let mut vel = default_vel;
     let mut dur = default_len;
@@ -5595,33 +5869,86 @@ fn parse_note_token(
     let rest = s == "." || s.eq_ignore_ascii_case("r");
     // A rest within rounding of zero (`R:0` from a generator) is nothing
     if rest && dur.abs() <= REST_EPSILON_BEATS {
-        return Ok((Vec::new(), 0.0, vel, 0.0));
+        return Ok((Vec::new(), 0.0, vel, 0.0, Vec::new()));
     }
     if dur <= 0.0 {
         return Err("duration must be positive".into());
     }
 
-    let one = |s: &str| -> Result<u8, String> {
+    let one = |s: &str| -> Result<(u8, Fine), String> {
         if drums {
             if let Some(n) = crate::drums::note_from_name(s) {
-                return Ok(n);
+                return Ok((n, Fine::Key));
             }
         }
-        parse_note(s)
+        parse_pitch(s)
     };
-    let notes = if rest {
+    let pitched = if rest {
         Vec::new()
     } else if let Some(inner) = s.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
         inner
             .split_whitespace()
             .map(one)
-            .collect::<Result<Vec<u8>, String>>()?
+            .collect::<Result<Vec<_>, String>>()?
     } else {
         vec![one(s)?]
     };
+    let (notes, fine) = pitched.into_iter().unzip();
 
     // unclamped: the caller clamps it, and warns when it must
-    Ok((notes, dur, vel, shift))
+    Ok((notes, dur, vel, shift, fine))
+}
+
+/// A note's pitch beyond its key: the key itself (in the track's tuning),
+/// cents on top of it (`A4+13.7c`), or an exact frequency (`220hz`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Fine {
+    Key,
+    Cents(f64),
+    Hz(f64),
+}
+
+/// A pitched note: a name or MIDI number, `+C`/`-C` cents on it
+/// (`A4+13.7c`, `60-25c`), or a frequency (`220hz`, `261.63Hz`), whose key
+/// is the nearest one.
+fn parse_pitch(s: &str) -> Result<(u8, Fine), String> {
+    // (compared as bytes: "hz" is ASCII, so a match leaves a char boundary
+    // before it, and a token ending in a wider character never slices one)
+    if s.len() > 2 && s.as_bytes()[s.len() - 2..].eq_ignore_ascii_case(b"hz") {
+        let hz = s[..s.len() - 2]
+            .parse_finite::<f64>()
+            .map_err(|_| format!("invalid frequency '{}'", s))?;
+        let (key, _) = crate::tuning::nearest_key(hz)
+            .filter(|_| hz >= 8.0)
+            .ok_or_else(|| format!("{} is off the keyboard (8 Hz .. 12.5 kHz)", s))?;
+        return Ok((key, Fine::Hz(hz)));
+    }
+    if let Some(body) = s.strip_suffix('c') {
+        if let Some(i) = body.rfind(['+', '-']).filter(|&i| i > 0) {
+            if let Ok(cents) = body[i..].parse_finite::<f64>() {
+                if cents.abs() > 1200.0 {
+                    return Err(format!("{}: cents past an octave", s));
+                }
+                return Ok((parse_note(&body[..i])?, Fine::Cents(cents)));
+            }
+        }
+    }
+    Ok((parse_note(s)?, Fine::Key))
+}
+
+/// The frequency a note plays: its key in `tuning` (12-TET at A4 440 when
+/// None), moved by its cents, or its own frequency.
+fn note_pitch(key: u8, fine: Fine, tuning: Option<&crate::tuning::Tuning>) -> Option<f64> {
+    let base = || match tuning {
+        Some(t) => t.hz(key as i32),
+        None => crate::tuning::equal_hz(key as f64, 440.0),
+    };
+    let hz = match fine {
+        Fine::Hz(h) => h,
+        Fine::Cents(c) => base() * (c / 1200.0).exp2(),
+        Fine::Key => base(),
+    };
+    Some(hz)
 }
 
 /// Where a note bend goes: a note (`>G3`, `>55`) or a signed interval in
@@ -5954,21 +6281,21 @@ mod tests {
 
     #[test]
     fn note_tokens() {
-        let (notes, dur, vel, _) = parse_note_token("C4:2@0.7", 0.8, 1.0, false).unwrap();
+        let (notes, dur, vel, _, _) = parse_note_token("C4:2@0.7", 0.8, 1.0, false).unwrap();
         assert_eq!(notes, vec![60]);
         assert_eq!(dur, 2.0);
         assert_eq!(vel, 0.7);
 
-        let (notes, dur, _, _) = parse_note_token("[C4 E4 G4]:0.5", 0.8, 1.0, false).unwrap();
+        let (notes, dur, _, _, _) = parse_note_token("[C4 E4 G4]:0.5", 0.8, 1.0, false).unwrap();
         assert_eq!(notes, vec![60, 64, 67]);
         assert_eq!(dur, 0.5);
 
-        let (notes, dur, _, _) = parse_note_token("R:4", 0.8, 1.0, false).unwrap();
+        let (notes, dur, _, _, _) = parse_note_token("R:4", 0.8, 1.0, false).unwrap();
         assert!(notes.is_empty());
         assert_eq!(dur, 4.0);
 
         // default duration comes from the track's len option
-        let (_, dur, _, _) = parse_note_token("C4", 0.8, 0.5, false).unwrap();
+        let (_, dur, _, _, _) = parse_note_token("C4", 0.8, 0.5, false).unwrap();
         assert_eq!(dur, 0.5);
     }
 
@@ -7116,6 +7443,50 @@ mod tests {
         x.iter().map(|&(l, r)| (l * l + r * r) as f64).sum()
     }
 
+    /// Additive tracks: the harmonic voice and a `partials` table of the
+    /// song's own, knobs on the track line and automated per track. A
+    /// held note sits within 3 dB of a synth note at the same velocity.
+    #[test]
+    fn additive_tracks_parse_and_sound() {
+        let song = parse_song(
+            "automate reverb_wet\n0\ntail 0.1\n\
+             partials organ 1 2:0.5 3:0.3:-0.5 4.2:0.2:0.5\n\
+             track synth vel=1\nC3:4\n\
+             track pad additive vel=1 attack=0.01 add_partials=128\nC3:4\n\
+             track org additive=organ add_tilt=0 add_width=0.5\n[C3 G3]:4\n\
+             automate pad.add_comb_depth\n0.8\n\
+             automate pad.add_comb_phase\n0 30:4\n",
+        )
+        .unwrap();
+        let rms = |t: &str| {
+            let x = stem_of(&song, t);
+            let seg = &x[24000..72000];
+            10.0 * (energy_of(seg) / (2.0 * seg.len() as f64)).log10()
+        };
+        let (synth, pad) = (rms("synth"), rms("pad"));
+        assert!((pad - synth).abs() < 3.0, "pad {pad:.1} dB vs synth {synth:.1} dB");
+        assert!(rms("org") > synth - 10.0);
+        // the organ table's 4.2 partial sounds on the right of C3
+        let org: Vec<f32> = stem_of(&song, "org").iter().map(|s| s.1).collect();
+        let c3 = crate::tuning::equal_hz(48.0, 440.0);
+        let f = crate::physical::tests::measure_hz(&org, 48000.0, 4.2 * c3, 0.3, 1.2);
+        assert!((f / (4.2 * c3) - 1.0).abs() < 1e-4, "{f}");
+        for bad in [
+            "track s string add_tilt=1\nC4\n",
+            "track a additive str_decay=1\nC4\n",
+            "track a additive=nope\nC4\n",
+            "track d kit=909\nBD\ntrack a additive excite=d\nC4\n",
+            "track a additive excite_gain=2\nC4\n",
+            "partials x 1:2:3\n",
+            "partials x\n",
+            "partials x 1\npartials x 2\n",
+            "track a additive\nC4\nautomate a.str_decay\n0\n",
+            "track a additive modal=bell\nC4\n",
+        ] {
+            assert!(parse_song(bad).is_err(), "accepted: {bad:?}");
+        }
+    }
+
     /// String and modal tracks, a `modes` body of the song's own and an
     /// excited body: each plays on its own instrument channel and sounds
     /// in its own stem.
@@ -7199,6 +7570,156 @@ mod tests {
         let n = x.len();
         let (a, b) = (energy_of(&x[..n / 3]), energy_of(&x[2 * n / 3..]));
         assert!(b < 1e-3 * a, "kept ringing with the gate shut: {a} then {b}");
+    }
+
+    fn tunes_of(song: &Song) -> Vec<(u8, f32)> {
+        song.events
+            .iter()
+            .filter_map(|e| match e.kind {
+                EventKind::Tune { note, cents, .. } => Some((note, cents)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Every note-on's key and the frequency it plays (its tune, if any).
+    fn played(song: &Song) -> Vec<(u8, f64)> {
+        let mut pending = std::collections::HashMap::new();
+        let mut out = Vec::new();
+        for e in &song.events {
+            match e.kind {
+                EventKind::Tune {
+                    note,
+                    channel,
+                    cents,
+                } => {
+                    pending.insert((channel, note), cents);
+                }
+                EventKind::NoteOn { note, channel, .. } => {
+                    let cents = pending.remove(&(channel, note)).unwrap_or(0.0) as f64;
+                    out.push((note, crate::tuning::equal_hz(note as f64, 440.0) * (cents / 1200.0).exp2()));
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    fn pitch_of_stem(song: &Song, track: &str, guess: f64) -> f64 {
+        let x: Vec<f32> = stem_of(song, track).iter().map(|&(l, _)| l).collect();
+        crate::physical::tests::measure_hz(&x, 48000.0, guess, 0.3, 1.2)
+    }
+
+    fn cents_off(a: f64, b: f64) -> f64 {
+        1200.0 * (a / b).log2()
+    }
+
+    /// `A3+13.7c` and `233.5hz` play exactly that pitch: the parser sends
+    /// the key and its cents, and a string tuned by them sounds there.
+    #[test]
+    fn cents_and_hz_notes_play_exact_pitches() {
+        let head = "automate reverb_wet\n0\ntail 0.1\ntrack s string str_decay=8\n";
+        let song = parse_song(&format!("{head}A3+13.7c:4\n")).unwrap();
+        assert_eq!(tunes_of(&song), vec![(57, 13.7)]);
+        let want = 220.0 * (13.7f64 / 1200.0).exp2();
+        let got = pitch_of_stem(&song, "s", want);
+        assert!(cents_off(got, want).abs() < 0.05, "{got} vs {want}");
+
+        let song = parse_song(&format!("{head}233.5hz:4\n")).unwrap();
+        let (key, cents) = tunes_of(&song)[0];
+        assert_eq!(key, 58);
+        let exact = 1200.0 * (233.5 / crate::tuning::equal_hz(58.0, 440.0)).log2();
+        assert!((cents as f64 - exact).abs() < 1e-4, "{cents} vs {exact}");
+        let got = pitch_of_stem(&song, "s", 233.5);
+        assert!(cents_off(got, 233.5).abs() < 0.05, "{got}");
+
+        // a synth card moves by the cents too (its analog tracking error
+        // is the same at both pitches, so the interval is exact)
+        let synth = |note: &str| {
+            parse_song(&format!(
+                "automate reverb_wet\n0\ntail 0.1\ntrack s patch=deepsine\n{note}:4\n"
+            ))
+            .unwrap()
+        };
+        let a = pitch_of_stem(&synth("C4"), "s", 261.6);
+        let b = pitch_of_stem(&synth("C4+35c"), "s", 261.6 * (35f64 / 1200.0).exp2());
+        assert!((cents_off(b, a) - 35.0).abs() < 0.2, "{a} -> {b}: {}", cents_off(b, a));
+        // drum hits have no pitch
+        assert!(parse_song("track d kit=909\nBD+10c\n").is_err());
+        // a token ending in a wide character is an error, not a panic
+        for bad in ["C\u{266F}4", "A4\u{266F}", "C4+3\u{00E7}", "\u{00E9}hz"] {
+            assert!(parse_song(&format!("track s\n{bad}\n")).is_err(), "{bad}");
+        }
+        assert!(parse_song("track d kit=909 tuning=just\nBD\n").is_err());
+    }
+
+    /// A tuning table retunes the track's keys: just intonation on D puts
+    /// F#4 at 5/4 over D4; edo19 runs a 19-step octave up the keyboard,
+    /// each tuned note on a key of its own; 12-TET songs carry no tunes.
+    #[test]
+    fn tuning_tables_retune_their_tracks() {
+        let song = parse_song(
+            "automate reverb_wet\n0\ntail 0.1\ntuning dj just root=D4\n\
+             track s string tuning=dj str_decay=8\nF#4:4\n",
+        )
+        .unwrap();
+        let want = crate::tuning::equal_hz(62.0, 440.0) * 1.25;
+        let got = pitch_of_stem(&song, "s", want);
+        assert!(cents_off(got, want).abs() < 0.05, "{got} vs {want}");
+
+        let song = parse_song("track s tuning=edo19\n[C4 C#4 D4 D#4]:2 [C4 C#4]\n").unwrap();
+        assert_keys_alternate(&song);
+        let p = played(&song);
+        let step = 1200.0 / 19.0;
+        let c4 = crate::tuning::equal_hz(60.0, 440.0);
+        for (i, &(key, hz)) in p.iter().take(4).enumerate() {
+            let want = c4 * (i as f64 * step / 1200.0).exp2();
+            assert!(cents_off(hz, want).abs() < 1e-3, "step {i}: key {key} {hz} Hz");
+        }
+        let keys: std::collections::HashSet<u8> = p.iter().take(4).map(|t| t.0).collect();
+        assert_eq!(keys.len(), 4, "{p:?}");
+        // two pitches near one key take two keys, and once the chord lets
+        // go the nearest key is free again
+        let c4_30 = c4 * (30.0f64 / 1200.0).exp2();
+        let song = parse_song("track s\n[C4 C4+30c]:2 C4+30c\n").unwrap();
+        let p = played(&song);
+        assert_eq!(p[0], (60, c4));
+        assert_ne!(p[1].0, 60);
+        assert!(cents_off(p[1].1, c4_30).abs() < 1e-3);
+        assert_eq!(p[2].0, 60);
+        assert!(cents_off(p[2].1, c4_30).abs() < 1e-3);
+        assert_keys_alternate(&song);
+        // a plain C4 under a held C4+30c moves to another key, in tune
+        let song = parse_song("track s\n[C4+30c C4]:2\n").unwrap();
+        let p = played(&song);
+        assert_ne!(p[0].0, p[1].0);
+        assert!(cents_off(p[0].1, c4_30).abs() < 1e-3);
+        assert!(cents_off(p[1].1, c4).abs() < 1e-3, "{p:?}");
+        assert_keys_alternate(&song);
+        // ... but not under another track's, and a pitch on its own key
+        // (12tet named outright) sends no tune
+        let song = parse_song("track s\nC4+30c:4\ntrack s2 tuning=12tet\nC4\n").unwrap();
+        assert_eq!(tunes_of(&song).len(), 1);
+        // plain 12-TET: no tune events at all
+        let plain = parse_song("track s\n[C4 E4 G4]:2 A4\ntrack t string\nC2\n").unwrap();
+        assert!(tunes_of(&plain).is_empty());
+        // tuning lines are checked
+        for bad in [
+            "tuning just\ntrack s\nC4\n",
+            "tuning x\n",
+            "tuning x wobble\n",
+            "tuning x just\ntuning x edo19\n",
+            "track s tuning=nope\nC4\n",
+            "track k kit=909 tuning=just\nBD\n",
+        ] {
+            assert!(parse_song(bad).is_err(), "accepted: {bad:?}");
+        }
+        // slice picks are not pitches
+        let slices = "track k kit=909\nBD BD BD BD\nbounce b from 0..4 tracks=k\n\
+                      track m sample=@b slice=4 TUNE\n>4 0\n";
+        assert!(parse_song(&slices.replace("TUNE", "")).is_ok());
+        let e = parse_song(&slices.replace("TUNE", "tuning=just")).err().unwrap_or_default();
+        assert!(e.contains("slice picks"), "{e}");
     }
 
     /// A string track sounds its note's pitch through the whole engine.

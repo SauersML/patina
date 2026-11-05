@@ -154,14 +154,47 @@ We will use a layered architecture with clear interfaces between components:
      dd3d1c8 it was the switch position (0 = 2:1, 1 = 4:1, 2 or more =
      10:1), so an old song converts 0, 1, 2+ to 2, 4, 10
 
-8. **MIDI Handler**: Processes MIDI input.
+8. **Physical instruments** (src/physical.rs): a stiff waveguide string
+   and a modal resonator bank, one per song track, each its own strip.
+   - String: a delay loop solved to the note's period exactly, a one-pole
+     loss fitted to the T60 and its damping, a fitted allpass cascade for
+     stiffness (partial k at k f0 sqrt(1 + B k^2)); plucked, struck or
+     bowed (stick-slip friction) at a point along it
+   - Modal bank: up to 512 two-pole modes from a preset or a `modes`
+     table, a port of Hypha's numpy reference; struck, noise-burst,
+     noise-bowed, or driven by another track's audio (`excite=`)
+   - Knob changes on a sounding bank glide; leaving modes die away; the
+     output bends under a ceiling, so no setting runs away
+   - Song syntax: `track lute string str_stiff=0.0003 str_decay=4`,
+     `track bell modal=bell`, `modes chime 1 2.76:2 5.4:1:0.5`,
+     `track plate modal=plate excite=drums`
+
+9. **Additive voice** (src/additive.rs): up to 512 sine partials a note
+   (ratio, amp, pan each), shaped by tilt, odd/even, inharmonic stretch,
+   detune spread, a moving comb and a stereo fan; a port of Hypha's
+   numpy reference
+   - Knobs glide (~15 ms), then are read per 64-sample block and
+     interpolated across it; partials are complex rotators carried from
+     block to block, so no sine runs per sample
+   - Song syntax: `track pad additive add_partials=256 add_tilt=0.7`,
+     `partials organ 1 2:0.5 3:0.3:-0.5`, `track org additive=organ`,
+     lanes such as `automate pad.add_comb_phase`
+
+10. **Free tuning** (src/tuning.rs): notes in Hz (`220hz`) or cents
+    (`A4+13.7c`), and tuning tables (`tuning dj just root=D4`, `edo19`,
+    `bp`, `cents=` / `ratios=` lists, Scala `scl=` files) that a track
+    names with `tuning=`. The parser gives each pitch the nearest key the
+    track is not holding at another pitch and sends its cents ahead of the
+    note-on; every pitched engine adds them, and 12-TET sends none
+
+11. **MIDI Handler**: Processes MIDI input.
    - Uses a custom enum for type-safe MIDI events
 
-9. **User Interface**: Provides control over synth parameters.
+12. **User Interface**: Provides control over synth parameters.
    - Implemented using egui for immediate mode GUI
    - Communicates with audio thread via Arc<Mutex<>>
 
-10. **Real-time Audio Processing:**
+13. **Real-time Audio Processing:**
     - Use lock-free data structures and atomic types for parameter updates
     - Minimize allocations in the audio callback
     - Implement oversampling for alias reduction

@@ -464,6 +464,15 @@ const EXCLUDED: &[Param] = &[
     Param::ModalBurst,
     Param::ModalMute,
     Param::ExciteGain,
+    Param::AddPartials,
+    Param::AddTilt,
+    Param::AddOdd,
+    Param::AddStretch,
+    Param::AddSpread,
+    Param::AddCombDepth,
+    Param::AddCombFreq,
+    Param::AddCombPhase,
+    Param::AddWidth,
 ];
 
 /// THE host parameter table, built from the presentation rows above with

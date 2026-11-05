@@ -1233,6 +1233,11 @@ pub struct VoiceManager {
     /// Channels whose raw output (before their strip) another track
     /// listens to this sample: an instrument's `excite=` source.
     taps: Vec<Tap>,
+    /// Tuned notes (song `Tune` events): the cents the next note-on of
+    /// (channel, key) sounds at, then the cents of each tuned key held,
+    /// for a mono channel falling back to it. Both empty in 12-TET.
+    pending_tune: Vec<(u16, u8, f32)>,
+    held_tune: Vec<(u16, u8, f32)>,
     reverb: Reverb,
     chorus: Chorus,
     /// The console's mix-bus compressor, printing to the tape.
@@ -1365,6 +1370,8 @@ impl VoiceManager {
             sampler: SamplerBank::new(sample_rate),
             instruments: Vec::new(),
             taps: Vec::new(),
+            pending_tune: Vec::new(),
+            held_tune: Vec::new(),
             reverb: Reverb::new(sample_rate),
             chorus: Chorus::new(sample_rate),
             comp: BusComp::new(sample_rate),
@@ -2186,6 +2193,8 @@ impl VoiceManager {
     }
 
     pub fn note_on_channel(&mut self, note: u8, velocity: f32, channel: u16) {
+        // A tuned note's cents (0 in 12-TET)
+        let cents = self.take_tune(channel, note);
         // From its first note on, a channel's fader moves glide
         if self.sounded.insert(channel, ()).is_none() {
             if let Some(m) = self.channel_mix.get_mut(&channel) {
@@ -2225,7 +2234,7 @@ impl VoiceManager {
         // Sampler notes start playback heads on their slot's reel; they
         // never claim a keyboard voice
         if let Some(slot) = slot_for_channel(channel) {
-            if let Some((victim, held)) = self.sampler.note_on(slot, note, velocity) {
+            if let Some((victim, held)) = self.sampler.note_on_tuned(slot, note, velocity, cents) {
                 let victim = crate::sampler::SAMPLER_CHANNEL_BASE + victim as u16;
                 self.record_steal(victim, channel, held, true);
             }
@@ -2234,7 +2243,7 @@ impl VoiceManager {
         // An instrument track's notes strike, pluck or bow its body
         if let Some(i) = crate::physical::instrument_for_channel(channel) {
             if let Some(inst) = self.instruments.get_mut(i).and_then(|s| s.as_mut()) {
-                inst.note_on(note, 0.0, velocity);
+                inst.note_on(note, cents, velocity);
             }
             return;
         }
@@ -2267,7 +2276,7 @@ impl VoiceManager {
             .unwrap_or(false);
         let glide_from = if is_chord { None } else { self.last_note_cv };
         self.last_note_on_sample = self.samples_rendered;
-        self.last_note_cv = Some(crate::voice::note_cv(note));
+        self.last_note_cv = Some(crate::voice::note_cv(note) + cents / 1200.0);
 
         let chan_params = self.channel_patch(channel);
 
@@ -2291,7 +2300,7 @@ impl VoiceManager {
         // Mono: the channel's one card stack takes the note. Poly:
         // retrigger every card already holding this note on this channel.
         let reused = if self.is_mono(channel) {
-            self.mono_note_on(note, velocity, age, glide_from, channel, key_held)
+            self.mono_note_on(note, cents, velocity, age, glide_from, channel, key_held)
         } else {
             let mut retriggered = false;
             for voice in self.voices.iter_mut() {
@@ -2299,6 +2308,7 @@ impl VoiceManager {
                     if let Some(p) = &chan_params {
                         voice.apply_params(p);
                     }
+                    voice.set_tune_cents(cents);
                     voice.trigger(note, velocity, age, glide_from);
                     retriggered = true;
                 }
@@ -2368,6 +2378,7 @@ impl VoiceManager {
                     self.voices[i].apply_params(&p);
                 }
                 self.voices[i].set_unison_cents(offset);
+                self.voices[i].set_tune_cents(cents);
                 self.voices[i].set_stereo_position(note_position, stack_position, count, spread);
                 self.voices[i].trigger(note, velocity, age, glide_from);
             }
@@ -2424,9 +2435,11 @@ impl VoiceManager {
     /// re-attack from the charge their caps still hold (a detached line
     /// flows without dipping). Returns false when the channel has no card
     /// sounding, leaving the note to ordinary allocation.
+    #[allow(clippy::too_many_arguments)]
     fn mono_note_on(
         &mut self,
         note: u8,
+        cents: f32,
         velocity: f32,
         age: u64,
         glide_from: Option<f32>,
@@ -2451,6 +2464,7 @@ impl VoiceManager {
             if let Some(p) = &chan_params {
                 voice.apply_params(p);
             }
+            voice.set_tune_cents(cents);
             if key_held && voice.is_held() {
                 voice.legato(note, age, glide_from);
             } else {
@@ -2530,6 +2544,9 @@ impl VoiceManager {
         if !self.key_up(note, channel) {
             self.release_note(note, |ch| ch == channel);
         }
+        if !self.held_tune.is_empty() {
+            self.held_tune.retain(|&(c, n, _)| !(c == channel && n == note));
+        }
     }
 
     /// The panel keyboard's key-up. Channel 0's key stack hears it first
@@ -2581,17 +2598,19 @@ impl VoiceManager {
         let Some(stack) = self.mono_stack_age(channel) else {
             return false;
         };
-        let from = Some(crate::voice::note_cv(note));
+        let from = Some(crate::voice::note_cv(note) + self.held_cents(channel, note) / 1200.0);
+        let back_cents = self.held_cents(channel, back_to);
         let mut moved = false;
         for voice in self.voices.iter_mut().filter(|v| {
             v.is_held() && v.channel() == channel && v.age() == stack && v.note == Some(note)
         }) {
+            voice.set_tune_cents(back_cents);
             voice.legato(back_to, stack, from);
             moved = true;
         }
         if moved {
             // The hold capacitor now carries the key it fell back to
-            self.last_note_cv = Some(crate::voice::note_cv(back_to));
+            self.last_note_cv = Some(crate::voice::note_cv(back_to) + back_cents / 1200.0);
         }
         moved
     }
@@ -2980,9 +2999,43 @@ impl VoiceManager {
         self.vox.set_wav(samples, source_rate);
     }
 
+    // --- Tuned notes ----------------------------------------------------
+
+    /// The next note-on of `note` on `channel` sounds `cents` away from
+    /// the key's 12-TET pitch (a song's tuning, tuning.rs).
+    pub fn set_note_tune(&mut self, channel: u16, note: u8, cents: f32) {
+        let cents = if cents.is_finite() { cents.clamp(-2400.0, 2400.0) } else { 0.0 };
+        self.pending_tune.retain(|&(c, n, _)| !(c == channel && n == note));
+        self.pending_tune.push((channel, note, cents));
+    }
+
+    /// The cents a key is tuned to: taken from the pending note-on (and
+    /// remembered while it is held), or 0.
+    fn take_tune(&mut self, channel: u16, note: u8) -> f32 {
+        if self.pending_tune.is_empty() && self.held_tune.is_empty() {
+            return 0.0;
+        }
+        self.held_tune.retain(|&(c, n, _)| !(c == channel && n == note));
+        match self.pending_tune.iter().position(|&(c, n, _)| c == channel && n == note) {
+            Some(i) => {
+                let (_, _, cents) = self.pending_tune.swap_remove(i);
+                self.held_tune.push((channel, note, cents));
+                cents
+            }
+            None => 0.0,
+        }
+    }
+
+    /// A held key's cents (0 for a 12-TET key).
+    fn held_cents(&self, channel: u16, note: u8) -> f32 {
+        self.held_tune
+            .iter()
+            .find(|&&(c, n, _)| c == channel && n == note)
+            .map_or(0.0, |t| t.2)
+    }
+
     // --- The tape deck --------------------------------------------------
 
-    /// Load a reel + transport into a sampler slot (song registration).
     /// Build instrument `index` (channel INSTRUMENT_CHANNEL_BASE + index)
     /// for a song's `string` / `modal=` track, and tap its excite source.
     pub fn set_instrument(&mut self, index: usize, spec: &crate::physical::InstrumentSpec) {
@@ -3021,6 +3074,7 @@ impl VoiceManager {
         }
     }
 
+    /// Load a reel + transport into a sampler slot (song registration).
     pub fn set_sampler_slot(&mut self, index: usize, slot: SamplerSlot) {
         self.sampler.set_slot(index, slot);
     }

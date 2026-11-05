@@ -1,0 +1,54 @@
+# Just and otherwise — 72 bpm, about a minute. A demo of free tuning
+# (src/tuning.rs): the same few chords, retuned.
+#
+#   beats  0-24   JUST    plucked strings in five-limit just intonation on
+#                         D over a drone given in Hz: the thirds sit pure,
+#                         without 12-TET's beating
+#   beats 24-48   SLENDRO bells in a five-note slendro-like scale of
+#                         near-equal 240-cent steps, from a cents= table
+#   beats 48-72   NINETEEN a synth pad and a bowed string in 19-EDO,
+#                         nineteen equal steps to the octave (its thirds
+#                         near pure, its fifths a little narrow), while a
+#                         12-TET whistle slides between keys in cents
+
+bpm 72
+gate 0.95
+tail 5
+
+section JUST 0..24
+section SLENDRO 24..48
+section NINETEEN 48..72
+
+automate reverb_wet
+0.26
+automate reverb_decay
+0.8
+
+tuning dj just root=D4
+tuning sl cents=240,480,720,960,1200 root=D4
+tuning e19 edo19 root=C4
+
+# --- JUST: a drone in Hz, chords in just intonation
+track drone patch=deepsine vel=0.5 gain=1.1 reverb_send=0.3
+>JUST [73.416hz 110.124hz]:24
+track lute string tuning=dj str_stiff=0.0003 str_decay=4 str_damp=0.5 vel=0.7 reverb_send=0.3
+>JUST ([D3 F#3 A3 D4]:1 A3:1 F#4:1 D4:1)x2 ([G3 B3 D4 G4]:1 D4:1 B4:1 G4:1)x2 ([A3 C#4 E4 A4]:1 E4:1 C#5:1 A4:1)x1 ([D3 F#3 A3 D4]:3 R:1)
+track lute2 string tuning=dj str_stiff=0.0002 str_decay=6 vel=0.55 pan=0.3 reverb_send=0.35
+>JUST [D4 F#4 A4]:8 [D4 G4 B4]:8 [C#4 E4 A4]:4 [D4 F#4 A4]:4
+
+# --- SLENDRO: bells on a near-equal pentatonic
+track bells modal=bell tuning=sl modal_bright=0.2 modal_spread=0.5 modal_decay=1.4 vel=0.6 reverb_send=0.45
+>SLENDRO D4 D#4 E4:2 F4 E4 D#4:2 F4 F#4 G4:2 F#4 F4 E4:2 D4:0.5 D#4:0.5 E4:0.5 F4:0.5 F#4:2 E4:2 D4:2
+track gong modal=gong tuning=sl modal_decay=2 vel=0.35 pan=-0.3 reverb_send=0.4
+>SLENDRO D2:8 C#2:8 D2:8
+
+# --- NINETEEN: a 19-EDO progression, then a melody in cents. Keys are
+# steps here (MIDI numbers read easiest): 60 is C4, a major second is 3
+# steps, a major third 6, a fourth 8, a fifth 11, an octave 19; so 41 is
+# C3, 66 E4, 71 G4. C, A minor, F, G, C:
+track pad patch=aurora tuning=e19 vel=0.45 gain=0.8 reverb_send=0.35
+>NINETEEN [41 60 66 71]:5 [36 55 60 66]:5 [30 49 55 60]:5 [33 52 58 63]:5 [41 60 66 71 79]:4
+track cello string=bow tuning=e19 str_pressure=0.5 str_pos=0.12 attack=0.2 release=0.5 vel=0.6 pan=0.25 reverb_send=0.3
+>NINETEEN 71:2 74:2 71:1 68:1 66:2 63:1 66:1 60:2 58:2 63:1 61:1 58:2 60:6
+track whistle patch=deepsine vel=0.5 gain=1.2 pan=-0.25 reverb_send=0.4
+>NINETEEN R:12 G5:1 G5+17c:1 G5+33c:1 G5+50c:1 A5-33c:2 A5:2 G5+25c:2 G5:2

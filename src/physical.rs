@@ -83,9 +83,25 @@ pub fn is_modal_param(p: Param) -> bool {
 }
 
 /// Every knob an instrument owns (the parser checks the family against
-/// the track's kind; `excite_gain` belongs to both bodies).
+/// the track's kind; `excite_gain` belongs to both excitable bodies).
 pub fn is_instrument_param(p: Param) -> bool {
-    is_string_param(p) || is_modal_param(p) || p == Param::ExciteGain
+    is_string_param(p)
+        || is_modal_param(p)
+        || crate::additive::is_additive_param(p)
+        || p == Param::ExciteGain
+}
+
+/// The track option of the body a knob belongs to, for errors.
+pub fn param_owner(p: Param) -> &'static str {
+    if is_string_param(p) {
+        "string"
+    } else if is_modal_param(p) {
+        "modal="
+    } else if crate::additive::is_additive_param(p) {
+        "additive"
+    } else {
+        "string or modal="
+    }
 }
 
 /// The volts a struck or plucked body puts on the bus at full velocity:
@@ -267,6 +283,23 @@ fn chladni(p: f64, split: f64, top: f64, t60: f64) -> ModeSet {
 pub enum InstrumentKind {
     String,
     Modal(ModeSet),
+    Additive(crate::additive::PartialSet),
+}
+
+impl InstrumentKind {
+    /// Whether a knob (an instrument's) belongs to this body.
+    pub fn takes(&self, p: Param) -> bool {
+        match self {
+            InstrumentKind::String => is_string_param(p) || p == Param::ExciteGain,
+            InstrumentKind::Modal(_) => is_modal_param(p) || p == Param::ExciteGain,
+            InstrumentKind::Additive(_) => crate::additive::is_additive_param(p),
+        }
+    }
+
+    /// Whether another track's audio can drive it (`excite=`).
+    pub fn excitable(&self) -> bool {
+        !matches!(self, InstrumentKind::Additive(_))
+    }
 }
 
 /// One instrument track: its body and the channel whose audio excites it.
@@ -675,15 +708,15 @@ enum Strike {
 /// A note bend in flight: `oct` octaves, progress `x` stepping `inc` a
 /// sample, shaped by the track's bend curve (`power`, see voice.rs).
 #[derive(Clone, Copy, Debug, Default)]
-struct Bend {
-    oct: f64,
-    x: f64,
-    inc: f64,
-    power: f64,
+pub(crate) struct Bend {
+    pub(crate) oct: f64,
+    pub(crate) x: f64,
+    pub(crate) inc: f64,
+    pub(crate) power: f64,
 }
 
 impl Bend {
-    fn offset(&self) -> f64 {
+    pub(crate) fn offset(&self) -> f64 {
         if self.oct == 0.0 {
             0.0
         } else {
@@ -1206,10 +1239,18 @@ struct ModalVoice {
     a1: Vec<f64>,
     a2: Vec<f64>,
     gin: Vec<f64>,
+    /// which side a mode sits on: gl 1 for the kept-even modes (panned
+    /// left by the spread), gr 1 for the kept-odd ones (right)
     gl: Vec<f64>,
     gr: Vec<f64>,
     y1: Vec<f64>,
     y2: Vec<f64>,
+    /// how many modes sound, and until when modes beyond them (or pushed
+    /// past Nyquist) are still dying away rather than cut off
+    count: usize,
+    fade_until: u64,
+    /// the spread the pan gains are at, gliding to the knob's
+    spread: f64,
     /// the excitation in flight
     strike: Option<[f64; 64]>,
     burst_n: usize,
@@ -1243,6 +1284,9 @@ impl ModalVoice {
             gr: vec![0.0; MAX_MODES],
             y1: vec![0.0; MAX_MODES],
             y2: vec![0.0; MAX_MODES],
+            count: 0,
+            fade_until: 0,
+            spread: 0.0,
             strike: None,
             burst_n: 0,
             burst_len: 0,
@@ -1263,18 +1307,31 @@ impl ModalVoice {
         let stretch = p.stretch as f64;
         let mut kept = 0usize;
         let mut norm = 0.0;
+        let mut live = [false; MAX_MODES];
+        // A mode leaving (past the count, or stretched or bent past
+        // Nyquist) stops taking input and dies away over ~20 ms on its own
+        // pitch instead of being cut, which would click
+        let fast = 10f64.powf(-3.0 / (0.02 * sr));
+        let mut fading = false;
+        let mut fade = |a1: &mut f64, a2: &mut f64, gin: &mut f64| {
+            if *a2 != 0.0 && *gin != 0.0 {
+                let cosw = *a1 / (2.0 * (-*a2).sqrt());
+                *a1 = 2.0 * fast * cosw;
+                *a2 = -fast * fast;
+                *gin = 0.0;
+                fading = true;
+            }
+        };
         for m in 0..count {
             let r0 = set.ratios[m];
             let r = r0 * (1.0 + stretch * (r0 - 1.0));
             let f = self.hz * r;
             if !(f > 0.0 && f < sr / 2.0 * 0.95) {
-                self.a1[m] = 0.0;
-                self.a2[m] = 0.0;
-                self.gin[m] = 0.0;
-                self.y1[m] = 0.0;
-                self.y2[m] = 0.0;
+                // (it keeps its side while it dies)
+                fade(&mut self.a1[m], &mut self.a2[m], &mut self.gin[m]);
                 continue;
             }
+            live[m] = true;
             let t60 = p.decay as f64 * set.t60[m] / (1.0 + p.damp as f64 * (r - 1.0)).max(0.05)
                 * self.damper;
             let rr = 10f64.powf(-3.0 / (t60 * sr));
@@ -1283,29 +1340,33 @@ impl ModalVoice {
             self.a1[m] = 2.0 * rr * w.cos();
             self.a2[m] = -rr * rr;
             // gin holds g for now; (1 - r) and the normalisation below
-            self.gin[m] = g;
-            self.gl[m] = 1.0 - rr; // stash (1 - r) until the pan pass
+            // gin holds g times (1 - r) until the normalisation below
+            self.gin[m] = g * (1.0 - rr);
             norm += g * g;
-            let pan = if kept % 2 == 0 { -p.spread } else { p.spread } as f64;
-            self.gr[m] = pan;
+            let even = kept % 2 == 0;
+            self.gl[m] = if even { 1.0 } else { 0.0 };
+            self.gr[m] = if even { 0.0 } else { 1.0 };
             kept += 1;
         }
         let norm = if norm > 0.0 { 1.0 / norm.sqrt() } else { 0.0 };
         for m in 0..count {
-            if self.a2[m] == 0.0 {
-                continue;
+            if live[m] {
+                self.gin[m] *= norm;
             }
-            let one_minus_r = self.gl[m];
-            let pan = self.gr[m];
-            self.gin[m] *= norm * one_minus_r;
-            self.gl[m] = ((1.0 - pan) / 2.0).sqrt();
-            self.gr[m] = ((1.0 + pan) / 2.0).sqrt();
         }
         for m in count..self.n {
-            self.y1[m] = 0.0;
-            self.y2[m] = 0.0;
+            fade(&mut self.a1[m], &mut self.a2[m], &mut self.gin[m]);
         }
-        self.n = count;
+        if fading {
+            self.fade_until = self.n_sample + (0.1 * sr) as u64;
+        }
+        // the dying modes stay in the loop until they have gone
+        self.n = if self.n_sample < self.fade_until {
+            count.max(self.n)
+        } else {
+            count
+        };
+        self.count = count;
     }
 
     #[inline]
@@ -1363,9 +1424,31 @@ impl ModalVoice {
             al[0] += y * self.gl[m];
             ar[0] += y * self.gr[m];
         }
-        let l = (al[0] + al[1]) + (al[2] + al[3]);
-        let r = (ar[0] + ar[1]) + (ar[2] + ar[3]);
+        // the two sides through the pan law, the spread gliding (~5 ms)
+        // so a fast lane never steps the gains
+        let target = p.spread as f64;
+        if self.spread != target {
+            self.spread += (target - self.spread) * (1.0 - (-1.0 / (0.005 * sr)).exp());
+            if (self.spread - target).abs() < 1e-9 {
+                self.spread = target;
+            }
+        }
+        let (near, far) = (((1.0 + self.spread) / 2.0).sqrt(), ((1.0 - self.spread) / 2.0).sqrt());
+        let even = (al[0] + al[1]) + (al[2] + al[3]);
+        let odd = (ar[0] + ar[1]) + (ar[2] + ar[3]);
+        let l = even * near + odd * far;
+        let r = even * far + odd * near;
         self.n_sample += 1;
+        if self.n > self.count && self.n_sample >= self.fade_until {
+            for m in self.count..self.n {
+                self.a1[m] = 0.0;
+                self.a2[m] = 0.0;
+                self.gin[m] = 0.0;
+                self.y1[m] = 0.0;
+                self.y2[m] = 0.0;
+            }
+            self.n = self.count;
+        }
         if self.bend.moving() {
             self.bend.x += self.bend.inc;
             if self.n_sample % 32 == 0 || self.bend.x >= 1.0 {
@@ -1392,7 +1475,12 @@ impl ModalVoice {
 /// A polyphonic modal instrument.
 pub struct ModalInstrument {
     sr: f64,
+    /// the knobs as set
     pub p: ModalParams,
+    /// decay, damp, stretch and bright as the sounding banks have them,
+    /// gliding to `p` (~10 ms) so a lane never steps the coefficients
+    cur: ModalParams,
+    tick: u32,
     pub modes: ModeSet,
     gate_steps: (f64, f64),
     voices: Vec<ModalVoice>,
@@ -1405,6 +1493,8 @@ impl ModalInstrument {
         ModalInstrument {
             sr,
             p: ModalParams::default(),
+            cur: ModalParams::default(),
+            tick: 0,
             modes,
             gate_steps: Gate::default().steps(sr),
             voices: (0..MODAL_VOICES).map(ModalVoice::new).collect(),
@@ -1412,7 +1502,23 @@ impl ModalInstrument {
         }
     }
 
+    /// The knobs a bank is configured with: the gliding ones where they
+    /// are now, the rest as set.
+    fn knobs(&self) -> ModalParams {
+        ModalParams {
+            decay: self.cur.decay,
+            damp: self.cur.damp,
+            stretch: self.cur.stretch,
+            bright: self.cur.bright,
+            ..self.p
+        }
+    }
+
     pub fn note_on(&mut self, key: u8, hz: f64, vel: f32) {
+        if self.active_voices() == 0 {
+            // nothing sounding: no glide to make
+            self.cur = self.p;
+        }
         self.counter += 1;
         let idx = self
             .voices
@@ -1435,12 +1541,15 @@ impl ModalInstrument {
                     .map(|(i, _)| i)
                     .unwrap()
             });
-        let (sr, p) = (self.sr, self.p);
+        let (sr, p) = (self.sr, self.knobs());
         let v = &mut self.voices[idx];
         if !v.active {
             v.y1.iter_mut().for_each(|y| *y = 0.0);
             v.y2.iter_mut().for_each(|y| *y = 0.0);
             v.gate = 0.0;
+            v.fade_until = 0;
+            v.spread = p.spread as f64;
+            v.n = 0;
         }
         v.key = key;
         v.held = true;
@@ -1472,7 +1581,7 @@ impl ModalInstrument {
     }
 
     pub fn note_off(&mut self, key: u8) {
-        let (sr, p) = (self.sr, self.p);
+        let (sr, p) = (self.sr, self.knobs());
         let mute = p.mute.clamp(0.0, 1.0) as f64;
         for i in 0..self.voices.len() {
             if !(self.voices[i].held && self.voices[i].key == key) {
@@ -1504,20 +1613,59 @@ impl ModalInstrument {
         self.gate_steps = gate.steps(self.sr);
     }
 
-    /// A knob moved: every sounding bank takes the new shapes now.
+    /// A knob moved. With nothing sounding the banks just take it; while
+    /// they sound, the mode count applies now (leaving modes die away) and
+    /// decay, damp, stretch and bright glide there in render_raw.
     pub fn changed(&mut self) {
-        let (sr, p) = (self.sr, self.p);
+        if self.active_voices() == 0 {
+            self.cur = self.p;
+            return;
+        }
+        let (sr, p) = (self.sr, self.knobs());
         for v in self.voices.iter_mut().filter(|v| v.active) {
             v.configure(&self.modes, &p, sr);
         }
     }
 
+    /// One step of the knob glide, every 32 samples: ~10 ms to settle
+    /// (the decay in ratio, the rest linearly), then every bank retuned.
+    fn glide(&mut self) {
+        let k = 1.0 - (-32.0 / (0.01 * self.sr as f32)).exp();
+        let (c, p) = (&mut self.cur, &self.p);
+        let lin = |c: &mut f32, t: f32, eps: f32| {
+            *c += (t - *c) * k;
+            if (t - *c).abs() < eps {
+                *c = t;
+            }
+        };
+        lin(&mut c.damp, p.damp, 1e-4);
+        lin(&mut c.stretch, p.stretch, 1e-6);
+        lin(&mut c.bright, p.bright, 1e-4);
+        let ratio = (p.decay / c.decay).ln();
+        c.decay *= (ratio * k).exp();
+        if (p.decay / c.decay).ln().abs() < 1e-4 {
+            c.decay = p.decay;
+        }
+        let (sr, knobs) = (self.sr, self.knobs());
+        for v in self.voices.iter_mut().filter(|v| v.active) {
+            v.configure(&self.modes, &knobs, sr);
+        }
+    }
+
     /// One sample in the reference's own units (before the bus scale).
     pub fn render_raw(&mut self, input: f64) -> (f64, f64) {
+        let c = &self.cur;
+        let p = &self.p;
+        if c.decay != p.decay || c.damp != p.damp || c.stretch != p.stretch || c.bright != p.bright {
+            self.tick = self.tick.wrapping_add(1);
+            if self.tick % 32 == 0 {
+                self.glide();
+            }
+        }
         let (mut l, mut r) = (0.0, 0.0);
-        let (sr, steps) = (self.sr, self.gate_steps);
+        let (sr, steps, knobs) = (self.sr, self.gate_steps, self.knobs());
         for v in self.voices.iter_mut().filter(|v| v.active) {
-            let (vl, vr) = v.render(&self.modes, &self.p, sr, steps, input);
+            let (vl, vr) = v.render(&self.modes, &knobs, sr, steps, input);
             l += vl;
             r += vr;
         }
@@ -1533,9 +1681,26 @@ impl ModalInstrument {
 // The instrument a track owns
 // ---------------------------------------------------------------------------
 
+/// The ceiling an instrument's output bends toward, in volts: 16 x a
+/// note's level (24 dB over it), reached only by a long-ringing body
+/// driven hard through excite=. Below 70% of it the output is untouched;
+/// above, a tanh knee holds it under the ceiling.
+const GUARD_V: f32 = 16.0 * PROGRAM_V;
+
+fn guard(v: f32) -> f32 {
+    const KNEE: f32 = 0.7 * GUARD_V;
+    let a = v.abs();
+    if a <= KNEE {
+        v
+    } else {
+        v.signum() * (KNEE + (GUARD_V - KNEE) * ((a - KNEE) / (GUARD_V - KNEE)).tanh())
+    }
+}
+
 pub enum Body {
     String(StringInstrument),
     Modal(ModalInstrument),
+    Additive(crate::additive::AdditiveInstrument),
 }
 
 pub struct Instrument {
@@ -1550,6 +1715,9 @@ impl Instrument {
         let body = match &spec.kind {
             InstrumentKind::String => Body::String(StringInstrument::new(sr)),
             InstrumentKind::Modal(set) => Body::Modal(ModalInstrument::new(sr, set.clone())),
+            InstrumentKind::Additive(set) => {
+                Body::Additive(crate::additive::AdditiveInstrument::new(sr, set.clone()))
+            }
         };
         let mut inst = Instrument {
             body,
@@ -1561,6 +1729,7 @@ impl Instrument {
             match &mut inst.body {
                 Body::String(s) => s.p.excite = 3,
                 Body::Modal(m) => m.p.excite = 3,
+                Body::Additive(_) => {}
             }
         }
         inst
@@ -1571,6 +1740,7 @@ impl Instrument {
         match &mut self.body {
             Body::String(s) => s.note_on(key, hz, vel),
             Body::Modal(m) => m.note_on(key, hz, vel),
+            Body::Additive(a) => a.note_on(key, hz, vel),
         }
     }
 
@@ -1578,6 +1748,7 @@ impl Instrument {
         match &mut self.body {
             Body::String(s) => s.note_off(key),
             Body::Modal(m) => m.note_off(key),
+            Body::Additive(a) => a.note_off(key),
         }
     }
 
@@ -1585,6 +1756,7 @@ impl Instrument {
         match &mut self.body {
             Body::String(s) => s.bend(key, semitones, seconds, power),
             Body::Modal(m) => m.bend(key, semitones, seconds, power),
+            Body::Additive(a) => a.bend(key, semitones, seconds, power),
         }
     }
 
@@ -1593,6 +1765,7 @@ impl Instrument {
         match &mut self.body {
             Body::String(s) => s.set_gate(gate),
             Body::Modal(m) => m.set_gate(gate),
+            Body::Additive(a) => a.set_gate(gate),
         }
     }
 
@@ -1649,6 +1822,7 @@ impl Instrument {
                 }
                 true
             }
+            Body::Additive(a) => a.set_param(param, v),
         }
     }
 
@@ -1656,7 +1830,7 @@ impl Instrument {
     /// output (volts, mono).
     pub fn render(&mut self, input: f32) -> (f32, f32) {
         let x = input / PROGRAM_V * self.excite_gain;
-        match &mut self.body {
+        let (l, r) = match &mut self.body {
             Body::String(s) => {
                 let o = s.render(x * STRING_EXCITE);
                 (o, o)
@@ -1665,13 +1839,16 @@ impl Instrument {
                 let (l, r) = m.render_raw((x * MODAL_EXCITE) as f64);
                 (l as f32 * MODAL_V, r as f32 * MODAL_V)
             }
-        }
+            Body::Additive(a) => a.render(),
+        };
+        (guard(l), guard(r))
     }
 
     pub fn is_silent(&self) -> bool {
         match &self.body {
             Body::String(s) => s.active_voices() == 0,
             Body::Modal(m) => m.active_voices() == 0,
+            Body::Additive(a) => a.active_voices() == 0,
         }
     }
 }
@@ -2011,5 +2188,126 @@ pub(crate) mod tests {
         let on = drive(f0 * 2.32);
         let off = drive(f0 * 3.3);
         assert!(on > 20.0 * off, "on-mode {on} vs off-mode {off}");
+    }
+
+    fn spec(kind: InstrumentKind) -> InstrumentSpec {
+        InstrumentSpec { kind, excite: None }
+    }
+
+    fn instrument(kind: &InstrumentKind, knobs: &[(Param, f32)]) -> Instrument {
+        let mut inst = Instrument::new(&spec(kind.clone()), SR);
+        for &(p, v) in knobs {
+            assert!(inst.set_param(p, v), "{p:?}");
+        }
+        inst
+    }
+
+    /// The largest jump a knob move puts on the output in the 32 samples
+    /// after it, against the output's own peak: two identical
+    /// instruments, one of them turned.
+    fn jump(kind: &InstrumentKind, knobs: &[(Param, f32)], turn: (Param, f32), key: u8) -> f64 {
+        let mut a = instrument(kind, knobs);
+        let mut b = instrument(kind, knobs);
+        for i in [&mut a, &mut b] {
+            i.set_gate(Gate { attack: 0.05, release: 0.3 });
+            i.note_on(key, 0.0, 0.9);
+        }
+        let mut peak = 0.0f64;
+        for _ in 0..24000 {
+            let (l, r) = a.render(0.0);
+            b.render(0.0);
+            peak = peak.max(l.abs().max(r.abs()) as f64);
+        }
+        b.set_param(turn.0, turn.1);
+        let mut worst = 0.0f64;
+        for _ in 0..32 {
+            let (la, ra) = a.render(0.0);
+            let (lb, rb) = b.render(0.0);
+            worst = worst.max(((la - lb).abs().max((ra - rb).abs())) as f64);
+        }
+        worst / peak
+    }
+
+    /// Any knob, turned all the way in one step mid-note, moves the
+    /// output smoothly: within 32 samples it has moved less than 6% of
+    /// the note's peak (a cut-off mode or a stepped pan gain moved it
+    /// by the mode's whole amplitude at once).
+    #[test]
+    fn knob_jumps_do_not_click() {
+        let bell = InstrumentKind::Modal(ModeSet::preset("bell").unwrap());
+        let wire = InstrumentKind::Modal(ModeSet::preset("string").unwrap());
+        let bowed = [(Param::ModalExcite, 2.0), (Param::ModalSpread, 0.0)];
+        let string = InstrumentKind::String;
+        let bow = [(Param::StrExcite, 2.0), (Param::StrDecay, 8.0)];
+        let add = InstrumentKind::Additive(crate::additive::PartialSet::harmonic());
+        let cases: Vec<(&str, &InstrumentKind, &[(Param, f32)], (Param, f32), u8)> = vec![
+            ("bell spread", &bell, &bowed, (Param::ModalSpread, 1.0), 60),
+            ("bell modes", &bell, &bowed, (Param::ModalModes, 2.0), 60),
+            ("bell stretch", &bell, &bowed, (Param::ModalStretch, 0.4), 60),
+            ("bell bright", &bell, &bowed, (Param::ModalBright, -1.0), 60),
+            ("bell decay", &bell, &bowed, (Param::ModalDecay, 0.01), 60),
+            ("bell damp", &bell, &bowed, (Param::ModalDamp, 4.0), 60),
+            ("wire modes", &wire, &bowed, (Param::ModalModes, 1.0), 33),
+            ("wire stretch past nyquist", &wire, &bowed, (Param::ModalStretch, 0.5), 33),
+            ("string decay", &string, &bow, (Param::StrDecay, 0.05), 45),
+            ("string damp", &string, &bow, (Param::StrDamp, 4.0), 45),
+            ("string pressure", &string, &bow, (Param::StrPressure, 1.0), 45),
+            ("additive partials", &add, &[], (Param::AddPartials, 512.0), 45),
+            ("additive tilt", &add, &[], (Param::AddTilt, -2.0), 45),
+            ("additive comb", &add, &[], (Param::AddCombDepth, 1.0), 45),
+            ("additive width", &add, &[], (Param::AddWidth, 1.0), 45),
+            ("additive stretch", &add, &[], (Param::AddStretch, 0.05), 45),
+        ];
+        for (name, kind, knobs, turn, key) in cases {
+            let j = jump(kind, knobs, turn, key);
+            println!("{name}: {j:.4}");
+            assert!(j < 0.06, "{name}: the output jumped {j:.3} of its peak");
+        }
+    }
+
+    /// Every knob at either end of its range, on the lowest and the
+    /// highest key: nothing blows up, nothing goes NaN.
+    #[test]
+    fn extreme_settings_stay_finite_and_bounded() {
+        let kinds = [
+            InstrumentKind::String,
+            InstrumentKind::Modal(ModeSet::preset("cymbal").unwrap()),
+            InstrumentKind::Modal(ModeSet::preset("bar").unwrap()),
+            InstrumentKind::Additive(crate::additive::PartialSet::harmonic()),
+        ];
+        let params: Vec<Param> = crate::song::PARAM_DEFS
+            .iter()
+            .map(|d| d.param)
+            .filter(|p| is_instrument_param(*p))
+            .collect();
+        for kind in &kinds {
+            for end in [0, 1] {
+                for excite in [0.0f32, 1.0, 2.0] {
+                    let mut inst = Instrument::new(&spec(kind.clone()), SR);
+                    for &p in &params {
+                        let (lo, hi, _) = p.range();
+                        inst.set_param(p, if end == 0 { lo } else { hi });
+                    }
+                    inst.set_param(Param::StrExcite, excite);
+                    inst.set_param(Param::ModalExcite, excite);
+                    inst.set_gate(Gate { attack: 0.0, release: 0.0 });
+                    let mut peak = 0.0f32;
+                    for (k, key) in [21u8, 108, 60].into_iter().enumerate() {
+                        inst.note_on(key, 0.0, 1.0);
+                        for i in 0..24000 {
+                            // the excite input at full scale too
+                            let x = if i % 97 < 48 { 10.0 } else { -10.0 };
+                            let (l, r) = inst.render(x);
+                            assert!(l.is_finite() && r.is_finite(), "{kind:?} end {end} key {key}");
+                            peak = peak.max(l.abs().max(r.abs()));
+                        }
+                        if k == 1 {
+                            inst.note_off(21);
+                        }
+                    }
+                    assert!(peak <= GUARD_V, "{kind:?} end {end} excite {excite}: peak {peak} V");
+                }
+            }
+        }
     }
 }

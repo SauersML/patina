@@ -249,6 +249,14 @@ pub fn export_events(song: &crate::song::Song, path: &str) -> Result<()> {
                  \"semis\":{:.4},\"gain\":{:.4},\"pan\":{:.4},\"ch\":{}",
                 hit.slice, hit.note, hit.velocity, hit.reverse, hit.semis, hit.gain, hit.pan, channel
             ),
+            crate::song::EventKind::Tune {
+                note,
+                channel,
+                cents,
+            } => format!(
+                "\"type\":\"tune\",\"note\":{},\"cents\":{:.6},\"ch\":{}",
+                note, cents, channel
+            ),
         };
         let comma = if i + 1 < n { "," } else { "" };
         writeln!(w, "    {{\"t\":{:.6},{}}}{}", e.time, body, comma)?;

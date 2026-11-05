@@ -36,6 +36,7 @@ pub fn supported_sample_rate(rate: f64) -> bool {
 }
 
 pub mod adaa;
+pub mod additive;
 pub mod binaural;
 pub mod body;
 pub mod buscomp;
@@ -71,6 +72,7 @@ pub mod spring;
 pub mod substrate;
 pub mod talker;
 pub mod tape;
+pub mod tuning;
 pub mod vocoder;
 pub mod voice;
 pub mod voice_manager;

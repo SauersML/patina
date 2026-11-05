@@ -25,6 +25,8 @@ format for programmatic playback and parameter automation.
 - 💥 Glitch inserts on any track, any bus or the whole mix: beat repeat from 1/8 to 1/64 that can halve itself into a roll, reverse in note slices, and a tape stop with a curve (`stutter`, `stutter_halve`, `reverse`, `tape_stop`, `tape_stop_curve`)
 - 🌀 Generative automation lanes: `{expr}` segments of time at control rate, with noise, step sequences and chaotic systems (Lorenz, Rössler, logistic and Hénon maps, a Kuramoto swarm of coupled oscillators, a double pendulum)
 - 🔀 Audio-rate cross-modulation between tracks: any track's signal as another's FM, filter FM or ring modulator, and routed feedback loops between tracks through a delay, a tone filter and a safety limiter (`fm_from=`, `filter_fm_from=`, `ringmod_from=`, `feed_from=`)
+- 〰️ An additive voice: up to 512 sine partials a note, each with its own ratio, amplitude and pan (a `partials` table), shaped by click-free lanes for tilt, odd/even balance, inharmonic stretch, detune spread, a moving comb and a stereo fan (`track pad additive`, `add_tilt`, `add_comb_phase`, ...)
+- 📐 Free tuning: notes in cents or Hz (`A4+13.7c`, `220hz`) and tuning tables a track plays in (`tuning=just`, `edo19`, `bp`, `cents=` and `ratios=` lists, Scala `.scl` files)
 - 🌾 A granular engine on any track, the whole mix bus, or a send bus any tracks feed: a live capture buffer played back as a cloud of grains with size, density, position, pitch and pan scatter, a pitch set, freeze and reverse probability (`gran`, `gran_size`, `gran_pitches=`, `gran_send=`, a `grains` line, ...)
 - 🌈 Spectral inserts on any track or the mix bus: freeze, blur, frequency shift and pitch shift, spectral gate and tilt, and a morph that crossfades one track's spectrum into another's (`spec_freeze`, `spec_morph` with `spec_from=`, ...)
 - 🎧 Binaural placement on any track, for headphones: azimuth, elevation and distance around a modelled head (a spherical head with pinna and shoulder echoes, generated, no measured dataset), motion paths, and the Doppler bend of a moving source (`azimuth`, `distance`, `orbit`, `pos_x`, `doppler`, ...)
@@ -297,6 +299,25 @@ automate riser.noise_cutoff        # sweep a track's own noise
 - **Noise oscillator**: `noise_osc` (0..1) is the card's own white noise through its own resonant filter, `noise_cutoff` (Hz), `noise_res`, `noise_mode` (0 lowpass, 1 bandpass, 2 highpass). Unlike `noise` (one shared source into every voice), each card's noise is its own.
 - Patches: `hardkick` (hardstyle kick-bass), `rawkick` (wavefolded screech), `kick808` (long 808), `superwall`, `riser`. `songs/kick-bass.song` is the demo.
 
+## 📐 Free tuning
+
+Notes need not sit on 12-TET. `A4+13.7c` moves a note by cents, `220hz` plays a frequency, and a track line's `tuning=` retunes every key it plays (`src/tuning.rs`):
+
+```
+tuning dj just root=D4                      # five-limit just intonation on D
+tuning slendro cents=240,480,720,960,1200   # or ratios=9/8,5/4,3/2,2, or scl=file.scl
+track lute string tuning=dj
+D4 F#4 A4 [D4 F#4 A4]:2
+track bells modal=bell tuning=edo31         # 31 keys to the octave
+track drone
+110hz:16 [110hz 165hz 220hz]:16
+```
+
+- Built-ins: `12tet`, `just`, `pythagorean`, `meantone` (quarter-comma), `werckmeister3`, `edoN` (any N, `edo19`, `edo24`, `edo31`, ...), `bp` (Bohlen-Pierce, 13 steps to the 3:1 tritave). A `tuning NAME BASE` line names a table with its own `root=` (the key that keeps its 12-TET pitch, C4 by default) and `a4=` (440 by default).
+- Keys map to scale steps one for one from the root (the Scala convention), so a 12-note scale lands where its note names say and a 19- or 31-step one runs up the keyboard a step a key.
+- The engine plays every pitch as a key plus cents. Two different pitches near one key never share it: the second takes the nearest free key, so each keeps its own note-off. Synth, vox (the carrier), sampler and instrument tracks sound the cents exactly; 12-TET songs send none and render bit-for-bit as before.
+- Demo: `songs/just-and-otherwise.song`.
+
 ## 🪕 Strings and struck bodies
 
 Physical models play on their own tracks (`src/physical.rs`), each with its own strip and stem:
@@ -315,7 +336,27 @@ track wire modal=string modal_excite=2 modal_stretch=0.002 modal_damp=0.2 modal_
 - **String** (`string=pluck|strike|bow|none`): a digital waveguide whose loop is solved to the note's period exactly (every filter's delay counted; the tests hold it within 0.05 cents from 41 Hz to 2 kHz). `str_decay` is the fundamental's T60 in seconds and `str_damp` shortens partial f to T60/(1 + damp·(f/f1 − 1)). `str_stiff` is the inharmonicity B: an allpass cascade (8 to 32 sections, fitted per note) puts partial k at k·f0·√(1 + B·k²): within 2 cents through the 16th partial for B up to 0.001 (piano-like), about 8 cents at 0.002; a stiffer low string runs out of loop and stretches less than asked. `str_pos` is where the pluck, hammer or bow touches (harmonics with a node there drop out), `str_hard` the plectrum or felt, `str_pressure` the bow (velocity is bow speed, so loudness), `str_mute` how hard a note-off damps. A bow speaks in clean Helmholtz motion near the bridge (`str_pos` 0.08 to 0.15) and breaks into multi-slip further out.
 - **Modal bank** (`modal=bar|glass|plate|bell|string|gong|cymbal`, or a `modes` line): up to 512 two-pole resonators, a line-for-line port of Hypha's reference (`tests/data/spec/modal.py`, matched sample for sample by the tests). `modal_decay` scales every T60, `modal_damp` shortens the high modes, `modal_stretch` makes ratios inharmonic, `modal_bright` tilts the gains, `modal_spread` puts odd modes left and even right, `modal_modes` sounds the lowest N. `modal_excite` picks a mallet strike (`modal_hard`), a noise burst (`modal_burst` seconds), a noise bow that sustains while the note is held, or none.
 - **Excite**: `excite=TRACK` drives the body with another track's audio (its raw output, so a source at `gain=0` still drives it), scaled by `excite_gain`. The instrument's own notes tune the body and hold it open; `attack=`/`release=` on the track line shape that gate. A pitched source on a body tuned to it resonates hard: turn `excite_gain` down.
-- Every knob is a track option and a lane (`automate wire.str_decay`); unscoped, it turns every instrument that has it. Notes bend (`C4:2>G3`).
+- Every knob is a track option and a lane (`automate wire.str_decay`); unscoped, it turns every instrument that has it. Notes bend (`C4:2>G3`). On a sounding bank the decay, damping, stretch and brightness glide to a new value over about 10 ms, the spread pans over 5 ms, and a mode the count or the stretch drops dies away over 20 ms instead of being cut, so fast lanes never click. A body driven very hard bends under a ceiling 24 dB over a note's level instead of running away.
+- Demo: `songs/wire-and-bell.song`.
+
+## 〰️ Additive voice
+
+`track NAME additive` plays each note as up to 512 sine partials (`src/additive.rs`, a port of Hypha's reference `tests/data/spec/additive.py`, matched sample for sample by the tests). Nine knobs shape the spectrum, and every one is a track option and a click-free lane:
+
+```
+partials organ 1 2:0.5 3:0.3:-0.5 4.2:0.2:0.5   # a table of your own: ratio:amp:pan
+track org additive=organ add_tilt=0
+track pad additive add_partials=256 add_tilt=0.7 add_spread=12 attack=1.5 release=3
+[C3 G3 D4]:16
+automate pad.add_comb_phase                       # sweep the comb through the partials
+0 25:16
+```
+
+- Partial k at ratio r (k for the default harmonic table) sounds at f0·r·(1 + `add_stretch`·(r − 1)), detuned by up to ±`add_spread` cents (a fixed random pattern per partial).
+- Its amplitude is its table amp × r^−`add_tilt` (0 flat, 1 saw, 2 dark), with even partials × (1 − `add_odd`) (1 is square-like), × a comb 1 − `add_comb_depth`·(0.5 + 0.5·cos(2π·r·`add_comb_freq` + `add_comb_phase`)). `add_width` fans the partials alternately left and right.
+- `add_partials` (default 64) sound; partials past 0.95 Nyquist drop out, and the total power stays constant as the count, tilt and comb move. Every knob glides toward its lane (about 15 ms), is read every 64 samples and glides across them, and each partial keeps its phase, so fast lanes never click or zipper. `attack=`/`release=` on the track line are the note's gate; 8 voices; notes bend and take tunings.
+- Cost: 60 s of eight held notes of 512 partials, every spectral lane moving, renders in about 12 s.
+- Demo: `songs/partials.song`.
 
 ## 💥 Glitch
 

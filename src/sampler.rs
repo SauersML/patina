@@ -309,6 +309,8 @@ struct Head {
     st_n: u64,
     st_grains: [(f64, f64); STRETCH_GRAINS],
     st_live: [bool; STRETCH_GRAINS],
+    /// A tuned note's offset from its key, in semitones (0 in 12-TET)
+    tune_semis: f32,
 }
 
 impl Head {
@@ -346,6 +348,7 @@ impl Head {
             st_n: 0,
             st_grains: [(0.0, 0.0); STRETCH_GRAINS],
             st_live: [false; STRETCH_GRAINS],
+            tune_semis: 0.0,
         }
     }
 }
@@ -883,13 +886,25 @@ impl SamplerBank {
     /// was sounding (and whether that was a held note rather than a
     /// release tail), so the engine can say the deck ran out.
     pub fn note_on(&mut self, slot_idx: usize, note: u8, velocity: f32) -> Option<(usize, bool)> {
-        self.start_head(slot_idx, note, velocity, None)
+        self.note_on_tuned(slot_idx, note, velocity, 0.0)
+    }
+
+    /// A note `cents` off its key's pitch (a song's tuning): a keytracked
+    /// head runs that much faster or slower. Returns what `note_on` does.
+    pub fn note_on_tuned(
+        &mut self,
+        slot_idx: usize,
+        note: u8,
+        velocity: f32,
+        cents: f32,
+    ) -> Option<(usize, bool)> {
+        self.start_head(slot_idx, note, velocity, None, cents)
     }
 
     /// Start a head on one slice of a slice track (`slice=N`): the pick's
     /// slice, direction, transposition, gain and pan latched on it.
     pub fn slice_on(&mut self, slot_idx: usize, hit: &SliceHit) -> Option<(usize, bool)> {
-        self.start_head(slot_idx, hit.note, hit.velocity, Some(hit))
+        self.start_head(slot_idx, hit.note, hit.velocity, Some(hit), 0.0)
     }
 
     fn start_head(
@@ -898,6 +913,7 @@ impl SamplerBank {
         note: u8,
         velocity: f32,
         hit: Option<&SliceHit>,
+        cents: f32,
     ) -> Option<(usize, bool)> {
         let Some(slot) = self.slots.get(slot_idx).and_then(|s| s.as_ref()) else {
             return None;
@@ -1045,6 +1061,7 @@ impl SamplerBank {
             st_n: 0,
             st_grains: [(0.0, 0.0); STRETCH_GRAINS],
             st_live: [false; STRETCH_GRAINS],
+            tune_semis: cents / 100.0,
         };
         cut
     }
@@ -1120,7 +1137,7 @@ impl SamplerBank {
             // Varispeed: keytrack interval * live pitch knob * tempo-fit
             // speed * bend bus
             let semis = if h.keytrack {
-                (h.note as i16 - cfg.root as i16) as f32 + cfg.pitch_semis
+                (h.note as i16 - cfg.root as i16) as f32 + cfg.pitch_semis + h.tune_semis
             } else {
                 cfg.pitch_semis
             };

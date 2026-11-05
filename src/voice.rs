@@ -161,6 +161,8 @@ pub struct Voice {
     /// is a genuinely different circuit (its own tolerances and drift),
     /// so unison here is an ensemble of instruments, not copies.
     unison_cents: f32,
+    /// A tuned note's offset from its key's 12-TET pitch (0 in 12-TET)
+    tune_cents: f32,
     /// Filter keyboard tracking, octaves of cutoff per octave of pitch.
     /// The 2600 trims this to full 1 V/oct so a self-oscillating filter
     /// plays in tune; the Minimoog offers fractional settings.
@@ -316,6 +318,7 @@ impl Voice {
             osc_level: [0.72, 0.72],
             detune_cents: 7.0,
             unison_cents: 0.0,
+            tune_cents: 0.0,
             key_track: 0.4,
             fm_amount: 0.0,
             fm_mean: 1.0,
@@ -577,6 +580,13 @@ impl Voice {
         self.unison_cents = cents.clamp(-50.0, 50.0);
     }
 
+    /// The next note's offset from its key's 12-TET pitch, in cents (a
+    /// song's tuning): the oscillators, the CV glide moves on and the
+    /// filter's key tracking all hear it.
+    pub fn set_tune_cents(&mut self, cents: f32) {
+        self.tune_cents = cents;
+    }
+
     /// Place this card in the stereo field: the note's own position
     /// (`note_position`, -1..+1, scaled by `spread`) plus its place inside
     /// one unison stack (`stack_position`, -1..+1 across the stack). A stack
@@ -697,7 +707,7 @@ impl Voice {
     /// Set the keyboard CV to `note`: the glide distance from the source
     /// CV, then each oscillator's converter with its own tolerances.
     fn tune(&mut self, note: u8, glide_from_cv: Option<f32>) {
-        let new_cv = note_cv(note);
+        let new_cv = note_cv(note) + self.tune_cents / 1200.0;
         if self.glide_rate < 0.999 {
             // No source CV (the first note, or a chord member that must
             // start in tune): begin AT the target. Leaving the offset
@@ -712,7 +722,7 @@ impl Voice {
         }
 
         let frequency = Oscillator::note_to_frequency(note)
-            * (self.unison_cents / 1200.0 * std::f32::consts::LN_2).exp();
+            * ((self.unison_cents + self.tune_cents) / 1200.0 * std::f32::consts::LN_2).exp();
         let octaves_from_ref = (frequency / CAL_REF_HZ).log2();
         for (osc, err_cents_per_oct) in self.oscs.iter().zip(self.voct_error) {
             // V/oct tracking error grows with distance from the calibration
@@ -803,7 +813,7 @@ impl Voice {
         let pitch_mult = if let Some(cv) = self.cv_override {
             // Performance line: absolute pitch, relative to the note the
             // oscillators were tuned to at trigger
-            let note_cv = note_cv(self.note.unwrap_or(69));
+            let note_cv = note_cv(self.note.unwrap_or(69)) + self.tune_cents / 1200.0;
             pitch_mult * (cv - note_cv).exp2()
         } else if self.glide_offset != 0.0 {
             // Linear slew, exact arrival: step toward the target and STOP
@@ -877,7 +887,7 @@ impl Voice {
         self.prev_prefilter = osc;
 
         // Cutoff modulation in octaves: filter envelope, key tracking, velocity
-        let note = self.note.unwrap_or(60) as f32;
+        let note = self.note.unwrap_or(60) as f32 + self.tune_cents / 100.0;
         let key_oct = (note - 60.0) / 12.0 * self.key_track;
         let vel_oct = (self.velocity - 0.5) * self.vel_filter;
         let mod_oct = filter_env * self.filter_env_amount

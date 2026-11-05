@@ -1,0 +1,52 @@
+# Wire and bell — 84 bpm, D minor, about a minute. A demo of the physical
+# models (src/physical.rs): every sound here is a string or a struck body.
+#
+#   beats  0-16   WIRE    a modal string bowed by noise: its notes tune the
+#                         body and hold it open; the stretch lane bends its
+#                         overtones out of the harmonic series and back
+#   beats 16-48   PLUCK   a stiff plucked string picks a figure over the
+#                         wire, a bowed cello takes the bass, bells answer
+#   beats 48-80   PLATE   the kit plays no sound of its own in the mix: it
+#                         strikes a plate (excite=drums) tuned to the
+#                         chord, and a struck string (a piano-like hammer)
+#                         joins in
+
+bpm 84
+gate 0.95
+tail 5
+
+section WIRE 0..16
+section PLUCK 16..48
+section PLATE 48..80
+
+automate reverb_wet
+0.24
+automate reverb_decay
+0.78
+
+# --- the wire: one held body, bowed by noise the whole piece
+track wire modal=string modal_excite=2 modal_stretch=0.002 modal_damp=0.2 modal_spread=0.4 attack=0.4 release=3 vel=0.7 gain=0.4 reverb_send=0.35
+D2:16 [D2 A2]:32 [A#1 F2]:16 [D2 A2]:16
+automate wire.modal_stretch
+0.002 R:6 0.012:6@smooth 0.002:4@smooth R:40 0.006:12@smooth 0.002:12@smooth
+automate wire.gain
+0.4 R:72 0:8@smooth
+
+# --- a stiff plucked string, a bowed cello, bells
+track lute string str_stiff=0.0004 str_decay=3 str_damp=0.6 str_pos=0.17 vel=0.75 pan=-0.25 reverb_send=0.3
+>PLUCK (D3:0.5 A3:0.5 F4:0.5 A3:0.5 E4:0.5 A3:0.5 D4:0.5 A3:0.5)x2 (C3:0.5 G3:0.5 E4:0.5 G3:0.5 D4:0.5 G3:0.5 C4:0.5 G3:0.5)x2 (A#2:0.5 F3:0.5 D4:0.5 F3:0.5 C4:0.5 F3:0.5 A#3:0.5 F3:0.5)x2 (A2:0.5 E3:0.5 C#4:0.5 E3:0.5 A3:0.5 E3:0.5 C#4:0.5 E3:0.5)x2
+>PLATE (D3:0.5 A3:0.5 F4:0.5 A3:0.5 E4:0.5 A3:0.5 D4:0.5 A3:0.5)x2 (A#2:0.5 F3:0.5 D4:0.5 F3:0.5 C4:0.5 F3:0.5 A#3:0.5 F3:0.5)x2 (C3:0.5 G3:0.5 E4:0.5 G3:0.5 D4:0.5 G3:0.5 C4:0.5 G3:0.5)x2 (A2:0.5 E3:0.5 C#4:0.5 E3:0.5 A3:0.5 E3:0.5 C#4:0.5 E3:0.5) D3:4
+track cello string=bow str_pressure=0.55 str_pos=0.11 str_decay=6 attack=0.25 release=0.6 vel=0.6 pan=0.2 reverb_send=0.25
+>PLUCK D2:8 C2:8 A#1:8 A1:6 A1>D2:2
+>PLATE D2:8 A#1:8 C2:8 A1:4 D2:4
+track bells modal=bell modal_bright=0.3 modal_spread=0.6 modal_decay=1.6 vel=0.9 gain=2.5 pan=0.35 reverb_send=0.5
+>PLUCK R:7 A5:1 R:7 G5:1 R:7 F5:1 R:6 E5:2
+>PLATE R:7 A5:1 R:7 F5:1 R:7 G5:1 R:4 [D5 A5]:4
+
+# --- the kit strikes a plate; only the plate is heard
+track drums kit=909 gain=0
+>PLATE (BD:0.5 R:0.5 SD:0.5 R:0.5 BD:0.5 BD:0.5 SD:0.5 R:0.5)x7 BD:4
+track plate modal=plate excite=drums excite_gain=0.12 modal_decay=1.2 modal_damp=0.8 modal_spread=0.5 vel=0.8 reverb_send=0.3
+>PLATE [D2 A2]:8 [A#1 F2]:8 [C2 G2]:8 [A1 E2]:4 [D2 A2]:4
+track piano string=strike str_hard=0.6 str_stiff=0.0006 str_decay=5 str_damp=1 vel=0.55 pan=-0.1 reverb_send=0.3
+>PLATE [D3 F3 A3]:4 R:4 [A#2 D3 F3]:4 R:4 [C3 E3 G3]:4 R:4 [A2 C#3 E3]:2 R:2 [D3 F3 A3 D4]:4
