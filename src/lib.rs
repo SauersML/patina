@@ -41,6 +41,7 @@ pub mod chorus;
 pub mod drums;
 pub mod echo;
 pub mod envelope;
+pub mod feel;
 pub mod filter;
 pub mod fuzz;
 pub mod gen;

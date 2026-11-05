@@ -175,6 +175,8 @@ USAGE:
     patina --say \"HH-AH-L-OW\" [--out <out.wav>]
                                              speak a phrase through the voice box
     patina --params                          print every automatable parameter
+    patina feel <song | file.wav> [options]  what a body under the subwoofer would
+                                             feel (patina feel --help)
     patina --help                            show this message
 
 RENDER OPTIONS:
@@ -206,6 +208,11 @@ fn sample_format(args: &[String]) -> Result<patina::render::SampleFormat, String
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
 
+    // `patina feel <song.song | file.wav> [options]`: what a body in the
+    // floor or soil under the subwoofer would feel (src/feel.rs)
+    if args.get(1).map(String::as_str) == Some("feel") {
+        return patina::feel::cli(&args[2..]).map_err(Into::into);
+    }
     // Help never touches the audio device: it must work on a headless box
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!("{USAGE}");

@@ -303,6 +303,23 @@ automate tape_stop                 # the whole mix winds down over 3 beats
 - **Tape stop**: `tape_stop B` winds the tape down to a halt over B beats at a constant rate, pitch and level falling together, then holds silence until it returns to 0 and the music comes back live.
 - Every seam (each repeat, each reversed slice, switching in and out) is declicked. A song that never touches them renders exactly as before. `songs/glitch.song` is the demo.
 
+## 🫨 Feel
+
+`patina feel <song.song | file.wav | file.mid>` plays a song (rendered in memory) or a bounce through a modelled festival rig and reports what a body in the ground right under the subwoofer would feel: the sub feed (mono, 90 Hz Linkwitz-Riley crossover, the cabinet's roll-off), its force on the floor at a calibrated level, the floor's vertical acceleration where you are, and that acceleration weighted the way a body feels it (ISO 2631-1 Wk), against the perception threshold (0.015 m/s²) and the standard's comfort bands.
+
+```
+patina feel songs/under-the-sub.song                    # buried 30 cm under a festival sub
+patina feel mix.wav --venue house                       # in a boomy timber floor, at home volume
+patina feel songs/kick-bass.song --venue club --distance 2 --out /tmp/kb
+```
+
+It prints a time-ordered report (still stretches, each section's hits with their peak in g, frequency, ring-down and tempo, and what hums between them) and writes `PREFIX.feel.json` (the 50 fps Wk envelope, every hit, the sections and the settings).
+
+- `--venue field|club|house`: soft soil over firmer ground (you buried, `--depth` 0.3 m), a 150 mm concrete slab on grade (`--distance` 1 m), a suspended timber floor that booms at 28 Hz.
+- `--level festival|club|home|<dB>`: the sub's peak SPL at 1 m for a full-scale signal: festival 143 dB (the field's default), club 135 (the slab's), home 112 (the house's). Songs and WAVs are normalized to −1 dBFS first, like a mastered track; `--no-normalize` keeps a song's engine gain.
+- `--crossover HZ`, `--sub-hz HZ`, `--sealed`/`--vented`, `--out PREFIX`, `--json PATH`, `--patch NAME` (the voice a MIDI file plays). `patina feel --help` lists them.
+- The model, every parameter and its sources: design.md §9. `cargo run --release --example feel_venues` prints each venue's transfer function. `songs/under-the-sub.song` is the demo.
+
 ## 🔌 The Substrate
 
 Patina models the *chassis*, not just the modules. Three shared physical states couple everything, with magnitudes taken from the service specs rather than tuned by ear:
