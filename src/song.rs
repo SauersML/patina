@@ -177,6 +177,19 @@
 //     170 90:16@smooth    # accelerando, half-time snaps — beats keep
 //                         # their musical positions, time stretches
 //
+//   automate m2.phase     # a track's own clock offset, in beats: its
+//     0 R:96 -0.5:36 R:96 # notes play at written beat b + phase(b)
+//                         # (negative = ahead). A linear ramp is a
+//                         # constant-rate drift, Reich's phasing: -0.5
+//                         # over 36 beats slides one eighth ahead in six
+//                         # 6-beat figures; a hold is a lock. Only that
+//                         # track's notes move (bends and lyrics with
+//                         # them, even on a shared kit=<track> board);
+//                         # automation stays on the song clock. Evaluated
+//                         # exactly at every note, no grid. A ramp may
+//                         # not fall one beat per beat or faster (the
+//                         # track would stop, then run backwards).
+//
 //   Per-track mixer lanes ride the same syntax: `automate lead.gain`,
 //   `automate pad.pan`, `automate snare.reverb_send` (dub throws that
 //   touch only the snare), `automate bass.duck`. `automate chorus_mix`
@@ -1791,6 +1804,8 @@ enum TrackMode {
         len: f64,
         channel: u16,
         swing: f64,
+        /// index into `track_channels`: whose notes these are
+        track: usize,
     },
     Automation {
         param: Param,
@@ -1799,6 +1814,11 @@ enum TrackMode {
     },
     /// `automate bpm`: tokens land on the tempo map, not the event list
     Tempo {
+        current: Option<f32>,
+    },
+    /// `automate <track>.phase`: tokens land on that track's time warp
+    Phase {
+        track: usize,
         current: Option<f32>,
     },
 }
@@ -1838,6 +1858,12 @@ fn parse_song(text: &str) -> Result<Song, String> {
 
     let mut mode = TrackMode::None;
     let mut track_beat = 0.0_f64;
+    // (first event, end, track index) for every line of note tokens, so a
+    // track's phase lane can find exactly its own events afterwards
+    let mut note_spans: Vec<(usize, usize, usize)> = Vec::new();
+    // `automate <track>.phase` breakpoints per track index, in beats
+    let mut phase_lanes: std::collections::HashMap<usize, Vec<(f64, AutoToken)>> =
+        std::collections::HashMap::new();
 
     for (line_no, raw) in text.lines().enumerate() {
         let err = |msg: String| format!("line {}: {}", line_no + 1, msg);
@@ -2184,6 +2210,7 @@ fn parse_song(text: &str) -> Result<Song, String> {
                     len,
                     channel,
                     swing,
+                    track: track_channels.len() - 1,
                 };
             }
             "automate" => {
@@ -2193,6 +2220,32 @@ fn parse_song(text: &str) -> Result<Song, String> {
                     .copied()
                     .ok_or_else(|| err("automate needs a parameter name".into()))?
                     .trim_end_matches(':');
+                // `automate m2.phase`: a time warp on one track's notes
+                if name == "phase" {
+                    return Err(err("phase belongs to a track: automate <track>.phase".into()));
+                }
+                if let Some(track) = name.strip_suffix(".phase") {
+                    let idx = track_channels
+                        .iter()
+                        .position(|(t, _)| t == track)
+                        .ok_or_else(|| {
+                            err(format!(
+                                "automate '{}': no track named '{}' defined above",
+                                name, track
+                            ))
+                        })?;
+                    if toks.len() > 2 {
+                        return Err(err(
+                            "a phase lane takes breakpoints on the following lines".into(),
+                        ));
+                    }
+                    track_beat = 0.0;
+                    mode = TrackMode::Phase {
+                        track: idx,
+                        current: None,
+                    };
+                    continue;
+                }
                 // `automate lead.cutoff` targets the named track's channel
                 let (channel, pname) = match name.split_once('.') {
                     Some((track, pname)) => {
@@ -2329,9 +2382,11 @@ fn parse_song(text: &str) -> Result<Song, String> {
                     len,
                     channel,
                     swing,
+                    track,
                 } => {
                     let swing = *swing;
-                    let (vel, len, channel) = (*vel, *len, *channel);
+                    let (vel, len, channel, track) = (*vel, *len, *channel, *track);
+                    let first_event = events.len();
                     let drums = crate::drums::kit_for_channel(channel).is_some();
                     let line = expand_groups(line).map_err(err)?;
                     for token in tokenize(&line).map_err(err)? {
@@ -2463,6 +2518,7 @@ fn parse_song(text: &str) -> Result<Song, String> {
                         }
                         track_beat += dur;
                     }
+                    note_spans.push((first_event, events.len(), track));
                 }
                 TrackMode::Automation {
                     param,
@@ -2557,7 +2613,58 @@ fn parse_song(text: &str) -> Result<Song, String> {
                         }
                     }
                 }
+                TrackMode::Phase { track, current } => {
+                    let track = *track;
+                    let line = expand_groups(line).map_err(err)?;
+                    for token in tokenize(&line).map_err(err)? {
+                        if token == "|" {
+                            continue;
+                        }
+                        if let Some(beat) = token.strip_prefix('>') {
+                            track_beat = resolve_seek(beat, &sections).map_err(err)?;
+                            continue;
+                        }
+                        let seg = parse_automation_token(&token)
+                            .map_err(|m| err(format!("token '{}': {}", token, m)))?;
+                        let lane = phase_lanes.entry(track).or_default();
+                        match seg {
+                            AutoToken::Hold(dur) => track_beat += dur,
+                            AutoToken::Set(value) => {
+                                lane.push((track_beat, AutoToken::Set(value)));
+                                *current = Some(value);
+                            }
+                            AutoToken::Ramp { to, dur, shape } => {
+                                let from = current.ok_or_else(|| {
+                                    err("first phase token must be a plain value".into())
+                                })?;
+                                check_phase_ramp(from, to, dur, shape)
+                                    .map_err(|m| err(format!("token '{}': {}", token, m)))?;
+                                lane.push((track_beat, AutoToken::Ramp { to, dur, shape }));
+                                *current = Some(to);
+                                track_beat += dur;
+                            }
+                        }
+                    }
+                }
             },
+        }
+    }
+
+    // Phase lanes: each laned track's events (note-ons, note-offs, lyric
+    // onsets, bends and the off beat a bend glides to) move from beat b
+    // to b + phase(b). Automation stays on the song clock.
+    for (&track, lane) in &mut phase_lanes {
+        lane.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        for &(a, b, t) in &note_spans {
+            if t != track {
+                continue;
+            }
+            for e in &mut events[a..b] {
+                e.0 = (e.0 + phase_at(lane, e.0)).max(0.0);
+                if let EventKind::Bend { seconds: off, .. } = &mut e.2 {
+                    *off = (*off + phase_at(lane, *off)).max(0.0);
+                }
+            }
         }
     }
 
@@ -2821,6 +2928,55 @@ fn end_notes_at_restrike(events: &mut Vec<(f64, u8, EventKind)>) {
         }
         i += 1;
     }
+}
+
+/// A phase lane's offset (beats) at beat `b`: the lane's breakpoints
+/// evaluated exactly (no automation grid: phasing is all small, precise
+/// differences), 0 before the first breakpoint and the last value held
+/// past the end.
+fn phase_at(lane: &[(f64, AutoToken)], b: f64) -> f64 {
+    let mut v = 0.0f64;
+    for &(at, ref tok) in lane {
+        if b < at {
+            break;
+        }
+        match *tok {
+            AutoToken::Set(x) => v = x as f64,
+            AutoToken::Ramp { to, dur, shape } => {
+                if b < at + dur {
+                    let t = ((b - at) / dur) as f32;
+                    return shape.interpolate(v as f32, to, t) as f64;
+                }
+                v = to as f64;
+            }
+            AutoToken::Hold(_) => {}
+        }
+    }
+    v
+}
+
+/// A phase ramp must never run a track's time backwards: if the offset
+/// falls one beat per beat, the track's notes pile up on one instant;
+/// faster, they play in reverse. Jumps (`@step`, plain values) are fine.
+fn check_phase_ramp(from: f32, to: f32, dur: f64, shape: Shape) -> Result<(), String> {
+    if matches!(shape, Shape::Step) || dur <= 0.0 {
+        return Ok(());
+    }
+    const N: usize = 256;
+    let mut prev = from as f64;
+    for k in 1..=N {
+        let v = shape.interpolate(from, to, k as f32 / N as f32) as f64;
+        let slope = (v - prev) / (dur / N as f64);
+        if slope <= -1.0 {
+            return Err(format!(
+                "phase falls {:.3} beats per beat here; it must stay above -1 \
+                 (at -1 the track stops, below it runs backwards): stretch the ramp",
+                -slope
+            ));
+        }
+        prev = v;
+    }
+    Ok(())
 }
 
 /// Compile the tempo lane into beat -> seconds. The lane is sampled at
@@ -3661,6 +3817,117 @@ mod tests {
         assert!(gaps.first().unwrap() > &0.7);
         assert!(gaps.last().unwrap() < &0.003);
         assert!(parse_song("track a\nC4\nautomate bpm\n120 24001:1\n").is_err());
+    }
+
+    /// `automate <track>.phase` warps exactly that track's notes by the
+    /// lane's offset in beats, evaluated exactly at each note: a linear
+    /// ramp is a constant-rate phase (Reich), a hold is a lock. Other
+    /// tracks, a kit track sharing the laned track's board, and every
+    /// automation lane stay on the song clock.
+    #[test]
+    fn phase_lane_warps_only_its_track() {
+        let ons = |song: &Song, ch: u16| -> Vec<f64> {
+            song.events
+                .iter()
+                .filter_map(|e| match e.kind {
+                    EventKind::NoteOn { channel, .. } if channel == ch => Some(e.time),
+                    _ => None,
+                })
+                .collect()
+        };
+        let channel = |song: &Song, name: &str| {
+            song.tracks.iter().find(|(t, _)| t == name).unwrap().1
+        };
+        let song = parse_song(
+            "bpm 60\ntrack a\n(C4:1)x8\ntrack b\n(E4:1)x8\n\
+             automate a.cutoff\n500 R:4 900\n\
+             automate a.phase\n0 R:2 0.5:4 R:2\n",
+        )
+        .unwrap();
+        let a = ons(&song, channel(&song, "a"));
+        let want = [0.0, 1.0, 2.0, 3.125, 4.25, 5.375, 6.5, 7.5];
+        assert_eq!(a.len(), want.len());
+        for (got, want) in a.iter().zip(want) {
+            assert!((got - want).abs() < 1e-6, "a: {a:?}");
+        }
+        assert_eq!(
+            ons(&song, channel(&song, "b")),
+            [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]
+        );
+        // the cutoff step is still at beat 4, not warped
+        let cut = song.events.iter().find(|e| {
+            matches!(e.kind, EventKind::Param { param: Param::Cutoff, value, .. } if value == 900.0)
+        });
+        assert!((cut.unwrap().time - 4.0).abs() < 1e-9);
+        // note-offs travel with their notes: the fifth note still ends
+        // inside its own (warped) slot
+        let off = song
+            .events
+            .iter()
+            .filter(|e| {
+                matches!(e.kind, EventKind::NoteOff { channel: c, .. } if c == channel(&song, "a"))
+            })
+            .nth(4)
+            .unwrap()
+            .time;
+        assert!(off > 4.25 && off < 5.375, "off {off}");
+
+        // h plays k's board (one channel); only h's hats move
+        let song = parse_song(
+            "bpm 60\ntrack k kit=909\n(BD)x4\ntrack h kit=k\n(CH)x4\n\
+             automate h.phase\n0.25\n",
+        )
+        .unwrap();
+        assert_eq!(channel(&song, "k"), channel(&song, "h"));
+        let mut hits = ons(&song, channel(&song, "k"));
+        hits.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_eq!(hits, [0.0, 0.25, 1.0, 1.25, 2.0, 2.25, 3.0, 3.25]);
+    }
+
+    /// A bend rides its warped note: it starts with the note-on and
+    /// glides over the note's warped length.
+    #[test]
+    fn phase_lane_carries_bends() {
+        let song = parse_song("bpm 60\ngate 1\ntrack a\nR C4:2>G3\nautomate a.phase\n0 1:4\n")
+            .unwrap();
+        let on = song
+            .events
+            .iter()
+            .find(|e| matches!(e.kind, EventKind::NoteOn { .. }))
+            .unwrap()
+            .time;
+        let off = song
+            .events
+            .iter()
+            .find(|e| matches!(e.kind, EventKind::NoteOff { .. }))
+            .unwrap()
+            .time;
+        let (at, secs) = song
+            .events
+            .iter()
+            .find_map(|e| match e.kind {
+                EventKind::Bend { seconds, .. } => Some((e.time, seconds)),
+                _ => None,
+            })
+            .unwrap();
+        // written 1..3; the lane adds b/4: 1.25..3.75
+        assert!((on - 1.25).abs() < 1e-6 && (off - 3.75).abs() < 1e-6, "{on} {off}");
+        assert!((at - on).abs() < 1e-9, "bend at {at}, note at {on}");
+        assert!((secs - 2.5).abs() < 1e-6, "bend length {secs}");
+    }
+
+    #[test]
+    fn phase_lane_rejects_what_it_cannot_mean() {
+        let e = |text: &str| parse_song(text).err().expect("should not parse");
+        assert!(e("track a\nC4\nautomate phase\n0\n").contains("automate <track>.phase"));
+        assert!(e("track a\nC4\nautomate b.phase\n0\n").contains("no track named 'b'"));
+        assert!(e("track a\nC4\nautomate a.phase: 0 during X\n").contains("following lines"));
+        assert!(e("track a\nC4\nautomate a.phase\n-0.5:4\n").contains("plain value"));
+        // falling one beat per beat stops time; faster reverses it
+        assert!(e("track a\n(C4)x8\nautomate a.phase\n0 -4:4\n").contains("must stay above -1"));
+        assert!(e("track a\n(C4)x8\nautomate a.phase\n0 -3:4@smooth\n").contains("above -1"));
+        // steep but legal, and jumps (step / plain values) are allowed
+        assert!(parse_song("track a\n(C4)x8\nautomate a.phase\n0 -3:4 R:1 0 2:1@step\n").is_ok());
     }
 
     #[test]
