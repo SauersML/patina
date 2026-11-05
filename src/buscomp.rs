@@ -145,6 +145,19 @@ use std::f32::consts::{LN_10, PI};
 // --- Front panel ---
 /// Ratio switch positions.
 pub const RATIOS: [f32; 3] = [2.0, 4.0, 10.0];
+
+/// The switch position nearest a ratio (in octaves of ratio), for a panel
+/// or host switch showing a ratio a song or patch set between positions.
+pub fn ratio_switch_index(ratio: f32) -> usize {
+    let r = if ratio.is_finite() { ratio.max(1.0) } else { RATIOS[1] };
+    (0..RATIOS.len())
+        .min_by(|&a, &b| {
+            let da = (RATIOS[a] / r).log2().abs();
+            let db = (RATIOS[b] / r).log2().abs();
+            da.total_cmp(&db)
+        })
+        .unwrap_or(1)
+}
 /// Attack switch positions, seconds.
 pub const ATTACKS_S: [f32; 6] = [0.0001, 0.0003, 0.001, 0.003, 0.01, 0.03];
 /// Release switch positions, seconds; the index past the end is AUTO.
@@ -331,7 +344,9 @@ pub struct BusComp {
     // The front panel, as set
     engaged: bool,
     threshold_db: f32,
-    ratio: usize,
+    /// The ratio, N:1 (the switch's 2, 4 and 10, or any value a song
+    /// sets).
+    ratio: f32,
     attack: usize,
     release: usize,
     makeup_db: f32,
@@ -395,7 +410,7 @@ impl BusComp {
             sample_rate,
             engaged: false,
             threshold_db: -20.0,
-            ratio: 1,
+            ratio: RATIOS[1],
             attack: 4,
             release: RELEASE_AUTO,
             makeup_db: 0.0,
@@ -460,8 +475,17 @@ impl BusComp {
 
     /// Ratio switch position: 0 = 2:1, 1 = 4:1, 2 = 10:1.
     pub fn set_ratio(&mut self, index: usize) {
-        self.ratio = index.min(RATIOS.len() - 1);
-        self.slope_target = 1.0 - 1.0 / RATIOS[self.ratio];
+        self.set_ratio_value(RATIOS[index.min(RATIOS.len() - 1)]);
+    }
+
+    /// Any ratio, N:1 (1 = no reduction; a song's `comp_ratio`). The
+    /// switch positions are three of these, so a song asking for 4 gets
+    /// exactly the 4:1 position.
+    pub fn set_ratio_value(&mut self, ratio: f32) {
+        if ratio.is_finite() {
+            self.ratio = ratio.max(1.0);
+            self.slope_target = 1.0 - 1.0 / self.ratio;
+        }
     }
 
     /// Attack switch position, 0..=5 (0.1 ms .. 30 ms).

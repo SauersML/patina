@@ -77,7 +77,7 @@ pub fn is_sampler_param(param: Param) -> bool {
 
 /// Heads across the whole deck (not per slot): enough for thick pads on
 /// one slot or a busy multi-slot arrangement, small enough to stay cheap.
-const NUM_HEADS: usize = 24;
+pub const NUM_HEADS: usize = 24;
 
 /// One-shot regions get a short fade approaching the region edge so a
 /// `start=`/`end=` cut mid-waveform can't click.
@@ -773,16 +773,19 @@ impl SamplerBank {
             .map(|s| s.cfg)
     }
 
-    pub fn note_on(&mut self, slot_idx: usize, note: u8, velocity: f32) {
+    /// Start a head. Returns the slot whose sound it cut when every head
+    /// was sounding (and whether that was a held note rather than a
+    /// release tail), so the engine can say the deck ran out.
+    pub fn note_on(&mut self, slot_idx: usize, note: u8, velocity: f32) -> Option<(usize, bool)> {
         let Some(slot) = self.slots.get(slot_idx).and_then(|s| s.as_ref()) else {
-            return;
+            return None;
         };
         let data = &slot.data;
         let cfg = slot.cfg;
         let rate = data.rate as f64;
         let frames = data.frames() as f64;
         if frames < 2.0 {
-            return;
+            return None;
         }
 
         // The playback region in source frames
@@ -858,7 +861,11 @@ impl SamplerBank {
                     .min_by_key(|(_, h)| h.age)
                     .map(|(i, _)| i)
             });
-        let Some(idx) = idx else { return };
+        let Some(idx) = idx else { return None };
+        // a head still sounding (not one a choke is already fading) is
+        // the deck running out
+        let old = &self.heads[idx];
+        let cut = (old.stage != Stage::Off && !old.choke).then_some((old.slot, old.held));
 
         self.counter += 1;
         // Song velocities are parsed floats and never validated (`C4@NaN`
@@ -900,6 +907,7 @@ impl SamplerBank {
             bend_inc: 1.0,
             bend_power: 1.0,
         };
+        cut
     }
 
     /// Bend the held heads playing `note` on a slot by `semitones` over

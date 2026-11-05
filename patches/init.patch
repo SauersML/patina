@@ -97,7 +97,7 @@ chorus_depth 0.3
 chorus_hiss 1
 comp_in 0
 comp_threshold -20
-comp_ratio 1
+comp_ratio 4
 comp_attack 4
 comp_release 4
 comp_makeup 0

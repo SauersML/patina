@@ -297,9 +297,11 @@
 //
 // The mix-bus compressor (buscomp.rs; SSL G-series bus comp, printing to
 // the tape): comp_in (0 = out, 1 = in; plain sets), comp_threshold (dBFS
-// peak, -48..0), comp_ratio (0 = 2:1, 1 = 4:1, 2 = 10:1), comp_attack (0..5
-// = 0.1, 0.3, 1, 3, 10, 30 ms), comp_release (0..3 = 0.1, 0.3, 0.6, 1.2 s,
-// 4 = AUTO) — the three switches take plain sets — comp_makeup (dB, 0..15),
+// peak, -48..0), comp_ratio (the ratio N:1, 1..20: 4 is 4:1; the card's
+// switch has 2, 4 and 10, and before 11-05 songs wrote those as 0, 1, 2),
+// comp_attack (0..5 = 0.1, 0.3, 1, 3, 10, 30 ms), comp_release (0..3 =
+// 0.1, 0.3, 0.6, 1.2 s, 4 = AUTO) — the two switches and comp_in take
+// plain sets — comp_makeup (dB, 0..15),
 // comp_mix (0..1 parallel blend, 1 = compressor alone), comp_sc_hpf
 // (sidechain high-pass Hz, 20..400; 20 = the card's own coupling).
 //
@@ -736,11 +738,13 @@ param_table! {
     TapeDrive:       "tape_drive",     Some(118), (0.0, 1.0, Lin);
     TapeAge:         "tape_age",       Some(119), (0.0, 1.0, Lin);
     // The mix-bus compressor (buscomp.rs): the console's centre section,
-    // printing to the tape. Its three switches are stepped like the card's
-    // (ratio 2/4/10:1, attack 0.1..30 ms, release 0.1..1.2 s + AUTO).
+    // printing to the tape. Attack and release are stepped like the card's
+    // switches (0.1..30 ms, 0.1..1.2 s + AUTO); the ratio is N:1 itself,
+    // 1..20, of which the card's switch has 2, 4 and 10 (a panel or
+    // plugin turns that switch: see `knob_range`).
     CompIn:          "comp_in",        None,      (0.0, 1.0, Step);
     CompThreshold:   "comp_threshold", None,      (-48.0, 0.0, Lin);
-    CompRatio:       "comp_ratio",     None,      (0.0, 2.0, Step);
+    CompRatio:       "comp_ratio",     None,      (1.0, 20.0, Log);
     CompAttack:      "comp_attack",    None,      (0.0, 5.0, Step);
     CompRelease:     "comp_release",   None,      (0.0, 4.0, Step);
     CompMakeup:      "comp_makeup",    None,      (0.0, 15.0, Lin);
@@ -1039,7 +1043,32 @@ impl Param {
             Param::BdLevel | Param::SdLevel | Param::RsLevel | Param::CpLevel | Param::HhLevel => {
                 (0.0, 1.0, Curve::Lin)
             }
+            // The card's ratio switch: three positions (2, 4, 10:1); a
+            // song or patch writes the ratio itself (see `switch_value`)
+            Param::CompRatio => (0.0, (crate::buscomp::RATIOS.len() - 1) as f32, Curve::Step),
             _ => self.range(),
+        }
+    }
+
+    /// The engine value a panel or host switch position stands for: the
+    /// position itself, except the compressor's ratio switch, whose
+    /// positions are the ratios 2, 4 and 10.
+    pub fn switch_value(self, index: f32) -> f32 {
+        match self {
+            Param::CompRatio => {
+                let i = (index.round().max(0.0) as usize).min(crate::buscomp::RATIOS.len() - 1);
+                crate::buscomp::RATIOS[i]
+            }
+            _ => index,
+        }
+    }
+
+    /// The switch position showing an engine value (`switch_value`'s
+    /// inverse; a ratio between positions shows the nearest).
+    pub fn switch_index(self, value: f32) -> f32 {
+        match self {
+            Param::CompRatio => crate::buscomp::ratio_switch_index(value) as f32,
+            _ => value,
         }
     }
 
@@ -1051,7 +1080,7 @@ impl Param {
         match curve {
             Curve::Lin => lo + (hi - lo) * t,
             Curve::Log => lo * (hi / lo).powf(t),
-            Curve::Step => (lo + (hi - lo) * t).round(),
+            Curve::Step => self.switch_value((lo + (hi - lo) * t).round()),
         }
     }
 }
@@ -2167,6 +2196,7 @@ fn register_channels(vm: &mut VoiceManager, song: &Song) {
 pub struct OfflineRender<'a> {
     vm: VoiceManager,
     events: &'a [SongEvent],
+    tracks: &'a [(String, u16)],
     next_event: usize,
     frame: usize,
     total: usize,
@@ -2185,6 +2215,71 @@ impl OfflineRender<'_> {
     pub fn peak_voices(&self) -> usize {
         self.peak_voices
     }
+
+    /// One warning per track that lost sound to the voice cap so far: a
+    /// new note found all 64 voice cards (or the tape deck's heads)
+    /// sounding and cut one of that track's, with when it first happened.
+    pub fn steal_warnings(&self) -> Vec<String> {
+        steal_warnings(self.vm.voice_steals(), self.tracks, self.vm.voices.len())
+    }
+}
+
+/// The voice-cap warnings for `steals` (see `OfflineRender::steal_warnings`).
+pub fn steal_warnings(
+    steals: &[crate::voice_manager::VoiceSteal],
+    tracks: &[(String, u16)],
+    cards: usize,
+) -> Vec<String> {
+    let name = |ch: u16| -> String {
+        let names: Vec<&str> = tracks
+            .iter()
+            .filter(|(_, c)| *c == ch)
+            .map(|(n, _)| n.as_str())
+            .collect();
+        match names.len() {
+            0 if ch == 0 => "the panel".to_string(),
+            0 => format!("channel {}", ch),
+            _ => format!("'{}'", names.join("'/'")),
+        }
+    };
+    steals
+        .iter()
+        .map(|s| {
+            let what = if s.head {
+                format!(
+                    "the tape deck's {} heads were all playing",
+                    crate::sampler::NUM_HEADS
+                )
+            } else {
+                format!("all {} voice cards were sounding", cards)
+            };
+            match (s.first_held, s.first_tail) {
+                (Some((t, by)), _) => format!(
+                    "voice cap: track {} lost a held note at {:.2} s to a note on {} ({}); \
+                     {} held note{} and {} release tail{} cut in all",
+                    name(s.victim),
+                    t,
+                    name(by),
+                    what,
+                    s.held,
+                    if s.held == 1 { "" } else { "s" },
+                    s.tails,
+                    if s.tails == 1 { "" } else { "s" },
+                ),
+                (None, Some((t, by))) => format!(
+                    "voice cap: track {} had a release tail cut at {:.2} s by a note on {} ({}); \
+                     {} tail{} cut in all",
+                    name(s.victim),
+                    t,
+                    name(by),
+                    what,
+                    s.tails,
+                    if s.tails == 1 { "" } else { "s" },
+                ),
+                (None, None) => unreachable!("a steal records what it cut"),
+            }
+        })
+        .collect()
 }
 
 impl Iterator for OfflineRender<'_> {
@@ -2251,6 +2346,7 @@ pub fn render_offline_solo(song: &Song, sample_rate: f32, solo: Option<u16>) -> 
     OfflineRender {
         vm,
         events: &song.events,
+        tracks: &song.tracks,
         next_event: 0,
         frame: 0,
         total: (end * sample_rate as f64) as usize,
@@ -3785,7 +3881,18 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
 
 /// The warning for a value outside what `param` takes, if it is.
 fn clamp_warning(param: Param, value: f32) -> Option<String> {
-    clamp_warning_as(param.name(), param, value)
+    let w = clamp_warning_as(param.name(), param, value)?;
+    // comp_ratio was the card's switch position (0, 1, 2) before it was
+    // the ratio itself: say so where an old song's 0 lands
+    Some(if param == Param::CompRatio && value < 1.0 {
+        format!(
+            "{} (comp_ratio is the ratio N:1 now, 1..20; the old switch positions 0, 1, 2 \
+             are 2, 4 and 10)",
+            w
+        )
+    } else {
+        w
+    })
 }
 
 /// The same, naming the value as the song wrote it (`res=` on a sampler
@@ -7301,5 +7408,58 @@ mod tests {
             .windows(24)
             .any(|w| w.iter().all(|&(l, r)| l == 0.0 && r == 0.0));
         assert!(!quiet, "engaging the limiter dropped a run of silence into the mix");
+    }
+
+    /// A note that finds all 64 cards sounding cuts one, and the bounce
+    /// says so: once per track that lost sound, with the time.
+    #[test]
+    fn the_voice_cap_warns_once_per_track_with_the_time() {
+        let notes: Vec<String> = (30..100).map(|n| n.to_string()).collect();
+        let text = format!(
+            "bpm 120\ntrack pad\n[{}]:2\ntrack lead\nR:1 C5:1\n",
+            notes.join(" ")
+        );
+        let song = parse_song(&text).unwrap();
+        let mut r = render_offline(&song, 48000.0);
+        for _ in r.by_ref().take(48000) {}
+        let w = r.steal_warnings();
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(
+            w[0].contains("track 'pad' lost a held note at 0.00 s")
+                && w[0].contains("7 held notes"),
+            "{}",
+            w[0]
+        );
+        // a song inside the cap warns nothing
+        let song = parse_song("track pad\n[C4 E4 G4]:2\n").unwrap();
+        let mut r = render_offline(&song, 48000.0);
+        for _ in r.by_ref().take(4800) {}
+        assert!(r.steal_warnings().is_empty());
+    }
+
+    /// comp_ratio is the ratio N:1 with a real range, on a strip and on
+    /// the bus; an old song's switch position 0 is clamped with a warning
+    /// that says what changed.
+    #[test]
+    fn comp_ratio_is_the_ratio() {
+        let song = parse_song(
+            "track d kit=909 comp=-20 comp_ratio=6\nBD\nautomate comp_ratio\n20\n",
+        )
+        .unwrap();
+        assert!(song.warnings.is_empty(), "{:?}", song.warnings);
+        let ratios: Vec<f32> = song
+            .events
+            .iter()
+            .filter_map(|e| match e.kind {
+                EventKind::Param { param: Param::CompRatio, value, .. } => Some(value),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ratios, vec![6.0, 20.0]);
+        let old = parse_song("track d kit=909\nBD\nautomate comp_ratio\n0\n").unwrap();
+        assert_eq!(old.warnings.len(), 1);
+        assert!(old.warnings[0].contains("old switch positions 0, 1, 2 are 2, 4 and 10"));
+        let over = parse_song("track d kit=909\nBD\nautomate comp_ratio\n30\n").unwrap();
+        assert!(over.warnings[0].contains("comp_ratio 30 clamped to 20"), "{:?}", over.warnings);
     }
 }

@@ -176,7 +176,7 @@ impl AuUnit {
                 // index as an f32) to the engine enum position.
                 ParamDef::Choice(cd) => {
                     if value != engine.applied[i] {
-                        cd.param.apply(&mut engine.vm, value);
+                        cd.param.apply(&mut engine.vm, cd.param.switch_value(value));
                         engine.applied[i] = value;
                     }
                 }

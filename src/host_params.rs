@@ -104,9 +104,13 @@ impl ParamDef {
 
     /// Apply a host value to the engine through the canonical setter path.
     /// Floats pass their native value; selectors pass the index as an f32,
-    /// which `Param::apply` maps to the enum position.
+    /// which `Param::apply` maps to the enum position (the ratio switch's
+    /// positions are ratios: `Param::switch_value`).
     pub fn apply(&self, vm: &mut VoiceManager, value: f32) {
-        self.param().apply(vm, value);
+        match self {
+            ParamDef::Float(f) => f.param.apply(vm, value),
+            ParamDef::Choice(c) => c.param.apply(vm, c.param.switch_value(value)),
+        }
     }
 }
 
@@ -487,7 +491,9 @@ pub fn param_defs() -> Vec<ParamDef> {
                     name: row.name,
                     param: row.param,
                     variants,
-                    default: default as usize,
+                    // the switch position Init's value sits on (the ratio
+                    // switch's 4:1 is position 1)
+                    default: row.param.switch_index(default) as usize,
                 }),
             }
         })
@@ -679,12 +685,14 @@ mod tests {
         }
     }
 
-    /// Selector ranges and their variant lists agree: max index == len-1.
+    /// Selector ranges and their variant lists agree: max index == len-1
+    /// (the span a host switch turns: the ratio switch's three positions,
+    /// though a song writes the ratio itself).
     #[test]
     fn selector_ranges_match_variant_counts() {
         for def in param_defs() {
             if let ParamDef::Choice(c) = def {
-                let (min, max, _) = c.param.range();
+                let (min, max, _) = c.param.knob_range();
                 assert_eq!(min, 0.0, "{} min", c.id);
                 assert_eq!(max as usize, c.variants.len() - 1, "{} max", c.id);
             }
@@ -859,5 +867,33 @@ mod tests {
             sine < 0.4 * saw,
             "Sine (ratio {sine}) not markedly cleaner than Sawtooth (ratio {saw})"
         );
+    }
+
+    /// The ratio switch keeps its three positions for a host and the
+    /// panel, while the engine and a song speak the ratio: position 1
+    /// (Init) is 4:1, position 2 is 10:1, and the nearest position shows a
+    /// ratio set between them.
+    #[test]
+    fn the_ratio_switch_positions_are_ratios() {
+        let defs = param_defs();
+        let def = defs
+            .iter()
+            .find(|d| d.param() == Param::CompRatio)
+            .expect("the ratio switch is a host parameter");
+        let ParamDef::Choice(c) = def else {
+            panic!("the ratio is a switch for a host");
+        };
+        assert_eq!(c.default, 1, "Init's 4:1 is the middle position");
+        let mut vm = VoiceManager::new(48000.0, NUM_VOICES);
+        def.apply(&mut vm, 2.0);
+        assert_eq!(vm.params.comp_ratio, 10.0);
+        def.apply(&mut vm, 0.0);
+        assert_eq!(vm.params.comp_ratio, 2.0);
+        let nearest = [(1.0, 0.0), (3.0, 1.0), (4.0, 1.0), (6.0, 1.0), (7.0, 2.0), (20.0, 2.0)];
+        for (ratio, position) in nearest {
+            assert_eq!(Param::CompRatio.switch_index(ratio), position, "{ratio}:1");
+        }
+        // every other switch's positions are its values
+        assert_eq!(Param::CompAttack.switch_value(3.0), 3.0);
     }
 }

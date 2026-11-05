@@ -368,7 +368,7 @@ impl PatinaPlugin {
         for (slot, last) in params.choices.iter().zip(self.applied_choices.iter_mut()) {
             let index = slot.kind.index();
             if *last != Some(index) {
-                slot.def.param.apply(&mut self.vm, index as f32);
+                slot.def.param.apply(&mut self.vm, slot.def.param.switch_value(index as f32));
                 *last = Some(index);
             }
         }

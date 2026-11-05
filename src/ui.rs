@@ -442,7 +442,7 @@ impl SynthUI {
         vm.set_tape_age(self.tape_age);
         vm.set_comp_in(if self.comp_in { 1.0 } else { 0.0 });
         vm.set_comp_threshold(self.comp_threshold);
-        vm.set_comp_ratio(self.comp_ratio as f32);
+        vm.set_comp_ratio(Param::CompRatio.switch_value(self.comp_ratio as f32));
         vm.set_comp_attack(self.comp_attack as f32);
         vm.set_comp_release(self.comp_release as f32);
         vm.set_comp_makeup(self.comp_makeup);
@@ -632,7 +632,7 @@ impl SynthUI {
             self.tape_age = p.tape_age;
             self.comp_in = p.comp_in >= 1.0;
             self.comp_threshold = p.comp_threshold;
-            self.comp_ratio = p.comp_ratio as usize;
+            self.comp_ratio = Param::CompRatio.switch_index(p.comp_ratio) as usize;
             self.comp_attack = p.comp_attack as usize;
             self.comp_release = p.comp_release as usize;
             self.comp_makeup = p.comp_makeup;
@@ -1565,7 +1565,7 @@ impl SynthUI {
                 ] {
                     if let Some(i) = rotary_switch(ui, label, *position, names, false) {
                         *position = i;
-                        param.apply(&mut self.voice_manager.lock(), i as f32);
+                        param.apply(&mut self.voice_manager.lock(), param.switch_value(i as f32));
                     }
                 }
                 param_knob(

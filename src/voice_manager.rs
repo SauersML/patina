@@ -121,8 +121,9 @@ pub struct ParamValues {
     pub tape_drive: f32,
     pub tape_age: f32,
     // The mix-bus compressor (buscomp.rs). Switches hold their position
-    // index: comp_in 0/1; comp_ratio 0..2 = 2:1, 4:1, 10:1; comp_attack
-    // 0..5 = 0.1..30 ms; comp_release 0..3 = 0.1..1.2 s, 4 = AUTO.
+    // index: comp_in 0/1; comp_attack 0..5 = 0.1..30 ms; comp_release
+    // 0..3 = 0.1..1.2 s, 4 = AUTO. comp_ratio is the ratio itself, N:1
+    // (1..20; the panel's switch sits on 2, 4 and 10).
     pub comp_in: f32,
     /// dBFS peak.
     pub comp_threshold: f32,
@@ -331,7 +332,7 @@ impl Default for ParamValues {
             // on a mix bus (4:1, 10 ms, AUTO), ready for the IN switch
             comp_in: 0.0,
             comp_threshold: -20.0,
-            comp_ratio: 1.0,
+            comp_ratio: 4.0,
             comp_attack: 4.0,
             comp_release: 4.0,
             comp_makeup: 0.0,
@@ -535,6 +536,25 @@ enum DuckStage {
     Release,
 }
 
+/// A track that lost sound to the voice cap: a new note found every voice
+/// card (or every tape head) sounding and took one (see
+/// `VoiceManager::voice_steals`). Recorded per track whose sound was cut.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VoiceSteal {
+    /// The channel whose card (or head) was taken.
+    pub victim: u16,
+    /// A tape-deck head (the deck's heads are shared by every sample
+    /// track) rather than a voice card.
+    pub head: bool,
+    /// The first time a held note was cut, and the first time a release
+    /// tail was: (seconds into the render, the channel that took it).
+    pub first_held: Option<(f64, u16)>,
+    pub first_tail: Option<(f64, u16)>,
+    /// How many held notes and release tails were cut in all.
+    pub held: u32,
+    pub tails: u32,
+}
+
 /// A strip's sidechain key (`duck_from=`): the note-ons of one channel,
 /// optionally only one drum voice or one note of it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -566,7 +586,8 @@ impl DuckKey {
 /// channel-compressor voicing (see `ChannelMix::apply_comp`).
 #[derive(Clone, Copy, Default)]
 struct StripCompKnobs {
-    ratio: Option<usize>,
+    /// N:1.
+    ratio: Option<f32>,
     attack: Option<usize>,
     release: Option<usize>,
     makeup: Option<f32>,
@@ -669,7 +690,7 @@ impl ChannelMix {
             .comp
             .get_or_insert_with(|| Box::new(crate::buscomp::BusComp::new(sample_rate)));
         comp.set_threshold(threshold);
-        comp.set_ratio(k.ratio.unwrap_or(1));
+        comp.set_ratio_value(k.ratio.unwrap_or(crate::buscomp::RATIOS[1]));
         comp.set_attack(k.attack.unwrap_or(0));
         comp.set_release(k.release.unwrap_or(4));
         comp.set_makeup(k.makeup.unwrap_or((-threshold * 0.33).min(12.0)));
@@ -1217,9 +1238,13 @@ pub struct VoiceManager {
     /// The master clipper and look-ahead limiter (limiter.rs), between
     /// the stereo width and the arrangement trim.
     master_peak: crate::limiter::MasterPeak,
-    /// Solo one channel (stem bounces): every other channel still
-    /// renders — oscillators free-run — but never reaches the bus.
-    solo: Option<u16>,
+    /// Solo channels (a stem bounce solos one, a song's `bounce` the
+    /// tracks it names): every other channel still renders — oscillators
+    /// free-run — but never reaches the bus.
+    solo: Option<Vec<u16>>,
+    /// Every track that lost a sounding voice card or tape head to a new
+    /// note because all of them were busy (see `voice_steals`).
+    steals: Vec<VoiceSteal>,
     /// Offline bounces may render the cards on several cores (see
     /// CardPool); the audio callback never does.
     card_pool: Option<CardPool>,
@@ -1307,6 +1332,7 @@ impl VoiceManager {
             spec_links: Vec::new(),
             master_peak: crate::limiter::MasterPeak::new(sample_rate),
             solo: None,
+            steals: Vec::new(),
             card_pool: None,
             card_in: Vec::new(),
             card_out: Vec::new(),
@@ -1366,7 +1392,47 @@ impl VoiceManager {
     /// and noise fall through to the global path; LFO routing is local.
     /// Solo one channel for a stem bounce (None restores the full mix).
     pub fn set_solo(&mut self, channel: Option<u16>) {
-        self.solo = channel;
+        self.solo = channel.map(|c| vec![c]);
+    }
+
+    /// Solo several channels at once (a song's `bounce` of some tracks).
+    pub fn set_solo_set(&mut self, channels: Vec<u16>) {
+        self.solo = Some(channels);
+    }
+
+    /// Every track whose sound a new note cut because all the voice cards
+    /// (or the tape deck's heads) were sounding: when it first happened,
+    /// to whom, and how often. Offline bounces print these.
+    pub fn voice_steals(&self) -> &[VoiceSteal] {
+        &self.steals
+    }
+
+    /// A new note on `by` took a card (or `head`) still sounding on
+    /// `victim`: a held note (`held`) or a release tail.
+    fn record_steal(&mut self, victim: u16, by: u16, held: bool, head: bool) {
+        let seconds = self.samples_rendered as f64 / self.sample_rate as f64;
+        let i = match self.steals.iter().position(|s| s.victim == victim && s.head == head) {
+            Some(i) => i,
+            None => {
+                self.steals.push(VoiceSteal {
+                    victim,
+                    head,
+                    first_held: None,
+                    first_tail: None,
+                    held: 0,
+                    tails: 0,
+                });
+                self.steals.len() - 1
+            }
+        };
+        let s = &mut self.steals[i];
+        if held {
+            s.held += 1;
+            s.first_held.get_or_insert((seconds, by));
+        } else {
+            s.tails += 1;
+            s.first_tail.get_or_insert((seconds, by));
+        }
     }
 
     pub fn set_track_mix(&mut self, channel: u16, param: crate::song::Param, value: f32) {
@@ -1417,7 +1483,7 @@ impl VoiceManager {
             P::DuckHold => m.duck_hold = (value * sr).round() as u32,
             P::TrackComp | P::CompThreshold => m.set_comp(value, sr),
             P::CompRatio => {
-                m.comp_knobs.ratio = Some(value.round() as usize);
+                m.comp_knobs.ratio = Some(value);
                 m.apply_comp(sr);
             }
             P::CompAttack => {
@@ -1963,7 +2029,10 @@ impl VoiceManager {
         // Sampler notes start playback heads on their slot's reel; they
         // never claim a keyboard voice
         if let Some(slot) = slot_for_channel(channel) {
-            self.sampler.note_on(slot, note, velocity);
+            if let Some((victim, held)) = self.sampler.note_on(slot, note, velocity) {
+                let victim = crate::sampler::SAMPLER_CHANNEL_BASE + victim as u16;
+                self.record_steal(victim, channel, held, true);
+            }
             return;
         }
         // An instrument track's notes strike, pluck or bow its body
@@ -2069,10 +2138,8 @@ impl VoiceManager {
             }
             // Prefer a fully idle voice, then the longest-releasing voice,
             // then steal the oldest held voice.
-            let index = self
-                .voices
-                .iter()
-                .position(|v| !v.is_active())
+            let idle = self.voices.iter().position(|v| !v.is_active());
+            let index = idle
                 .or_else(|| {
                     self.voices
                         .iter()
@@ -2090,6 +2157,11 @@ impl VoiceManager {
                 });
 
             if let Some(i) = index {
+                // Every card was sounding: this note cut one
+                if idle.is_none() {
+                    let (victim, held) = (self.voices[i].channel(), self.voices[i].is_held());
+                    self.record_steal(victim, channel, held, false);
+                }
                 self.voices[i].set_channel(channel);
                 if let Some(p) = &chan_params {
                     self.voices[i].apply_params(p);
@@ -2970,7 +3042,7 @@ impl VoiceManager {
             }
             if ch == VOX_CHANNEL {
                 carrier += l + r;
-            } else if self.solo.map_or(true, |s| s == ch)
+            } else if self.solo.as_ref().map_or(true, |s| s.contains(&ch))
                 || self.channel_mix.get(&ch).map_or(false, |m| m.xmod.is_some())
             {
                 // (a routed strip sums its cards even when a stem bounce
@@ -2998,7 +3070,7 @@ impl VoiceManager {
         // cards, once a sample, silence included (an EQ rings out, a
         // compressor releases in real time)
         for (&ch, m) in self.channel_mix.iter_mut() {
-            let heard = self.solo.map_or(true, |s| s == ch);
+            let heard = self.solo.as_ref().map_or(true, |s| s.contains(&ch));
             if m.voice_fed && m.stateful() && (heard || m.xmod.is_some()) {
                 let (l, r) = std::mem::take(&mut m.voice_sum);
                 if heard {
@@ -3018,7 +3090,7 @@ impl VoiceManager {
         if !self.taps.is_empty() {
             tap_add(&mut self.taps, VOX_CHANNEL, vox_out, vox_out);
         }
-        if self.solo.map_or(true, |s| s == VOX_CHANNEL) {
+        if self.solo.as_ref().map_or(true, |s| s.contains(&VOX_CHANNEL)) {
             let (vl, vr) = strip(
                 &mut self.channel_mix,
                 VOX_CHANNEL,
@@ -3041,7 +3113,7 @@ impl VoiceManager {
         if !self.taps.is_empty() {
             tap_add(&mut self.taps, DRUM_CHANNEL, dl, dr);
         }
-        if self.solo.map_or(true, |s| s == DRUM_CHANNEL) {
+        if self.solo.as_ref().map_or(true, |s| s.contains(&DRUM_CHANNEL)) {
             let (dl, dr) = strip(
                 &mut self.channel_mix,
                 DRUM_CHANNEL,
@@ -3060,7 +3132,7 @@ impl VoiceManager {
             if !self.taps.is_empty() {
                 tap_add(&mut self.taps, *ch, dl, dr);
             }
-            if self.solo.map_or(true, |s| s == *ch) {
+            if self.solo.as_ref().map_or(true, |s| s.contains(ch)) {
                 let (dl, dr) = strip(&mut self.channel_mix, *ch, dl, dr, &mut sends);
                 left += dl;
                 right += dr;
@@ -3095,7 +3167,7 @@ impl VoiceManager {
             {
                 continue;
             }
-            if self.solo.map_or(true, |s| s == ch) {
+            if self.solo.as_ref().map_or(true, |s| s.contains(&ch)) {
                 let (sl, sr) = strip(
                     &mut self.channel_mix,
                     ch,
@@ -3138,7 +3210,7 @@ impl VoiceManager {
             if !self.taps.is_empty() {
                 tap_add(&mut self.taps, ch, il, ir);
             }
-            if self.solo.map_or(true, |s| s == ch) {
+            if self.solo.as_ref().map_or(true, |s| s.contains(&ch)) {
                 let (il, ir) = strip(&mut self.channel_mix, ch, il, ir, &mut sends);
                 left += il;
                 right += ir;
@@ -3379,9 +3451,13 @@ impl VoiceManager {
         self.comp.set_threshold(self.params.comp_threshold);
     }
 
+    /// The bus compressor's ratio, N:1 (the panel switch sends 2, 4 or 10).
     pub fn set_comp_ratio(&mut self, v: f32) {
-        self.params.comp_ratio = Param::CompRatio.clamp(v.round());
-        self.comp.set_ratio(self.params.comp_ratio as usize);
+        if !v.is_finite() {
+            return;
+        }
+        self.params.comp_ratio = Param::CompRatio.clamp(v);
+        self.comp.set_ratio_value(self.params.comp_ratio);
     }
 
     pub fn set_comp_attack(&mut self, v: f32) {
@@ -3759,7 +3835,7 @@ mod tests {
             if touch {
                 for (p, v) in [
                     (Param::CompThreshold, -48.0),
-                    (Param::CompRatio, 2.0),
+                    (Param::CompRatio, 10.0),
                     (Param::CompAttack, 0.0),
                     (Param::CompRelease, 0.0),
                     (Param::CompMakeup, 15.0),
@@ -3889,13 +3965,21 @@ mod tests {
             }
             e
         };
-        let (four, ten) = (take(None), take(Some(2.0)));
+        let (four, ten) = (take(None), take(Some(10.0)));
         assert!(ten < four * 0.8, "10:1 {ten} vs 4:1 {four}");
+        // the ratio is continuous: 6:1 lands between the two, and asking
+        // for 4 is exactly the default 4:1 position
+        let six = take(Some(6.0));
+        assert!(ten < six && six < four, "6:1 {six} between 10:1 {ten} and 4:1 {four}");
+        assert_eq!(take(Some(4.0)), four);
         // unscoped, the same knob is the bus compressor's, not a strip's
         let mut vm = VoiceManager::new(48000.0, 8);
-        vm.set_channel_param(0, Param::CompRatio, 2.0);
+        vm.set_channel_param(0, Param::CompRatio, 10.0);
         assert!(vm.channel_mix.get(&0).is_none());
-        assert_eq!(vm.params.comp_ratio, 2.0);
+        assert_eq!(vm.params.comp_ratio, 10.0);
+        // past the old switch's top: 20:1 is a ratio, not a clamp to 2
+        vm.set_channel_param(0, Param::CompRatio, 20.0);
+        assert_eq!(vm.params.comp_ratio, 20.0);
     }
 
     /// The sidechain must hear the kick by EITHER route. The reserved low
@@ -3955,7 +4039,7 @@ mod tests {
                 (Param::TapeFlutter, 0.5),
                 (Param::CompIn, 1.0),
                 (Param::CompThreshold, -40.0),
-                (Param::CompRatio, 2.0),
+                (Param::CompRatio, 10.0),
                 (Param::CompAttack, 0.0),
                 (Param::CompMakeup, 15.0),
             ] {
@@ -4675,5 +4759,75 @@ mod tests {
             vm.note_off_channel(n, 1);
         }
         assert_eq!(held(&vm), 0, "a key-up was lost switching mono off");
+    }
+
+    /// The voice cap is never silent: a note that finds every card
+    /// sounding records whose sound it cut, a held note or a release
+    /// tail, once per track with the first time and a count. Notes with a
+    /// card free record nothing.
+    #[test]
+    fn a_stolen_note_is_recorded_once_per_track() {
+        let sr = 48000.0;
+        let mut vm = VoiceManager::new(sr, 8);
+        vm.set_channel_params(1, ParamValues::default());
+        vm.set_channel_params(2, ParamValues::default());
+        for n in 0..8u8 {
+            vm.note_on_channel(40 + n, 0.8, 1);
+        }
+        assert!(vm.voice_steals().is_empty(), "eight notes fit eight cards");
+        for _ in 0..4800 {
+            vm.render_next();
+        }
+        // the ninth note, 0.1 s in, takes the oldest held card from track 1
+        vm.note_on_channel(70, 0.8, 2);
+        vm.note_on_channel(71, 0.8, 2);
+        let s = vm.voice_steals();
+        assert_eq!(s.len(), 1, "one record per track that lost sound");
+        assert_eq!(s[0].victim, 1);
+        assert!(!s[0].head);
+        assert_eq!(s[0].held, 2);
+        assert_eq!(s[0].tails, 0);
+        let (t, by) = s[0].first_held.unwrap();
+        assert!((t - 0.1).abs() < 1e-9 && by == 2, "first at {t} s by {by}");
+        // release everything; a new note on a full bank of release tails
+        // cuts a tail, which is recorded apart from the held notes
+        for n in 0..8u8 {
+            vm.note_off_channel(40 + n, 1);
+        }
+        vm.note_off_channel(70, 2);
+        vm.note_off_channel(71, 2);
+        vm.render_next();
+        vm.note_on_channel(80, 0.8, 2);
+        let s = vm.voice_steals();
+        let tails: u32 = s.iter().map(|s| s.tails).sum();
+        assert_eq!(tails, 1, "{s:?}");
+    }
+
+    /// The tape deck's shared heads run out too, and say so.
+    #[test]
+    fn the_tape_deck_running_out_of_heads_is_recorded() {
+        let mut vm = VoiceManager::new(48000.0, 8);
+        let n = 48000;
+        let data = std::sync::Arc::new(crate::sampler::SampleData {
+            left: (0..n).map(|i| (i as f32 * 0.01).sin()).collect(),
+            right: (0..n).map(|i| (i as f32 * 0.01).sin()).collect(),
+            rate: 48000,
+        });
+        vm.set_sampler_slot(
+            0,
+            crate::sampler::SamplerSlot {
+                data,
+                cfg: Default::default(),
+            },
+        );
+        let ch = crate::sampler::SAMPLER_CHANNEL_BASE;
+        for k in 0..crate::sampler::NUM_HEADS as u8 {
+            vm.note_on_channel(40 + k, 0.8, ch);
+        }
+        assert!(vm.voice_steals().is_empty());
+        vm.note_on_channel(90, 0.8, ch);
+        let s = vm.voice_steals();
+        assert_eq!(s.len(), 1);
+        assert!(s[0].head && s[0].victim == ch && s[0].held == 1, "{s:?}");
     }
 }

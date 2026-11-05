@@ -234,8 +234,8 @@ automate comp_in
 1
 automate comp_threshold
 -18
-automate comp_ratio
-0
+automate comp_ratio   # 2:1
+2
 automate comp_attack
 5
 automate comp_release

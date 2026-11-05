@@ -146,6 +146,13 @@ pub fn render_stems(song: &crate::song::Song, dir: &str, format: SampleFormat) -
                     let mut frames = crate::song::render_offline_solo(song, 48000.0, Some(*key));
                     let out = write_wav(&path, &mut frames, false, format)
                         .map(|(peak, rms, lufs)| (peak, rms, lufs, frames.peak_voices()));
+                    // every stem plays every note, so every stem loses the
+                    // same voices: the first stem says so for the song
+                    if i == 0 {
+                        for w in frames.steal_warnings() {
+                            eprintln!("warning: {}", w);
+                        }
+                    }
                     *results[i].lock().unwrap() = Some(out);
                 }
             });
@@ -253,6 +260,9 @@ pub fn render_to_wav(
         crate::song::render_offline(song, 48000.0).with_card_lanes(crate::song::card_lanes());
     let seconds = frames.len() as f64 / 48000.0;
     let (peak, rms, lufs) = write_wav(path, &mut frames, normalize, format)?;
+    for w in frames.steal_warnings() {
+        eprintln!("warning: {}", w);
+    }
     println!("peak concurrent voices: {}/64", frames.peak_voices());
     println!("Levels: peak {peak:.1} dBFS, rms {rms:.1} dBFS, {lufs:.1} LUFS");
     let elapsed = start.elapsed().as_secs_f64();
