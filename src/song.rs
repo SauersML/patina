@@ -204,6 +204,34 @@
 //   value. Shapes: lin (default), exp (musical/geometric — right for
 //   frequencies), log (fast start), smooth (S-curve), step (jump at the end).
 //
+//   Generative segments (gen.rs): `{expr}:D` follows an expression for D
+//   beats at control rate (32 steps a beat; `{expr}:D@N` takes N), and
+//   `{expr}` alone runs to the end of the song (the lane's last token).
+//   It may open a lane, or follow any token; the next token starts from
+//   its last value. It reads the clock: t (seconds, through the tempo
+//   lane), b (beats), s (beats into the segment), p (0..1 through it) and
+//   v (the lane's value where it began); operators + - * / % ^, < <= >
+//   >= == != && || !, c ? a : b; math (sin cos tan exp log sqrt abs
+//   floor round min max clamp mix pow smoothstep snap mtof db and the
+//   rest); cycles one period a unit, -1..1 (sine tri saw square(x,duty));
+//   step(x), seq(i, a, b, ..) (a step sequence), noise(x[,seed]) (smooth)
+//   and rand(x[,seed]) (a new 0..1 each integer); and chaotic systems,
+//   each about -1..1 unless noted, pure functions of their time argument:
+//   lorenz(time[,axis 0..2[,rho,sigma,beta]]), rossler(time[,axis[,a,b,c]]),
+//   logistic(n, r[,x0]) (0..1: a fixed point under r = 3, period doubling
+//   to 3.57, chaos to 4), henon(n[,axis[,a,b]]), kuramoto(time, k[,which[,
+//   n[,spread]]]) (n coupled oscillators: which 0 their mean field, -1
+//   their coherence 0..1, i the i-th), pendulum(time[,axis[,damping]]) (a
+//   double pendulum). `automate x: {expr} during CH1` runs it through each
+//   section. The tempo and phase lanes take expressions of b with a
+//   duration (not t: they lay out the clock and the song's end), a phase
+//   expression as straight lines between its steps, held to the phase
+//   ramp rule.
+//     automate pad.cutoff
+//       800 {2000 + 1500 * lorenz(t / 2)}:32 R:4 600:4@exp
+//     automate lead.gain
+//       {0.8 + 0.2 * seq(b * 4, 1, 0, 0.5, 0) * step(b - 16)}
+//
 // Automatable parameters: volume, output (post-effects arrangement trim),
 // waveform (0=sine 1=square 2=saw 3=tri,
 // use plain sets), detune, cutoff, resonance, drive, saturation, hpf
@@ -1826,7 +1854,36 @@ enum TrackMode {
 // (beats, order-rank, kind); rank makes offs < params < ons at equal times
 type RawEvent = (f64, u8, EventKind);
 
+/// The clock a generative lane (`{expr}`, gen.rs) reads. `t` runs through
+/// the tempo lane, which may sit anywhere in the file, and an open-ended
+/// `{expr}` runs to where the rest of the song ends, so a song with one
+/// is parsed twice: a scouting pass that skips the expressions and keeps
+/// the tempo lane and the last beat, then the real pass with them.
+#[derive(Default)]
+struct GenClock {
+    /// The real pass: beats to seconds, and the scouted last beat.
+    time_of: Option<Box<dyn Fn(f64) -> f64>>,
+    end_beat: f64,
+    /// The scouting pass leaves (base bpm, tempo lane, last beat) here.
+    scouted: Option<(f64, Vec<(f64, AutoToken)>, f64)>,
+}
+
 fn parse_song(text: &str) -> Result<Song, String> {
+    if !text.contains('{') {
+        return parse_song_pass(text, &mut GenClock::default());
+    }
+    let mut scout = GenClock::default();
+    parse_song_pass(text, &mut scout)?;
+    let (bpm, lane, end) = scout.scouted.take().expect("the scouting pass keeps its clock");
+    let mut clock = GenClock {
+        time_of: Some(Box::new(tempo_map(bpm, &lane, end))),
+        end_beat: end,
+        scouted: None,
+    };
+    parse_song_pass(text, &mut clock)
+}
+
+fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
     let mut bpm = 120.0_f64;
     let mut gate = 0.9_f64;
     let mut tail_seconds = DEFAULT_TAIL_SECONDS;
@@ -1872,6 +1929,23 @@ fn parse_song(text: &str) -> Result<Song, String> {
             continue;
         }
 
+        // A generative segment's `{expr}` may hold spaces and parentheses:
+        // lift each out of an automation line, leaving `{K}` behind
+        let lifted;
+        let mut gens: Vec<crate::gen::Expr> = Vec::new();
+        let lane_line = line.starts_with("automate")
+            || matches!(
+                mode,
+                TrackMode::Automation { .. } | TrackMode::Tempo { .. } | TrackMode::Phase { .. }
+            );
+        let line = if lane_line && line.contains('{') {
+            let (text, exprs) = lift_gens(line).map_err(&err)?;
+            gens = exprs;
+            lifted = text;
+            lifted.as_str()
+        } else {
+            line
+        };
         let first = line.split_whitespace().next().unwrap();
         match first {
             "bpm" => {
@@ -2304,10 +2378,19 @@ fn parse_song(text: &str) -> Result<Song, String> {
                     }
                     let param = Param::from_name(pname)
                         .ok_or_else(|| err(format!("unknown parameter '{}'", pname)))?;
-                    let value: f32 = toks[2]
-                        .parse_finite()
-                        .map_err(|_| err(format!("invalid value '{}'", toks[2])))?;
-                    if let Some(w) = clamp_warning(param, value) {
+                    // `{expr}` during a section runs through each one
+                    let gen_value = match gen_index(toks[2]) {
+                        Some(k) => Some(gens.get(k).ok_or_else(|| err("bad expression".into()))?),
+                        None => None,
+                    };
+                    let value: f32 = if gen_value.is_some() {
+                        0.0
+                    } else {
+                        toks[2]
+                            .parse_finite()
+                            .map_err(|_| err(format!("invalid value '{}'", toks[2])))?
+                    };
+                    if let Some(w) = clamp_warning(param, value).filter(|_| gen_value.is_none()) {
                         warnings.push(err(w));
                     }
                     let names = toks.get(4).copied().ok_or_else(|| {
@@ -2341,11 +2424,22 @@ fn parse_song(text: &str) -> Result<Song, String> {
                         let &(a, b) = sections.get(sname).ok_or_else(|| {
                             err(format!("unknown section '{}' (define it above)", sname))
                         })?;
-                        events.push((
-                            a,
-                            1,
-                            param_event(param, value, channel),
-                        ));
+                        if let Some(expr) = gen_value {
+                            let seg = GenSegment { start: a, dur: Some(b - a), rate: AUTOMATION_STEPS_PER_BEAT };
+                            let (points, warn) = seg
+                                .run(expr, param, base, gen)
+                                .map_err(|m| err(format!("{}: {}", expr, m)))?;
+                            warnings.extend(warn.map(&err));
+                            for (beat, v) in points {
+                                events.push((beat, 1, param_event(param, v, channel)));
+                            }
+                        } else {
+                            events.push((
+                                a,
+                                1,
+                                param_event(param, value, channel),
+                            ));
+                        }
                         if let Some(base) = base {
                             events.push((
                                 b,
@@ -2527,12 +2621,40 @@ fn parse_song(text: &str) -> Result<Song, String> {
                 } => {
                     let (param, channel) = (*param, *channel);
                     let line = expand_groups(line).map_err(err)?;
-                    for token in tokenize(&line).map_err(err)? {
+                    let tokens = tokenize(&line).map_err(err)?;
+                    let last = tokens.len().saturating_sub(1);
+                    for (ti, token) in tokens.into_iter().enumerate() {
                         if token == "|" {
                             continue;
                         }
                         if let Some(beat) = token.strip_prefix('>') {
                             track_beat = resolve_seek(beat, &sections).map_err(err)?;
+                            continue;
+                        }
+                        if let Some(k) = gen_index(&token) {
+                            // A generative segment: the expression at
+                            // control rate for its duration
+                            let expr = gens.get(k).ok_or_else(|| err("bad expression".into()))?;
+                            let seg = GenSegment::parse(&token, track_beat)
+                                .map_err(|m| err(format!("{}: {}", expr, m)))?;
+                            if seg.dur.is_none() && ti != last {
+                                return Err(err(format!(
+                                    "{} with no duration runs to the end of the song, so it \
+                                     ends its lane; give it one ({}:16) to go on",
+                                    expr, expr
+                                )));
+                            }
+                            let (points, warn) = seg
+                                .run(expr, param, *current, gen)
+                                .map_err(|m| err(format!("{}: {}", expr, m)))?;
+                            warnings.extend(warn.map(&err));
+                            for &(beat, v) in &points {
+                                events.push((beat, 1, param_event(param, v, channel)));
+                            }
+                            if let Some(&(_, last)) = points.last() {
+                                *current = Some(last);
+                            }
+                            track_beat = seg.end(gen).max(track_beat);
                             continue;
                         }
                         let seg = parse_automation_token(&token)
@@ -2586,6 +2708,30 @@ fn parse_song(text: &str) -> Result<Song, String> {
                             track_beat = resolve_seek(beat, &sections).map_err(err)?;
                             continue;
                         }
+                        if let Some(k) = gen_index(&token) {
+                            // The tempo itself from an expression: the
+                            // grid steps land as plain sets
+                            let expr = gens.get(k).ok_or_else(|| err("bad expression".into()))?;
+                            let seg = GenSegment::parse(&token, track_beat)
+                                .map_err(|m| err(format!("{}: {}", expr, m)))?;
+                            let points = seg
+                                .run_untimed(expr, *current, "the tempo lane sets the clock t runs on")
+                                .map_err(|m| err(format!("{}: {}", expr, m)))?;
+                            for &(beat, v) in &points {
+                                if !(20.0..=MAX_SONG_BPM).contains(&v) {
+                                    return Err(err(format!(
+                                        "{}: bpm {} at beat {} (bpm must be 20-{MAX_SONG_BPM})",
+                                        expr, v, beat
+                                    )));
+                                }
+                                tempo_lane.push((beat, AutoToken::Set(v)));
+                            }
+                            if let Some(&(_, last)) = points.last() {
+                                *current = Some(last);
+                            }
+                            track_beat += seg.dur.unwrap_or(0.0);
+                            continue;
+                        }
                         let seg = parse_automation_token(&token)
                             .map_err(|m| err(format!("token '{}': {}", token, m)))?;
                         match seg {
@@ -2622,6 +2768,39 @@ fn parse_song(text: &str) -> Result<Song, String> {
                         }
                         if let Some(beat) = token.strip_prefix('>') {
                             track_beat = resolve_seek(beat, &sections).map_err(err)?;
+                            continue;
+                        }
+                        if let Some(k) = gen_index(&token) {
+                            // The phase from an expression: a jump to its
+                            // first value, then straight lines between the
+                            // control steps, each held to the ramp rule
+                            let expr = gens.get(k).ok_or_else(|| err("bad expression".into()))?;
+                            let seg = GenSegment::parse(&token, track_beat)
+                                .map_err(|m| err(format!("{}: {}", expr, m)))?;
+                            let points = seg
+                                .run_untimed(
+                                    expr,
+                                    *current,
+                                    "a phase lane moves notes before the song's clock is laid out",
+                                )
+                                .map_err(|m| err(format!("{}: {}", expr, m)))?;
+                            let lane = phase_lanes.entry(track).or_default();
+                            for (i, &(beat, v)) in points.iter().enumerate() {
+                                if i == 0 {
+                                    lane.push((beat, AutoToken::Set(v)));
+                                    continue;
+                                }
+                                let (from_beat, from) = points[i - 1];
+                                let dur = beat - from_beat;
+                                check_phase_ramp(from, v, dur, Shape::Lin).map_err(|m| {
+                                    err(format!("{}: at beat {:.3}: {}", expr, from_beat, m))
+                                })?;
+                                lane.push((from_beat, AutoToken::Ramp { to: v, dur, shape: Shape::Lin }));
+                            }
+                            if let Some(&(_, last)) = points.last() {
+                                *current = Some(last);
+                            }
+                            track_beat += seg.dur.unwrap_or(0.0);
                             continue;
                         }
                         let seg = parse_automation_token(&token)
@@ -2835,6 +3014,9 @@ fn parse_song(text: &str) -> Result<Song, String> {
         });
     }
 
+    if gen.time_of.is_none() {
+        gen.scouted = Some((bpm, tempo_lane.clone(), max_beat));
+    }
     let time_of = tempo_map(bpm, &tempo_lane, max_beat);
     Ok(Song {
         events: events
@@ -3158,10 +3340,195 @@ fn emit_ramp(
     }
 }
 
+#[derive(Clone)]
 enum AutoToken {
     Set(f32),
     Hold(f64),
     Ramp { to: f32, dur: f64, shape: Shape },
+}
+
+/// Lift every `{expr}` out of a lane line, compiled, leaving `{K}` (its
+/// index) in its place for the tokenizer and the repeat groups.
+fn lift_gens(line: &str) -> Result<(String, Vec<crate::gen::Expr>), String> {
+    let mut out = String::with_capacity(line.len());
+    let mut exprs = Vec::new();
+    let mut rest = line;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let close = rest[open..]
+            .find('}')
+            .ok_or_else(|| "unmatched '{' (an expression runs {like + this}:4)".to_string())?
+            + open;
+        let src = &rest[open + 1..close];
+        if src.contains('{') {
+            return Err("an expression cannot hold another '{'".into());
+        }
+        let expr = crate::gen::Expr::parse(src).map_err(|m| format!("{{{}}}: {}", src.trim(), m))?;
+        out.push_str(&format!("{{{}}}", exprs.len()));
+        exprs.push(expr);
+        rest = &rest[close + 1..];
+    }
+    if rest.contains('}') {
+        return Err("unmatched '}'".into());
+    }
+    out.push_str(rest);
+    Ok((out, exprs))
+}
+
+/// The expression index of a lifted `{K}` token (with or without its
+/// `:D@N` suffix).
+fn gen_index(token: &str) -> Option<usize> {
+    let rest = token.strip_prefix('{')?;
+    let (k, _) = rest.split_once('}')?;
+    k.parse().ok()
+}
+
+/// One generative segment of a lane: `{expr}` from `start` for `dur`
+/// beats (None = to the end of the song), at `rate` steps a beat.
+struct GenSegment {
+    start: f64,
+    dur: Option<f64>,
+    rate: f64,
+}
+
+impl GenSegment {
+    /// `{K}`, `{K}:D` or `{K}:D@N` (N steps a beat), starting at `start`.
+    fn parse(token: &str, start: f64) -> Result<Self, String> {
+        let suffix = token.split_once('}').map_or("", |(_, r)| r);
+        let (dur, rate) = match suffix.split_once('@') {
+            Some((d, n)) => (d, Some(n)),
+            None => (suffix, None),
+        };
+        let dur = match dur.strip_prefix(':') {
+            Some(d) => {
+                let d: f64 = d.parse_finite().map_err(|_| format!("invalid duration '{}'", d))?;
+                if d <= 0.0 {
+                    return Err("duration must be positive".into());
+                }
+                Some(d)
+            }
+            None if dur.is_empty() => None,
+            None => return Err(format!("unexpected '{}' after the expression", dur)),
+        };
+        let rate = match rate {
+            Some(n) => {
+                let n: f64 = n.parse_finite().map_err(|_| format!("invalid rate '@{}'", n))?;
+                if !(1.0..=1024.0).contains(&n) {
+                    return Err("the control rate @N is 1 to 1024 steps a beat".into());
+                }
+                n
+            }
+            None => AUTOMATION_STEPS_PER_BEAT,
+        };
+        Ok(Self { start, dur, rate })
+    }
+
+    /// Where the segment ends: its duration, or the scouted song end.
+    fn end(&self, gen: &GenClock) -> f64 {
+        match self.dur {
+            Some(d) => self.start + d,
+            None => gen.end_beat.max(self.start),
+        }
+    }
+
+    /// The control points (beat, value), from the segment's start to its
+    /// end inclusive, and one warning if any value had to be clamped. The
+    /// scouting pass only marks the segment's end.
+    fn run(
+        &self,
+        expr: &crate::gen::Expr,
+        param: Param,
+        start_value: Option<f32>,
+        gen: &GenClock,
+    ) -> Result<(Vec<(f64, f32)>, Option<String>), String> {
+        let Some(time_of) = gen.time_of.as_ref() else {
+            let mark = start_value.unwrap_or(param.accepts().0);
+            return Ok((self.dur.map(|d| vec![(self.start + d, mark)]).unwrap_or_default(), None));
+        };
+        if expr.reads_start_value() && start_value.is_none() {
+            return Err("reads v, the lane's value where it begins, but nothing comes before it".into());
+        }
+        let mut points = self.points_to(self.end(gen), expr, start_value, &|b| time_of(b))?;
+        let (lo, hi) = param.accepts();
+        let out: Vec<f32> = points.iter().map(|p| p.1).filter(|v| *v < lo || *v > hi).collect();
+        let warn = out.first().map(|_| {
+            let worst = out
+                .iter()
+                .copied()
+                .fold(f32::NAN, |w, v| if w.is_nan() || (v - v.clamp(lo, hi)).abs() > (w - w.clamp(lo, hi)).abs() { v } else { w });
+            format!(
+                "{}: {} {} clamped to {}..{} ({} of {} values)",
+                expr,
+                param.name(),
+                worst,
+                lo,
+                hi,
+                out.len(),
+                points.len()
+            )
+        });
+        for pt in &mut points {
+            pt.1 = pt.1.clamp(lo, hi);
+        }
+        Ok((points, warn))
+    }
+
+    /// A tempo or phase lane's points: the same in both passes, since
+    /// they lay out the clock `t` runs on and where the song ends (so
+    /// they cannot read t, and need a duration). `why` says which.
+    fn run_untimed(
+        &self,
+        expr: &crate::gen::Expr,
+        start_value: Option<f32>,
+        why: &str,
+    ) -> Result<Vec<(f64, f32)>, String> {
+        if expr.reads_time() {
+            return Err(format!("{why}, so it cannot read t (use b)"));
+        }
+        if self.dur.is_none() {
+            return Err(format!("{why}, so an expression here needs a duration, e.g. {expr}:32"));
+        }
+        if expr.reads_start_value() && start_value.is_none() {
+            return Err("reads v, the lane's value where it begins, but nothing comes before it".into());
+        }
+        let end = self.start + self.dur.unwrap_or(0.0);
+        self.points_to(end, expr, start_value, &|_| f64::NAN)
+    }
+
+    /// Every control step from the start to `end`, both ends included.
+    fn points_to(
+        &self,
+        end: f64,
+        expr: &crate::gen::Expr,
+        start_value: Option<f32>,
+        time_of: &dyn Fn(f64) -> f64,
+    ) -> Result<Vec<(f64, f32)>, String> {
+        let len = end - self.start;
+        if len <= 0.0 {
+            return Ok(Vec::new());
+        }
+        let steps = ((len * self.rate).ceil() as usize).clamp(1, 1 << 20);
+        let mut ev = expr.eval();
+        let v = start_value.map_or(f64::NAN, |v| v as f64);
+        let mut out = Vec::with_capacity(steps + 1);
+        for k in 0..=steps {
+            let p = k as f64 / steps as f64;
+            let b = self.start + len * p;
+            let ctx = crate::gen::Ctx {
+                t: time_of(b),
+                b,
+                s: b - self.start,
+                p,
+                v,
+            };
+            let x = ev.value(&ctx)?;
+            if !x.is_finite() {
+                return Err(format!("is {} at beat {}", x, b));
+            }
+            out.push((b, x as f32));
+        }
+        Ok(out)
+    }
 }
 
 /// Resolve a `>` seek target: a plain beat number, a section name (its
@@ -5508,6 +5875,133 @@ mod tests {
         let held = db(1.001, 1.199);
         assert!((held + 6.02).abs() < 0.1, "duck=0.5 held at {held:.2} dB");
         assert!(db(1.6, 1.9).abs() < 0.05, "released: {:.2} dB", db(1.6, 1.9));
+    }
+
+    /// (seconds, value) of every `param` event on `channel`.
+    fn lane(song: &Song, param: Param, channel: u16) -> Vec<(f64, f32)> {
+        song.events
+            .iter()
+            .filter_map(|e| match e.kind {
+                EventKind::Param { param: p, value, channel: c } if p == param && c == channel => {
+                    Some((e.time, value))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_generative_lane_follows_its_expression_at_control_rate() {
+        let song = parse_song(
+            "bpm 120\ntrack lead\nC4:16\nautomate lead.cutoff\n\
+             500 R:4 {1000 + 500 * sin(tau * s / 4)}:8 R:2 3000:2\n",
+        )
+        .unwrap();
+        let pts = lane(&song, Param::Cutoff, channel_of(&song, "lead"));
+        // the start value, 8 beats at 32 steps a beat (both ends), then the
+        // ramp from the expression's last value
+        let gen: Vec<_> = pts.iter().filter(|(t, _)| (2.0..=6.0).contains(t)).collect();
+        assert_eq!(gen.len(), 8 * 32 + 1);
+        for (k, &&(t, v)) in gen.iter().enumerate() {
+            let beat = 4.0 + k as f64 / 32.0;
+            assert!((t - beat * 0.5).abs() < 1e-9);
+            let want = 1000.0 + 500.0 * (std::f64::consts::TAU * (beat - 4.0) / 4.0).sin();
+            assert!((v as f64 - want).abs() < 1e-3, "beat {beat}: {v} vs {want}");
+        }
+        // the ramp after it starts where the expression ended (1000 at s = 8)
+        let ramp: Vec<_> = pts.iter().filter(|(t, _)| *t > 7.0).collect();
+        assert!((ramp[0].1 - (1000.0 + 2000.0 / 64.0)).abs() < 1.0, "{:?}", ramp[0]);
+        assert_eq!(ramp.last().unwrap().1, 3000.0);
+    }
+
+    #[test]
+    fn a_generative_lane_reads_seconds_through_a_tempo_lane_anywhere_in_the_file() {
+        // the expression's lane comes first; the tempo lane that sets t is
+        // below it (the scouting pass finds it)
+        let song = parse_song(
+            "track lead\nC4:16\nautomate lead.pan\n{t / 20}:16\n\
+             automate bpm\n60 120:16\n",
+        )
+        .unwrap();
+        let pts = lane(&song, Param::TrackPan, channel_of(&song, "lead"));
+        // 16 beats from 60 to 120 bpm take 16 ln 2 = 11.09 s
+        assert!((pts.last().unwrap().0 - 16.0 * 2f64.ln()).abs() < 0.01);
+        for (secs, v) in pts {
+            assert!((v as f64 - secs / 20.0).abs() < 1e-5, "t = {secs} read as {}", v * 20.0);
+        }
+        // `v` is the lane's value where the segment begins; `@N` is the
+        // control rate in steps a beat
+        let song = parse_song("track lead\nC4:4\nautomate lead.cutoff\n800 {v * (1 + p)}:4@4\n").unwrap();
+        let pts = lane(&song, Param::Cutoff, channel_of(&song, "lead"));
+        assert_eq!(pts.len(), 1 + 4 * 4 + 1);
+        assert_eq!(pts[1].1, 800.0);
+        assert_eq!(pts.last().unwrap().1, 1600.0);
+    }
+
+    #[test]
+    fn an_open_generative_segment_runs_to_the_end_and_chaos_is_repeatable() {
+        let text = "track lead\nC4:24\nautomate lead.cutoff\n\
+                    {2000 + 1500 * lorenz(t / 2)}\nautomate lead.resonance: \
+                    {0.5 + 0.4 * logistic(b * 4, 3.9)} during B\nsection B 8..12\n";
+        // the section is defined below its first use: refused, as always
+        assert!(parse_song(text).is_err());
+        let text = "section B 8..12\ntrack lead\nC4:24\nautomate lead.cutoff\n\
+                    {2000 + 1500 * lorenz(t / 2)}\nautomate lead.resonance: \
+                    {0.5 + 0.4 * logistic(b * 4, 3.9)} during B base 0\n";
+        let (a, b) = (parse_song(text).unwrap(), parse_song(text).unwrap());
+        let lead = channel_of(&a, "lead");
+        let cut = lane(&a, Param::Cutoff, lead);
+        assert_eq!(cut, lane(&b, Param::Cutoff, lead));
+        // to the last note-off (beat 24 minus the gate's gap), the Lorenz
+        // attractor's x inside its range
+        let end = cut.last().unwrap().0;
+        assert!(end > 11.5 && end <= 12.0, "ends at {end} s");
+        assert!(cut.iter().all(|&(_, v)| (500.0..=3500.0).contains(&v)));
+        let res = lane(&a, Param::Resonance, lead);
+        let inside: Vec<_> = res.iter().filter(|(t, _)| (4.0..6.0).contains(t)).collect();
+        assert!(inside.len() > 100 && inside.iter().all(|&&(_, v)| (0.5..=0.9).contains(&v)));
+        assert_eq!(res.last().unwrap(), &(6.0, 0.0), "base comes back at the section's end");
+    }
+
+    #[test]
+    fn generative_lanes_refuse_what_they_cannot_do() {
+        let bad = |text: &str, says: &str| {
+            let e = parse_song(text).err().unwrap_or_default();
+            assert!(e.contains(says), "{text:?} gave {e:?}");
+        };
+        bad("track a\nC4\nautomate a.cutoff\n{1000 + wobble(t)}:4\n", "unknown function");
+        bad("track a\nC4\nautomate a.cutoff\n{1000 + t:4\n", "unmatched '{'");
+        bad("track a\nC4\nautomate a.cutoff\n{v * 2}:4\n", "reads v");
+        bad("track a\nC4\nautomate a.cutoff\n{1000} 500:4\n", "ends its lane");
+        bad("track a\nC4\nautomate a.cutoff\n{log(b - 1)}:4\n", "at beat");
+        bad("track a\nC4\nautomate bpm\n{100 + t}:4\n", "cannot read t");
+        bad("track a\nC4\nautomate bpm\n{10}:4\n", "bpm must be");
+        bad("track a\nC4\nautomate bpm\n{100 + b}\n", "needs a duration, e.g. {100 + b}:32");
+        // out of range values clamp, with one warning for the segment
+        let song = parse_song("track a\nC4\nautomate a.cutoff\n{30000 * p}:4\n").unwrap();
+        assert_eq!(song.warnings.len(), 1, "{:?}", song.warnings);
+        assert!(song.warnings[0].contains("clamped"));
+        let top = lane(&song, Param::Cutoff, channel_of(&song, "a")).last().unwrap().1;
+        assert_eq!(top, Param::Cutoff.accepts().1);
+        // a phase lane takes one too: notes at beats 0..4 under a phase
+        // of b / 16 play at 17/16 of their beats
+        let song = parse_song("track a\nC4 C4 C4 C4 C4\nautomate a.phase\n{b / 16}:4\n").unwrap();
+        let ons: Vec<f64> = song
+            .events
+            .iter()
+            .filter(|e| matches!(e.kind, EventKind::NoteOn { .. }))
+            .map(|e| e.time)
+            .collect();
+        for (k, on) in ons.iter().enumerate() {
+            assert!((on - k as f64 * 0.5 * 17.0 / 16.0).abs() < 1e-6, "note {k} at {on} s");
+        }
+        bad("track a\nC4\nautomate a.phase\n{t / 8}:4\n", "cannot read t");
+        bad("track a\nC4:8\nautomate a.phase\n{-2 * b}:4\n", "at beat");
+        // the tempo itself can come from an expression of beats
+        let song = parse_song("track a\nC4:8\nautomate bpm\n120 {120 + 60 * step(b - 4)}:8\n").unwrap();
+        let off = song.events.iter().find(|e| matches!(e.kind, EventKind::NoteOff { .. })).unwrap();
+        // 4 beats at 120 then about 4 at 180 (the gate's gap aside)
+        assert!((off.time - (2.0 + 4.0 * 60.0 / 180.0)).abs() < 0.12, "note off at {}", off.time);
     }
 
     #[test]

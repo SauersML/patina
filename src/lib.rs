@@ -43,6 +43,7 @@ pub mod echo;
 pub mod envelope;
 pub mod filter;
 pub mod fuzz;
+pub mod gen;
 pub mod glitch;
 pub mod hpf;
 pub mod inserts;

@@ -1,0 +1,73 @@
+# Generative — 96 bpm, D dorian, one minute. A demo of generative
+# automation lanes: `{expr}` segments that follow an expression of time,
+# and the chaotic systems an expression can read.
+#
+#   beats  0-32   SWARM  three arpeggios panned by three voices of a
+#                        Kuramoto swarm: the coupling rises through the
+#                        section past the point where the swarm locks, and
+#                        the voices go from scattered across the field to
+#                        moving as one; the pad's cutoff rides the Lorenz
+#                        attractor for the whole song
+#   beats 32-64   MAP    a sixteenth-note line whose cutoff follows the
+#                        logistic map, r stepping up every two bars: one
+#                        value (r = 2.8), two alternating (3.2), a cycle of
+#                        four (3.5), then chaos (3.9)
+#   beats 64-96   FALL   a bell FM'd by a muted modulator, its index swung
+#                        by a double pendulum, its reverb send from the
+#                        Henon map; the tempo sags and recovers
+
+bpm 96
+gate 0.92
+tail 3
+
+section SWARM 0..32
+section MAP 32..64
+section FALL 64..96
+
+automate reverb_wet
+0.22
+automate reverb_decay
+0.75
+automate bpm
+96 R:64 {96 - 12 * sin(pi * p)}:32
+
+# --- the bed: a pad on the Lorenz attractor, a drone bass on smooth noise
+track pad patch=aurora vel=0.55 gain=0.8 reverb_send=0.35
+([D3 F3 A3 C4]:8 [C3 E3 G3 B3]:8 [A#2 D3 F3 A3]:8 [C3 F3 A3 D4]:8)x3
+automate pad.cutoff
+{1800 + 1200 * lorenz(t / 3)}
+
+track bass patch=deepsine vel=0.7 gain=0.7
+(D2:8 C2:8 A#1:8 F1:8)x3
+automate bass.cutoff
+{500 + 300 * noise(b / 2, 7)}
+
+# --- SWARM: three arpeggios, panned by three voices of one swarm
+track arp1 patch=glintbell vel=0.6 gain=0.45 reverb_send=0.3
+(D4:0.25 A4:0.25 F5:0.25 A4:0.25)x32
+track arp2 patch=glintbell vel=0.55 gain=0.4 reverb_send=0.3
+(F4:0.5 C5:0.5)x32
+track arp3 patch=mallet vel=0.6 gain=0.45 reverb_send=0.3
+(A4:0.75 D5:0.75 E5:0.5)x16
+automate arp1.pan
+{0.9 * kuramoto(t / 2, 10 * p, 1)}:32 0:2@smooth
+automate arp2.pan
+{0.9 * kuramoto(t / 2, 10 * p, 2)}:32 0:2@smooth
+automate arp3.pan
+{0.9 * kuramoto(t / 2, 10 * p, 3)}:32 0:2@smooth
+
+# --- MAP: the logistic map's period doubling, one value per sixteenth
+track line patch=acidline vel=0.75 gain=0.8 reverb_send=0.15
+>MAP (D3:0.25 D3:0.25 D4:0.25 D3:0.25)x32
+automate line.cutoff
+400 >MAP {300 * 2 ^ (4 * logistic(s * 4, seq(s / 8, 2.8, 3.2, 3.5, 3.9)))}:32@4
+
+# --- FALL: a bell FM'd by a muted modulator, swung by a double pendulum
+track bellmod patch=deepsine gain=0
+>FALL (A5:8 G5:8 F5:8 A5:8)
+track bell patch=deepsine vel=0.75 gain=0.9 fm_from=bellmod fm=0
+>FALL (D4:8 C4:8 A#3:8 D4:8)
+automate bell.fm
+0 >FALL {2.5 + 2 * pendulum(s / 3, 1)}:30 0:2@smooth
+automate bell.reverb_send
+0.3 >FALL {0.35 + 0.25 * henon(b * 2)}:32
