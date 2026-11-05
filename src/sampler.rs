@@ -678,6 +678,9 @@ pub struct SamplerBank {
     epochs: Vec<Option<Arc<Vec<(f64, f64, bool)>>>>,
     filt: Vec<FiltCoeffs>,
     counter: u64,
+    /// Per slot, this sample's FM ratio and filter-FM cutoff factor from
+    /// another track (xmod.rs); exactly 1 when nothing drives the slot.
+    xmod: [(f32, f32); MAX_SLOTS],
 }
 
 impl SamplerBank {
@@ -689,6 +692,14 @@ impl SamplerBank {
             epochs: (0..MAX_SLOTS).map(|_| None).collect(),
             filt: (0..MAX_SLOTS).map(|_| FiltCoeffs::stale()).collect(),
             counter: 0,
+            xmod: [(1.0, 1.0); MAX_SLOTS],
+        }
+    }
+
+    /// This sample's cross-track FM ratio and cutoff factor for a slot.
+    pub fn set_xmod(&mut self, index: usize, pitch_ratio: f32, cutoff_mult: f32) {
+        if index < MAX_SLOTS {
+            self.xmod[index] = (pitch_ratio, cutoff_mult);
         }
     }
 
@@ -953,6 +964,11 @@ impl SamplerBank {
             let cfg = &slot.cfg;
             let data = &slot.data;
             let src_rate = data.rate as f64;
+            // Cross-track FM rides the bend bus, filter FM the cutoff
+            // (both exactly 1 unless a route drives this slot)
+            let (x_ratio, x_cut) = self.xmod[h.slot];
+            let pitch_mult = pitch_mult * x_ratio;
+            let cutoff = cfg.cutoff * x_cut;
 
             // Varispeed: keytrack interval * live pitch knob * tempo-fit
             // speed * bend bus
@@ -1157,7 +1173,7 @@ impl SamplerBank {
                     }
                     // shared filter/pan path, mirrored from below
                     let fc = &mut self.filt[h.slot];
-                    fc.update(cfg.cutoff, cfg.res, self.sample_rate);
+                    fc.update(cutoff, cfg.res, self.sample_rate);
                     if fc.bypass {
                         h.svf[1] = l;
                         h.svf[3] = r;
@@ -1201,7 +1217,7 @@ impl SamplerBank {
             // head). Bypassed wide-open; the integrator tracks the input
             // meanwhile so a sweep re-engaging the filter doesn't thump.
             let fc = &mut self.filt[h.slot];
-            fc.update(cfg.cutoff, cfg.res, self.sample_rate);
+            fc.update(cutoff, cfg.res, self.sample_rate);
             if fc.bypass {
                 h.svf[1] = l;
                 h.svf[3] = r;

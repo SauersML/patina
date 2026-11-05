@@ -23,6 +23,7 @@ format for programmatic playback and parameter automation.
 - 🥊 Kick-bass on any voice: a per-note pitch envelope (start, time, curve) diving onto the note, key sync, and an antialiased drive stage (tanh, clip, wavefolder) ahead of the ladder as post-filter; plus a seven-saw supersaw bank and a filtered noise oscillator per card for walls and risers
 - 🫦 Note bends (`C4:2>G3` glides to the target over the note), and the throat: pitch-synchronous grains that move a voice's formants apart from its pitch, so a sampled voice drops an octave without turning into a monster (`formant`, `smp_formant`, `vox_formant`)
 - 💥 Glitch inserts on any track or the whole mix bus: beat repeat from 1/8 to 1/64, reverse in note slices, and tape stop (`stutter`, `reverse`, `tape_stop`)
+- 🔀 Audio-rate cross-modulation between tracks: any track's signal as another's FM, filter FM or ring modulator, and routed feedback loops between tracks through a delay, a tone filter and a safety limiter (`fm_from=`, `filter_fm_from=`, `ringmod_from=`, `feed_from=`)
 - 🖥️ Studio-hardware GUI: knobs, ADSR graph, live oscilloscope, keys that light from the engine's real voice state
 - ⌨️ QWERTY keyboard input · 🖱️ click-and-drag keys · 🎹 MIDI input
 - 📜 Text-based song files with per-track sequencing and full parameter automation
@@ -146,6 +147,18 @@ automate vox_mode: 1 during CH1 base 0   # one-line section automation
   track bass patch=deepsine gain=1.6 duck=0.7 duck_from=kick duck_hold=0.05 duck_release=0.12
   track pad patch=aurora shape=x.x.xx.x. shape_depth=0.9 eq_low=-6 eq_high=3
   track drums kit=909 dist=0.4 dist_mode=1 comp=-18 comp_ratio=2
+  ```
+- **Cross-modulation**: one track's signal drives another at audio rate. The route sits on the track it drives and names its source (any track, anywhere in the song, itself included); every depth is a lane (`automate lead.fm`):
+  - `fm_from=SRC fm=` linear FM: the track's oscillators run at f0·(1 + fm·m), m being SRC's signal (1 = 0 dBFS). A sine of level A at f_m puts sidebands at f0 ± k·f_m with Bessel amplitudes J_k(fm·A·f0/f_m); the frequency stops at 0 Hz (no through-zero).
+  - `filter_fm_from=SRC filter_fm=` the cutoff moves `filter_fm` octaves (−8..8) per unit of m.
+  - `ringmod_from=SRC ringmod=` the track times (1 − d + d·m): 1 is a ring modulator (the carrier is gone, f ± f_m are left), 0.5 is AM.
+  - `feed_from=SRC feed=` routed feedback: SRC's signal comes into this track's strip ahead of its glitch, EQ and drive, through `feed_time=` (delay, 0–2 s), `feed_tone=` (lowpass Hz, 20000 = open), a DC blocker, the gain `feed=` (0–2) and a safety limiter at `feed_limit=` (dBFS, default −6). A loop (a track feeding itself, or two tracks each other) with gain over 1 rings up to the limiter's ceiling and stays there, never past it.
+
+  FM and filter FM need a synth, vox (its carrier) or sampler track; ring and feed work on every track. The source is SRC's strip after its inserts and before its fader, so `gain=0` silences a modulator you only want to hear through the track it drives, and a track with no notes can take a feed as an effects bus. Routes read their sources one sample late, so any graph runs in one pass whatever the track order, and stems keep every route.
+  ```
+  track mod patch=deepsine gain=0                  # heard only through lead
+  track lead fm_from=mod fm=3 ringmod_from=mod ringmod=0.2
+  track loop feed_from=loop feed=1.2 feed_time=0.0023 feed_tone=3000 dist=0.3
   ```
 - **Master**: `automate limit` sets a look-ahead brickwall limiter's threshold (dBFS, 0 = out — the mix comes up by −threshold and is held under `limit_ceiling`, default −1 dBFS, released over `limit_release` seconds); `automate clip` drives a soft-knee clipper into the same ceiling first (dB, 0 = out). Engaged, this stage replaces the engine's tanh soft limit, so the ceiling is the bounce's true peak, and a song that limits or clips anywhere runs it from the downbeat. The threshold is absolute, so how much it takes off depends on how hot the raw mix runs (a normalized bounce prints it: `Normalized: peak 0.447`, about −7 dBFS): the loudest peak loses about raw peak − threshold − ceiling dB. On a dense 128 bpm loop with a −7 dBFS raw peak and 15.6 dB crest: `limit -12` gives 11.9 dB crest, `limit -16` 9.6, `limit -20` 8.3, and `clip 8` with `limit -12` 8.2 (−7.8 LUFS).
 - **Range warnings**: a value the loader has to clamp is reported, one line each, at load: any parameter outside its range (`patina --params`) on a track line, in a lane, a `during` block or a `patch=` file, and the gate, `vel=`, a note's `@` velocity and the sampler's options. `warning: line 12: gain 6 clamped to 4`.

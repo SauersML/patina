@@ -314,6 +314,36 @@
 //                 automate tape_stop
 //                   0 >60 4
 // Lengths follow the song's tempo lane. Every seam is declicked.
+//
+// Cross-modulation (xmod.rs): any track's signal drives another track at
+// audio rate. A route lives on the track it drives, naming its source
+// (any track, defined anywhere in the song, itself included), with a depth
+// that is a strip lane like gain (`automate lead.fm`):
+//   fm_from=SRC fm=D       linear FM: the track's oscillators run at
+//                          f0 (1 + D m), m = SRC's signal (1 = 0 dBFS); a
+//                          sine of level A at fm puts sidebands at
+//                          f0 +- k fm with Bessel amplitudes J_k(D A f0/fm).
+//                          The frequency stops at 0 Hz (no through-zero).
+//   filter_fm_from=SRC filter_fm=D   the cutoff moves D octaves (-8..8)
+//                          per unit of m
+//   ringmod_from=SRC ringmod=D   the track times (1 - D + D m): 1 = ring
+//                          modulation (carrier gone), 0.5 = AM
+//   feed_from=SRC feed=G   routed feedback: SRC's signal into this track's
+//                          strip ahead of its glitch, EQ and drive, through
+//                          feed_time (delay, seconds, 0..2), feed_tone
+//                          (lowpass Hz, 20000 = open), a DC blocker, the
+//                          gain G (0..2) and a safety limiter whose ceiling
+//                          is feed_limit (dBFS, default -6). A loop with
+//                          gain over 1 rings up to the ceiling and stays.
+// FM and filter FM need a synth, vox (the carrier) or sampler track; ring
+// and feed work on every track. The source is SRC's strip after its
+// inserts and before its fader, so `gain=0` mutes a modulator that should
+// only be heard through the track it drives; a track with no notes can
+// take a feed (an effects bus). Routes read their sources one sample late,
+// so any graph, loops included, runs in one pass.
+//   track mod patch=deepsine gain=0         # heard only through lead
+//   track lead fm_from=mod fm=3 ringmod_from=mod ringmod=0.2
+//   track loop feed_from=loop feed=1.2 feed_time=0.0023 feed_tone=3000 dist=0.3
 
 use std::sync::Arc;
 use std::thread;
@@ -605,6 +635,20 @@ param_table! {
     EqMidQ:          "eq_mid_q",       None,      (0.2, 10.0, Log);
     EqHigh:          "eq_high",        None,      (-24.0, 24.0, Lin);
     EqHighFreq:      "eq_high_freq",   None,      (1000.0, 20000.0, Log);
+    // Cross-track modulation (xmod.rs), on the strip of the track a
+    // route drives, from the track its `fm_from=` (`filter_fm_from=`,
+    // `ringmod_from=`, `feed_from=`) names: linear FM depth (the
+    // frequency swings f0 (1 + fm m), m the source signal, 1 = 0 dBFS),
+    // filter FM (cutoff octaves per unit m), the ring modulator (1 = the
+    // carrier gone), and routed feedback: the feed's gain, its delay
+    // (seconds), its lowpass (Hz) and its safety limiter's ceiling (dBFS)
+    XFm:             "fm",             None,      (0.0, 16.0, Lin);
+    XFilterFm:       "filter_fm",      None,      (-8.0, 8.0, Lin);
+    XRing:           "ringmod",        None,      (0.0, 1.0, Lin);
+    Feed:            "feed",           None,      (0.0, 2.0, Lin);
+    FeedTime:        "feed_time",      None,      (0.0, 2.0, Lin);
+    FeedTone:        "feed_tone",      None,      (20.0, 20000.0, Log);
+    FeedLimit:       "feed_limit",     None,      (-24.0, 0.0, Lin);
     // The master bus's peak control (limiter.rs), after the width and
     // before the arrangement trim: clipper drive in dB (0 = out), limiter
     // threshold in dBFS (0 = out; the mix comes up by -threshold), the
@@ -899,7 +943,14 @@ impl Param {
             | Param::EqMidFreq
             | Param::EqMidQ
             | Param::EqHigh
-            | Param::EqHighFreq => vm.set_track_mix(0, self, value),
+            | Param::EqHighFreq
+            | Param::XFm
+            | Param::XFilterFm
+            | Param::XRing
+            | Param::Feed
+            | Param::FeedTime
+            | Param::FeedTone
+            | Param::FeedLimit => vm.set_track_mix(0, self, value),
             Param::Clip => vm.set_master_clip(value),
             Param::Limit => vm.set_limit(value),
             Param::LimitCeiling => vm.set_limit_ceiling(value),
@@ -1151,6 +1202,13 @@ impl Param {
                 | P::EqMidQ
                 | P::EqHigh
                 | P::EqHighFreq
+                | P::XFm
+                | P::XFilterFm
+                | P::XRing
+                | P::Feed
+                | P::FeedTime
+                | P::FeedTone
+                | P::FeedLimit
         )
     }
 
@@ -1452,6 +1510,9 @@ pub struct SongMix {
     pub duck_keys: Vec<(u16, crate::voice_manager::DuckKey)>,
     /// `shape=`: (channel, its tempo-synced volume shaper).
     pub shapers: Vec<(u16, crate::inserts::Shaper)>,
+    /// Cross-track routes (`fm_from=`, `filter_fm_from=`,
+    /// `ringmod_from=`, `feed_from=`; xmod.rs).
+    pub routes: Vec<crate::xmod::Route>,
 }
 
 /// A rest this short is rounding noise from a generator, not a rest:
@@ -1593,6 +1654,9 @@ fn register_channels(vm: &mut VoiceManager, song: &Song) {
     }
     for (channel, shaper) in &song.mix.shapers {
         vm.set_shaper(*channel, shaper.clone());
+    }
+    for &route in &song.mix.routes {
+        vm.add_route(route);
     }
     // A song that limits or clips anywhere runs the master peak control
     // from its downbeat (see VoiceManager::arm_master_peak)
@@ -1768,6 +1832,9 @@ fn parse_song(text: &str) -> Result<Song, String> {
     // once every track is known (line, keyed channel, key spec)
     let mut mix = SongMix::default();
     let mut duck_from: Vec<(usize, u16, String)> = Vec::new();
+    // Cross-track routes, resolved like duck keys once every track is
+    // known (line, driven channel, where it lands, source track)
+    let mut xmod_from: Vec<(usize, u16, crate::xmod::Dest, String)> = Vec::new();
 
     let mut mode = TrackMode::None;
     let mut track_beat = 0.0_f64;
@@ -1860,6 +1927,7 @@ fn parse_song(text: &str) -> Result<Song, String> {
                 // become Param events at beat 0 on this track's channel
                 let mut mix_opts: Vec<(Param, f32)> = Vec::new();
                 let mut track_duck_from: Option<String> = None;
+                let mut track_routes: Vec<(crate::xmod::Dest, String)> = Vec::new();
                 let mut shape_spec: Option<String> = None;
                 let mut shape_beats: Option<f64> = None;
                 for opt in line.split_whitespace().skip(2) {
@@ -1884,6 +1952,16 @@ fn parse_song(text: &str) -> Result<Song, String> {
                         // Key this strip's duck off another track's notes
                         // (resolved below, once every track is known)
                         track_duck_from = Some(v.to_string());
+                    } else if let Some((dest, v)) = opt
+                        .split_once('=')
+                        .and_then(|(k, v)| crate::xmod::Dest::from_option(k).map(|d| (d, v)))
+                    {
+                        // A cross-track route into this track (xmod.rs),
+                        // resolved once every track is known
+                        if track_routes.iter().any(|(d, _)| *d == dest) {
+                            return Err(err(format!("{} given twice", dest.option())));
+                        }
+                        track_routes.push((dest, v.to_string()));
                     } else if let Some(v) = opt.strip_prefix("shape=") {
                         shape_spec = Some(v.to_string());
                     } else if let Some(v) = opt.strip_prefix("shape_beats=") {
@@ -2090,6 +2168,9 @@ fn parse_song(text: &str) -> Result<Song, String> {
                 if let Some(spec) = track_duck_from {
                     duck_from.push((line_no, channel, spec));
                 }
+                for (dest, spec) in track_routes {
+                    xmod_from.push((line_no, channel, dest, spec));
+                }
                 for (param, value) in mix_opts {
                     events.push((
                         0.0,
@@ -2147,6 +2228,17 @@ fn parse_song(text: &str) -> Result<Song, String> {
                     }
                     None => (0u16, name),
                 };
+                if channel == 0 {
+                    if let Some(dest) = Param::from_name(pname).and_then(crate::xmod::Dest::of_param) {
+                        return Err(err(format!(
+                            "automate '{}': a cross-track route lives on the track it drives; \
+                             automate it there (`automate lead.{}`, with {}= on that track's line)",
+                            name,
+                            pname,
+                            dest.option()
+                        )));
+                    }
+                }
                 // One-line section automation:
                 //   automate vox_mode: 1 during CH1,CH2 [base 0]
                 // sets the value at each section's start; `base` is the
@@ -2518,6 +2610,55 @@ fn parse_song(text: &str) -> Result<Song, String> {
         return Err(format!(
             "the song runs to beat {max_beat}, past the {MAX_SONG_BEATS}-beat limit"
         ));
+    }
+
+    // Cross-track routes: `fm_from=NAME` (and the others) listen to track
+    // NAME, defined anywhere in the song; a track may name itself
+    for (line_no, channel, dest, spec) in xmod_from {
+        let e = |m: String| format!("line {}: {}={}: {}", line_no + 1, dest.option(), spec, m);
+        let src = track_channels
+            .iter()
+            .find(|(t, _)| *t == spec)
+            .map(|(_, c)| *c)
+            .ok_or_else(|| e("no track by that name".into()))?;
+        if dest.needs_pitch_or_filter() && crate::drums::kit_for_channel(channel).is_some() {
+            return Err(e(
+                "a kit track has no oscillator or filter to modulate; ringmod_from= and \
+                 feed_from= work on any track"
+                    .into(),
+            ));
+        }
+        if mix.routes.iter().any(|r| r.dst == channel && r.dest == dest) {
+            return Err(e(format!(
+                "this track's channel already takes a {} route (kit=<track> shares one board)",
+                dest.option()
+            )));
+        }
+        mix.routes.push(crate::xmod::Route {
+            dest,
+            src,
+            dst: channel,
+        });
+    }
+    // Every routing knob needs its route: `fm=2` with no `fm_from=` has
+    // nothing to listen to
+    for (_, _, kind) in &events {
+        if let EventKind::Param { param, channel, .. } = kind {
+            if let Some(dest) = crate::xmod::Dest::of_param(*param) {
+                if !mix.routes.iter().any(|r| r.dst == *channel && r.dest == dest) {
+                    let track = track_channels
+                        .iter()
+                        .find(|(_, c)| c == channel)
+                        .map_or("?", |(t, _)| t.as_str());
+                    return Err(format!(
+                        "track '{}' sets {} but names no source: add {}=TRACK to its track line",
+                        track,
+                        param.name(),
+                        dest.option()
+                    ));
+                }
+            }
+        }
     }
 
     // `duck_from=NAME` keys a strip off every note of track NAME;
@@ -5100,6 +5241,54 @@ mod tests {
         let held = db(1.001, 1.199);
         assert!((held + 6.02).abs() < 0.1, "duck=0.5 held at {held:.2} dB");
         assert!(db(1.6, 1.9).abs() < 0.05, "released: {:.2} dB", db(1.6, 1.9));
+    }
+
+    #[test]
+    fn routes_resolve_by_name_and_refuse_what_cannot_be_driven() {
+        use crate::xmod::{Dest, Route};
+        // a source defined below its listener, and a track feeding itself
+        let song = parse_song(
+            "track lead fm_from=mod fm=2 feed_from=lead feed=0.5\nC4:4\n\
+             track mod gain=0\nG2:4\n",
+        )
+        .unwrap();
+        let (lead, modu) = (channel_of(&song, "lead"), channel_of(&song, "mod"));
+        assert!(song.mix.routes.contains(&Route { dest: Dest::Fm, src: modu, dst: lead }));
+        assert!(song.mix.routes.contains(&Route { dest: Dest::Feed, src: lead, dst: lead }));
+        assert_eq!(song.mix.routes.len(), 2);
+        // a kit board takes ring and feed, but has no oscillator to FM
+        assert!(parse_song("track beat kit=909 ringmod_from=lead ringmod=1\nBD\ntrack lead\nC4\n").is_ok());
+        assert!(parse_song("track beat kit=909 fm_from=lead\nBD\ntrack lead\nC4\n").is_err());
+        assert!(parse_song("track lead fm_from=nobody\nC4\n").is_err());
+        assert!(parse_song("track lead fm_from=lead fm_from=lead\nC4\n").is_err());
+        // a depth with nothing to listen to, on the line or in a lane
+        assert!(parse_song("track lead fm=2\nC4\n").is_err());
+        assert!(parse_song("track lead\nC4\nautomate lead.feed\n0 1:4\n").is_err());
+        assert!(parse_song("track lead fm_from=lead\nC4\nautomate lead.fm\n0 2:4\n").is_ok());
+        // a route belongs to the track it drives, never the bus
+        assert!(parse_song("track lead fm_from=lead\nC4\nautomate fm\n0 2:4\n").is_err());
+    }
+
+    #[test]
+    fn a_muted_modulator_is_heard_only_through_the_track_it_drives() {
+        let take = |route: &str| {
+            let text = format!(
+                "automate reverb_wet\n0\ntail 0.1\n\
+                 track mod gain=0\nD3:2\ntrack lead {route}\nA4:2\n"
+            );
+            parse_song(&text).unwrap()
+        };
+        let stem = |song: &Song, name: &str| {
+            render_offline_solo(song, 48000.0, Some(channel_of(song, name))).collect::<Vec<(f32, f32)>>()
+        };
+        let energy = |x: &[(f32, f32)]| x.iter().map(|&(l, r)| (l * l + r * r) as f64).sum::<f64>();
+        let (plain, fm) = (take(""), take("fm_from=mod fm=4"));
+        // the modulator's own stem is silent, yet the lead's stem carries
+        // its FM: a stem bounce keeps every route
+        assert!(energy(&stem(&fm, "mod")) < 1e-9 * energy(&stem(&fm, "lead")));
+        let (a, b) = (stem(&plain, "lead"), stem(&fm, "lead"));
+        let diff: f64 = a.iter().zip(&b).map(|(x, y)| ((x.0 - y.0) as f64).powi(2)).sum();
+        assert!(diff > 0.1 * energy(&a), "the FM barely moved the lead: {diff}");
     }
 
     #[test]

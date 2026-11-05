@@ -1,0 +1,67 @@
+# Cross-mod — 120 bpm, A minor, one minute. A demo of the cross-track
+# routes: tracks driving one another at audio rate, and feeding each other.
+#
+#   beats  0-32   WIRE   one tone in a loop: the wire track feeds itself
+#                        through a 4.55 ms delay (A3's period), so its
+#                        own harmonics ring on; the loop gain swells past
+#                        1 at beat 24 and the safety limiter holds it
+#   beats 32-64   BELL   a muted modulator 3.5 times the bell's pitch
+#                        FMs it (fm_from=): inharmonic sidebands, the
+#                        index swelling and falling with each phrase
+#   beats 64-96   RING   the pad is ring-modulated by a slow pulse track
+#                        and the bass's cutoff follows the kick at audio
+#                        rate (filter_fm_from=kick)
+#   beats 96-120  KNOT   two tracks feed each other through drive and a
+#                        stutter: a loop that only the limiters hold
+
+bpm 120
+gate 0.95
+tail 2
+
+section WIRE 0..32
+section BELL 32..64
+section RING 64..96
+section KNOT 96..120
+
+automate reverb_wet
+0.18
+automate reverb_decay
+0.7
+
+# --- WIRE: a self-feeding string of one tone
+track wire patch=deepsine vel=0.8 gain=0.22 feed_from=wire feed=0.9 feed_time=0.004545 feed_tone=5000 feed_limit=-9 reverb_send=0.3
+A3:32 R:88
+automate wire.feed
+0.9 R:16 1.15:8@smooth R:4 0:4@smooth
+
+# --- BELL: a modulator heard only through the bell
+track bellmod patch=deepsine gain=0
+>BELL (E6:4 D6:4 C6:4 B5:4)x2
+track bell patch=deepsine vel=0.75 gain=1.6 fm_from=bellmod fm=0 reverb_send=0.4
+>BELL (A3:4 G3:4 F3:4 E3:4)x2
+automate bell.fm
+0 >BELL (6:2@smooth 0.5:2@smooth)x8
+
+# --- RING: a pad times a slow pulse, a bass whose filter follows the kick
+track ringer patch=deepsine gain=0
+>RING (A1:8 E1:8)x2
+track pad patch=aurora vel=0.6 gain=1.2 ringmod_from=ringer ringmod=0 reverb_send=0.3
+>RING ([A3 C4 E4]:8 [F3 A3 C4]:8)x2
+automate pad.ringmod
+0 >RING 1:16@smooth 0.4:16@smooth
+track kick patch=hardkick vel=0.9 gain=0.9
+>RING (A1 A1 A1 A1)x8 (A1 A1 A1 A1)x6
+track bass patch=deepsine vel=0.8 gain=0.8 filter_fm_from=kick filter_fm=4
+>RING (A1:2 A1:2 C2:2 G1:2)x4 (A1:2 A1:2 C2:2 G1:2)x3
+
+# --- KNOT: two tracks feeding each other
+track knot_a patch=deepsine vel=0.7 gain=0.3 feed_from=knot_b feed=0 feed_time=0.0071 dist=0.4 pan=-0.5
+>KNOT E2:24
+track knot_b patch=deepsine vel=0.7 gain=0.3 feed_from=knot_a feed=0 feed_time=0.0113 feed_tone=2500 eq_mid=6 pan=0.5
+>KNOT B2:24
+automate knot_a.feed
+0 >KNOT 1.4:8@smooth R:12 0:4@smooth
+automate knot_b.feed
+0 >KNOT 1.4:8@smooth R:12 0:4@smooth
+automate knot_b.stutter
+0 >112 16 >116 32 >118 0

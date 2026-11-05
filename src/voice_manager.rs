@@ -509,6 +509,10 @@ pub struct ChannelMix {
     /// The glitch insert (glitch.rs: beat repeat, reverse, tape stop),
     /// first on the strip; None until a song touches it.
     glitch: Option<Box<crate::glitch::Glitch>>,
+    /// Cross-track routing (xmod.rs): the tap this strip lends, and the
+    /// FM, filter FM, ring and feed its own routes bring it. None unless
+    /// a route touches the strip.
+    xmod: Option<Box<crate::xmod::StripXmod>>,
 }
 
 /// The duck envelope's stage. Release is where it rests (decaying toward
@@ -619,6 +623,7 @@ impl ChannelMix {
             voice_sum: (0.0, 0.0),
             voice_fed: false,
             glitch: None,
+            xmod: None,
         }
     }
 
@@ -672,7 +677,11 @@ impl ChannelMix {
     /// for all of them, +2.5 dB), and its nonlinearity would distort each
     /// note alone instead of the chord.
     fn stateful(&self) -> bool {
-        self.comp.is_some() || self.eq.is_some() || self.dist.is_some() || self.glitch.is_some()
+        self.comp.is_some()
+            || self.eq.is_some()
+            || self.dist.is_some()
+            || self.glitch.is_some()
+            || self.xmod.is_some()
     }
 
     /// A key trigger: run the duck envelope from where it stands.
@@ -755,6 +764,23 @@ fn strip(
     }
 }
 
+/// A routed strip a stem bounce leaves unheard still runs, so the tracks
+/// it drives hear it; its output and sends go nowhere.
+fn strip_unheard(mixes: &mut ChannelMap<ChannelMix>, ch: u16, l: f32, r: f32) {
+    if let Some(m) = mixes.get_mut(&ch) {
+        if m.xmod.is_some() {
+            strip_one(m, l, r, &mut SendBus::default());
+        }
+    }
+}
+
+/// A channel the voice cards play (a synth track or the panel), as
+/// opposed to the voice box, a kit board or a tape slot, which reach
+/// their strips by their own paths.
+fn card_channel(ch: u16) -> bool {
+    ch != VOX_CHANNEL && kit_for_channel(ch).is_none() && slot_for_channel(ch).is_none()
+}
+
 /// One strip, one stereo sample (see `strip`).
 #[inline]
 fn strip_one(m: &mut ChannelMix, l: f32, r: f32, sends: &mut SendBus) -> (f32, f32) {
@@ -763,6 +789,11 @@ fn strip_one(m: &mut ChannelMix, l: f32, r: f32, sends: &mut SendBus) -> (f32, f
     // Detecting in volts read every part ~20 dB hot.
     const TO_BUS: f32 = 0.7 / PROGRAM_V;
     let (mut l, mut r) = (l, r);
+    // A routed feed comes in and the ring modulator multiplies, ahead of
+    // every insert (xmod.rs)
+    if let Some(x) = m.xmod.as_ref() {
+        (l, r) = x.input(l, r);
+    }
     // The glitch insert comes first, so everything on the strip (EQ,
     // drive, fader, compressor, sends) hears the repeat, the reversal or
     // the stop, as a beat-repeat pedal patched into the channel would be
@@ -781,6 +812,11 @@ fn strip_one(m: &mut ChannelMix, l: f32, r: f32, sends: &mut SendBus) -> (f32, f
             let (dl, dr) = d.process(l * TO_BUS, r * TO_BUS);
             (l, r) = (dl / TO_BUS, dr / TO_BUS);
         }
+    }
+    // What this strip lends the tracks it drives: after the inserts,
+    // before the fader
+    if let Some(x) = m.xmod.as_mut() {
+        x.tap = (l, r);
     }
     let mut g = m.cur_gain * (1.0 - m.duck * m.duck_env);
     if let Some(sh) = m.shaper.as_ref() {
@@ -1083,6 +1119,9 @@ pub struct VoiceManager {
     /// The glitch insert across the mix bus (unscoped `stutter`,
     /// `reverse`, `tape_stop`), after the tape; None until a song uses it.
     bus_glitch: Option<Box<crate::glitch::Glitch>>,
+    /// Cross-track routes (xmod.rs); None until a song routes one track
+    /// into another.
+    routes: Option<Box<crate::xmod::RouteTable>>,
     /// The master clipper and look-ahead limiter (limiter.rs), between
     /// the stereo width and the arrangement trim.
     master_peak: crate::limiter::MasterPeak,
@@ -1167,6 +1206,7 @@ impl VoiceManager {
             song_beat: 0.0,
             beat_step: 120.0 / 60.0 / sample_rate as f64,
             bus_glitch: None,
+            routes: None,
             master_peak: crate::limiter::MasterPeak::new(sample_rate),
             solo: None,
             card_pool: None,
@@ -1314,8 +1354,96 @@ impl VoiceManager {
             P::EqMidQ => eq(m, EqKnob::MidQ),
             P::EqHigh => eq(m, EqKnob::HighGain),
             P::EqHighFreq => eq(m, EqKnob::HighFreq),
+            P::XFm
+            | P::XFilterFm
+            | P::XRing
+            | P::Feed
+            | P::FeedTime
+            | P::FeedTone
+            | P::FeedLimit => m
+                .xmod
+                .get_or_insert_with(Default::default)
+                .set(param, value, sr),
             _ => {}
         }
+    }
+
+    /// Route one track's signal into another (song `fm_from=` and the
+    /// rest; xmod.rs). Both strips run every sample from here on, sounding
+    /// or not, so a source that falls silent lends silence and a track
+    /// with no notes of its own can still take a feed.
+    pub fn add_route(&mut self, route: crate::xmod::Route) {
+        let sr = self.sample_rate;
+        for ch in [route.src, route.dst] {
+            let card = card_channel(ch);
+            let m = self.strip_mut(ch);
+            m.xmod.get_or_insert_with(Default::default);
+            if card {
+                m.voice_fed = true;
+            }
+        }
+        self.strip_mut(route.dst)
+            .xmod
+            .as_mut()
+            .unwrap()
+            .enable(route.dest, sr);
+        let t = self.routes.get_or_insert_with(Default::default);
+        for ch in [route.src, route.dst] {
+            if !t.chans.contains(&ch) {
+                t.chans.push(ch);
+            }
+        }
+        if route.dest.needs_pitch_or_filter() {
+            if let Some(slot) = slot_for_channel(route.dst) {
+                if !t.slots.contains(&(route.dst, slot)) {
+                    t.slots.push((route.dst, slot));
+                }
+            }
+        }
+        t.routes.push(route);
+        t.vals.push((0.0, 0.0));
+    }
+
+    /// The start of a sample: every route reads its source as the last
+    /// sample left it, and delivers it to the strip it drives (FM and
+    /// filter FM wait there for the cards, a tape slot takes them now).
+    fn gather_routes(&mut self) {
+        let Some(t) = self.routes.as_mut() else {
+            return;
+        };
+        for (i, r) in t.routes.iter().enumerate() {
+            t.vals[i] = self
+                .channel_mix
+                .get(&r.src)
+                .and_then(|m| m.xmod.as_ref())
+                .map_or((0.0, 0.0), |x| x.tap);
+        }
+        let k = self.knob_smooth_k;
+        for ch in &t.chans {
+            if let Some(x) = self.channel_mix.get_mut(ch).and_then(|m| m.xmod.as_mut()) {
+                x.begin(k);
+            }
+        }
+        for (i, r) in t.routes.iter().enumerate() {
+            if let Some(x) = self.channel_mix.get_mut(&r.dst).and_then(|m| m.xmod.as_mut()) {
+                x.deliver(r.dest, t.vals[i]);
+            }
+        }
+        for &(ch, slot) in &t.slots {
+            if let Some(x) = self.channel_mix.get(&ch).and_then(|m| m.xmod.as_ref()) {
+                self.sampler.set_xmod(slot, x.pitch_ratio, x.cutoff_oct.exp2());
+            }
+        }
+    }
+
+    /// This sample's tap of a routed strip (after its inserts, before its
+    /// fader, volts), for tests.
+    #[cfg(test)]
+    pub(crate) fn route_tap(&self, channel: u16) -> Option<(f32, f32)> {
+        self.channel_mix
+            .get(&channel)
+            .and_then(|m| m.xmod.as_ref())
+            .map(|x| x.tap)
     }
 
     /// Turn a glitch knob (`stutter`, `reverse`, `tape_stop`) on a track's
@@ -2369,6 +2497,8 @@ impl VoiceManager {
             m.advance_shaper(beat);
         }
         self.song_beat += self.beat_step;
+        // Cross-track routes read last sample's taps (xmod.rs)
+        self.gather_routes();
 
         let mut left = 0.0;
         let mut right = 0.0;
@@ -2391,12 +2521,23 @@ impl VoiceManager {
             if voice.channel() != VOX_CHANNEL && voice.is_sleeping() {
                 continue;
             }
-            let (pitch_mult, cutoff_mod, pwm_mod) = self
+            let (mut pitch_mult, mut cutoff_mod, pwm_mod) = self
                 .channel_lfos
                 .get(&voice.channel())
                 .map_or((panel_pitch_mult, lfo_cutoff_oct, pw_offset), |channel| {
                     channel.modulation
                 });
+            // FM and filter FM from another track, this sample
+            if self.routes.is_some() {
+                if let Some(x) = self
+                    .channel_mix
+                    .get(&voice.channel())
+                    .and_then(|m| m.xmod.as_ref())
+                {
+                    pitch_mult *= x.pitch_ratio;
+                    cutoff_mod += x.cutoff_oct;
+                }
+            }
             self.card_in[i] = CardIn {
                 pitch_mult,
                 cutoff_mod,
@@ -2427,7 +2568,11 @@ impl VoiceManager {
             let ch = self.voices[i].channel();
             if ch == VOX_CHANNEL {
                 carrier += l + r;
-            } else if self.solo.map_or(true, |s| s == ch) {
+            } else if self.solo.map_or(true, |s| s == ch)
+                || self.channel_mix.get(&ch).map_or(false, |m| m.xmod.is_some())
+            {
+                // (a routed strip sums its cards even when a stem bounce
+                // leaves it unheard: the tracks it drives still hear it)
                 match self.channel_mix.get_mut(&ch) {
                     // a strip with memory takes the channel's sum, below
                     Some(m) if m.stateful() => {
@@ -2451,11 +2596,16 @@ impl VoiceManager {
         // cards, once a sample, silence included (an EQ rings out, a
         // compressor releases in real time)
         for (&ch, m) in self.channel_mix.iter_mut() {
-            if m.voice_fed && m.stateful() && self.solo.map_or(true, |s| s == ch) {
+            let heard = self.solo.map_or(true, |s| s == ch);
+            if m.voice_fed && m.stateful() && (heard || m.xmod.is_some()) {
                 let (l, r) = std::mem::take(&mut m.voice_sum);
-                let (l, r) = strip_one(m, l, r, &mut sends);
-                left += l;
-                right += r;
+                if heard {
+                    let (l, r) = strip_one(m, l, r, &mut sends);
+                    left += l;
+                    right += r;
+                } else {
+                    strip_one(m, l, r, &mut SendBus::default());
+                }
             }
         }
 
@@ -2473,6 +2623,8 @@ impl VoiceManager {
             );
             left += vl;
             right += vr;
+        } else {
+            strip_unheard(&mut self.channel_mix, VOX_CHANNEL, vox_out, vox_out);
         }
 
         // The rhythm section renders on the same bus, in the same volts.
@@ -2491,6 +2643,8 @@ impl VoiceManager {
             );
             left += dl;
             right += dr;
+        } else {
+            strip_unheard(&mut self.channel_mix, DRUM_CHANNEL, dl, dr);
         }
         // Every further kit track's board, each through its own strip
         for (ch, board) in self.kits.iter_mut() {
@@ -2499,6 +2653,8 @@ impl VoiceManager {
                 let (dl, dr) = strip(&mut self.channel_mix, *ch, dl, dr, &mut sends);
                 left += dl;
                 right += dr;
+            } else {
+                strip_unheard(&mut self.channel_mix, *ch, dl, dr);
             }
         }
 
@@ -2514,13 +2670,13 @@ impl VoiceManager {
         for (i, &(sl, sr)) in slot_out.iter().enumerate() {
             let ch = crate::sampler::SAMPLER_CHANNEL_BASE + i as u16;
             // A silent slot skips its strip, except one with an EQ or a
-            // drive stage, which runs on so its filters ring out
+            // drive stage, which runs on so its filters ring out, and a
+            // routed one, which lends (or takes) a signal every sample
             if sl == 0.0
                 && sr == 0.0
-                && !self
-                    .channel_mix
-                    .get(&ch)
-                    .map_or(false, |m| m.eq.is_some() || m.dist.is_some() || m.glitch.is_some())
+                && !self.channel_mix.get(&ch).map_or(false, |m| {
+                    m.eq.is_some() || m.dist.is_some() || m.glitch.is_some() || m.xmod.is_some()
+                })
             {
                 continue;
             }
@@ -2534,6 +2690,8 @@ impl VoiceManager {
                 );
                 left += sl;
                 right += sr;
+            } else {
+                strip_unheard(&mut self.channel_mix, ch, sl, sr);
             }
         }
 

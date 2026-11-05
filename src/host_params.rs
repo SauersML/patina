@@ -388,6 +388,14 @@ const EXCLUDED: &[Param] = &[
     Param::EqMidQ,
     Param::EqHigh,
     Param::EqHighFreq,
+    // Cross-track routes need a second track to listen to
+    Param::XFm,
+    Param::XFilterFm,
+    Param::XRing,
+    Param::Feed,
+    Param::FeedTime,
+    Param::FeedTone,
+    Param::FeedLimit,
     Param::ChorusMix,
     // Note bends are written on song notes (`C4:2>G3`); their curve has
     // nothing to shape in a plugin

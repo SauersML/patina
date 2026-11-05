@@ -68,6 +68,7 @@ pub mod vocoder;
 pub mod voice;
 pub mod voice_manager;
 pub mod vox;
+pub mod xmod;
 
 #[cfg(feature = "app")]
 pub mod aurora_gpu;
