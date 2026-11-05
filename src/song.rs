@@ -517,11 +517,28 @@
 //   gran_freeze        1 stops the recording: the cloud keeps what it
 //                      caught; 0 records again (plain sets)
 //   gran_jitter        onset randomness: 0 a clock, 1 Poisson
+//   gran_pitches=0,7,12  a pitch set (track-line option, or a
+//                      `gran_pitches 0,7,12` line for the bus engine):
+//                      each grain takes one interval at random, on top of
+//                      gran_pitch and its scatter (semitones, at most 16);
+//                      a set with no engine to draw it is an error
 //                 track pad patch=aurora gran=0.7 gran_size=150 gran_spray=0.4
 //                 automate pad.gran_freeze
 //                   0 >16 1
 // At density x size = 2 with no scatter the cloud is the input exactly,
 // gran_pos late. A grain never reads ahead of the recording.
+//
+// The granular send: the same engine on its own bus, fed by `gran_send=`
+// (0..1, a strip send like echo_send) on any tracks, its cloud returned
+// into the mix bus ahead of the spring, echo and reverb (so the grains sit
+// in the same rooms). Its knobs go on a `grains` line, written like a
+// track line's, and its lanes are `automate grains.<knob>`; `gran` is the
+// return level (default 1), and it hears only what is sent:
+//                 grains gran_size=40 gran_density=60 gran_spray=0.8 gran_pitches=0,12,24,7 gran_reverse=0.5
+//                 track wire string gran_send=0.6
+//                 automate grains.gran_density
+//                   15 275:12@exp
+// A track cannot be named `grains`.
 //
 // Spectral inserts (spectral_fx.rs), one short-time FFT processor (2048
 // points, 75% overlap) on a track's strip after the grains (track-line
@@ -1025,6 +1042,9 @@ param_table! {
     GranReverse:     "gran_reverse",   None,      (0.0, 1.0, Lin);
     GranFreeze:      "gran_freeze",    None,      (0.0, 1.0, Step);
     GranJitter:      "gran_jitter",    None,      (0.0, 1.0, Lin);
+    // A track's send into the granular send engine (a `grains` line for
+    // its knobs), like echo_send: 0..1 of the strip's signal
+    GranSend:        "gran_send",      None,      (0.0, 1.0, Lin);
     // Spectral inserts (spectral_fx.rs): one short-time FFT processor on
     // one track's strip (`automate pad.spec_freeze`) or unscoped across
     // the mix bus. Freeze (0..1: the frame caught as it left 0, against
@@ -1313,6 +1333,7 @@ impl Param {
             | Param::SpringSend
             | Param::ChorusSend
             | Param::EchoSend
+            | Param::GranSend
             | Param::DuckAmount
             | Param::DuckRelease
             | Param::DuckAttack
@@ -1652,6 +1673,7 @@ impl Param {
                 | P::SpringSend
                 | P::ChorusSend
                 | P::EchoSend
+                | P::GranSend
                 | P::DuckAmount
                 | P::DuckRelease
                 | P::DuckAttack
@@ -2078,6 +2100,9 @@ pub struct SongMix {
     pub routes: Vec<crate::xmod::Route>,
     /// `spec_from=`: (morphing strip's channel, the source track's).
     pub spec_sources: Vec<(u16, u16)>,
+    /// `gran_pitches=` and the `gran_pitches` line: (channel, 0 for the
+    /// bus engine, GRAN_SEND_CHANNEL for the send; its pitch set).
+    pub gran_pitches: Vec<(u16, Vec<f32>)>,
     /// `body=` and the `body` line: (channel, 0 for the bus; the body;
     /// the body its morph runs to).
     pub bodies: Vec<(u16, crate::body::BodyKind, Option<crate::body::BodyKind>)>,
@@ -2086,6 +2111,24 @@ pub struct SongMix {
     pub buses: Vec<(u16, Vec<u16>)>,
     /// `duck_at=`: strips keyed by the song's listed hits.
     pub duck_lists: Vec<u16>,
+}
+
+/// `0,7,12`: a granular pitch set, semitones (-24..24, at most 16).
+fn parse_pitch_set(spec: &str) -> Result<Vec<f32>, String> {
+    let set = spec
+        .split(',')
+        .map(|t| {
+            t.trim()
+                .parse_finite::<f32>()
+                .ok()
+                .filter(|v| (-24.0..=24.0).contains(v))
+                .ok_or_else(|| format!("gran_pitches: '{t}' is not a semitone interval in -24..24"))
+        })
+        .collect::<Result<Vec<f32>, String>>()?;
+    if set.len() > crate::granular::MAX_PITCHES {
+        return Err(format!("gran_pitches: at most {} intervals", crate::granular::MAX_PITCHES));
+    }
+    Ok(set)
 }
 
 /// `glass` or `room..cathedral`: a body, and the body its morph runs to.
@@ -2235,10 +2278,19 @@ fn register_channels(vm: &mut VoiceManager, song: &Song) {
             _ => None,
         })
         .collect();
+    // ...and a track sending to the granular send builds the send engine
+    if song.events.iter().any(|e| {
+        matches!(e.kind, EventKind::Param { param: Param::GranSend, value, .. } if value > 0.0)
+    }) {
+        gran_channels.push(crate::granular::GRAN_SEND_CHANNEL);
+    }
     gran_channels.sort_unstable();
     gran_channels.dedup();
     for channel in gran_channels {
         vm.arm_granular(channel);
+    }
+    for (channel, set) in &song.mix.gran_pitches {
+        vm.set_gran_pitches(*channel, set);
     }
     // A spectral insert delays its track by a frame: built at the
     // downbeat, the delay is there from the first sample, never mid-song
@@ -2695,6 +2747,48 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                 mix.bodies.retain(|(c, _, _)| *c != 0);
                 mix.bodies.push((0, a, b));
             }
+            "grains" => {
+                // the granular send's knobs, as on a track line:
+                // `grains gran_size=40 gran_density=60 gran_pitches=0,12`
+                let ch = crate::granular::GRAN_SEND_CHANNEL;
+                for opt in line.split_whitespace().skip(1) {
+                    if let Some(v) = opt.strip_prefix("gran_pitches=") {
+                        let set = parse_pitch_set(v).map_err(err)?;
+                        mix.gran_pitches.retain(|(c, _)| *c != ch);
+                        mix.gran_pitches.push((ch, set));
+                        continue;
+                    }
+                    let (param, v) = opt
+                        .split_once('=')
+                        .and_then(|(k, v)| Param::from_name(k).filter(|p| p.is_granular()).map(|p| (p, v)))
+                        .ok_or_else(|| {
+                            err(format!(
+                                "grains takes the granular knobs (gran=, gran_size=, gran_density=, \
+                                 gran_pos=, gran_spray=, gran_pitch=, gran_pitches=, gran_reverse=, ...), \
+                                 not '{opt}'"
+                            ))
+                        })?;
+                    let value = v
+                        .parse_finite::<f32>()
+                        .map_err(|_| err(format!("invalid {} '{}'", param.name(), v)))?;
+                    if let Some(w) = clamp_warning(param, value) {
+                        warnings.push(err(w));
+                    }
+                    events.push((0.0, 1, param_event(param, value, ch)));
+                }
+            }
+            "gran_pitches" => {
+                // the mix-bus engine's pitch set: `gran_pitches 0,7,12`
+                let spec = line["gran_pitches".len()..].trim();
+                if spec.is_empty() || spec.contains(char::is_whitespace) {
+                    return Err(err(
+                        "gran_pitches needs intervals in semitones, e.g. gran_pitches 0,7,12".into(),
+                    ));
+                }
+                let set = parse_pitch_set(spec).map_err(err)?;
+                mix.gran_pitches.retain(|(c, _)| *c != 0);
+                mix.gran_pitches.push((0, set));
+            }
             "tail" => {
                 tail_seconds = line[4..]
                     .trim()
@@ -2929,6 +3023,13 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                     .nth(1)
                     .ok_or_else(|| err("track needs a name".into()))?
                     .to_string();
+                if name == "grains" {
+                    return Err(err(
+                        "'grains' names the granular send (`automate grains.gran_density`); \
+                         give the track another name"
+                            .into(),
+                    ));
+                }
                 let mut vel = 0.8_f32;
                 let mut len = 1.0_f64;
                 let mut channel = 0u16;
@@ -2959,6 +3060,7 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                 let mut track_routes: Vec<(crate::xmod::Dest, String)> = Vec::new();
                 let mut track_spec_from: Option<String> = None;
                 let mut track_body: Option<String> = None;
+                let mut track_pitches: Option<Vec<f32>> = None;
                 let mut shape_spec: Option<String> = None;
                 let mut shape_beats: Option<f64> = None;
                 // A physical-model instrument: its body, its excite source
@@ -3011,6 +3113,8 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                         track_spec_from = Some(v.to_string());
                     } else if let Some(v) = opt.strip_prefix("body=") {
                         track_body = Some(v.to_string());
+                    } else if let Some(v) = opt.strip_prefix("gran_pitches=") {
+                        track_pitches = Some(parse_pitch_set(v).map_err(err)?);
                     } else if let Some(v) = opt.strip_prefix("shape=") {
                         shape_spec = Some(v.to_string());
                     } else if let Some(v) = opt.strip_prefix("shape_beats=") {
@@ -3392,6 +3496,10 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                     mix.bodies.retain(|(c, _, _)| *c != channel);
                     mix.bodies.push((channel, a, b));
                 }
+                if let Some(set) = track_pitches {
+                    mix.gran_pitches.retain(|(c, _)| *c != channel);
+                    mix.gran_pitches.push((channel, set));
+                }
                 for (param, value) in mix_opts {
                     events.push((
                         0.0,
@@ -3444,6 +3552,16 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                 }
                 // `automate lead.cutoff` targets the named track's channel
                 let (channel, pname) = match name.split_once('.') {
+                    // ...and `automate grains.gran_density` the granular send
+                    Some(("grains", pname)) => {
+                        if !Param::from_name(pname).map_or(false, |p| p.is_granular()) {
+                            return Err(err(format!(
+                                "automate '{name}': the granular send takes the granular \
+                                 knobs (gran, gran_size, gran_density, ...), not {pname}"
+                            )));
+                        }
+                        (crate::granular::GRAN_SEND_CHANNEL, pname)
+                    }
                     Some((track, pname)) => {
                         let ch = track_channels
                             .iter()
@@ -4328,6 +4446,31 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                     format!("{pname} on track '{track}', which has no body= (e.g. body=glass)")
                 });
             }
+        }
+    }
+
+    // A pitch set needs an engine to draw from: a gran knob or lane on its
+    // track (or unscoped, for the bus engine), or a track sending to the
+    // `grains` send
+    for (channel, _) in &mix.gran_pitches {
+        let send = *channel == crate::granular::GRAN_SEND_CHANNEL;
+        let armed = events.iter().any(|(_, _, k)| match k {
+            EventKind::Param { param, .. } if send => *param == Param::GranSend,
+            EventKind::Param { param, channel: c, .. } => param.is_granular() && c == channel,
+            _ => false,
+        });
+        if !armed {
+            return Err(if *channel == 0 {
+                "a `gran_pitches` line needs the bus engine: an unscoped gran lane (e.g. automate gran)".into()
+            } else if send {
+                "the `grains` line's gran_pitches= needs a track with gran_send= to feed it".into()
+            } else {
+                let track = track_channels
+                    .iter()
+                    .find(|(_, c)| c == channel)
+                    .map_or("?", |(t, _)| t.as_str());
+                format!("gran_pitches= on track '{track}', which has no granular engine (e.g. gran=0.5)")
+            });
         }
     }
 
@@ -6383,6 +6526,94 @@ mod tests {
         assert_eq!(plain.len(), wire.len());
         let worst = plain.iter().zip(&wire).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
         assert!(worst < 1e-6, "gran=0 is a wire on the strip: {worst}");
+    }
+
+    /// The granular send from the song format: a track's `gran_send=`
+    /// feeds the send engine, whose `grains` line puts every grain an
+    /// octave up (a one-interval pitch set), so 880 Hz appears in the mix
+    /// beside the track's own 440; a track that sends nothing stays out of
+    /// the cloud; and with no send there is no cloud at all.
+    #[test]
+    fn the_granular_send_hears_only_what_is_sent() {
+        let render = |text: &str| -> Vec<f32> {
+            let song = parse_song(&format!(
+                "bpm 120\ngate 1\nautomate reverb_wet\n0\n\
+                 grains gran_size=60 gran_density=40 gran_pos=0.2 gran_pitches=12\n{text}"
+            ))
+            .unwrap();
+            render_offline(&song, 48000.0).map(|(l, _)| l).collect()
+        };
+        let band = |x: &[f32], f: f64| -> f64 {
+            let n = 1024;
+            let blocks = x.len() / n;
+            let mut sum = 0.0;
+            for b in 0..blocks {
+                let (mut re, mut im) = (0.0f64, 0.0f64);
+                for i in 0..n {
+                    let w = 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / n as f64).cos();
+                    let ph = std::f64::consts::TAU * f * i as f64 / 48000.0;
+                    re += x[b * n + i] as f64 * w * ph.cos();
+                    im += x[b * n + i] as f64 * w * ph.sin();
+                }
+                sum += (re * re + im * im).sqrt() / (0.25 * n as f64);
+            }
+            sum / blocks as f64
+        };
+        let tracks = |send: &str| {
+            format!(
+                "track a {send}\nA4:4\nautomate a.waveform\n0\n\
+                 track b\nC5:4\nautomate b.waveform\n0\n"
+            )
+        };
+        let sent = render(&tracks("gran_send=1"));
+        let dry = render(&tracks("gran_send=0"));
+        let (s, d) = (&sent[30000..80000], &dry[30000..80000]);
+        let c6 = 2.0 * 523.25;
+        assert!(band(s, 880.0) > 0.3 * band(s, 440.0), "the send's octave: {:.4}", band(s, 880.0));
+        assert!(band(s, c6) < 0.05 * band(s, 880.0), "b sent nothing: {:.4}", band(s, c6));
+        assert!(
+            band(s, 880.0) > 20.0 * band(d, 880.0),
+            "no send, no cloud: 880 Hz {:.5} sent, {:.5} not",
+            band(s, 880.0),
+            band(d, 880.0)
+        );
+        // the dry tracks are untouched by the send's presence
+        assert!((band(s, 440.0) / band(d, 440.0) - 1.0).abs() < 0.05);
+        // a lane on the send, and the refusals
+        assert!(parse_song("track a gran_send=1\nA4\nautomate grains.gran_density\n10 80:4\n").is_ok());
+        for bad in [
+            "track grains\nA4\n",
+            "track a\nA4\nautomate grains.cutoff\n100\n",
+            "track a gran_pitches=30\nA4\n",
+            "track a gran_pitches=0,x\nA4\n",
+            "gran_pitches\ntrack a\nA4\n",
+            // a set with no engine to draw it
+            "track a gran_pitches=0,12\nA4\n",
+            "gran_pitches 0,12\ntrack a\nA4\n",
+            "grains gran_pitches=0,12\ntrack a\nA4\n",
+            "grains cutoff=100\ntrack a\nA4\n",
+        ] {
+            assert!(parse_song(bad).is_err(), "accepted: {bad:?}");
+        }
+    }
+
+    /// spec_freeze holds a frame on any track: a synth, a 909 kit and a
+    /// string instrument, each frozen mid-note, keep sounding long after
+    /// the dry track has gone quiet.
+    #[test]
+    fn spectral_freeze_works_on_any_track() {
+        let tail = |track: &str, freeze: bool| -> f64 {
+            let lane = if freeze { "automate t.spec_freeze\n0 >0.25 1\n" } else { "" };
+            let song = parse_song(&format!(
+                "bpm 120\ngate 1\ntail 2\nautomate reverb_wet\n0\n{track}\n{lane}"
+            ))
+            .unwrap();
+            render_offline(&song, 48000.0).skip(72000).take(24000).map(|(l, r)| (l * l + r * r) as f64).sum()
+        };
+        for track in ["track t\nA4:0.5", "track t kit=909\nBD:0.5", "track t string\nA3:0.5"] {
+            let (held, dry) = (tail(track, true), tail(track, false));
+            assert!(held > 1000.0 * dry.max(1e-12), "{track}: frozen {held:.3e}, dry {dry:.3e}");
+        }
     }
 
     /// The spectral inserts from the song format. A track frozen during

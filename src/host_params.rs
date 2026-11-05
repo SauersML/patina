@@ -376,6 +376,7 @@ const EXCLUDED: &[Param] = &[
     Param::GranReverse,
     Param::GranFreeze,
     Param::GranJitter,
+    Param::GranSend,
     Param::SpecFreeze,
     Param::SpecBlur,
     Param::SpecShift,

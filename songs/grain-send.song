@@ -1,0 +1,44 @@
+# Grain Send — 96 bpm, A minor. A demo of the granular send: two tracks
+# feed one grain engine on its own bus (`gran_send=`), whose knobs sit on
+# the `grains` line, and the cloud comes back into the mix ahead of the
+# reverb.
+#
+#   beats  0-8    DRY     a plucked string and felt keys, nothing sent
+#   beats  8-16   SEND    both open their sends: a thin cloud of grains
+#                         on the octaves and the fifth of what they play
+#   beats 16-24   THICK   the cloud thickens to 200 grains a second, half
+#                         of them backwards
+#   beats 24-32   HOLD    the send's buffer freezes on the last chord;
+#                         the keys stop and the string drops to a low A
+#                         under the held cloud
+
+bpm 96
+gate 0.95
+tail 4
+
+section DRY 0..8
+section SEND 8..16
+section THICK 16..24
+section HOLD 24..32
+
+automate reverb_wet
+0.3
+
+grains gran_size=70 gran_density=12 gran_pos=0.4 gran_spray=0.6 gran_pitches=0,12,7,-12 gran_pan_scatter=0.9 gran_jitter=1
+
+track wire string vel=0.8
+(A2:2 E3:2 C3:2 G2:2)x3 A1:8
+automate wire.gran_send
+0 >8 0.7
+
+track keys patch=feltkeys vel=0.6
+(A3:0.5 E4:0.5 C5:0.5 E4:0.5)x12 R:8
+automate keys.gran_send
+0 >8 0.4
+
+automate grains.gran_density
+12 >16 12 200:8@exp
+automate grains.gran_reverse
+0 >16 0.5
+automate grains.gran_freeze
+0 >24 1

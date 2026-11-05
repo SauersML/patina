@@ -50,9 +50,18 @@
 // 5 ms before the freeze fade out and the first 5 ms after it fade in, so
 // a grain that reads across the seam dips rather than jumps.
 //
+// A pitch set (`gran_pitches=0,7,12`) gives each grain one of its
+// intervals at random, on top of `gran_pitch` and its scatter: a cloud
+// that sounds a chord of the input rather than a smear around it.
+//
 // The insert exists only for a song that uses it (built at the downbeat so
 // the buffer is already full of the track when grains first start), and
 // at `gran` 0 it passes its input through untouched.
+//
+// The same engine also runs as a send (`gran_send=` on the tracks that
+// feed it, a `grains` line for its knobs): it hears the sum of the sends
+// and returns only its cloud, `gran` its return level (default 1), into
+// the mix bus ahead of the spring, echo and reverb.
 
 use crate::rng;
 
@@ -66,6 +75,11 @@ const WET_TAU_S: f32 = 0.01;
 /// A grain's fade-out, and the recording seam's fades, at a freeze or a
 /// thaw, seconds.
 const FADE_S: f32 = 0.005;
+/// The send engine's channel (a `grains` line's knobs, `automate
+/// grains.gran_density`): one past the sampler slots, below the voice box.
+pub const GRAN_SEND_CHANNEL: u16 = u16::MAX - 2;
+/// Intervals a pitch set holds, at most.
+pub const MAX_PITCHES: usize = 16;
 /// Copies of the recording, each at half the rate of the one before (0 is
 /// the recording itself): grains up to 16 times faster read alias-free.
 const LEVELS: usize = 5;
@@ -163,6 +177,10 @@ pub struct Granular {
     pan_scatter: f32,
     reverse: f32,
     jitter: f32,
+    /// The pitch set (`gran_pitches=`), semitones: each grain draws one.
+    /// Empty (n_pitches 0) draws nothing.
+    pitches: [f32; MAX_PITCHES],
+    n_pitches: usize,
 }
 
 /// The engine's knobs, by song-file name (see `Granular::set`).
@@ -218,7 +236,27 @@ impl Granular {
             pan_scatter: 0.0,
             reverse: 0.0,
             jitter: 0.0,
+            pitches: [0.0; MAX_PITCHES],
+            n_pitches: 0,
         }
+    }
+
+    /// The send form: an engine that hears a send bus and returns only its
+    /// cloud (`process_send`), open from the first sample at full return.
+    pub fn new_send(sample_rate: f32) -> Self {
+        let mut g = Self::new(sample_rate);
+        g.mix = 1.0;
+        g.wet = 1.0;
+        g
+    }
+
+    /// The pitch set each grain draws an interval from (semitones; at most
+    /// MAX_PITCHES, the rest ignored). Empty: no draw, every grain at
+    /// `gran_pitch`.
+    pub fn set_pitches(&mut self, set: &[f32]) {
+        let n = set.len().min(MAX_PITCHES);
+        self.pitches[..n].copy_from_slice(&set[..n]);
+        self.n_pitches = n;
     }
 
     /// Turn one knob (values already clamped to the parameter's range).
@@ -345,7 +383,14 @@ impl Granular {
             return;
         }
         let len = ((self.size_ms * 0.001 * self.sr).round() as u32).max(8);
-        let semis = self.pitch + self.pitch_scatter * rng::bipolar(&mut self.rng);
+        // one interval of the pitch set, if there is one
+        let chosen = if self.n_pitches > 0 {
+            let i = (rng::unipolar(&mut self.rng) * self.n_pitches as f32) as usize;
+            self.pitches[i.min(self.n_pitches - 1)]
+        } else {
+            0.0
+        };
+        let semis = self.pitch + chosen + self.pitch_scatter * rng::bipolar(&mut self.rng);
         let rate = (semis as f64 / 12.0).exp2();
         let backward = self.reverse > 0.0 && rng::unipolar(&mut self.rng) < self.reverse;
         let pan = self.pan_scatter * rng::bipolar(&mut self.rng);
@@ -444,7 +489,43 @@ impl Granular {
         ]
     }
 
+    /// One sample on a strip or the bus: the input blended with its cloud.
     pub fn process(&mut self, l: f32, r: f32) -> (f32, f32) {
+        self.record(l, r);
+        self.wet += (self.mix - self.wet) * self.wet_k;
+        if self.mix == 0.0 && self.wet < 1e-6 {
+            // out: recording only, so the cloud starts from a full buffer
+            self.rest();
+            return (l, r);
+        }
+        let (wl, wr) = self.cloud();
+        let wet = self.wet;
+        (l * (1.0 - wet) + wl * wet, r * (1.0 - wet) + wr * wet)
+    }
+
+    /// One sample of the send form: the send bus in, only the cloud out,
+    /// at the return level `gran` sets.
+    pub fn process_send(&mut self, l: f32, r: f32) -> (f32, f32) {
+        self.record(l, r);
+        self.wet += (self.mix - self.wet) * self.wet_k;
+        if self.mix == 0.0 && self.wet < 1e-6 {
+            self.rest();
+            return (0.0, 0.0);
+        }
+        let (wl, wr) = self.cloud();
+        (wl * self.wet, wr * self.wet)
+    }
+
+    /// Closed: no grains sound, and the next opening starts the clock.
+    fn rest(&mut self) {
+        self.wet = 0.0;
+        self.grains.clear();
+        self.until_next = 0.0;
+    }
+
+    /// Write one sample into the capture buffer and its slower copies
+    /// (nothing while frozen).
+    fn record(&mut self, l: f32, r: f32) {
         if !self.frozen {
             let cap = self.buf.len() as u64;
             let (mut wl, mut wr) = (l, r);
@@ -467,14 +548,10 @@ impl Granular {
                 self.decimate(k, n - 1);
             }
         }
-        self.wet += (self.mix - self.wet) * self.wet_k;
-        if self.mix == 0.0 && self.wet < 1e-6 {
-            // out: recording only, so the cloud starts from a full buffer
-            self.wet = 0.0;
-            self.grains.clear();
-            self.until_next = 0.0;
-            return (l, r);
-        }
+    }
+
+    /// Start the grains due this sample and sum every sounding one.
+    fn cloud(&mut self) -> (f32, f32) {
         self.until_next -= 1.0;
         while self.until_next <= 0.0 {
             self.spawn();
@@ -515,8 +592,7 @@ impl Granular {
                 k += 1;
             }
         }
-        let wet = self.wet;
-        (l * (1.0 - wet) + wl * wet, r * (1.0 - wet) + wr * wet)
+        (wl, wr)
     }
 }
 
@@ -816,6 +892,84 @@ mod tests {
         let rms = (l0.iter().map(|v| (v * v) as f64).sum::<f64>() / l0.len() as f64).sqrt();
         let db = 20.0 * (rms / 0.2887).log10();
         assert!(db.abs() < 3.0, "a 9.6-overlap cloud at {db:+.1} dB re the input");
+    }
+
+    /// A pitch set gives each grain one of its intervals: a {0, 12} cloud
+    /// of a 440 Hz tone sounds at 440 and 880 Hz, about evenly, and
+    /// nowhere between; {7} alone moves the whole cloud a fifth up.
+    #[test]
+    fn a_pitch_set_gives_each_grain_one_interval() {
+        let cloud = |set: &[f32]| -> Vec<f32> {
+            let mut g = engine(&[
+                (Knob::Mix, 1.0),
+                (Knob::Size, 60.0),
+                (Knob::Density, 40.0),
+                (Knob::Pos, 0.3),
+                (Knob::Jitter, 1.0),
+            ]);
+            g.set_pitches(set);
+            (0..144000)
+                .map(|n| {
+                    let v = (std::f32::consts::TAU * 440.0 * n as f32 / SR).sin();
+                    g.process(v, v).0
+                })
+                .skip(48000)
+                .collect()
+        };
+        let y = cloud(&[0.0, 12.0]);
+        let (lo, hi, mid) = (band(&y, 440.0), band(&y, 880.0), band(&y, 660.0));
+        assert!(lo > 0.15 && hi > 0.15, "both intervals sound: 440 {lo:.3}, 880 {hi:.3}");
+        assert!((20.0 * (lo / hi).log10()).abs() < 4.0, "about evenly: 440 {lo:.3}, 880 {hi:.3}");
+        assert!(mid < 0.1 * lo.min(hi), "nothing between: 660 {mid:.4}");
+        let fifth = (7.0f32 / 12.0).exp2() * 440.0;
+        let y = cloud(&[7.0]);
+        assert!(band(&y, fifth) > 20.0 * band(&y, 440.0), "a one-interval set moves the cloud");
+        // an empty set draws nothing: the same cloud as no set at all
+        let mut a = engine(&[(Knob::Mix, 1.0), (Knob::PitchScatter, 5.0), (Knob::Jitter, 1.0)]);
+        let mut b = a.clone();
+        b.set_pitches(&[]);
+        for n in 0..48000 {
+            let v = ((n * 7919) % 1001) as f32 / 500.0 - 1.0;
+            assert_eq!(a.process(v, v), b.process(v, v));
+        }
+    }
+
+    /// The send form returns only the cloud: a two-overlap cloud of a
+    /// signal is that signal gran_pos late, with no dry copy on top; at
+    /// gran 0 it returns silence while it keeps recording.
+    #[test]
+    fn the_send_form_returns_only_the_cloud() {
+        let mut g = Granular::new_send(SR);
+        for (k, v) in [(Knob::Size, 50.0), (Knob::Density, 40.0), (Knob::Pos, 0.1)] {
+            g.set(k, v);
+        }
+        let x: Vec<f32> = (0..48000)
+            .map(|n| (std::f32::consts::TAU * 220.0 * n as f32 / SR).sin() * 0.5)
+            .collect();
+        let y: Vec<f32> = x.iter().map(|&v| g.process_send(v, v).0).collect();
+        let mut worst = 0.0f32;
+        for n in 4800 + 2400..48000 {
+            worst = worst.max((y[n] - x[n - 4800]).abs());
+        }
+        assert!(worst < 1e-5, "the return strays {worst} from the send 4800 samples back");
+        assert!(y[..4800].iter().all(|v| v.abs() < 1e-6), "no dry copy before the grains reach it");
+        // closed, the return fades out over its 10 ms smoothing and then
+        // is exactly silent
+        g.set(Knob::Mix, 0.0);
+        let tail: Vec<f32> = (0..24000).map(|n| g.process_send(x[n], x[n]).0).collect();
+        assert!(tail[12000..].iter().all(|&v| v == 0.0), "closed, the send returns nothing");
+        assert_eq!(g.head, 48000 + 24000);
+    }
+
+    /// The send's channel is no track's, slot's, kit's or instrument's.
+    #[test]
+    fn the_send_channel_is_its_own() {
+        let c = GRAN_SEND_CHANNEL;
+        assert!(crate::sampler::slot_for_channel(c).is_none());
+        assert!(crate::drums::kit_for_channel(c).is_none());
+        assert!(crate::physical::instrument_for_channel(c).is_none());
+        assert!(c != crate::vox::VOX_CHANNEL && c != crate::drums::DRUM_CHANNEL);
+        assert!(c > crate::sampler::SAMPLER_CHANNEL_BASE + crate::sampler::MAX_SLOTS as u16 - 1);
     }
 
     /// At gran 0 the insert is a wire: bit-identical output, while it keeps

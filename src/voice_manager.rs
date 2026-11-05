@@ -469,6 +469,8 @@ pub struct ChannelMix {
     pub spr_send: f32,
     pub cho_send: f32,
     pub echo_send: f32,
+    /// The send into the granular send engine (`gran_send=`).
+    pub gran_send: f32,
     pub duck: f32,
     duck_decay: f32,
     cur_gain: f32,
@@ -642,6 +644,7 @@ impl ChannelMix {
             spr_send: 0.0,
             cho_send: 0.0,
             echo_send: 0.0,
+            gran_send: 0.0,
             duck: 0.0,
             duck_decay: duck_decay_for(0.18, sample_rate),
             cur_gain: 1.0,
@@ -805,6 +808,8 @@ struct SendBus {
     echo: (f32, f32),
     reverb: (f32, f32),
     chorus: (f32, f32),
+    /// The granular send engine's input (read only when a song builds it)
+    gran: (f32, f32),
 }
 
 /// Pass one channel's contribution through its mixer strip: ducked gain,
@@ -928,6 +933,7 @@ fn strip_one(m: &mut ChannelMix, l: f32, r: f32, sends: &mut SendBus) -> (f32, f
     tap(&mut sends.echo, m.echo_send);
     tap(&mut sends.reverb, m.rev_send);
     tap(&mut sends.chorus, m.cho_send);
+    tap(&mut sends.gran, m.gran_send);
     (l, r)
 }
 
@@ -1289,6 +1295,10 @@ pub struct VoiceManager {
     /// The granular engine across the mix bus (unscoped `gran`), after the
     /// bus glitch; None until a song uses it.
     bus_gran: Option<Box<crate::granular::Granular>>,
+    /// The granular send engine (`gran_send=` on the tracks, a `grains`
+    /// line for its knobs): it hears the sends and returns its cloud ahead
+    /// of the spring; None until a song uses it.
+    send_gran: Option<Box<crate::granular::Granular>>,
     /// The spectral inserts across the mix bus (unscoped `spec_*`), after
     /// the bus grains; None until a song uses them.
     bus_spec: Option<Box<crate::spectral_fx::SpectralFx>>,
@@ -1391,6 +1401,7 @@ impl VoiceManager {
             mix_strip: false,
             routes: None,
             bus_gran: None,
+            send_gran: None,
             bus_spec: None,
             bus_body: None,
             spec_links: Vec::new(),
@@ -1586,6 +1597,7 @@ impl VoiceManager {
             P::SpringSend => m.spr_send = value,
             P::ChorusSend => m.cho_send = value,
             P::EchoSend => m.echo_send = value,
+            P::GranSend => m.gran_send = value,
             P::DuckAmount => m.duck = value,
             P::DuckRelease => m.duck_decay = duck_decay_for(value, sr),
             P::DuckAttack => {
@@ -1766,17 +1778,40 @@ impl VoiceManager {
         }
     }
 
-    /// Build a channel's granular engine (channel 0: the bus engine) at
-    /// its defaults, so it records from now on. The song player arms every
+    /// Build a channel's granular engine (channel 0: the bus engine;
+    /// GRAN_SEND_CHANNEL: the send engine, open at full return) at its
+    /// defaults, so it records from now on. The song player arms every
     /// channel a granular lane touches at the downbeat.
     pub fn arm_granular(&mut self, channel: u16) {
+        use crate::granular::{Granular, GRAN_SEND_CHANNEL};
         let sr = self.sample_rate;
+        if channel == GRAN_SEND_CHANNEL {
+            self.send_gran.get_or_insert_with(|| Box::new(Granular::new_send(sr)));
+            return;
+        }
         let slot = if channel == 0 {
             &mut self.bus_gran
         } else {
             &mut self.strip_mut(channel).gran
         };
-        slot.get_or_insert_with(|| Box::new(crate::granular::Granular::new(sr)));
+        slot.get_or_insert_with(|| Box::new(Granular::new(sr)));
+    }
+
+    /// The engine behind a granular channel, if built.
+    fn granular_mut(&mut self, channel: u16) -> Option<&mut crate::granular::Granular> {
+        match channel {
+            0 => self.bus_gran.as_deref_mut(),
+            crate::granular::GRAN_SEND_CHANNEL => self.send_gran.as_deref_mut(),
+            _ => self.channel_mix.get_mut(&channel).and_then(|m| m.gran.as_deref_mut()),
+        }
+    }
+
+    /// A granular engine's pitch set (`gran_pitches=`), building it first.
+    pub fn set_gran_pitches(&mut self, channel: u16, set: &[f32]) {
+        self.arm_granular(channel);
+        if let Some(g) = self.granular_mut(channel) {
+            g.set_pitches(set);
+        }
     }
 
     /// Turn a granular knob on a track's strip, or with channel 0 on the
@@ -1803,12 +1838,7 @@ impl VoiceManager {
             _ => return,
         };
         self.arm_granular(channel);
-        let slot = if channel == 0 {
-            self.bus_gran.as_mut()
-        } else {
-            self.channel_mix.get_mut(&channel).and_then(|m| m.gran.as_mut())
-        };
-        if let Some(g) = slot {
+        if let Some(g) = self.granular_mut(channel) {
             g.set(knob, value);
         }
     }
@@ -3437,6 +3467,15 @@ impl VoiceManager {
         // cassette.
         let s = sends;
         let (left, right) = self.fuzz.process(left, right);
+        // The granular send's cloud comes back onto the bus here, so its
+        // grains sit in the same spring, echo and room as the notes
+        let (left, right) = match self.send_gran.as_mut() {
+            Some(c) => {
+                let (cl, cr) = c.process_send(s.gran.0 * g, s.gran.1 * g);
+                (left + cl, right + cr)
+            }
+            None => (left, right),
+        };
         let (left, right) =
             self.spring
                 .process_with_send(left, right, s.spring.0 * g, s.spring.1 * g);

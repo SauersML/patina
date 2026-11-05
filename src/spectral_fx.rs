@@ -80,6 +80,9 @@ struct Chan {
     frz_phase: Vec<f32>,
     frz_omega: Vec<f32>,
     syn_phase: Vec<f32>,
+    /// The shift stage's peak list, kept so a frame never allocates on
+    /// the audio thread
+    peaks: Vec<usize>,
 }
 
 impl Chan {
@@ -95,6 +98,7 @@ impl Chan {
             frz_phase: z.clone(),
             frz_omega: z.clone(),
             syn_phase: z,
+            peaks: Vec::with_capacity(BINS),
         }
     }
 }
@@ -406,7 +410,8 @@ impl SpectralFx {
         let ratio = (self.pitch / 12.0).exp2();
         if ratio != 1.0 || self.shift_hz != 0.0 {
             let hz = self.sr / N as f32;
-            let mut peaks: Vec<usize> = Vec::with_capacity(128);
+            let peaks = &mut ch.peaks;
+            peaks.clear();
             for k in 2..BINS - 2 {
                 let m = f.mag[k];
                 if m > 1e-9

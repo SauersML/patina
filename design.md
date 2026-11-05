@@ -571,7 +571,8 @@ to a build without it.
 
 ```
 track strip:  xmod in -> glitch -> gran -> spec -> body -> EQ -> drive -> fader -> comp -> binaural | pan -> sends
-mix bus:      glitch -> gran -> spec -> body -> width
+mix bus:      fuzz -> + granular send return -> spring -> echo -> reverb -> chorus -> comp -> tape
+                -> glitch -> gran -> spec -> body -> width
 ```
 
 A lane scoped to a track (`automate pad.gran`) or an option on its track
@@ -596,7 +597,8 @@ Knobs: `gran` (wet, 0 to 1), `gran_size` (ms, 2 to 2000), `gran_density`
 the live input, and its random spread), `gran_pitch` and
 `gran_pitch_scatter` (semitones), `gran_pan_scatter`, `gran_reverse` (the
 chance a grain plays backwards), `gran_freeze` (step), `gran_jitter` (clock
-to Poisson onsets).
+to Poisson onsets). Not a lane: `gran_pitches=0,7,12` on the track line
+(or a `gran_pitches 0,7,12` line for the bus engine), a pitch set.
 
 - **Capture**: a 12 s stereo ring, written every sample unless frozen. A
   grain is a Hann-windowed read at a delay, a speed (2^(semitones/12)), a
@@ -628,6 +630,21 @@ to Poisson onsets).
   the first 5 ms after in). Test: switching every 37 ms under a tone keeps
   the output's largest second difference at 0.013, against 0.39 without
   the fades.
+- **Pitch set**: with `gran_pitches=` each grain draws one interval of the
+  set, uniformly, and adds it to `gran_pitch` before the scatter, so a
+  cloud plays a chord of its input instead of a smear around it. Without
+  a set no draw is made, so the random sequence is the same as before.
+- **The send**: the same engine on a bus of its own. `gran_send=` (0 to 1)
+  taps a strip after its fader and pan like `echo_send`; the summed sends
+  go to one engine whose knobs are a `grains` line (track-line syntax,
+  `grains gran_size=40 gran_density=60 gran_pitches=0,12`) and lanes
+  `automate grains.<knob>`. It returns only its cloud (no dry copy of the
+  sends), `gran` as the return level (default 1), onto the mix bus after
+  the fuzz and ahead of the spring, echo and reverb, so the grains sit in
+  the same rooms as the notes. It is built at the downbeat when any track
+  sends to it; a stem bounce hears only the soloed track's send. Its
+  channel, u16::MAX − 2, is reserved between the sampler slots and the
+  voice box, so a track cannot be named `grains`.
 - **Cost**: 60 s of one engine at its heaviest (2 s grains at 500 a second,
   so 256 always sounding, with pitch scatter and reverse) renders in
   26 s of CPU time.

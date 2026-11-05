@@ -25,7 +25,7 @@ format for programmatic playback and parameter automation.
 - 💥 Glitch inserts on any track, any bus or the whole mix: beat repeat from 1/8 to 1/64 that can halve itself into a roll, reverse in note slices, and a tape stop with a curve (`stutter`, `stutter_halve`, `reverse`, `tape_stop`, `tape_stop_curve`)
 - 🌀 Generative automation lanes: `{expr}` segments of time at control rate, with noise, step sequences and chaotic systems (Lorenz, Rössler, logistic and Hénon maps, a Kuramoto swarm of coupled oscillators, a double pendulum)
 - 🔀 Audio-rate cross-modulation between tracks: any track's signal as another's FM, filter FM or ring modulator, and routed feedback loops between tracks through a delay, a tone filter and a safety limiter (`fm_from=`, `filter_fm_from=`, `ringmod_from=`, `feed_from=`)
-- 🌾 A granular engine on any track or the whole mix bus: a live capture buffer played back as a cloud of grains with size, density, position, pitch and pan scatter, freeze and reverse probability (`gran`, `gran_size`, `gran_freeze`, ...)
+- 🌾 A granular engine on any track, the whole mix bus, or a send bus any tracks feed: a live capture buffer played back as a cloud of grains with size, density, position, pitch and pan scatter, a pitch set, freeze and reverse probability (`gran`, `gran_size`, `gran_pitches=`, `gran_send=`, a `grains` line, ...)
 - 🌈 Spectral inserts on any track or the mix bus: freeze, blur, frequency shift and pitch shift, spectral gate and tilt, and a morph that crossfades one track's spectrum into another's (`spec_freeze`, `spec_morph` with `spec_from=`, ...)
 - 🎧 Binaural placement on any track, for headphones: azimuth, elevation and distance around a modelled head (a spherical head with pinna and shoulder echoes, generated, no measured dataset), motion paths, and the Doppler bend of a moving source (`azimuth`, `distance`, `orbit`, `pos_x`, `doppler`, ...)
 - 🔔 Bodies: any track or the whole mix bus heard inside a wine glass, a steel box, a wooden crate, a tube, a room, a hall or a cathedral, by convolution with impulse responses generated from each body's physics, and morphs from one body into another (`body=glass..cathedral`, `body_morph`)
@@ -388,9 +388,26 @@ automate pad.gran_freeze           # catch the chord at beat 16 and hold it
 - `gran` is the wet/dry blend (0 is out, 1 is grains only). `gran_size` (ms, 2 to 2000) and `gran_density` (grains a second, 0.5 to 500) set the texture: density x size grains overlap at once.
 - `gran_pos` is how far behind the live input a grain reads (seconds, 0 to 10), and `gran_spray` spreads it at random. Frozen (`gran_freeze 1`), the buffer stops recording, and `gran_pos` scrubs through what it caught.
 - `gran_pitch` (semitones) sets each grain's playback speed: a grain an octave up reads twice as much of the recording in the same `gran_size`, so the pitch moves while the cloud keeps the music's tempo. `gran_pitch_scatter` spreads it at random, `gran_pan_scatter` (0 to 1) spreads the grains across the field, `gran_reverse` is the chance a grain plays backwards, and `gran_jitter` moves the onsets from a steady clock (0) to a random Poisson stream (1).
+- A pitch set, `gran_pitches=0,7,12` on the track line (or a `gran_pitches 0,7,12` line for the bus engine), gives each grain one of its intervals at random, on top of `gran_pitch`: a cloud that sounds a chord of its input. Semitones, -24 to 24, up to 16 of them. A set with no engine to draw it (no `gran` knob or lane on its track, no unscoped gran lane for the line, no track with `gran_send=` for the `grains` line) is an error.
 - Level: at density x size = 2 with no scatter, the windows sum to exactly one and the cloud is the input itself, `gran_pos` late. Denser clouds scale by sqrt(2/N), so a thick cloud stays near the input's loudness. A grain never reads past the recording head: pitched-up grains start far enough back not to overtake it.
 - Clean at any setting: a grain read faster than the recording reads a copy filtered and kept at half the rate (or a quarter, down to a sixteenth), so a cloud pitched up two octaves does not fold its treble back down as aliases. `gran_freeze` can switch every sixteenth note without a click: a grain that would run into the stopped head, or into audio the restarted head overwrites, fades out over 5 ms, and the seam in the recording is faded too.
 - A song that never touches the engine builds none and renders exactly as before; at `gran 0` it is a wire that keeps recording.
+
+### Granular send
+
+The same engine on a bus of its own: any tracks feed it with `gran_send=` (0 to 1, like `echo_send`), and it returns only its cloud into the mix, ahead of the spring, echo and reverb, so the grains sit in the same rooms as the notes. Its knobs go on a `grains` line, written like a track line, and its lanes are `automate grains.<knob>`. `gran` is the return level (default 1).
+
+```
+grains gran_size=40 gran_density=60 gran_spray=0.8 gran_pitches=0,12,24,7 gran_reverse=0.5 gran_pan_scatter=0.9
+track wire string gran_send=0.6
+A2:8 E2:8
+track keys patch=feltkeys gran_send=0.3
+(A3 E4 C5 E4)x8
+automate grains.gran_density       # the cloud thickens
+15 275:16@exp
+```
+
+The cloud hears only what is sent, from the downbeat. A track cannot be named `grains`. `songs/grain-send.song` is the demo.
 
 ## 🌈 Spectral inserts
 
