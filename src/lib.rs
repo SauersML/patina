@@ -36,6 +36,8 @@ pub fn supported_sample_rate(rate: f64) -> bool {
 }
 
 pub mod adaa;
+pub mod binaural;
+pub mod body;
 pub mod buscomp;
 pub mod chorus;
 pub mod drums;
@@ -46,6 +48,7 @@ pub mod filter;
 pub mod fuzz;
 pub mod gen;
 pub mod glitch;
+pub mod granular;
 pub mod hpf;
 pub mod inserts;
 pub mod lfo;
@@ -63,6 +66,7 @@ pub mod smoothing;
 pub mod song;
 pub mod sources;
 pub mod spectral;
+pub mod spectral_fx;
 pub mod spring;
 pub mod substrate;
 pub mod talker;

@@ -1,0 +1,37 @@
+# Bodies — 72 bpm, E minor. A demo of bodies: tracks heard inside
+# modelled objects and rooms, and morphs from one body into another.
+#
+#   beats  0-8    GLASS   a mallet figure inside a wine glass, its ring
+#                         modes answering every note
+#   beats  8-16   BOX     the glass becomes a steel box, while a pluck
+#                         knocks inside a wooden crate
+#   beats 16-32   NAVE    a pad opens from a small room into a cathedral,
+#                         and the whole mix moves into a hall
+
+bpm 72
+gate 0.9
+tail 6
+
+section GLASS 0..8
+section BOX 8..16
+section NAVE 16..32
+
+automate reverb_wet
+0
+
+body hall
+automate body_mix
+0 >16 0 0.3:8@smooth
+
+track tap patch=mallet vel=0.8 body=glass..metal body_mix=0.75
+(E5:0.5 G5:0.5 B5:0.5 G5:0.5)x4 (E5:0.5 G5:0.5 B5:0.5 D6:0.5)x4 R:16
+automate tap.body_morph
+0 >8 0 1:4@smooth
+
+track knock patch=nc-pluck vel=0.7 body=wood
+R:8 (E3 . B2 . E3 B2 . .)x1 R:16
+
+track pad patch=softpad vel=0.6 body=room..cathedral
+R:16 [E3 B3 G4]:8 [C3 G3 E4]:6 R:2
+automate pad.body_morph
+0 >16 0 1:12@smooth

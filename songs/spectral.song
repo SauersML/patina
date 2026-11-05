@@ -1,0 +1,45 @@
+# Spectral — 80 bpm, D minor. A demo of the spectral inserts: one track
+# morphing into another, a freeze, blur, a frequency shift and a pitch
+# shift, a gate and a tilt across the whole mix bus.
+#
+#   beats  0-8    PAD     a pad, blurred so every chord change smears in
+#   beats  8-16   MORPH   the pad's spectrum crossfades into a muted
+#                         cassette choir's, and is caught at beat 16
+#   beats 16-24   FREEZE  the caught chord holds while a bell line plays
+#                         through a +7 semitone spectral pitch shift
+#   beats 24-32   SHIFT   the held chord's partials slide 150 Hz up, out
+#                         of harmony; the bus gate thins the mix to its
+#                         strongest partials and the tilt darkens it;
+#                         the freeze lets go over the last two beats
+
+bpm 80
+gate 0.95
+tail 4
+
+section PAD 0..8
+section MORPH 8..16
+section FREEZE 16..24
+section SHIFT 24..32
+
+automate reverb_wet
+0.2
+
+track voice patch=cassette-choir gain=0
+[D3 A3 F4]:16 [D3 A3 F4]:16
+
+track pad patch=aurora vel=0.7 spec_from=voice spec_blur=0.6
+[D3 A3 E4]:4 [Bb2 F3 D4]:4 [C3 G3 E4]:4 [A2 E3 C#4]:4 [D3 A3 E4]:16
+automate pad.spec_morph
+0 >8 1:8@smooth
+automate pad.spec_freeze
+0 >16 1 >30 0:2@smooth
+automate pad.spec_shift
+0 >24 150:6@smooth
+
+track bell patch=glintbell vel=0.6 spec_pitch=7 spec_mix=0.7
+R:16 (A4 . D5 . F5 . E5 .)x2
+
+automate spec_gate
+0 >24 30:4@smooth
+automate spec_tilt
+0 >24 -3:4@smooth

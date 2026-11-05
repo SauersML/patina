@@ -26,6 +26,11 @@
 
 const N: usize = 1024;
 const HOP: usize = N / 4;
+/// The largest transform the twiddle table serves: this vocoder's N, the
+/// spectral inserts' frames (spectral_fx.rs) and the bodies' longest
+/// convolution blocks (body.rs). Each stage's factors are its own, so a
+/// longer table leaves the smaller transforms' factors as they were.
+pub(crate) const FFT_MAX: usize = 32768;
 /// Cepstral cutoff in seconds: ripple slower than this is envelope,
 /// faster is source. 2 ms sits safely below any singing pitch period.
 const LIFTER_S: f32 = 0.002;
@@ -40,9 +45,9 @@ const MAX_GAIN: f32 = 28.6;
 /// Twiddle factors for every radix-2 stage, computed once.
 ///
 /// A stage's factors depend only on its length, not on the transform's,
-/// so one flat table serves every power-of-two size up to N: stage `len`
-/// occupies `len/2` entries starting at `len/2 - 1`. N-1 entries total,
-/// ~8 KB.
+/// so one flat table serves every power-of-two size up to FFT_MAX: stage
+/// `len` occupies `len/2` entries starting at `len/2 - 1`. FFT_MAX-1
+/// entries total, ~256 KB.
 ///
 /// This replaces recomputing each twiddle inside the butterfly loop by
 /// complex multiplication — four multiplies and two adds of pure
@@ -53,9 +58,9 @@ fn twiddles() -> &'static [(f32, f32)] {
     use std::sync::OnceLock;
     static TABLE: OnceLock<Vec<(f32, f32)>> = OnceLock::new();
     TABLE.get_or_init(|| {
-        let mut v = Vec::with_capacity(N - 1);
+        let mut v = Vec::with_capacity(FFT_MAX - 1);
         let mut len = 2usize;
-        while len <= N {
+        while len <= FFT_MAX {
             for k in 0..len / 2 {
                 let a = -std::f32::consts::TAU * k as f32 / len as f32;
                 v.push((a.cos(), a.sin()));
@@ -67,10 +72,11 @@ fn twiddles() -> &'static [(f32, f32)] {
 }
 
 /// Radix-2 iterative FFT, in place. `inverse` includes the 1/N scale.
-/// `n` must be a power of two no larger than N (the twiddle table's size).
-fn fft(re: &mut [f32], im: &mut [f32], inverse: bool) {
+/// `n` must be a power of two no larger than FFT_MAX (the twiddle table's
+/// size).
+pub(crate) fn fft(re: &mut [f32], im: &mut [f32], inverse: bool) {
     let n = re.len();
-    debug_assert!(n.is_power_of_two() && n <= N, "fft size {n}");
+    debug_assert!(n.is_power_of_two() && n <= FFT_MAX, "fft size {n}");
     let tw = twiddles();
     // Bit-reversal permutation
     let mut j = 0usize;

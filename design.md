@@ -527,3 +527,222 @@ the tops.
   646 (1986), and later outdoor acoustic-to-seismic coupling surveys.
 - EN 1995-1-1 (Eurocode 5) 7.3: timber floor vibration, 1% damping.
 - L-Acoustics KS28 data sheet: 143 dB peak at 1 m.
+
+## 10. Space: grains, spectra, a head and bodies
+
+Four inserts that change where and in what a sound is heard: a granular
+engine (src/granular.rs), a spectral processor (src/spectral_fx.rs),
+binaural placement (src/binaural.rs) and convolution with generated
+bodies (src/body.rs). Each sits on one track's strip or across the mix
+bus, and each exists only for a song that uses it: the song player builds
+it at the downbeat, so a song that never names one renders bit-identical
+to a build without it.
+
+```
+track strip:  xmod in -> glitch -> gran -> spec -> body -> EQ -> drive -> fader -> comp -> binaural | pan -> sends
+mix bus:      glitch -> gran -> spec -> body -> width
+```
+
+A lane scoped to a track (`automate pad.gran`) or an option on its track
+line (`gran=0.7`) reaches that track's insert; an unscoped lane
+(`automate gran`) reaches the bus. Every knob is an automation lane with a
+range in the parameter table (`patina --params`); none is a host
+parameter.
+
+### 10.1 Granular
+
+```
+track pad patch=aurora gran=0.7 gran_size=150 gran_density=40 gran_spray=0.4 gran_pan_scatter=0.8
+[C3 G3 D4]:16 [A2 E3 B3]:16
+automate pad.gran_pos       # read further back
+0.1 3:16@smooth
+automate pad.gran_freeze    # catch the chord at beat 16
+0 >16 1
+```
+
+Knobs: `gran` (wet, 0 to 1), `gran_size` (ms, 2 to 2000), `gran_density`
+(grains a second, 0.5 to 500), `gran_pos` and `gran_spray` (seconds behind
+the live input, and its random spread), `gran_pitch` and
+`gran_pitch_scatter` (semitones), `gran_pan_scatter`, `gran_reverse` (the
+chance a grain plays backwards), `gran_freeze` (step), `gran_jitter` (clock
+to Poisson onsets).
+
+- **Capture**: a 12 s stereo ring, written every sample unless frozen. A
+  grain is a Hann-windowed read at a delay, a speed (2^(semitones/12)), a
+  direction and a pan, drawn when it starts. The window runs as a complex
+  phasor rotation, not a cosine per grain per sample. At most 256 grains
+  sound at once.
+- **Level**: N = density × size grains overlap. At N = 2 with no scatter
+  the periodic Hann windows sum to one and the cloud is the input, delayed
+  by `gran_pos`, to the sample (a test pins it). Denser clouds scale by
+  sqrt(2/N), the power sum of uncorrelated grains.
+- **Reads never pass the head**: a grain faster than the recording starts
+  far enough back not to overtake it; a reversed one starts at the end of
+  a stretch already written. Reads are 4-point Hermite.
+- **Antialiasing**: a grain read at speed s > 1 would fold everything
+  above sr / 2s back down. The engine keeps four more copies of the
+  recording, each half the rate of the one before, made by a 63-tap
+  Kaiser (β 8) half-band (flat to 0.21 of its input rate, 80 dB down from
+  0.29). Copy k's sample j stands for recording time 2^k j − 31 (2^k − 1),
+  so every copy lines up with the recording. A grain at speed s reads copy
+  ceil(log2 s), at a speed of one or less. Test: an octave-up cloud keeps
+  6 kHz → 12 kHz at full level and leaves nothing at 18 kHz from a 15 kHz
+  input (an unfiltered read put 1.09 there); two octaves up the same from 3
+  and 9 kHz.
+- **Freeze without clicks**: freezing stops the head, so a grain reading
+  near it would run into the last sample; thawing restarts it, so a grain
+  reading far back would hit overwritten audio. At each switch those
+  grains fade out over 5 ms with their reads held inside the recording,
+  and on a thaw the seam is faded (the last 5 ms before the freeze out,
+  the first 5 ms after in). Test: switching every 37 ms under a tone keeps
+  the output's largest second difference at 0.013, against 0.39 without
+  the fades.
+- **Cost**: 60 s of one engine at its heaviest (2 s grains at 500 a second,
+  so 256 always sounding, with pitch scatter and reverse) renders in
+  26 s of CPU time.
+
+### 10.2 Spectral inserts
+
+```
+track voice patch=cassette-choir gain=0      # muted, still feeding the morph
+[D3 A3 F4]:32
+track pad patch=aurora spec_from=voice spec_blur=0.4
+[D3 A3 E4]:16 [C3 G3 D4]:16
+automate pad.spec_morph
+0 1:16@smooth
+```
+
+Knobs: `spec_morph` (toward the `spec_from=` track), `spec_blur` (s),
+`spec_freeze` (0 to 1), `spec_shift` (Hz, ±4000), `spec_pitch`
+(semitones, ±24), `spec_gate` (dB, 0 is out), `spec_tilt` (dB an octave
+about 1 kHz), `spec_mix`.
+
+- **Frame**: 2048 points, hop 512, Hann in and out (overlap-add gain 1.5),
+  left and right packed into one complex transform. Per frame: morph →
+  blur → freeze → shift → gate → tilt → mix. Every stage at rest passes
+  its bins untouched, so the insert at rest is the input delayed by 2048
+  samples, a latency fixed from the downbeat.
+- **Morph** crossfades magnitudes; each bin keeps the phase of the louder
+  side, so 0 and 1 are the two tracks exactly. The source is read from the
+  shared track taps (the mechanism cross-modulation uses), one sample late,
+  before its own strip, so `gain=0` mutes it in the mix but not here.
+- **Blur and freeze** are phase vocoders: a bin whose smeared or held
+  level outlasts its input keeps turning at the frequency last measured
+  there, so tails and frozen chords ring as tones instead of buzzing at the
+  frame rate. Freeze catches the frame on the frame it leaves 0; the
+  setter only stores the value, so re-sending 1 does not re-catch.
+- **Shift** moves each spectral peak with its whole lobe and keeps the
+  neighbouring bins' phase offsets to the peak (Laroche and Dolson's
+  phase-locked vocoder). Bins moved past Nyquist or below 0 Hz are
+  dropped, never folded.
+- **Smoothness**: a knob changes once a frame, but every output sample is
+  the overlap of four windowed frames, so a step becomes a 2048-sample
+  crossfade. Stepping freeze, morph, shift and pitch every 1/16 to 1/6
+  beat leaves the largest second difference where the unautomated render
+  has it (0.019 against 0.018).
+- **Cost**: four full inserts plus one on the bus, 60 s: 11 s.
+
+### 10.3 Binaural placement
+
+```
+track bird patch=glintbell azimuth=-60 distance=3
+(A5 . E5 . C6 . .)x4
+automate bird.azimuth
+-60 300:16@smooth
+```
+
+Knobs: `azimuth` (degrees, 0 ahead, 90 right), `elevation`, `distance`
+(m, 0.15 to 100), `orbit` (degrees a second), `pos_x`, `pos_y`, `pos_z`
+(m), `doppler` (0 to 1). A placement replaces the track's pan; an
+unscoped placement lane is an error.
+
+- **Head**: Brown and Duda's structural model. A sphere of radius 8.75 cm
+  with ears at ±a on the x axis. Each ear's path is the straight line
+  where it sees the source, else the tangent plus the arc around the
+  sphere (Woodworth): at 90 degrees and 2 m the far ear hears 0.66 ms
+  late. Head shadow is Brown-Duda's one-pole one-zero at c/a, its zero set
+  by the angle between source and ear axis (α = 1.05 + 0.95 cos(1.2 θ)).
+  Five pinna echoes at Brown-Duda's elevation-dependent delays, a shoulder
+  echo 0.2 to 1.2 ms late, and up to 5 dB of treble loss for sources
+  behind.
+- **Air**: 1/d from 1 m, ISO 9613-style absorption (0.15 dB a metre at
+  10 kHz) as a one-pole whose cutoff falls with distance, and the travel
+  time itself, read from a 65536-sample line with 4-point Hermite.
+- **Doppler**: the travel time is solved as D = T(now − D) by fixed-point
+  iteration from the last sample's D, the exact moving-source shift
+  f c / (c + v). The read is slewed so it never moves more than half a
+  sample per sample. At physical speeds (under 50 m/s, read rates under
+  1.17) only content above 20 kHz can fold, so the line is not
+  oversampled.
+- **Smoothness**: every position control runs through two 25 ms one-pole
+  stages before the geometry, so azimuth jumps glide; a fresh insert
+  snaps to its first values.
+- **Sends** hear the source at one level at any distance, delayed by its
+  travel time, so a farther source is wetter.
+- **Cost**: eight placed, orbiting and moving tracks for 60 s: 36 s of CPU,
+  against 21 s for the same song unplaced.
+
+### 10.4 Bodies
+
+```
+track bell patch=mallet body=glass..cathedral body_mix=0.8
+(E5:0.5 G5:0.5 B5:0.5 D6:0.5)x8
+automate bell.body_morph
+0 1:16@smooth
+body hall                   # the mix bus, inside a hall
+automate body_mix
+0.3
+```
+
+Bodies: `glass`, `metal`, `wood`, `tube`, `room`, `hall`, `cathedral`;
+`body=A..B` on a track line or `body A..B` for the bus. Knobs: `body_mix`
+(wet, default 1) and `body_morph` (A to B). A body lane without a body is
+an error.
+
+- **Model**: one parametric body. Modes (frequency, T60, level): a wine
+  glass's thin-ring modes m = 2..7 over 760 Hz as split doublets, 1.2 mm
+  steel panel bending modes, plywood panels with a port, a 2 m tube's
+  n c / 2L series, a room's low modes. A shoebox cavity: early reflections
+  by the image-source method out to 1.5 mixing times (sqrt(V) ms), walls
+  reflecting sqrt(1 − α) with Sabine's α; a diffuse tail at the level the
+  diffuse field holds against the direct sound (4/R against 1/4πd²),
+  shaped in a 1024-point short-time transform (hop 256) so every
+  frequency decays at its own T60, interpolated in log frequency from
+  three anchors (250 Hz, 1 to 2 kHz, 8 kHz). Left and right are two
+  listening points; each mode reaches both with one sign, a moment apart.
+  Every response is scaled to unit energy.
+- **Morph**: 17 bodies from A to B, dimensions and T60s interpolated
+  geometrically, modes paired by frequency, generated in parallel threads
+  at load. `body_morph` crossfades the two nearest, smoothed over 50 ms.
+  All 17 share one input history, so a body the morph arrives at already
+  rings with what was played before.
+- **Convolution** without latency: the first 64 taps direct, then
+  uniformly partitioned tiers of 64, 2048 and 16384-sample blocks (FFT up
+  to 32768), each block computed when its input completes, one block
+  before it sounds. Left and right ride one complex spectrum.
+- **Checks**: a delta at any offset convolves to identity and a random
+  20000-tap response matches the direct sum; a cathedral measures T60
+  6.58 s at 1 kHz (6.5 built) and 3.89 s at 8 kHz (3.5), a room 0.43 s;
+  halfway from room to cathedral rings 1.75 s.
+- **Cost**: five bodies morphing at once (four tracks and the bus, 85
+  responses), 60 s: 40 s of CPU.
+
+### 10.5 Sources
+
+- C. P. Brown and R. O. Duda, "A structural model for binaural sound
+  synthesis", IEEE Trans. Speech and Audio Processing 6(5), 1998.
+- R. S. Woodworth, Experimental Psychology (1938): the path around a
+  spherical head.
+- J. Laroche and M. Dolson, "Improved phase vocoder time-scale
+  modification of audio", IEEE Trans. Speech and Audio Processing 7(3),
+  1999.
+- J. B. Allen and D. A. Berkley, "Image method for efficiently simulating
+  small-room acoustics", JASA 65(4), 1979.
+- W. C. Sabine, Collected Papers on Acoustics (1922); H. Kuttruff, Room
+  Acoustics, ch. 5 (diffuse field level).
+- W. G. Gardner, "Efficient convolution without input-output delay", JAES
+  43(3), 1995.
+- N. H. Fletcher and T. D. Rossing, The Physics of Musical Instruments
+  (1998): ring, plate and tube modes.
+- C. Roads, Microsound (2001): granular synthesis.
+- ISO 9613-1:1993, attenuation of sound by the atmosphere.

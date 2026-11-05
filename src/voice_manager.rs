@@ -513,6 +513,16 @@ pub struct ChannelMix {
     /// FM, filter FM, ring and feed its own routes bring it. None unless
     /// a route touches the strip.
     xmod: Option<Box<crate::xmod::StripXmod>>,
+    /// The granular engine (granular.rs), after the glitch insert.
+    gran: Option<Box<crate::granular::Granular>>,
+    /// The spectral inserts (spectral_fx.rs), after the grains, and the
+    /// morph source's sound this sample (see `VoiceManager::taps`).
+    spec: Option<Box<crate::spectral_fx::SpectralFx>>,
+    side: (f32, f32),
+    /// Binaural placement (binaural.rs), in place of the pan.
+    bin: Option<Box<crate::binaural::Binaural>>,
+    /// The body the track sounds inside (`body=glass`), if any.
+    body: Option<Box<crate::body::Body>>,
 }
 
 /// The duck envelope's stage. Release is where it rests (decaying toward
@@ -624,6 +634,11 @@ impl ChannelMix {
             voice_fed: false,
             glitch: None,
             xmod: None,
+            gran: None,
+            spec: None,
+            side: (0.0, 0.0),
+            bin: None,
+            body: None,
         }
     }
 
@@ -677,11 +692,21 @@ impl ChannelMix {
     /// for all of them, +2.5 dB), and its nonlinearity would distort each
     /// note alone instead of the chord.
     fn stateful(&self) -> bool {
-        self.comp.is_some()
-            || self.eq.is_some()
+        self.comp.is_some() || self.rings_on()
+    }
+
+    /// The inserts that keep sounding after their input stops (filters
+    /// ringing, a recorded slice, a grain cloud, a routed feedback loop):
+    /// a sampler slot's strip with one runs on through the slot's silence.
+    fn rings_on(&self) -> bool {
+        self.eq.is_some()
             || self.dist.is_some()
             || self.glitch.is_some()
             || self.xmod.is_some()
+            || self.gran.is_some()
+            || self.spec.is_some()
+            || self.bin.is_some()
+            || self.body.is_some()
     }
 
     /// A key trigger: run the duck envelope from where it stands.
@@ -803,6 +828,19 @@ fn strip_one(m: &mut ChannelMix, l: f32, r: f32, sends: &mut SendBus) -> (f32, f
     if let Some(g) = m.glitch.as_mut() {
         (l, r) = g.process(l, r);
     }
+    // ...then the grain cloud, which hears the glitch's output
+    if let Some(g) = m.gran.as_mut() {
+        (l, r) = g.process(l, r);
+    }
+    // ...then the spectral inserts, a frame late
+    if let Some(s) = m.spec.as_mut() {
+        (l, r) = s.process(l, r, m.side);
+    }
+    // ...then the body the track sounds inside (before the EQ and the
+    // drive, as an instrument's body comes before the desk)
+    if let Some(b) = m.body.as_mut() {
+        (l, r) = b.process(l, r);
+    }
     // The inserts sit before the fader, as on a console channel: the EQ,
     // then the drive stage (so the EQ shapes what distorts)
     if let Some(eq) = m.eq.as_mut() {
@@ -832,14 +870,24 @@ fn strip_one(m: &mut ChannelMix, l: f32, r: f32, sends: &mut SendBus) -> (f32, f
         let (cl, cr) = c.process(l * TO_BUS, r * TO_BUS);
         (l, r) = (cl / TO_BUS, cr / TO_BUS);
     }
-    if m.cur_pan > 0.0 {
-        l *= 1.0 - m.cur_pan;
+    // A placed track goes to its point around the head instead of the
+    // pan, and its sends hear the source at a constant level (the room
+    // fills the same however far away it stands)
+    let room = if let Some(b) = m.bin.as_mut() {
+        let ((bl, br), room) = b.process(l, r);
+        (l, r) = (bl, br);
+        room
     } else {
-        r *= 1.0 + m.cur_pan;
-    }
+        if m.cur_pan > 0.0 {
+            l *= 1.0 - m.cur_pan;
+        } else {
+            r *= 1.0 + m.cur_pan;
+        }
+        (l, r)
+    };
     let tap = |bus: &mut (f32, f32), amount: f32| {
-        bus.0 += l * amount;
-        bus.1 += r * amount;
+        bus.0 += room.0 * amount;
+        bus.1 += room.1 * amount;
     };
     tap(&mut sends.spring, m.spr_send);
     tap(&mut sends.echo, m.echo_send);
@@ -1155,6 +1203,17 @@ pub struct VoiceManager {
     /// Cross-track routes (xmod.rs); None until a song routes one track
     /// into another.
     routes: Option<Box<crate::xmod::RouteTable>>,
+    /// The granular engine across the mix bus (unscoped `gran`), after the
+    /// bus glitch; None until a song uses it.
+    bus_gran: Option<Box<crate::granular::Granular>>,
+    /// The spectral inserts across the mix bus (unscoped `spec_*`), after
+    /// the bus grains; None until a song uses them.
+    bus_spec: Option<Box<crate::spectral_fx::SpectralFx>>,
+    /// The body the whole mix sounds inside (a song's `body` line).
+    bus_body: Option<Box<crate::body::Body>>,
+    /// `spec_from=` morphs: (listening strip's channel, source channel).
+    /// The listener hears its source's tap from the last sample.
+    spec_links: Vec<(u16, u16)>,
     /// The master clipper and look-ahead limiter (limiter.rs), between
     /// the stereo width and the arrangement trim.
     master_peak: crate::limiter::MasterPeak,
@@ -1242,6 +1301,10 @@ impl VoiceManager {
             beat_step: 120.0 / 60.0 / sample_rate as f64,
             bus_glitch: None,
             routes: None,
+            bus_gran: None,
+            bus_spec: None,
+            bus_body: None,
+            spec_links: Vec::new(),
             master_peak: crate::limiter::MasterPeak::new(sample_rate),
             solo: None,
             card_pool: None,
@@ -1520,6 +1583,194 @@ impl VoiceManager {
         }
     }
 
+    /// Build a channel's granular engine (channel 0: the bus engine) at
+    /// its defaults, so it records from now on. The song player arms every
+    /// channel a granular lane touches at the downbeat.
+    pub fn arm_granular(&mut self, channel: u16) {
+        let sr = self.sample_rate;
+        let slot = if channel == 0 {
+            &mut self.bus_gran
+        } else {
+            &mut self.strip_mut(channel).gran
+        };
+        slot.get_or_insert_with(|| Box::new(crate::granular::Granular::new(sr)));
+    }
+
+    /// Turn a granular knob on a track's strip, or with channel 0 on the
+    /// bus engine, building it at its defaults on first touch.
+    pub fn set_granular(&mut self, channel: u16, param: crate::song::Param, value: f32) {
+        use crate::granular::Knob;
+        use crate::song::Param as P;
+        if value.is_nan() {
+            return;
+        }
+        let value = param.clamp(value);
+        let knob = match param {
+            P::Gran => Knob::Mix,
+            P::GranSize => Knob::Size,
+            P::GranDensity => Knob::Density,
+            P::GranPos => Knob::Pos,
+            P::GranSpray => Knob::Spray,
+            P::GranPitch => Knob::Pitch,
+            P::GranPitchScatter => Knob::PitchScatter,
+            P::GranPanScatter => Knob::PanScatter,
+            P::GranReverse => Knob::Reverse,
+            P::GranFreeze => Knob::Freeze,
+            P::GranJitter => Knob::Jitter,
+            _ => return,
+        };
+        self.arm_granular(channel);
+        let slot = if channel == 0 {
+            self.bus_gran.as_mut()
+        } else {
+            self.channel_mix.get_mut(&channel).and_then(|m| m.gran.as_mut())
+        };
+        if let Some(g) = slot {
+            g.set(knob, value);
+        }
+    }
+
+    /// Build a channel's spectral insert (channel 0: the bus one) at rest.
+    /// The song player arms every channel a spectral lane touches before
+    /// the first sample, so its frame of delay never appears mid-song.
+    pub fn arm_spectral(&mut self, channel: u16) {
+        let sr = self.sample_rate;
+        let slot = if channel == 0 {
+            &mut self.bus_spec
+        } else {
+            &mut self.strip_mut(channel).spec
+        };
+        slot.get_or_insert_with(|| Box::new(crate::spectral_fx::SpectralFx::new(sr)));
+    }
+
+    /// Turn a spectral knob on a track's strip, or with channel 0 on the
+    /// bus insert, building it at rest on first touch.
+    pub fn set_spectral(&mut self, channel: u16, param: crate::song::Param, value: f32) {
+        use crate::song::Param as P;
+        use crate::spectral_fx::Knob;
+        if value.is_nan() {
+            return;
+        }
+        let value = param.clamp(value);
+        let knob = match param {
+            P::SpecFreeze => Knob::Freeze,
+            P::SpecBlur => Knob::Blur,
+            P::SpecShift => Knob::Shift,
+            P::SpecPitch => Knob::Pitch,
+            P::SpecMorph => Knob::Morph,
+            P::SpecGate => Knob::Gate,
+            P::SpecTilt => Knob::Tilt,
+            P::SpecMix => Knob::Mix,
+            _ => return,
+        };
+        self.arm_spectral(channel);
+        let slot = if channel == 0 {
+            self.bus_spec.as_mut()
+        } else {
+            self.channel_mix.get_mut(&channel).and_then(|m| m.spec.as_mut())
+        };
+        if let Some(s) = slot {
+            s.set(knob, value);
+        }
+    }
+
+    /// Put a track's strip on the binaural placement (in place of its pan).
+    /// The song player arms every placed track at the downbeat.
+    pub fn arm_binaural(&mut self, channel: u16) {
+        if channel == 0 {
+            return;
+        }
+        let sr = self.sample_rate;
+        self.strip_mut(channel)
+            .bin
+            .get_or_insert_with(|| Box::new(crate::binaural::Binaural::new(sr)));
+    }
+
+    /// Move a placed track (`automate bird.azimuth`); the bus has no
+    /// placement, so channel 0 does nothing.
+    pub fn set_binaural(&mut self, channel: u16, param: crate::song::Param, value: f32) {
+        use crate::binaural::Knob;
+        use crate::song::Param as P;
+        if value.is_nan() || channel == 0 {
+            return;
+        }
+        let value = param.clamp(value);
+        let knob = match param {
+            P::Azimuth => Knob::Azimuth,
+            P::Elevation => Knob::Elevation,
+            P::Distance => Knob::Distance,
+            P::Orbit => Knob::Orbit,
+            P::PosX => Knob::PosX,
+            P::PosY => Knob::PosY,
+            P::PosZ => Knob::PosZ,
+            P::Doppler => Knob::Doppler,
+            _ => return,
+        };
+        self.arm_binaural(channel);
+        if let Some(b) = self.channel_mix.get_mut(&channel).and_then(|m| m.bin.as_mut()) {
+            b.set(knob, value);
+        }
+    }
+
+    /// Put a track's strip (channel 0: the mix bus) inside a body, or a
+    /// morph from `a` to `b`. Every response is generated here.
+    pub fn arm_body(
+        &mut self,
+        channel: u16,
+        a: crate::body::BodyKind,
+        b: Option<crate::body::BodyKind>,
+    ) {
+        let body = Box::new(crate::body::Body::new(self.sample_rate, a, b));
+        if channel == 0 {
+            self.bus_body = Some(body);
+        } else {
+            self.strip_mut(channel).body = Some(body);
+        }
+    }
+
+    /// Turn a body's mix or morph; a strip with no body ignores it (the
+    /// parser refuses a body lane without one).
+    pub fn set_body(&mut self, channel: u16, param: crate::song::Param, value: f32) {
+        use crate::song::Param as P;
+        if value.is_nan() {
+            return;
+        }
+        let value = param.clamp(value);
+        let slot = if channel == 0 {
+            self.bus_body.as_mut()
+        } else {
+            self.channel_mix.get_mut(&channel).and_then(|m| m.body.as_mut())
+        };
+        if let Some(b) = slot {
+            match param {
+                P::BodyMix => b.set_mix(value),
+                P::BodyMorph => b.set_morph(value),
+                _ => {}
+            }
+        }
+    }
+
+    /// Feed `source`'s raw sound into `channel`'s spectral insert as the
+    /// morph target (`spec_from=`).
+    pub fn set_spec_source(&mut self, channel: u16, source: u16) {
+        if channel == 0 || channel == source {
+            return;
+        }
+        self.arm_spectral(channel);
+        if let Some(s) = self.channel_mix.get_mut(&channel).and_then(|m| m.spec.as_mut()) {
+            s.set_side(true);
+        }
+        self.spec_links.retain(|&(c, _)| c != channel);
+        self.spec_links.push((channel, source));
+        if !self.taps.iter().any(|t| t.channel == source) {
+            self.taps.push(Tap {
+                channel: source,
+                cur: (0.0, 0.0),
+                prev: (0.0, 0.0),
+            });
+        }
+    }
+
     /// A channel's strip, set up at unity on first use.
     fn strip_mut(&mut self, channel: u16) -> &mut ChannelMix {
         let sr = self.sample_rate;
@@ -1594,6 +1845,22 @@ impl VoiceManager {
         // The glitch inserts: on the track's strip, or unscoped on the bus
         if matches!(param, P::Stutter | P::Reverse | P::TapeStop) {
             self.set_glitch(channel, param, value);
+            return;
+        }
+        if param.is_granular() {
+            self.set_granular(channel, param, value);
+            return;
+        }
+        if param.is_spectral() {
+            self.set_spectral(channel, param, value);
+            return;
+        }
+        if param.is_binaural() {
+            self.set_binaural(channel, param, value);
+            return;
+        }
+        if param.is_body() {
+            self.set_body(channel, param, value);
             return;
         }
         // A strip control lands on the channel's strip. Scoped to a track,
@@ -2604,6 +2871,15 @@ impl VoiceManager {
             deltas[i] = voice.prefilter_delta();
         }
 
+        // Listening strips get their sources' sound from the last sample
+        // (whatever order the channels render in)
+        for &(dst, src) in &self.spec_links {
+            let v = self.taps.iter().find(|t| t.channel == src).map_or((0.0, 0.0), |t| t.prev);
+            if let Some(m) = self.channel_mix.get_mut(&dst) {
+                m.side = v;
+            }
+        }
+
         // Advance every mixer strip once per sample: smoothed gain and
         // pan (no zipper under automation), duck envelopes breathing back
         let knob_k = self.knob_smooth_k;
@@ -2687,7 +2963,9 @@ impl VoiceManager {
                 continue;
             };
             let ch = self.voices[i].channel();
-            if !self.taps.is_empty() {
+            // (the vox carrier is never heard: the vox channel taps its
+            // vocoded output, below)
+            if ch != VOX_CHANNEL && !self.taps.is_empty() {
                 tap_add(&mut self.taps, ch, l, r);
             }
             if ch == VOX_CHANNEL {
@@ -2810,9 +3088,10 @@ impl VoiceManager {
             // routed one, which lends (or takes) a signal every sample
             if sl == 0.0
                 && sr == 0.0
-                && !self.channel_mix.get(&ch).map_or(false, |m| {
-                    m.eq.is_some() || m.dist.is_some() || m.glitch.is_some() || m.xmod.is_some()
-                })
+                && !self
+                    .channel_mix
+                    .get(&ch)
+                    .map_or(false, |m| m.rings_on())
             {
                 continue;
             }
@@ -2851,9 +3130,7 @@ impl VoiceManager {
             // (an EQ, drive or glitch rings on; a routed strip runs always)
             if inst.is_silent()
                 && input == 0.0
-                && !self.channel_mix.get(&ch).map_or(false, |m| {
-                    m.eq.is_some() || m.dist.is_some() || m.glitch.is_some() || m.xmod.is_some()
-                })
+                && !self.channel_mix.get(&ch).map_or(false, |m| m.rings_on())
             {
                 continue;
             }
@@ -2919,6 +3196,21 @@ impl VoiceManager {
         // rooms and tape included, catches, plays backwards or stops
         let (left, right) = match self.bus_glitch.as_mut() {
             Some(g) => g.process(left, right),
+            None => (left, right),
+        };
+        // ...and the bus grain cloud, the whole finished mix scattered
+        let (left, right) = match self.bus_gran.as_mut() {
+            Some(g) => g.process(left, right),
+            None => (left, right),
+        };
+        // ...and the bus spectral inserts (no morph source on the bus)
+        let (left, right) = match self.bus_spec.as_mut() {
+            Some(s) => s.process(left, right, (0.0, 0.0)),
+            None => (left, right),
+        };
+        // ...and the body the whole mix sounds inside
+        let (left, right) = match self.bus_body.as_mut() {
+            Some(b) => b.process(left, right),
             None => (left, right),
         };
 

@@ -1,0 +1,56 @@
+# Granular — 90 bpm, D dorian. A demo of the granular engine: a grain
+# cloud on one track (`automate keys.gran`) and across the whole mix bus
+# (`automate gran`, no track).
+#
+#   beats  0-8    PLAIN   a felt-piano figure, dry
+#   beats  8-16   CLOUD   the keys open into grains 0.3 s behind the
+#                         playing, spread in time, pitch and space
+#   beats 16-24   FREEZE  the cloud catches the chord at beat 16 and holds
+#                         it, scrubbing back through what it caught, while
+#                         the keys play on dry above it; a quarter of the
+#                         grains run backwards
+#   beats 24-32   SHIMMER the whole mix through the bus engine, an octave
+#                         up, then two, sparse and wide
+
+bpm 90
+gate 0.95
+tail 4
+
+section PLAIN 0..8
+section CLOUD 8..16
+section FREEZE 16..24
+section SHIMMER 24..32
+
+automate reverb_wet
+0.25
+automate reverb_decay
+0.8
+
+track keys patch=feltkeys vel=0.8 gran_size=140 gran_density=36 gran_pos=0.3 gran_spray=0.25 gran_pan_scatter=0.9
+(D3:0.5 A3:0.5 E4:0.5 F4:0.5 | C3:0.5 G3:0.5 D4:0.5 E4:0.5)x8
+automate keys.gran
+0 >8 0.75:2@smooth >16 1 >24 0.5
+automate keys.gran_pitch_scatter
+0 >8 0.15 >16 0.3
+automate keys.gran_freeze
+0 >16 1 >24 0
+automate keys.gran_pos
+0.3 >16 0.3 1.2:8@smooth
+automate keys.gran_reverse
+0 >16 0.25
+
+track pad patch=aurora vel=0.6 gain=0.6
+R:16 [D2 A2 F3]:8 [G2 D3 A3]:8
+
+automate gran
+0 >24 0.6
+automate gran_pitch
+0 >24 12 >28 24
+automate gran_size
+200
+automate gran_density
+14
+automate gran_spray
+0.6
+automate gran_pan_scatter
+1

@@ -435,6 +435,115 @@
 //   track plate modal=plate excite=drums modal_decay=2   # rung by the kit
 //   track wire modal=string modal_excite=2 modal_stretch=0.002 modal_damp=0.2 modal_spread=0.4 attack=0.4
 //   track cello string=bow str_pressure=0.6 str_pos=0.11 attack=0.15
+//
+// The granular engine (granular.rs), on one track's strip (after the
+// glitch insert; track-line options `gran=0.6 gran_size=120` or lanes
+// `automate pad.gran`) or unscoped across the whole mix bus (after the
+// bus glitch). It records what it hears into a 12 s capture buffer from
+// the downbeat and plays it back as overlapping Hann-windowed grains:
+//   gran               wet/dry blend, 0..1 (0 = out, 1 = grains only)
+//   gran_size          grain length, ms (2..2000, default 80)
+//   gran_density       grains a second (0.5..500, default 20; N =
+//                      density x size overlap, and past 2 the cloud
+//                      scales by sqrt(2/N) to hold its loudness)
+//   gran_pos           seconds behind the live input a grain reads
+//                      (0..10); in a frozen buffer it scrubs through
+//                      what was caught
+//   gran_spray         random spread around gran_pos, +- seconds
+//   gran_pitch         semitones (-24..24): each grain's read speed (an
+//                      octave up reads twice the recording in the same
+//                      gran_size, so the cloud keeps the tempo)
+//   gran_pitch_scatter random spread around gran_pitch, +- semitones
+//   gran_pan_scatter   each grain panned at random within +-this (0..1)
+//   gran_reverse       the chance a grain plays backwards (0..1)
+//   gran_freeze        1 stops the recording: the cloud keeps what it
+//                      caught; 0 records again (plain sets)
+//   gran_jitter        onset randomness: 0 a clock, 1 Poisson
+//                 track pad patch=aurora gran=0.7 gran_size=150 gran_spray=0.4
+//                 automate pad.gran_freeze
+//                   0 >16 1
+// At density x size = 2 with no scatter the cloud is the input exactly,
+// gran_pos late. A grain never reads ahead of the recording.
+//
+// Spectral inserts (spectral_fx.rs), one short-time FFT processor (2048
+// points, 75% overlap) on a track's strip after the grains (track-line
+// options or `automate pad.spec_freeze`), or unscoped across the mix bus
+// after the bus grains. In signal order, each at rest passes untouched:
+//   spec_morph  0..1: magnitudes crossfade toward the sound of the track
+//               named by `spec_from=NAME` on this track's line (heard
+//               before NAME's own strip: `gain=0` mutes NAME in the mix
+//               and keeps it feeding the morph). Each bin keeps the phase
+//               of the louder side, so 1 is NAME exactly.
+//   spec_blur   seconds (0..10): each bin's level smears over this time
+//               constant; tails ring on as tones at their own pitch
+//   spec_freeze 0..1: the frame is caught the moment it leaves 0 and
+//               held, each bin turning at its own frequency (a steady
+//               chord, no frame-rate buzz); between 0 and 1 the held and
+//               live frames crossfade; back to 0 lets go
+//   spec_shift  Hz added to every partial (-4000..4000; inharmonic)
+//   spec_pitch  semitones (-24..24): a pitch shift that keeps time (each
+//               peak moves with its lobe, phases locked to it)
+//   spec_gate   dB (0..96, 0 = out): keeps the bins within this much of
+//               the frame's loudest, so noise and room fall away
+//   spec_tilt   dB per octave about 1 kHz (-12..12)
+//   spec_mix    wet/dry, 0..1 (default 1)
+//                 track b patch=cassette-choir gain=0
+//                 track a patch=aurora spec_from=b spec_blur=0.5
+//                 automate a.spec_morph
+//                   0 1:16@smooth
+// The insert delays its track by one frame, 2048 samples (43 ms at
+// 48 kHz). The song player builds it at the downbeat for any track a
+// spectral lane or option touches, so the delay is constant all song.
+//
+// Binaural placement (binaural.rs), for headphones: on one track's strip in
+// place of its pan (track-line options `azimuth=-60 distance=3` or lanes
+// `automate bird.azimuth`; a placement belongs to one track, so an
+// unscoped lane is an error). A modelled head (an 8.75 cm sphere with
+// Brown-Duda head shadow, pinna and shoulder echoes) hears the track at a
+// point around it:
+//   azimuth    degrees: 0 ahead, 90 right, -90 left, 180 behind; past
+//              +-180 it keeps turning (-720..720)
+//   elevation  degrees, -90 below to 90 overhead
+//   distance   metres from the head's centre (0.15..100, default 1): the
+//              level falls as 1/d, the air takes the treble, and the sound
+//              arrives its travel time late
+//   orbit      degrees a second the azimuth keeps turning (-720..720)
+//   pos_x pos_y pos_z  a straight-line offset, metres (x right, y ahead,
+//              z up), added to the point the three above give
+//   doppler    0..1 (default 1): how much of the travel time is heard; 1
+//              is physical, and a moving source bends its pitch
+//                 track bird patch=glintbell azimuth=-60 distance=3
+//                 automate bird.azimuth
+//                   -60 300:16@smooth
+//                 track car patch=sunlead distance=3
+//                 automate car.pos_x
+//                   -40 40:6
+// Each ear hears the source along its own path (around the head where the
+// head is in the way), so the time and level differences and the Doppler
+// bend come from the geometry. The sends hear the source at one level at
+// any distance, so a far source is wetter, as in a room.
+//
+// Bodies (body.rs): a track heard inside a modelled object or room,
+// `body=glass` on its track line (after the spectral inserts, before the
+// EQ), or the whole mix bus with a `body` line (`body cathedral`, after
+// the bus spectral inserts). The bodies: glass (a wine glass's ring
+// modes), metal (a 1.2 mm steel box), wood (a plywood crate with a port),
+// tube (a 2 m steel tube), room, hall, cathedral; `body=room..cathedral`
+// (or `body room..cathedral`) morphs from the first to the second:
+//   body_mix    the wet share, 0..1 (default 1: all inside the body)
+//   body_morph  0..1, from the first body to the second
+//                 track bell patch=mallet body=glass..cathedral body_mix=0.8
+//                 automate bell.body_morph
+//                   0 1:16@smooth
+//                 body hall
+//                 automate body_mix
+//                   0.3
+// Each body's impulse response is generated from its physics (its modes,
+// image-source reflections off its walls, a diffuse tail with every
+// frequency decaying at its own T60) at unit energy, and convolved with no
+// latency. A morph passes through 17 bodies, the two ends and 15 between,
+// all generated before the first sample. A body lane on a track without
+// `body=`, or unscoped without a `body` line, is an error.
 
 use std::sync::Arc;
 use std::thread;
@@ -832,6 +941,63 @@ param_table! {
     ModalMute:       "modal_mute",     None,      (0.0, 1.0, Lin);
     // How hard an instrument's `excite=` track drives its body (linear)
     ExciteGain:      "excite_gain",    None,      (0.0, 16.0, Lin);
+    // The granular engine (granular.rs): grains from a live capture
+    // buffer, on one track's strip (`automate pad.gran`) or unscoped
+    // across the mix bus. `gran` is the wet/dry blend (0 = out); grain
+    // length in ms; grains a second; how far behind the live input they
+    // read and the random spread around it (seconds); pitch and its
+    // random spread (semitones); pan spread (0..1); the chance a grain
+    // plays backwards; freeze (1 = stop recording); onset randomness
+    // (0 = a clock, 1 = Poisson)
+    Gran:            "gran",           None,      (0.0, 1.0, Lin);
+    GranSize:        "gran_size",      None,      (2.0, 2000.0, Log);
+    GranDensity:     "gran_density",   None,      (0.5, 500.0, Log);
+    GranPos:         "gran_pos",       None,      (0.0, 10.0, Lin);
+    GranSpray:       "gran_spray",     None,      (0.0, 10.0, Lin);
+    GranPitch:       "gran_pitch",     None,      (-24.0, 24.0, Lin);
+    GranPitchScatter: "gran_pitch_scatter", None, (0.0, 24.0, Lin);
+    GranPanScatter:  "gran_pan_scatter", None,    (0.0, 1.0, Lin);
+    GranReverse:     "gran_reverse",   None,      (0.0, 1.0, Lin);
+    GranFreeze:      "gran_freeze",    None,      (0.0, 1.0, Step);
+    GranJitter:      "gran_jitter",    None,      (0.0, 1.0, Lin);
+    // Spectral inserts (spectral_fx.rs): one short-time FFT processor on
+    // one track's strip (`automate pad.spec_freeze`) or unscoped across
+    // the mix bus. Freeze (0..1: the frame caught as it left 0, against
+    // the live one), blur (seconds each bin's level smears over), shift
+    // (Hz added to every partial), pitch (semitones, time kept), morph
+    // (0..1 toward the `spec_from=` track's spectrum), gate (keeps the
+    // bins within this many dB of the loudest; 0 = out), tilt (dB per
+    // octave about 1 kHz) and the wet/dry mix
+    SpecFreeze:      "spec_freeze",    None,      (0.0, 1.0, Lin);
+    SpecBlur:        "spec_blur",      None,      (0.0, 10.0, Lin);
+    SpecShift:       "spec_shift",     None,      (-4000.0, 4000.0, Lin);
+    SpecPitch:       "spec_pitch",     None,      (-24.0, 24.0, Lin);
+    SpecMorph:       "spec_morph",     None,      (0.0, 1.0, Lin);
+    SpecGate:        "spec_gate",      None,      (0.0, 96.0, Lin);
+    SpecTilt:        "spec_tilt",      None,      (-12.0, 12.0, Lin);
+    SpecMix:         "spec_mix",       None,      (0.0, 1.0, Lin);
+    // Binaural placement (binaural.rs), on one track's strip in place of
+    // its pan: azimuth (degrees: 0 ahead, 90 right, -90 left, 180
+    // behind; past +-180 it keeps turning), elevation (degrees), distance
+    // (m from the head's centre), orbit (degrees a second of continuous
+    // turning), a cartesian offset (m: x right, y ahead, z up) for
+    // straight paths, and doppler (0..1: how much of the travel time,
+    // and the pitch bend it gives a moving source, is heard)
+    Azimuth:         "azimuth",        None,      (-720.0, 720.0, Lin);
+    Elevation:       "elevation",      None,      (-90.0, 90.0, Lin);
+    Distance:        "distance",       None,      (0.15, 100.0, Log);
+    Orbit:           "orbit",          None,      (-720.0, 720.0, Lin);
+    PosX:            "pos_x",          None,      (-100.0, 100.0, Lin);
+    PosY:            "pos_y",          None,      (-100.0, 100.0, Lin);
+    PosZ:            "pos_z",          None,      (-100.0, 100.0, Lin);
+    Doppler:         "doppler",        None,      (0.0, 1.0, Lin);
+    // Bodies (body.rs): a track's strip (`body=glass`), or the mix bus
+    // (a `body cathedral` line), heard inside a modelled object or room
+    // through a convolution with its generated impulse response. Mix is
+    // the wet share (1 = all inside the body, the default), morph runs
+    // from the first body (0) to the second (`body=room..cathedral`, 1)
+    BodyMix:         "body_mix",       None,      (0.0, 1.0, Lin);
+    BodyMorph:       "body_morph",     None,      (0.0, 1.0, Lin);
 }
 
 pub(crate) fn waveform_from_value(value: f32) -> Waveform {
@@ -1087,6 +1253,37 @@ impl Param {
             Param::LimitRelease => vm.set_limit_release(value),
             // unscoped, the glitch inserts sit across the bus
             Param::Stutter | Param::Reverse | Param::TapeStop => vm.set_glitch(0, self, value),
+            // ...and so does the granular engine
+            Param::Gran
+            | Param::GranSize
+            | Param::GranDensity
+            | Param::GranPos
+            | Param::GranSpray
+            | Param::GranPitch
+            | Param::GranPitchScatter
+            | Param::GranPanScatter
+            | Param::GranReverse
+            | Param::GranFreeze
+            | Param::GranJitter => vm.set_granular(0, self, value),
+            Param::SpecFreeze
+            | Param::SpecBlur
+            | Param::SpecShift
+            | Param::SpecPitch
+            | Param::SpecMorph
+            | Param::SpecGate
+            | Param::SpecTilt
+            | Param::SpecMix => vm.set_spectral(0, self, value),
+            // a placement belongs to one track; the parser refuses it
+            // unscoped, and the bus has none
+            Param::Azimuth
+            | Param::Elevation
+            | Param::Distance
+            | Param::Orbit
+            | Param::PosX
+            | Param::PosY
+            | Param::PosZ
+            | Param::Doppler => {}
+            Param::BodyMix | Param::BodyMorph => vm.set_body(0, self, value),
             Param::ChorusMix => vm.set_chorus_mix(value),
             Param::WaveformSel => vm.set_waveform(waveform_from_value(value)),
             Param::Detune => vm.set_detune(value),
@@ -1274,7 +1471,7 @@ impl Param {
         if self.apply_to_params(&mut ParamValues::default(), self.range().0) {
             return true;
         }
-        if self.is_strip() || self.is_strip_comp_knob() {
+        if self.is_strip() || self.is_strip_comp_knob() || self.is_strip_insert() {
             return true;
         }
         match self {
@@ -1363,6 +1560,70 @@ impl Param {
                 | P::FeedTime
                 | P::FeedTone
                 | P::FeedLimit
+        )
+    }
+
+    /// The granular engine's knobs (granular.rs).
+    pub(crate) fn is_granular(self) -> bool {
+        use Param as P;
+        matches!(
+            self,
+            P::Gran
+                | P::GranSize
+                | P::GranDensity
+                | P::GranPos
+                | P::GranSpray
+                | P::GranPitch
+                | P::GranPitchScatter
+                | P::GranPanScatter
+                | P::GranReverse
+                | P::GranFreeze
+                | P::GranJitter
+        )
+    }
+
+    /// An insert a track's strip builds when a song first touches it (or
+    /// that sits across the mix bus, unscoped): a track-line option
+    /// (`gran=0.5`) and a scoped lane (`automate pad.gran`) alike.
+    pub(crate) fn is_strip_insert(self) -> bool {
+        self.is_granular() || self.is_spectral() || self.is_binaural() || self.is_body()
+    }
+
+    /// A body's controls (body.rs): on a track with `body=`, or unscoped
+    /// on the bus's `body` line.
+    pub(crate) fn is_body(self) -> bool {
+        matches!(self, Param::BodyMix | Param::BodyMorph)
+    }
+
+    /// The binaural placement's controls (binaural.rs): one track's own.
+    pub(crate) fn is_binaural(self) -> bool {
+        use Param as P;
+        matches!(
+            self,
+            P::Azimuth
+                | P::Elevation
+                | P::Distance
+                | P::Orbit
+                | P::PosX
+                | P::PosY
+                | P::PosZ
+                | P::Doppler
+        )
+    }
+
+    /// The spectral inserts' knobs (spectral_fx.rs).
+    pub(crate) fn is_spectral(self) -> bool {
+        use Param as P;
+        matches!(
+            self,
+            P::SpecFreeze
+                | P::SpecBlur
+                | P::SpecShift
+                | P::SpecPitch
+                | P::SpecMorph
+                | P::SpecGate
+                | P::SpecTilt
+                | P::SpecMix
         )
     }
 
@@ -1670,6 +1931,26 @@ pub struct SongMix {
     /// Cross-track routes (`fm_from=`, `filter_fm_from=`,
     /// `ringmod_from=`, `feed_from=`; xmod.rs).
     pub routes: Vec<crate::xmod::Route>,
+    /// `spec_from=`: (morphing strip's channel, the source track's).
+    pub spec_sources: Vec<(u16, u16)>,
+    /// `body=` and the `body` line: (channel, 0 for the bus; the body;
+    /// the body its morph runs to).
+    pub bodies: Vec<(u16, crate::body::BodyKind, Option<crate::body::BodyKind>)>,
+}
+
+/// `glass` or `room..cathedral`: a body, and the body its morph runs to.
+fn parse_body(
+    spec: &str,
+) -> Result<(crate::body::BodyKind, Option<crate::body::BodyKind>), String> {
+    use crate::body::BodyKind;
+    let one = |n: &str| {
+        BodyKind::from_name(n)
+            .ok_or_else(|| format!("unknown body '{n}' (bodies: {})", BodyKind::NAMES))
+    };
+    match spec.split_once("..") {
+        Some((a, b)) => Ok((one(a)?, Some(one(b)?))),
+        None => Ok((one(spec)?, None)),
+    }
 }
 
 /// A rest this short is rounding noise from a generator, not a rest:
@@ -1791,6 +2072,59 @@ fn register_channels(vm: &mut VoiceManager, song: &Song) {
     };
     if throat_lane(&|p, _| p == Param::VoxFormant) {
         vm.vox.prepare_formant();
+    }
+    // A granular strip (or the bus engine) records from the downbeat, so
+    // its buffer already holds the track when the first grain starts
+    let mut gran_channels: Vec<u16> = song
+        .events
+        .iter()
+        .filter_map(|e| match e.kind {
+            EventKind::Param { param, channel, .. } if param.is_granular() => Some(channel),
+            _ => None,
+        })
+        .collect();
+    gran_channels.sort_unstable();
+    gran_channels.dedup();
+    for channel in gran_channels {
+        vm.arm_granular(channel);
+    }
+    // A spectral insert delays its track by a frame: built at the
+    // downbeat, the delay is there from the first sample, never mid-song
+    let mut spec_channels: Vec<u16> = song
+        .events
+        .iter()
+        .filter_map(|e| match e.kind {
+            EventKind::Param { param, channel, .. } if param.is_spectral() => Some(channel),
+            _ => None,
+        })
+        .collect();
+    spec_channels.sort_unstable();
+    spec_channels.dedup();
+    for channel in spec_channels {
+        vm.arm_spectral(channel);
+    }
+    for &(channel, source) in &song.mix.spec_sources {
+        vm.set_spec_source(channel, source);
+    }
+    // Every body (and every body a morph passes through) is generated
+    // here, before the first sample
+    for &(channel, a, b) in &song.mix.bodies {
+        vm.arm_body(channel, a, b);
+    }
+    // A placed track is binaural from the downbeat: its pan never gives
+    // way to the head mid-song
+    let mut placed: Vec<u16> = song
+        .events
+        .iter()
+        .filter_map(|e| match e.kind {
+            EventKind::Param { param, channel, .. } if param.is_binaural() => Some(channel),
+            _ => None,
+        })
+        .collect();
+    placed.sort_unstable();
+    placed.dedup();
+    for channel in placed {
+        vm.arm_binaural(channel);
     }
     if let Some((samples, rate)) = &song.vox_wav {
         vm.set_vox_wav(samples, *rate);
@@ -2037,6 +2371,9 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
     let mut excite_from: Vec<(usize, usize, String)> = Vec::new();
     let mut mode_sets: std::collections::HashMap<String, crate::physical::ModeSet> =
         std::collections::HashMap::new();
+    // `spec_from=` morph sources, resolved like the duck keys once every
+    // track is known
+    let mut spec_from: Vec<(usize, u16, String)> = Vec::new();
 
     let mut mode = TrackMode::None;
     let mut track_beat = 0.0_f64;
@@ -2089,6 +2426,19 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                     .map_err(|_| err("invalid gate".into()))?;
                 warnings.extend(range_warning("gate", gate as f32, 0.05, 1.0).map(&err));
                 gate = gate.clamp(0.05, 1.0);
+            }
+            "body" => {
+                // the mix bus inside a body: `body cathedral`, `body room..hall`
+                let spec = line[4..].trim();
+                if spec.is_empty() || spec.contains(char::is_whitespace) {
+                    return Err(err(format!(
+                        "body needs one body or a morph, e.g. body cathedral or body room..hall ({})",
+                        crate::body::BodyKind::NAMES
+                    )));
+                }
+                let (a, b) = parse_body(spec).map_err(err)?;
+                mix.bodies.retain(|(c, _, _)| *c != 0);
+                mix.bodies.push((0, a, b));
             }
             "tail" => {
                 tail_seconds = line[4..]
@@ -2189,6 +2539,8 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                 let mut mix_opts: Vec<(Param, f32)> = Vec::new();
                 let mut track_duck_from: Option<String> = None;
                 let mut track_routes: Vec<(crate::xmod::Dest, String)> = Vec::new();
+                let mut track_spec_from: Option<String> = None;
+                let mut track_body: Option<String> = None;
                 let mut shape_spec: Option<String> = None;
                 let mut shape_beats: Option<f64> = None;
                 // A physical-model instrument: its body, its excite source
@@ -2233,6 +2585,11 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                             return Err(err(format!("{} given twice", dest.option())));
                         }
                         track_routes.push((dest, v.to_string()));
+                    } else if let Some(v) = opt.strip_prefix("spec_from=") {
+                        // The track the spectral morph moves toward
+                        track_spec_from = Some(v.to_string());
+                    } else if let Some(v) = opt.strip_prefix("body=") {
+                        track_body = Some(v.to_string());
                     } else if let Some(v) = opt.strip_prefix("shape=") {
                         shape_spec = Some(v.to_string());
                     } else if let Some(v) = opt.strip_prefix("shape_beats=") {
@@ -2294,7 +2651,9 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                         }
                         inst_opts.push((param, value));
                     } else if let Some((k, v)) = opt.split_once('=').filter(|(k, _)| {
-                        Param::from_name(k).map_or(false, |p| p.is_strip() || p.is_strip_comp_knob())
+                        Param::from_name(k).map_or(false, |p| {
+                            p.is_strip() || p.is_strip_comp_knob() || p.is_strip_insert()
+                        })
                     }) {
                         let value = v
                             .parse_finite::<f32>()
@@ -2541,6 +2900,14 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                 for (dest, spec) in track_routes {
                     xmod_from.push((line_no, channel, dest, spec));
                 }
+                if let Some(name) = track_spec_from {
+                    spec_from.push((line_no, channel, name));
+                }
+                if let Some(spec) = track_body {
+                    let (a, b) = parse_body(&spec).map_err(err)?;
+                    mix.bodies.retain(|(c, _, _)| *c != channel);
+                    mix.bodies.push((channel, a, b));
+                }
                 for (param, value) in mix_opts {
                     events.push((
                         0.0,
@@ -2648,6 +3015,12 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                             name,
                             pname,
                             dest.option()
+                        )));
+                    }
+                    if Param::from_name(pname).map_or(false, |p| p.is_binaural()) {
+                        return Err(err(format!(
+                            "automate '{pname}': a placement belongs to one track \
+                             (`automate <track>.{pname}`)"
                         )));
                     }
                 }
@@ -3307,6 +3680,42 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                 name,
                 track
             ));
+        }
+    }
+
+    // `spec_from=NAME`: this strip's spectral morph moves toward track
+    // NAME's sound (heard before NAME's own strip, so `gain=0` mutes it in
+    // the mix and keeps it feeding the morph)
+    for (line_no, channel, name) in spec_from {
+        let e = |m: String| format!("line {}: spec_from={}: {}", line_no + 1, name, m);
+        let source = track_channels
+            .iter()
+            .find(|(t, _)| *t == name)
+            .map(|(_, c)| *c)
+            .ok_or_else(|| e(format!("no track named '{}'", name)))?;
+        if source == channel {
+            return Err(e("a track cannot morph toward itself".into()));
+        }
+        mix.spec_sources.retain(|(c, _)| *c != channel);
+        mix.spec_sources.push((channel, source));
+    }
+
+    // A body lane needs a body to turn: `body=` on its track, or the
+    // `body` line for an unscoped one
+    for (_, _, k) in &events {
+        if let EventKind::Param { param, channel, .. } = k {
+            if param.is_body() && !mix.bodies.iter().any(|(c, _, _)| c == channel) {
+                let pname = param.name();
+                return Err(if *channel == 0 {
+                    format!("{pname} without a track needs a `body` line for the mix bus (e.g. body cathedral)")
+                } else {
+                    let track = track_channels
+                        .iter()
+                        .find(|(_, c)| c == channel)
+                        .map_or("?", |(t, _)| t.as_str());
+                    format!("{pname} on track '{track}', which has no body= (e.g. body=glass)")
+                });
+            }
         }
     }
 
@@ -4929,6 +5338,175 @@ mod tests {
         }
         let c = xy / (xx * yy).sqrt().max(1e-30);
         assert!(c > 0.95, "the first reversed slice against beat 0-1 backwards: {c:.3}");
+    }
+
+    /// The granular engine from the song format, on a track and on the
+    /// bus. A track's cloud frozen during its first note (A4) keeps
+    /// sounding A4 after the track has moved on to E5, which never gets
+    /// into the frozen buffer; an unscoped engine an octave up moves the
+    /// whole mix to 880 Hz.
+    #[test]
+    fn granular_lanes_reach_a_track_and_the_bus() {
+        let render = |opts: &str, lanes: &str| -> Vec<f32> {
+            let song = parse_song(&format!(
+                "bpm 120\ngate 1\nautomate reverb_wet\n0\n\
+                 track a {opts}\nA4:2 E5:2\nautomate a.waveform\n0\n{lanes}"
+            ))
+            .unwrap();
+            render_offline(&song, 48000.0).map(|(l, _)| l).collect()
+        };
+        // a sinusoid's amplitude near f: Hann-windowed 1024-sample blocks
+        let band = |x: &[f32], f: f64| -> f64 {
+            let n = 1024;
+            let blocks = x.len() / n;
+            let mut sum = 0.0;
+            for b in 0..blocks {
+                let (mut re, mut im) = (0.0f64, 0.0f64);
+                for i in 0..n {
+                    let w = 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / n as f64).cos();
+                    let ph = std::f64::consts::TAU * f * i as f64 / 48000.0;
+                    re += x[b * n + i] as f64 * w * ph.cos();
+                    im += x[b * n + i] as f64 * w * ph.sin();
+                }
+                sum += (re * re + im * im).sqrt() / (0.25 * n as f64);
+            }
+            sum / blocks as f64
+        };
+        let cloud = "gran=1 gran_size=80 gran_density=50 gran_pos=0.2 gran_spray=0.1";
+        // beat 2 is 1 s (48000); the E5 plays 1-2 s
+        let live = render(cloud, "");
+        let frozen = render(cloud, "automate a.gran_freeze\n0 >1.5 1\n");
+        let (lt, ft) = (&live[60000..90000], &frozen[60000..90000]);
+        assert!(band(lt, 659.26) > 5.0 * band(lt, 440.0), "live, the cloud follows the track");
+        assert!(
+            band(ft, 440.0) > 20.0 * band(ft, 659.26),
+            "frozen at beat 1.5: A4 {:.4}, E5 {:.4}",
+            band(ft, 440.0),
+            band(ft, 659.26)
+        );
+        // the bus engine, an octave up, grains in phase (a 1200-sample
+        // clock is 11 cycles of 440 Hz)
+        let bus = render(
+            "",
+            "automate gran\n1\nautomate gran_pitch\n12\nautomate gran_size\n60\n\
+             automate gran_density\n40\n",
+        );
+        let b = &bus[20000..44000];
+        assert!(band(b, 880.0) > 10.0 * band(b, 440.0), "the whole mix an octave up");
+        // and a song that never touches it builds none: the plain track
+        let plain = render("", "");
+        let wire = render("gran=0", "");
+        assert_eq!(plain.len(), wire.len());
+        let worst = plain.iter().zip(&wire).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+        assert!(worst < 1e-6, "gran=0 is a wire on the strip: {worst}");
+    }
+
+    /// The spectral inserts from the song format. A track frozen during
+    /// its first note (A4) holds A4 after moving on to E5, which never
+    /// gets through; a track morphed fully toward a muted track (`gain=0`
+    /// keeps feeding the morph) sounds as that track; an unscoped pitch
+    /// lane moves the whole mix an octave.
+    #[test]
+    fn spectral_lanes_reach_a_track_a_source_and_the_bus() {
+        let render = |text: &str| -> Vec<f32> {
+            let song = parse_song(&format!("bpm 120\ngate 1\nautomate reverb_wet\n0\n{text}")).unwrap();
+            render_offline(&song, 48000.0).map(|(l, _)| l).collect()
+        };
+        let band = |x: &[f32], f: f64| -> f64 {
+            let n = 4096;
+            let blocks = x.len() / n;
+            let mut sum = 0.0;
+            for b in 0..blocks {
+                let (mut re, mut im) = (0.0f64, 0.0f64);
+                for i in 0..n {
+                    let w = 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / n as f64).cos();
+                    let ph = std::f64::consts::TAU * f * i as f64 / 48000.0;
+                    re += x[b * n + i] as f64 * w * ph.cos();
+                    im += x[b * n + i] as f64 * w * ph.sin();
+                }
+                sum += (re * re + im * im).sqrt() / (0.25 * n as f64);
+            }
+            sum / blocks as f64
+        };
+        let sines = "automate a.waveform\n0\n";
+        // the E5 plays 1-2 s
+        let frozen = render(&format!("track a\nA4:2 E5:2\n{sines}automate a.spec_freeze\n0 >1.5 1\n"));
+        let f = &frozen[60000..90000];
+        assert!(
+            band(f, 440.0) > 50.0 * band(f, 659.26),
+            "frozen at beat 1.5: A4 {:.4}, E5 {:.4}",
+            band(f, 440.0),
+            band(f, 659.26)
+        );
+        let morph = render(&format!(
+            "track b gain=0\nE5:4\nautomate b.waveform\n0\n\
+             track a spec_from=b spec_morph=1\nA4:4\n{sines}"
+        ));
+        let m = &morph[30000..80000];
+        assert!(band(m, 659.26) > 50.0 * band(m, 440.0), "morphed all the way to the muted E5");
+        assert!(band(m, 659.26) > 0.01, "the morph is too quiet: {:.4}", band(m, 659.26));
+        let bus = render(&format!("track a\nA4:4\n{sines}automate spec_pitch\n12\n"));
+        let b = &bus[30000..80000];
+        assert!(band(b, 880.0) > 30.0 * band(b, 440.0), "the whole mix an octave up");
+        assert!(parse_song("track a spec_from=nope\nA4\n").is_err());
+        assert!(parse_song("track a spec_from=a\nA4\n").is_err());
+    }
+
+    /// Bodies from the song format: a short note inside a cathedral rings
+    /// on for seconds where the dry note has stopped, on a track and across
+    /// the bus alike; a morph from a room to the cathedral rings longer the
+    /// further it goes; and a body lane with no body to turn is refused.
+    #[test]
+    fn body_lanes_put_a_track_inside_a_body() {
+        let tail = |text: &str| -> f64 {
+            let song = parse_song(&format!("bpm 120\ngate 1\ntail 3\nautomate reverb_wet\n0\n{text}")).unwrap();
+            let out = render_offline(&song, 48000.0);
+            out.skip(72000).take(48000).map(|(l, r)| (l * l + r * r) as f64).sum()
+        };
+        let dry = tail("track a\nA4:0.5\n");
+        let inside = tail("track a body=cathedral\nA4:0.5\n");
+        let bus = tail("body cathedral\ntrack a\nA4:0.5\n");
+        assert!(inside > 1000.0 * dry.max(1e-9), "the cathedral rings on: {inside:.3e} against {dry:.3e} dry");
+        assert!(bus > 1000.0 * dry.max(1e-9), "the bus cathedral rings on: {bus:.3e}");
+        let room = tail("track a body=room..cathedral\nA4:0.5\n");
+        let half = tail("track a body=room..cathedral body_morph=0.5\nA4:0.5\n");
+        let full = tail("track a body=room..cathedral body_morph=1\nA4:0.5\n");
+        assert!(room < half && half < full, "the morph lengthens the ring: {room:.3e} {half:.3e} {full:.3e}");
+        assert!(parse_song("track a body=nope\nA4\n").is_err());
+        assert!(parse_song("track a\nA4\nautomate a.body_mix\n0.5\n").is_err());
+        assert!(parse_song("track a\nA4\nautomate body_morph\n0.5\n").is_err());
+        assert!(parse_song("body\ntrack a\nA4\n").is_err());
+    }
+
+    /// Binaural placement from the song format: a lane sweeping a track
+    /// from the left (-90) to the right (+90) moves the louder ear with it,
+    /// a track-line `azimuth=90` leads in the right ear, and a placement
+    /// with no track is refused.
+    #[test]
+    fn binaural_lanes_place_a_track() {
+        let render = |text: &str| -> (Vec<f32>, Vec<f32>) {
+            let song = parse_song(&format!("bpm 120\ngate 1\nautomate reverb_wet\n0\n{text}")).unwrap();
+            render_offline(&song, 48000.0).unzip()
+        };
+        let rms = |x: &[f32]| (x.iter().map(|v| (v * v) as f64).sum::<f64>() / x.len() as f64).sqrt();
+        let (l, r) = render("track a\nA4:8\nautomate a.azimuth\n-90 R:2 90:2 R:4\n");
+        // beats 0-2 left (0-1 s), beats 4-8 right (2-4 s)
+        let early = 20.0 * (rms(&l[12000..44000]) / rms(&r[12000..44000])).log10();
+        let late = 20.0 * (rms(&r[110000..180000]) / rms(&l[110000..180000])).log10();
+        assert!(early > 3.0, "at -90 the left ear is louder by {early:.1} dB");
+        assert!(late > 3.0, "at +90 the right ear is louder by {late:.1} dB");
+        // the right ear hears a click first: cross-correlate the two ears
+        let (l, r) = render("track a azimuth=90 distance=2\nA4:2\n");
+        let lag = (-60i32..=60)
+            .max_by(|&a, &b| {
+                let c = |k: i32| -> f64 {
+                    (20000..40000).map(|n| l[n] as f64 * r[(n as i32 - k) as usize] as f64).sum()
+                };
+                c(a).total_cmp(&c(b))
+            })
+            .unwrap();
+        assert!((25..=38).contains(&lag), "the left ear lags the right by {lag} samples");
+        assert!(parse_song("track a\nA4\nautomate azimuth\n90\n").is_err());
     }
 
     /// A `sample=` track becomes a sampler slot on its own channel, its

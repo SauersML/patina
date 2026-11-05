@@ -1,0 +1,48 @@
+# Binaural — 84 bpm, A minor. A demo of binaural placement, for
+# headphones: tracks placed around a modelled head, moving along paths,
+# heard their travel time late and bent by their own motion.
+#
+#   beats  0-8    AROUND  a bell circles the head once: ahead, right,
+#                         behind, left, ahead
+#   beats  8-16   RISE    a pad climbs from below to overhead, ahead
+#   beats 16-24   FLYBY   a held lead passes 2 m ahead, left to right at
+#                         about 21 m/s, a semitone sharp as it comes and
+#                         a semitone flat as it goes
+#   beats 24-32   AWAY    a choir walks from 1 m to 30 m back, quieter,
+#                         darker and wetter, while a music box spins
+#                         close around the head
+
+bpm 84
+gate 0.95
+tail 4
+
+section AROUND 0..8
+section RISE 8..16
+section FLYBY 16..24
+section AWAY 24..32
+
+automate reverb_wet
+0.3
+
+track bell patch=glintbell vel=0.7 distance=1.5
+(A4 . C5 . E5 . A5 .)x2 R:24
+automate bell.azimuth
+0 360:8
+
+track pad patch=aurora vel=0.6 distance=2
+R:8 [A2 E3 C4]:4 [F2 C3 A3]:4 R:16
+automate pad.elevation
+-60 >8 -60 80:8@smooth
+
+track lead patch=sunlead vel=0.7 distance=2 gain=3
+R:16 E4:8 R:8
+automate lead.pos_x
+-30 >18 -30 30:4
+
+track choir patch=cassette-choir vel=0.7 azimuth=-20
+R:24 [A3 C4 E4]:4 [G3 B3 E4]:4
+automate choir.distance
+1 >24 1 30:8@smooth
+
+track spin patch=musicbox vel=0.5 distance=0.5 orbit=180
+R:24 (E5:0.5 A5:0.5 C6:0.5 B5:0.5)x4

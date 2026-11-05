@@ -25,6 +25,10 @@ format for programmatic playback and parameter automation.
 - 💥 Glitch inserts on any track or the whole mix bus: beat repeat from 1/8 to 1/64, reverse in note slices, and tape stop (`stutter`, `reverse`, `tape_stop`)
 - 🌀 Generative automation lanes: `{expr}` segments of time at control rate, with noise, step sequences and chaotic systems (Lorenz, Rössler, logistic and Hénon maps, a Kuramoto swarm of coupled oscillators, a double pendulum)
 - 🔀 Audio-rate cross-modulation between tracks: any track's signal as another's FM, filter FM or ring modulator, and routed feedback loops between tracks through a delay, a tone filter and a safety limiter (`fm_from=`, `filter_fm_from=`, `ringmod_from=`, `feed_from=`)
+- 🌾 A granular engine on any track or the whole mix bus: a live capture buffer played back as a cloud of grains with size, density, position, pitch and pan scatter, freeze and reverse probability (`gran`, `gran_size`, `gran_freeze`, ...)
+- 🌈 Spectral inserts on any track or the mix bus: freeze, blur, frequency shift and pitch shift, spectral gate and tilt, and a morph that crossfades one track's spectrum into another's (`spec_freeze`, `spec_morph` with `spec_from=`, ...)
+- 🎧 Binaural placement on any track, for headphones: azimuth, elevation and distance around a modelled head (a spherical head with pinna and shoulder echoes, generated, no measured dataset), motion paths, and the Doppler bend of a moving source (`azimuth`, `distance`, `orbit`, `pos_x`, `doppler`, ...)
+- 🔔 Bodies: any track or the whole mix bus heard inside a wine glass, a steel box, a wooden crate, a tube, a room, a hall or a cathedral, by convolution with impulse responses generated from each body's physics, and morphs from one body into another (`body=glass..cathedral`, `body_morph`)
 - 🖥️ Studio-hardware GUI: knobs, ADSR graph, live oscilloscope, keys that light from the engine's real voice state
 - ⌨️ QWERTY keyboard input · 🖱️ click-and-drag keys · 🎹 MIDI input
 - 📜 Text-based song files with per-track sequencing and full parameter automation
@@ -322,6 +326,88 @@ It prints a time-ordered report (still stretches, each section's hits with their
 - `--wav PATH` writes the ground motion itself (the vertical acceleration at you, not weighted) as mono 32-bit float audio at 8 kHz, its peak at −1 dBFS, with the scale (what 1.0 is in m/s²) in the report and the JSON: play it through a tactile transducer (a bass shaker on a chair or floor) and feel what the report describes.
 - `--crossover HZ`, `--sub-hz HZ`, `--sealed`/`--vented`, `--out PREFIX`, `--json PATH`, `--png PATH`, `--patch NAME` (the voice a MIDI file plays). `patina feel --help` lists them.
 - The model, every parameter and its sources: design.md §9. `cargo run --release --example feel_venues` prints each venue's transfer function. `songs/under-the-sub.song` is the demo.
+
+## 🌾 Granular
+
+A grain cloud on one track (`automate pad.gran`, or `gran=0.7` on its track line) or with no track across the whole mix bus (`automate gran`). From the downbeat it records what it hears into a 12-second capture buffer, and plays that back as overlapping Hann-windowed grains, each with its own position, speed, direction and pan.
+
+```
+track pad patch=aurora gran=0.7 gran_size=150 gran_density=40 gran_spray=0.4 gran_pan_scatter=0.8
+[C3 G3 D4]:16 [A2 E3 B3]:16
+automate pad.gran_pos              # read further and further back
+0.1 3:16@smooth
+automate pad.gran_freeze           # catch the chord at beat 16 and hold it
+0 >16 1
+```
+
+- `gran` is the wet/dry blend (0 is out, 1 is grains only). `gran_size` (ms, 2 to 2000) and `gran_density` (grains a second, 0.5 to 500) set the texture: density x size grains overlap at once.
+- `gran_pos` is how far behind the live input a grain reads (seconds, 0 to 10), and `gran_spray` spreads it at random. Frozen (`gran_freeze 1`), the buffer stops recording, and `gran_pos` scrubs through what it caught.
+- `gran_pitch` (semitones) sets each grain's playback speed: a grain an octave up reads twice as much of the recording in the same `gran_size`, so the pitch moves while the cloud keeps the music's tempo. `gran_pitch_scatter` spreads it at random, `gran_pan_scatter` (0 to 1) spreads the grains across the field, `gran_reverse` is the chance a grain plays backwards, and `gran_jitter` moves the onsets from a steady clock (0) to a random Poisson stream (1).
+- Level: at density x size = 2 with no scatter, the windows sum to exactly one and the cloud is the input itself, `gran_pos` late. Denser clouds scale by sqrt(2/N), so a thick cloud stays near the input's loudness. A grain never reads past the recording head: pitched-up grains start far enough back not to overtake it.
+- Clean at any setting: a grain read faster than the recording reads a copy filtered and kept at half the rate (or a quarter, down to a sixteenth), so a cloud pitched up two octaves does not fold its treble back down as aliases. `gran_freeze` can switch every sixteenth note without a click: a grain that would run into the stopped head, or into audio the restarted head overwrites, fades out over 5 ms, and the seam in the recording is faded too.
+- A song that never touches the engine builds none and renders exactly as before; at `gran 0` it is a wire that keeps recording.
+
+## 🌈 Spectral inserts
+
+One short-time FFT processor (2048 points, 75% overlap, ~23 Hz bins at 48 kHz) on a track (`automate pad.spec_freeze`, or `spec_blur=0.5` on its track line) or with no track across the whole mix bus. Every stage at rest passes its bins untouched.
+
+```
+track voice patch=cassette-choir gain=0              # muted, but still feeding the morph
+[D3 A3 F4]:32
+track pad patch=aurora spec_from=voice spec_blur=0.4
+[D3 A3 E4]:16 [C3 G3 D4]:16
+automate pad.spec_morph                     # the pad turns into the choir
+0 1:16@smooth
+automate pad.spec_freeze                    # ...and is caught at beat 24
+0 >24 1
+```
+
+- `spec_morph` (0 to 1) crossfades the magnitudes toward the sound of the track named by `spec_from=NAME` on this track's line. Each bin keeps the phase of whichever side gives it more, so 0 is this track and 1 is NAME exactly. The source is heard before its own strip, so `gain=0` mutes it in the mix while it keeps feeding the morph.
+- `spec_blur` (seconds, 0 to 10) smears each bin's level over that time constant: transients soften and endings ring on, as tones at their own pitch rather than as noise.
+- `spec_freeze` (0 to 1) catches the frame the moment it leaves 0 and holds it, each bin turning at the frequency it had, so a frozen chord rings steadily instead of buzzing at the frame rate. Between 0 and 1 the held frame and the live one crossfade; back at 0 it lets go, and the next rise catches a new frame.
+- `spec_shift` (Hz, -4000 to 4000) adds to every partial's frequency, so harmonics go inharmonic; `spec_pitch` (semitones, -24 to 24) multiplies, a pitch shift that keeps time. Each spectral peak moves with its whole lobe and the bins keep their phases locked to the peak (the Laroche-Dolson phase vocoder), so a shifted tone stays one tone.
+- `spec_gate` (dB, 0 is out) keeps only the bins within that many dB of the frame's loudest, so noise and room fall away and the strongest partials stay. `spec_tilt` is dB per octave about 1 kHz. `spec_mix` blends the processed spectrum with the input's.
+- The insert delays its track by one frame, 2048 samples (43 ms at 48 kHz). Any track a spectral lane or option touches gets its insert at the downbeat, so the delay is the same all song and never jumps in mid-song.
+
+## 🎧 Binaural
+
+For headphones: a track placed at a point around the listener's head (`azimuth=-60 distance=3` on its track line, or `automate bird.azimuth`), in place of its pan. The head is modelled, not measured: an 8.75 cm sphere with Brown and Duda's head shadow, five pinna echoes that move with elevation and a shoulder reflection. Each ear hears the source along its own path through the air (around the head where the head is in the way), so the time and level differences between the ears, and the Doppler bend of a moving source, come out of the geometry.
+
+```
+track bird patch=glintbell azimuth=-60 distance=3
+(A5 . E5 . C6 . .)x4
+automate bird.azimuth            # once around the head, ahead to behind and back
+-60 300:16@smooth
+track car patch=sunlead distance=3
+A3:8
+automate car.pos_x               # passes 3 m ahead, left to right
+-40 40:6
+```
+
+- `azimuth` is degrees: 0 ahead, 90 right, -90 left, 180 behind, and past 180 it keeps turning. `elevation` is degrees from -90 (below) to 90 (overhead). `distance` is metres from the head's centre (0.15 to 100, default 1): the level falls as 1/d, the air takes the treble (0.15 dB a metre at 10 kHz), and the sound arrives its travel time late.
+- Paths: `orbit` keeps the azimuth turning (degrees a second). `pos_x`, `pos_y` and `pos_z` add a straight-line offset in metres (x right, y ahead, z up), for fly-bys. `doppler` (0 to 1, default 1) is how much of the travel time is heard: 1 is physical, so a source closing at 30 m/s rises about 10%; 0 keeps only the head's own time differences.
+- Sizes, as measured on real heads: at 90 degrees the far ear hears the sound 0.65 ms late, and up to 16 dB quieter at 6 kHz (under 2 dB at 300 Hz). Straight ahead both ears hear the track at unity.
+- The reverb, spring, echo and chorus sends hear the source at one level at any distance, as a room fills the same however far back a source stands, so pulling a track back makes it wetter: the strongest distance cue there is.
+- A placement belongs to one track, so an unscoped `automate azimuth` is an error. A song that never places a track renders exactly as before. `songs/binaural.song` is the demo.
+
+## 🔔 Bodies
+
+A track heard inside a modelled object or room: `body=glass` on its track line, or a `body cathedral` line for the whole mix bus. The sound is convolved with the body's impulse response, generated from its physics when the song loads, so nothing is sampled.
+
+```
+track bell patch=mallet body=glass..cathedral body_mix=0.8
+(E5:0.5 G5:0.5 B5:0.5 D6:0.5)x8
+automate bell.body_morph         # from inside a wine glass out into a cathedral
+0 1:16@smooth
+body hall                        # and the whole mix in a hall, a third wet
+automate body_mix
+0.3
+```
+
+- The bodies: `glass` (a wine glass: the ring modes of a thin shell at 760 Hz and 2.83, 5.42, 8.77... times it, each a split pair that beats slowly), `metal` (a box of 1.2 mm steel panels: their bending modes and the box's cavity), `wood` (a plywood crate with a port), `tube` (a 2 m steel tube's axial resonances), `room`, `hall` and `cathedral`.
+- Each response is built from three parts: the body's modes (a frequency, decay time and level each); the cavity's early reflections, traced off its walls by the image-source method; and a diffuse tail at the level the room's absorption gives, with every frequency decaying at its own reverberation time (a cathedral holds 8 s in the bass, 6.5 s in the middle and 3.5 s in the treble). Every response is scaled to unit energy, so a broadband track keeps its loudness inside any body. A steady tone right on a long-ringing mode builds up far louder, as it does in a real glass (a 4-second glass mode is half a hertz wide); the glass's modes sit between the equal-tempered notes.
+- `body=room..cathedral` morphs: `body_morph` (0 to 1) runs through 17 bodies, the two ends and 15 interpolated between them, dimensions and decay times moving geometrically and the modes moving in pairs, so halfway between a room and a cathedral is a plausible mid-sized hall, not a crossfade of the two. All of them share the track's input history, so each rings with everything already played into it.
+- `body_mix` is the wet share (default 1, all inside the body). The convolution adds no latency. A body lane on a track without `body=`, or an unscoped one without a `body` line, is an error. A song that names no body renders exactly as before. `songs/bodies.song` is the demo.
 
 ## 🔌 The Substrate
 
