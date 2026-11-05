@@ -304,8 +304,9 @@
 // (sidechain high-pass Hz, 20..400; 20 = the card's own coupling).
 //
 // Rhythm section (the 909 board; 0..1 panel knobs, except the five voice
-// levels bd_ sd_ rs_ cp_ hh_level, linear gains to 4 = +12 dB over the
-// panel's full 1): bd_level, bd_tune,
+// levels bd_ sd_ rs_ cp_level, linear gains to 4 = +12 dB over the
+// panel's full 1, and hh_level to 16 = +24 dB, so a closed hat can be
+// as loud as the kick to the ear, not just at peak): bd_level, bd_tune,
 // bd_attack, bd_decay, bd_sweep, bd_drive, sd_level, sd_tune, sd_tone,
 // sd_snappy, sd_decay, rs_level, rs_tune, cp_level, cp_decay, hh_level,
 // hh_tune, hh_metal, ch_decay, oh_decay, dr_drive, dr_tone (bus lowpass:
@@ -641,9 +642,10 @@ param_table! {
     // (`automate beat.bd_tune`) it turns that kit track's board alone.
     // Unitless 0..1 panel knob rotations; the circuits map them onto
     // their electrical ranges. The five voice levels are linear gains
-    // reaching 4 (+12 dB over a full panel level of 1): the stock knob
-    // positions (0..1) sound exactly as they did, and a hat or rim can be
-    // brought up to sit against the kick
+    // reaching 4 (+12 dB over a full panel level of 1), the hats' 16
+    // (+24 dB, drums.rs HH_LEVEL_MAX): the stock knob positions (0..1)
+    // sound exactly as they did, and a hat or rim can be brought up to
+    // sit against the kick
     BdLevel:         "bd_level",       Some(20),  (0.0, 4.0, Lin);
     BdTune:          "bd_tune",        Some(21),  (0.0, 1.0, Lin);
     BdAttack:        "bd_attack",      Some(22),  (0.0, 1.0, Lin);
@@ -659,7 +661,7 @@ param_table! {
     RsTune:          "rs_tune",        Some(52),  (0.0, 1.0, Lin);
     CpLevel:         "cp_level",       Some(53),  (0.0, 4.0, Lin);
     CpDecay:         "cp_decay",       Some(54),  (0.0, 1.0, Lin);
-    HhLevel:         "hh_level",       Some(55),  (0.0, 4.0, Lin);
+    HhLevel:         "hh_level",       Some(55),  (0.0, 16.0, Lin);
     HhTune:          "hh_tune",        Some(56),  (0.0, 1.0, Lin);
     HhMetal:         "hh_metal",       Some(57),  (0.0, 1.0, Lin);
     ChDecay:         "ch_decay",       Some(58),  (0.0, 1.0, Lin);
@@ -863,7 +865,7 @@ impl Param {
     /// The span a knob sweeps: a MIDI controller, a plugin's host
     /// parameter, the app's panel. The table range, except the five 909
     /// voice levels: a song line reaches 4 (+12 dB, the desk channel's
-    /// trim), while a knob turns the stock panel's 0..1, as it always has
+    /// trim; the hats 16), while a knob turns the stock panel's 0..1, as it always has
     /// (CC 55 at full is hh_level 1, a saved plugin session holds its
     /// levels, a .mid file's level CCs render as they did).
     pub fn knob_range(self) -> (f32, f32, Curve) {
@@ -6216,18 +6218,24 @@ mod tests {
         assert_eq!(vels, vec![1.0, 1.0, 0.5]);
     }
 
-    /// The five 909 voice levels reach 4 (+12 dB) from a song, while a
-    /// knob (a MIDI controller, the plugin's host parameter, the app's
-    /// panel) still turns the stock 0..1: CC 55 at full is hh_level 1.
+    /// The 909 voice levels reach 4 (+12 dB) from a song, the hats 16
+    /// (+24 dB), while a knob (a MIDI controller, the plugin's host
+    /// parameter, the app's panel) still turns the stock 0..1: CC 55 at
+    /// full is hh_level 1.
     #[test]
     fn drum_levels_reach_four_in_a_song_but_a_knob_turns_the_panel() {
         for p in [Param::BdLevel, Param::SdLevel, Param::RsLevel, Param::CpLevel, Param::HhLevel] {
-            assert_eq!(p.range().1, 4.0, "{}", p.name());
+            let top = if p == Param::HhLevel { crate::drums::HH_LEVEL_MAX } else { crate::drums::LEVEL_MAX };
+            assert_eq!(p.range().1, top, "{}", p.name());
             assert_eq!(p.midi_value(1.0), 1.0, "{}", p.name());
             assert_eq!(p.knob_range().1, 1.0, "{}", p.name());
         }
-        let song = parse_song("track d kit=909\nCH\nautomate d.hh_level\n4\n").unwrap();
+        let song = parse_song("track d kit=909\nCH\nautomate d.hh_level\n16\n").unwrap();
         assert!(song.warnings.is_empty(), "{:?}", song.warnings);
+        let song = parse_song("track d kit=909\nCH\nautomate d.hh_level\n20\n").unwrap();
+        assert!(song.warnings.iter().any(|w| w.contains("hh_level 20 clamped to 16")), "{:?}", song.warnings);
+        let song = parse_song("track d kit=909\nBD\nautomate d.bd_level\n16\n").unwrap();
+        assert!(song.warnings.iter().any(|w| w.contains("bd_level 16 clamped to 4")), "{:?}", song.warnings);
     }
 
     /// Generated scores round tiny rests to `R:0`; those play as nothing.

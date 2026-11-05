@@ -253,16 +253,30 @@ fn knob(current: f32, v: f32) -> f32 {
 
 /// A voice LEVEL knob: a linear gain from silence to LEVEL_MAX. The panel
 /// level of 1 is the stock board's full level; the range above it (to
-/// +12 dB) is the desk channel's trim, there so a hat or rim can be
+/// +12 dB) is the desk channel's trim, there so a rim or clap can be
 /// brought up against the kick. Same NaN rule as `knob`.
 pub const LEVEL_MAX: f32 = 4.0;
 
+/// The hats' level reaches four times further: +24 dB over the panel's
+/// full level of 1. A closed hat is a 20-50 ms burst above 6 kHz, so
+/// matching the kick's PEAK leaves it far quieter to the ear: at
+/// LEVEL_MAX it peaked 1 dB under a default kick but its hit carried
+/// 13 dB less K-weighted energy (the loudness measure, over the hit's
+/// first 100 ms). At 16 the closed hat is within about 1 dB of the kick
+/// and the open hat has room above it.
+pub const HH_LEVEL_MAX: f32 = 16.0;
+
 #[inline]
 fn level_knob(current: f32, v: f32) -> f32 {
+    level_knob_to(current, v, LEVEL_MAX)
+}
+
+#[inline]
+fn level_knob_to(current: f32, v: f32, max: f32) -> f32 {
     if v.is_nan() {
         current
     } else {
-        v.clamp(0.0, LEVEL_MAX)
+        v.clamp(0.0, max)
     }
 }
 
@@ -1045,7 +1059,7 @@ impl DrumMachine {
         self.clap.decay = knob(self.clap.decay, v);
     }
     pub fn set_hh_level(&mut self, v: f32) {
-        self.hats.level = level_knob(self.hats.level, v);
+        self.hats.level = level_knob_to(self.hats.level, v, HH_LEVEL_MAX);
     }
     pub fn set_hh_tune(&mut self, v: f32) {
         self.hats.tune = knob(self.hats.tune, v);
@@ -1075,6 +1089,58 @@ mod tests {
 
     fn render(dm: &mut DrumMachine, n: usize) -> Vec<f32> {
         (0..n).map(|_| dm.render_next().0).collect()
+    }
+
+    /// Energy of a hit as heard: ITU-R BS.1770 K-weighting (the LUFS
+    /// filter: a +4 dB shelf above 1.5 kHz and a 38 Hz high-pass, the
+    /// published 48 kHz coefficients), summed over the first 100 ms, in dB.
+    fn hit_db(x: &[f32]) -> f64 {
+        let biquad = |x: &[f64], b: [f64; 3], a: [f64; 3]| {
+            let (mut x1, mut x2, mut y1, mut y2) = (0.0, 0.0, 0.0, 0.0);
+            x.iter()
+                .map(|&v| {
+                    let y = b[0] * v + b[1] * x1 + b[2] * x2 - a[1] * y1 - a[2] * y2;
+                    (x2, x1, y2, y1) = (x1, v, y1, y);
+                    y
+                })
+                .collect::<Vec<f64>>()
+        };
+        let x: Vec<f64> = x[..4800].iter().map(|&v| v as f64).collect();
+        let s = biquad(&x, [1.53512485958697, -2.69169618940638, 1.19839281085285], [1.0, -1.69065929318241, 0.73248077421585]);
+        let k = biquad(&s, [1.0, -2.0, 1.0], [1.0, -1.99004745483398, 0.99007225036621]);
+        10.0 * k.iter().map(|v| v * v).sum::<f64>().log10()
+    }
+
+    /// The hats' level reaches a default kick to the ear (K-weighted
+    /// energy of the hit), where the other voices' +12 dB left a closed
+    /// hat 13 dB under it; and the level is a plain gain all the way up.
+    #[test]
+    fn hats_level_reaches_the_kick() {
+        let hit = |voice: DrumVoice, hh: Option<f32>| {
+            let mut dm = DrumMachine::new(SR);
+            if let Some(l) = hh {
+                dm.set_hh_level(l);
+            }
+            dm.trigger(voice, 1.0);
+            render(&mut dm, 4800)
+        };
+        let kick = hit_db(&hit(DrumVoice::Kick, None));
+        let ch_max = hit(DrumVoice::ClosedHat, Some(HH_LEVEL_MAX));
+        let ch_four = hit(DrumVoice::ClosedHat, Some(LEVEL_MAX));
+        let (top, four) = (hit_db(&ch_max) - kick, hit_db(&ch_four) - kick);
+        assert!(top.abs() < 2.0, "closed hat at {HH_LEVEL_MAX} sits {top:.1} dB from the kick");
+        assert!(four < -9.0, "closed hat at {LEVEL_MAX} sits {four:.1} dB from the kick");
+        let open = hit_db(&hit(DrumVoice::OpenHat, Some(HH_LEVEL_MAX))) - kick;
+        assert!(open > top, "open hat at the top {open:.1} dB, closed {top:.1} dB");
+        // a gain, not a drive: 16 is the 4 hit times four, sample for sample
+        for (a, b) in ch_max.iter().zip(&ch_four) {
+            assert_eq!(*a, b * 4.0);
+        }
+        let mut dm = DrumMachine::new(SR);
+        dm.set_hh_level(100.0);
+        assert_eq!(dm.hats.level, HH_LEVEL_MAX);
+        dm.set_bd_level(100.0);
+        assert_eq!(dm.kick.level, LEVEL_MAX);
     }
 
     /// Each kit board has one channel, the block collides with nothing
@@ -1457,18 +1523,19 @@ mod tests {
     }
 
     /// Every voice level reaches +12 dB over the panel's full level (a
-    /// linear 4), and the stock 0..1 positions are where they were.
+    /// linear 4), the hats +24 dB (16), and the stock 0..1 positions are
+    /// where they were.
     #[test]
     fn voice_levels_reach_twelve_db_over_full() {
         type Knob = fn(&mut DrumMachine, f32);
-        let voices: [(Knob, u8); 5] = [
-            (DrumMachine::set_bd_level, 36),
-            (DrumMachine::set_sd_level, 38),
-            (DrumMachine::set_rs_level, 37),
-            (DrumMachine::set_cp_level, 39),
-            (DrumMachine::set_hh_level, 42),
+        let voices: [(Knob, u8, f32); 5] = [
+            (DrumMachine::set_bd_level, 36, LEVEL_MAX),
+            (DrumMachine::set_sd_level, 38, LEVEL_MAX),
+            (DrumMachine::set_rs_level, 37, LEVEL_MAX),
+            (DrumMachine::set_cp_level, 39, LEVEL_MAX),
+            (DrumMachine::set_hh_level, 42, HH_LEVEL_MAX),
         ];
-        for (set, note) in voices {
+        for (set, note, top) in voices {
             let peak = |level: f32| {
                 let mut dm = DrumMachine::new(SR);
                 set(&mut dm, level);
@@ -1477,7 +1544,10 @@ mod tests {
             };
             let ratio = 20.0 * (peak(4.0) / peak(1.0)).log10();
             assert!((ratio - 12.04).abs() < 0.01, "note {note}: {ratio:.3} dB");
-            assert_eq!(peak(9.0), peak(4.0), "note {note}: the top stops at 4");
+            let ratio = 20.0 * (peak(top) / peak(1.0)).log10();
+            let want = 20.0 * top.log10();
+            assert!((ratio - want).abs() < 0.01, "note {note}: {ratio:.3} dB at the top, want {want:.2}");
+            assert_eq!(peak(top + 5.0), peak(top), "note {note}: the top stops at {top}");
         }
     }
 
