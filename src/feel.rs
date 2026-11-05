@@ -15,6 +15,8 @@
 // Analysis only: nothing here touches the engine, so a render is the
 // same bit for bit whether or not anyone feels it.
 
+mod seismograph;
+
 use std::f64::consts::{FRAC_1_SQRT_2, PI, TAU};
 use std::fmt::Write as _;
 
@@ -2304,8 +2306,9 @@ patina feel <song.song | file.wav | file.mid> [options]
   --crossover HZ             LR4 crossover to the tops (default 90; house 80)
   --sub-hz HZ                the sub's low-frequency limit (default 32; house 25)
   --sealed | --vented        the sub's box (house sealed, others vented)
-  --out PREFIX               write PREFIX.feel.json (default: next to the input)
+  --out PREFIX               write PREFIX.feel.json and .feel.png (default: next to the input)
   --json PATH                the JSON at an exact path
+  --png PATH                 the seismograph at an exact path (default PREFIX.feel.png)
   --no-normalize             songs: keep the engine's gain, not the -1 dBFS bounce
   --patch NAME               the voice a MIDI file plays (as with --play)
 ";
@@ -2331,7 +2334,7 @@ pub fn cli(args: &[String]) -> Result<(), String> {
     let mut level: Option<String> = None;
     let (mut depth, mut distance) = (None, None);
     let (mut crossover, mut sub_hz, mut order) = (None, None, None);
-    let (mut out, mut json_path, mut patch) = (None, None, None);
+    let (mut out, mut json_path, mut png_path, mut patch) = (None, None, None, None);
     let mut normalize = true;
     let mut i = 1;
     while i < args.len() {
@@ -2350,6 +2353,7 @@ pub fn cli(args: &[String]) -> Result<(), String> {
             "--sub-hz" => sub_hz = Some(parse_f64(args, i, a)?),
             "--out" => out = Some(value()?),
             "--json" => json_path = Some(value()?),
+            "--png" => png_path = Some(value()?),
             "--patch" => patch = Some(value()?),
             "--sealed" | "--vented" => {
                 order = Some(if a == "--sealed" { 2 } else { 4 });
@@ -2461,6 +2465,7 @@ pub fn cli(args: &[String]) -> Result<(), String> {
         .unwrap_or_else(|| input.clone());
     let prefix = out.unwrap_or(stem);
     let json_path = json_path.unwrap_or_else(|| format!("{prefix}.feel.json"));
+    let png_path = png_path.unwrap_or_else(|| format!("{prefix}.feel.png"));
 
     let felt = if lower.ends_with(".wav") {
         let data = crate::sampler::load_wav_stereo(&input)?;
@@ -2490,7 +2495,9 @@ pub fn cli(args: &[String]) -> Result<(), String> {
     print!("{text}");
     std::fs::write(&json_path, json(&felt, &input, &text))
         .map_err(|e| format!("{json_path}: {e}"))?;
-    println!("\nWrote {json_path}");
+    std::fs::write(&png_path, seismograph::render(&felt, &input))
+        .map_err(|e| format!("{png_path}: {e}"))?;
+    println!("\nWrote {json_path} and the seismograph {png_path}");
     Ok(())
 }
 

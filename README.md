@@ -313,11 +313,11 @@ patina feel mix.wav --venue house                       # in a boomy timber floo
 patina feel songs/kick-bass.song --venue club --distance 2 --out /tmp/kb
 ```
 
-It prints a time-ordered report (still stretches, each section's hits with their peak in g, frequency, ring-down and tempo, and what hums between them) and writes `PREFIX.feel.json` (the 50 fps Wk envelope, every hit, the sections and the settings).
+It prints a time-ordered report (still stretches, each section's hits with their peak in g, frequency, ring-down and tempo, and what hums between them) and writes `PREFIX.feel.json` (the 50 fps Wk envelope, every hit, the sections and the settings) and `PREFIX.feel.png`, a seismograph: the Wk peak, 125 ms and 1 s r.m.s. on a log scale against the perception threshold and the comfort bands, every hit ticked above it, still stretches shaded.
 
 - `--venue field|club|house`: soft soil over firmer ground (you buried, `--depth` 0.3 m), a 150 mm concrete slab on grade (`--distance` 1 m), a suspended timber floor that booms at 28 Hz.
 - `--level festival|club|home|<dB>`: the sub's peak SPL at 1 m for a full-scale signal: festival 143 dB (the field's default), club 135 (the slab's), home 112 (the house's). Songs and WAVs are normalized to −1 dBFS first, like a mastered track; `--no-normalize` keeps a song's engine gain.
-- `--crossover HZ`, `--sub-hz HZ`, `--sealed`/`--vented`, `--out PREFIX`, `--json PATH`, `--patch NAME` (the voice a MIDI file plays). `patina feel --help` lists them.
+- `--crossover HZ`, `--sub-hz HZ`, `--sealed`/`--vented`, `--out PREFIX`, `--json PATH`, `--png PATH`, `--patch NAME` (the voice a MIDI file plays). `patina feel --help` lists them.
 - The model, every parameter and its sources: design.md §9. `cargo run --release --example feel_venues` prints each venue's transfer function. `songs/under-the-sub.song` is the demo.
 
 ## 🔌 The Substrate

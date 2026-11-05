@@ -457,6 +457,15 @@ nine times longer than the field.
   when a moment of it crosses, that only the tail of what came before
   does).
 
+- **Seismograph** (`PREFIX.feel.png`, 1580 x 640): the Wk peak, 125 ms
+  r.m.s. and 1 s r.m.s. per pixel column (each column's largest value) on
+  a log scale from 0.001 to 4 m/s², the perception threshold (a peak
+  measure) and the comfort bands (r.m.s. measures) as labelled lines,
+  section boundaries dashed, still sections shaded, a tick per hit above
+  the plot (dark when felt). It is written by a small encoder in
+  `src/feel/seismograph.rs` (4-bit palette, stored deflate blocks, crc32,
+  adler32, a 5x7 bitmap font), so it adds no dependency.
+
 ### 9.6 Not modelled
 
 The sound on the body through the air (chest and trouser-leg buzz, which
