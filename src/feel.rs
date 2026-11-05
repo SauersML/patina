@@ -1466,9 +1466,13 @@ fn analyze(felt: &mut Felt, notes: Option<&SongNotes>) {
                         (s.0 + (p.0 - mx) * (p.1 - my), s.1 + (p.0 - mx).powi(2))
                     });
                     let slope = sxy / sxx.max(1e-12); // dB/s
-                    if slope < -1.0 {
-                        let t3 = (j3 - kp) as f64 * HOP as f64 / FS;
-                        ring_ms = Some((t3 + 17.0 / -slope) * 1000.0);
+                                                      // only as far as four times what was seen: a slow fade
+                                                      // under a held note is not a ring to extrapolate
+                    let seen = (jmin - kp) as f64 * HOP as f64 / FS;
+                    let t3 = (j3 - kp) as f64 * HOP as f64 / FS;
+                    let ring = t3 + 17.0 / -slope.min(-1e-9);
+                    if slope < -1.0 && ring <= 4.0 * seen {
+                        ring_ms = Some(ring * 1000.0);
                         extrapolated = true;
                     }
                 }

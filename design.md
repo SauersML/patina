@@ -436,12 +436,18 @@ nine times longer than the field.
   bass about as strong once weighted, within 15 ms). Per hit: raw peak (m/s², g) in its first 100 ms, Wk peak,
   dominant frequency of its first 160 ms (Hann-windowed DFT, 15-200 Hz,
   parabolic peak), ring-down from the 40 ms envelope's peak to −20 dB
-  (extrapolated from the decay rate when the next hit comes first), what
+  (extrapolated from the decay rate when the next hit comes first, to at
+  most four times the stretch it was fitted on), what
   is felt over the last 40% of the gap to the next hit (Wk r.m.s., peak,
   frequency), and for songs the tracks whose notes start on it, among
   those that can reach the sub: kick drums, samples, and notes at E3
   (165 Hz) or below. A section names the tracks on 90% of its hits, or
   failing that on half of them.
+- **Beating**: two low tones a few hertz apart make the ground swell at
+  their difference rate, and the body feels that throb; the report
+  counts those swells as hits. In hypha's `underground` the bass's Bb1
+  (58 Hz) against a 55 Hz partial of the drone under it throbs every
+  0.32 s before any kick comes in, and reads as hits at "189 bpm".
 - **Tempo**: the most common hit spacing (the spacing with the most
   others within 4% of it, refined to their mean), reported when at least
   half the spacings fit it.
