@@ -173,6 +173,13 @@
 //                         late. Synth tracks, vox tracks (the carrier)
 //                         and sampler tracks bend; kit hits cannot.
 //   |                     bar line, ignored (readability only)
+//   >16  >CH1             a seek, as a token of its own: the lane's
+//                         cursor jumps to beat 16 (or a section's start,
+//                         `>CH1.end` its end), forwards or back. It works
+//                         the same on every lane: synth, kit, sampler,
+//                         vox and instrument tracks, automation, tempo
+//                         and phase lanes. (`->16` is not a seek; its
+//                         error says to write `>16`.)
 //
 // Automation tracks ramp a synth parameter through breakpoints:
 //
@@ -3432,7 +3439,7 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                         if token == "|" {
                             continue;
                         }
-                        if let Some(beat) = token.strip_prefix('>') {
+                        if let Some(beat) = seek_target(&token) {
                             track_beat = resolve_seek(beat, &sections).map_err(err)?;
                             continue;
                         }
@@ -3572,7 +3579,7 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                         if token == "|" {
                             continue;
                         }
-                        if let Some(beat) = token.strip_prefix('>') {
+                        if let Some(beat) = seek_target(&token) {
                             track_beat = resolve_seek(beat, &sections).map_err(err)?;
                             continue;
                         }
@@ -3649,7 +3656,7 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                         if token == "|" {
                             continue;
                         }
-                        if let Some(beat) = token.strip_prefix('>') {
+                        if let Some(beat) = seek_target(&token) {
                             track_beat = resolve_seek(beat, &sections).map_err(err)?;
                             continue;
                         }
@@ -3711,7 +3718,7 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                         if token == "|" {
                             continue;
                         }
-                        if let Some(beat) = token.strip_prefix('>') {
+                        if let Some(beat) = seek_target(&token) {
                             track_beat = resolve_seek(beat, &sections).map_err(err)?;
                             continue;
                         }
@@ -4615,12 +4622,27 @@ impl GenSegment {
     }
 }
 
+/// A seek token's target: `>16` (the same jump on every kind of lane),
+/// `>CH1`, `>CH1.end`. A token that is anything else is not a seek
+/// (`C4>G3` is a note bend), except that `->16` comes back whole, so
+/// resolve_seek can say how a seek is written instead of the lane
+/// reading it as a note named '-'.
+fn seek_target(token: &str) -> Option<&str> {
+    if token.starts_with("->") {
+        return Some(token);
+    }
+    token.strip_prefix('>')
+}
+
 /// Resolve a `>` seek target: a plain beat number, a section name (its
 /// start), or `NAME.end` (its end).
 fn resolve_seek(
     spec: &str,
     sections: &std::collections::HashMap<String, (f64, f64)>,
 ) -> Result<f64, String> {
+    if let Some(to) = spec.strip_prefix("->") {
+        return Err(format!("unknown token '{}'; a time seek is written >{}", spec, to));
+    }
     if let Ok(beat) = spec.parse_finite::<f64>() {
         if beat < 0.0 {
             return Err(format!("invalid seek '>{}' (before the song starts)", spec));
@@ -7795,5 +7817,47 @@ mod tests {
         let song =
             parse_song(&format!("{base}bus music tracks=pad duck=0.8 duck_from=kick.BD\n")).unwrap();
         assert_eq!(song.mix.duck_keys.len(), 1);
+    }
+
+    /// A seek (`>N`) moves the cursor on a synth track exactly as on a
+    /// kit track, and on automation lanes; `->N` is not a seek, and every
+    /// lane's error says how to write one.
+    #[test]
+    fn seeks_are_the_same_on_every_lane() {
+        for text in [
+            "track s\nC4 ->4 D4\n",
+            "track k kit=909\nBD ->4 SD\n",
+            "track s\nC4:8\nautomate s.cutoff\n500 ->4 900\n",
+        ] {
+            let e = parse_song(text).err().unwrap_or_default();
+            assert!(e.contains("unknown token '->4'; a time seek is written >4"), "{text:?}: {e}");
+        }
+        let ons = |text: &str| -> Vec<(f64, u8)> {
+            parse_song(text)
+                .unwrap()
+                .events
+                .iter()
+                .filter_map(|e| match e.kind {
+                    EventKind::NoteOn { note, .. } => Some((e.time, note)),
+                    _ => None,
+                })
+                .collect()
+        };
+        for seek in [">4"] {
+            let synth = ons(&format!("bpm 120\ntrack s\nC4 {seek} D4 >1 E4\n"));
+            let kit = ons(&format!("bpm 120\ntrack k kit=909\nBD {seek} SD >1 CH\n"));
+            let times = |v: &[(f64, u8)]| v.iter().map(|e| e.0).collect::<Vec<_>>();
+            assert_eq!(times(&synth), vec![0.0, 0.5, 2.0], "{seek}");
+            assert_eq!(times(&synth), times(&kit), "{seek}");
+            let lane = parse_song(&format!("track s\nC4:8\nautomate s.cutoff\n500 {seek} 900\n"))
+                .unwrap();
+            let at: Vec<f64> = lane
+                .events
+                .iter()
+                .filter(|e| matches!(e.kind, EventKind::Param { param: Param::Cutoff, .. }))
+                .map(|e| e.time)
+                .collect();
+            assert_eq!(at, vec![0.0, 2.0], "{seek}");
+        }
     }
 }
