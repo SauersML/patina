@@ -466,6 +466,13 @@ nine times longer than the field.
   `src/feel/seismograph.rs` (4-bit palette, stored deflate blocks, crc32,
   adler32, a 5x7 bitmap font), so it adds no dependency.
 
+- **Ground WAV** (`--wav PATH`): a(t) itself, vertical and unweighted
+  (the body does the weighting), mono 32-bit float at the 8 kHz analysis
+  rate, scaled so its peak sits at −1 dBFS; the report and the JSON
+  (`ground_wav.full_scale_ms2`) say what 1.0 is in m/s². Driving a
+  tactile transducer at that scale needs its own calibration (shaker,
+  amplifier, the mass on it); the file keeps the waveform and the scale.
+
 ### 9.6 Not modelled
 
 The sound on the body through the air (chest and trouser-leg buzz, which

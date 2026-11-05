@@ -317,6 +317,7 @@ It prints a time-ordered report (still stretches, each section's hits with their
 
 - `--venue field|club|house`: soft soil over firmer ground (you buried, `--depth` 0.3 m), a 150 mm concrete slab on grade (`--distance` 1 m), a suspended timber floor that booms at 28 Hz.
 - `--level festival|club|home|<dB>`: the sub's peak SPL at 1 m for a full-scale signal: festival 143 dB (the field's default), club 135 (the slab's), home 112 (the house's). Songs and WAVs are normalized to −1 dBFS first, like a mastered track; `--no-normalize` keeps a song's engine gain.
+- `--wav PATH` writes the ground motion itself (the vertical acceleration at you, not weighted) as mono 32-bit float audio at 8 kHz, its peak at −1 dBFS, with the scale (what 1.0 is in m/s²) in the report and the JSON: play it through a tactile transducer (a bass shaker on a chair or floor) and feel what the report describes.
 - `--crossover HZ`, `--sub-hz HZ`, `--sealed`/`--vented`, `--out PREFIX`, `--json PATH`, `--png PATH`, `--patch NAME` (the voice a MIDI file plays). `patina feel --help` lists them.
 - The model, every parameter and its sources: design.md §9. `cargo run --release --example feel_venues` prints each venue's transfer function. `songs/under-the-sub.song` is the demo.
 

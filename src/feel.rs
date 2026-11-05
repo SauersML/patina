@@ -2060,7 +2060,45 @@ fn jarr(v: &[f32]) -> String {
 }
 
 /// Every number the report is made from, for hypha to compute with.
-pub fn json(felt: &Felt, input: &str, report_text: &str) -> String {
+/// The ground motion as a WAV for a tactile transducer: the vertical
+/// acceleration at the body (not weighted), mono 32-bit float at the
+/// analysis rate, its peak at -1 dBFS. Returns the bytes and the
+/// acceleration a sample of 1.0 stands for, m/s².
+pub fn ground_wav(felt: &Felt) -> (Vec<u8>, f64) {
+    let peak = felt.accel.iter().fold(0.0f32, |m, v| m.max(v.abs())) as f64;
+    let full_scale = if peak > 0.0 { peak / BOUNCE_PEAK } else { 1.0 };
+    let data_len = (felt.accel.len() * 4) as u32;
+    let mut w = Vec::with_capacity(44 + data_len as usize);
+    w.extend_from_slice(b"RIFF");
+    w.extend_from_slice(&(36 + data_len).to_le_bytes());
+    w.extend_from_slice(b"WAVEfmt ");
+    w.extend_from_slice(&16u32.to_le_bytes());
+    w.extend_from_slice(&3u16.to_le_bytes()); // IEEE float
+    w.extend_from_slice(&1u16.to_le_bytes()); // mono
+    w.extend_from_slice(&(FS as u32).to_le_bytes());
+    w.extend_from_slice(&(FS as u32 * 4).to_le_bytes());
+    w.extend_from_slice(&4u16.to_le_bytes());
+    w.extend_from_slice(&32u16.to_le_bytes());
+    w.extend_from_slice(b"data");
+    w.extend_from_slice(&data_len.to_le_bytes());
+    for v in &felt.accel {
+        w.extend_from_slice(&((*v as f64 / full_scale) as f32).to_le_bytes());
+    }
+    (w, full_scale)
+}
+
+/// The line the report gets for `--wav`.
+fn wav_line(path: &str, full_scale: f64) -> String {
+    format!(
+        "Ground motion: {path}, mono {:.0} Hz float, the vertical acceleration at you \
+         (not weighted); 1.0 in the file is {} m/s² ({} g), its peak sits at -1 dBFS.\n",
+        FS,
+        sig2(full_scale),
+        sig2(full_scale / GRAVITY)
+    )
+}
+
+pub fn json(felt: &Felt, input: &str, report_text: &str, wav: Option<(&str, f64)>) -> String {
     let s = &felt.settings;
     let c = &felt.coupling;
     let sm = &felt.summary;
@@ -2070,6 +2108,15 @@ pub fn json(felt: &Felt, input: &str, report_text: &str) -> String {
     let _ = writeln!(o, "  \"input\": {},", jstr(input));
     let _ = writeln!(o, "  \"duration_s\": {},", jnum(sm.duration));
     let _ = writeln!(o, "  \"analysis_rate_hz\": {},", jnum(FS));
+    if let Some((path, full_scale)) = wav {
+        let _ = writeln!(
+            o,
+            "  \"ground_wav\": {{\"path\": {}, \"rate_hz\": {}, \"full_scale_ms2\": {}, \"weighted\": false}},",
+            jstr(path),
+            jnum(FS),
+            jnum(full_scale)
+        );
+    }
     // settings
     let venue_params: Vec<(&str, f64)> = match &s.venue {
         Venue::Field(f) => vec![
@@ -2309,6 +2356,9 @@ patina feel <song.song | file.wav | file.mid> [options]
   --out PREFIX               write PREFIX.feel.json and .feel.png (default: next to the input)
   --json PATH                the JSON at an exact path
   --png PATH                 the seismograph at an exact path (default PREFIX.feel.png)
+  --wav PATH                 also write the ground motion itself (vertical m/s², not
+                             weighted) as mono float audio at 8 kHz, peak at -1 dBFS,
+                             its scale in the report: to drive a tactile transducer
   --no-normalize             songs: keep the engine's gain, not the -1 dBFS bounce
   --patch NAME               the voice a MIDI file plays (as with --play)
 ";
@@ -2335,6 +2385,7 @@ pub fn cli(args: &[String]) -> Result<(), String> {
     let (mut depth, mut distance) = (None, None);
     let (mut crossover, mut sub_hz, mut order) = (None, None, None);
     let (mut out, mut json_path, mut png_path, mut patch) = (None, None, None, None);
+    let mut wav_path: Option<String> = None;
     let mut normalize = true;
     let mut i = 1;
     while i < args.len() {
@@ -2354,6 +2405,7 @@ pub fn cli(args: &[String]) -> Result<(), String> {
             "--out" => out = Some(value()?),
             "--json" => json_path = Some(value()?),
             "--png" => png_path = Some(value()?),
+            "--wav" => wav_path = Some(value()?),
             "--patch" => patch = Some(value()?),
             "--sealed" | "--vented" => {
                 order = Some(if a == "--sealed" { 2 } else { 4 });
@@ -2491,9 +2543,19 @@ pub fn cli(args: &[String]) -> Result<(), String> {
             crate::song::render_offline(&song, 48000.0).with_card_lanes(crate::song::card_lanes());
         feel(frames, 48000.0, settings, Some(&notes))
     };
-    let text = report(&felt, &input);
+    let mut text = report(&felt, &input);
+    let wav = match &wav_path {
+        Some(path) => {
+            let (bytes, full_scale) = ground_wav(&felt);
+            std::fs::write(path, bytes).map_err(|e| format!("{path}: {e}"))?;
+            text.push('\n');
+            text.push_str(&wav_line(path, full_scale));
+            Some((path.as_str(), full_scale))
+        }
+        None => None,
+    };
     print!("{text}");
-    std::fs::write(&json_path, json(&felt, &input, &text))
+    std::fs::write(&json_path, json(&felt, &input, &text, wav))
         .map_err(|e| format!("{json_path}: {e}"))?;
     std::fs::write(&png_path, seismograph::render(&felt, &input))
         .map_err(|e| format!("{png_path}: {e}"))?;
@@ -2850,7 +2912,7 @@ mod tests {
     fn json_is_well_formed() {
         let (felt, _) = render("bpm 120\ntail 1\ntrack kick kit=909\n(BD R BD R)x2\n");
         let text = report(&felt, "test \"song\"");
-        let j = json(&felt, "test \"song\"", &text);
+        let j = json(&felt, "test \"song\"", &text, Some(("out.wav", 0.25)));
         // balanced outside strings, every key we promise
         let (mut depth, mut in_str, mut esc) = (0i32, false, false);
         for ch in j.chars() {
@@ -2872,9 +2934,32 @@ mod tests {
             "\"sections\"",
             "\"settings\"",
             "\"wk_rms_1s\"",
+            "\"ground_wav\"",
         ] {
             assert!(j.contains(key), "{key}");
         }
         assert!(!j.contains("NaN") && !j.contains("inf"));
+    }
+
+    #[test]
+    fn the_ground_wav_is_the_acceleration_at_its_stated_scale() {
+        let (felt, _) = render("bpm 120\ntail 1\ntrack kick kit=909\n(BD R BD R)x2\n");
+        let (w, full_scale) = ground_wav(&felt);
+        assert_eq!(&w[..4], b"RIFF");
+        assert_eq!(&w[8..16], b"WAVEfmt ");
+        assert_eq!(u16::from_le_bytes([w[20], w[21]]), 3); // float
+        assert_eq!(u16::from_le_bytes([w[22], w[23]]), 1); // mono
+        assert_eq!(u32::from_le_bytes(w[24..28].try_into().unwrap()), FS as u32);
+        assert_eq!(&w[36..40], b"data");
+        let samples: Vec<f32> = w[44..]
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+            .collect();
+        assert_eq!(samples.len(), felt.accel.len());
+        let peak = samples.iter().fold(0.0f32, |m, v| m.max(v.abs())) as f64;
+        assert!((peak - BOUNCE_PEAK).abs() < 1e-6, "peak {peak}");
+        for (x, a) in samples.iter().zip(&felt.accel).step_by(97) {
+            assert!((*x as f64 * full_scale - *a as f64).abs() < 1e-6);
+        }
     }
 }
