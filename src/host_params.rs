@@ -358,6 +358,9 @@ const EXCLUDED: &[Param] = &[
     Param::SmpFormant,
     Param::SmpFormantKeep,
     Param::VoxFormant,
+    Param::Stutter,
+    Param::Reverse,
+    Param::TapeStop,
     // Mixer desk (per-track strips, the song's post-effects arrangement
     // trim, a track's own pitch CV) + the song-only chorus insert override
     Param::Output,

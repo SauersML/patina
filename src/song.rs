@@ -295,6 +295,25 @@
 // card's own white noise ahead of the drive and ladder), noise_cutoff
 // (Hz, 20..20000, its own resonant filter), noise_res (0..1), noise_mode
 // (0 lowpass, 1 bandpass, 2 highpass). Switches take plain sets.
+//
+// Glitch inserts (glitch.rs), on one track's strip as `automate
+// <track>.stutter`, or unscoped across the whole mix bus (after the tape,
+// so the finished mix stutters and stops):
+//   stutter N   beat repeat: from the moment it reaches N >= 1, the next
+//               1/N note (8 an eighth, 16 a sixteenth, 64 a 64th; 12 an
+//               eighth-note triplet) is caught and repeated until it goes
+//               back to 0. Raising N while it runs shortens the repeat on
+//               the caught audio, the roll into a drop:
+//                 automate kick.stutter
+//                   0 >12 8 >13 16 >14 32 >15 64 >16 0
+//   reverse N   plays the track backwards in 1/N-note slices, one slice
+//               behind (each slice is the one before it, reversed); 0 off
+//   tape_stop B the tape winds down to a halt over B beats, pitch and
+//               level falling together, then silence until it goes back
+//               to 0, when the music returns live:
+//                 automate tape_stop
+//                   0 >60 4
+// Lengths follow the song's tempo lane. Every seam is declicked.
 
 use std::sync::Arc;
 use std::thread;
@@ -632,6 +651,13 @@ param_table! {
     SmpFormant:      "smp_formant",    None,      (-24.0, 24.0, Lin);
     SmpFormantKeep:  "smp_formant_keep", None,    (0.0, 1.0, Lin);
     VoxFormant:      "vox_formant",    None,      (-24.0, 24.0, Lin);
+    // Glitch inserts (glitch.rs): a beat repeat of 1/N notes, a reverser
+    // in 1/N-note slices (below 1 = off), and a tape stop over N beats
+    // (0 = running). On one track's strip as `automate <track>.stutter`;
+    // unscoped, across the whole mix bus.
+    Stutter:         "stutter",        None,      (0.0, 64.0, Lin);
+    Reverse:         "reverse",        None,      (0.0, 64.0, Lin);
+    TapeStop:        "tape_stop",      None,      (0.0, 16.0, Lin);
 }
 
 pub(crate) fn waveform_from_value(value: f32) -> Waveform {
@@ -878,6 +904,8 @@ impl Param {
             Param::Limit => vm.set_limit(value),
             Param::LimitCeiling => vm.set_limit_ceiling(value),
             Param::LimitRelease => vm.set_limit_release(value),
+            // unscoped, the glitch inserts sit across the bus
+            Param::Stutter | Param::Reverse | Param::TapeStop => vm.set_glitch(0, self, value),
             Param::ChorusMix => vm.set_chorus_mix(value),
             Param::WaveformSel => vm.set_waveform(waveform_from_value(value)),
             Param::Detune => vm.set_detune(value),
@@ -1048,6 +1076,7 @@ impl Param {
             return true;
         }
         match self {
+            P::Stutter | P::Reverse | P::TapeStop => true,
             P::SmpPitch
             | P::SmpStart
             | P::SmpGain
@@ -2524,9 +2553,19 @@ fn parse_song(text: &str) -> Result<Song, String> {
         ));
     }
 
-    // Shapers ride the beat: give the engine the song's clock, once at the
-    // downbeat and again at every grid step where the tempo moves
-    if !mix.shapers.is_empty() {
+    // Shapers ride the beat and glitch lengths follow the tempo: give the
+    // engine the song's clock, once at the downbeat and again at every
+    // grid step where the tempo moves
+    let glitched = events.iter().any(|(_, _, k)| {
+        matches!(
+            k,
+            EventKind::Param {
+                param: Param::Stutter | Param::Reverse | Param::TapeStop,
+                ..
+            }
+        )
+    });
+    if !mix.shapers.is_empty() || glitched {
         let grid = bpm_grid(bpm, &tempo_lane, max_beat);
         let mut last = f64::NAN;
         for i in 0..grid.len() - 1 {
@@ -3723,6 +3762,63 @@ mod tests {
         };
         let (plain, moved) = (centroid("smp_gain\n0.8"), centroid("smp_formant\n12"));
         assert!(moved > 1.4 * plain, "a +12 throat lane: centroid {plain:.0} -> {moved:.0} Hz");
+    }
+
+    /// The glitch lanes follow the song's tempo: at 150 bpm a track's
+    /// 1/16 stutter repeats every 0.1 s (a rising sine, which never
+    /// repeats by itself, correlates with itself one repeat back), and an
+    /// unscoped tape stop over a beat leaves the whole mix silent.
+    #[test]
+    fn glitch_lanes_follow_the_tempo_on_a_track_and_the_bus() {
+        let render = |lanes: &str| -> Vec<f32> {
+            let song = parse_song(&format!(
+                "bpm 150\ngate 1\nautomate reverb_wet\n0\n\
+                 track a\nA3:4>A5\nautomate a.waveform\n0\n{lanes}"
+            ))
+            .unwrap();
+            render_offline(&song, 48000.0).map(|(l, _)| l).collect()
+        };
+        // normalized correlation of x[k] and x[k - lag] over a window
+        let corr = |x: &[f32], at: usize, lag: usize| {
+            let (mut xy, mut xx, mut yy) = (0.0f64, 0.0f64, 0.0f64);
+            for k in at..at + 9600 {
+                let (a, b) = (x[k] as f64, x[k - lag] as f64);
+                xy += a * b;
+                xx += a * a;
+                yy += b * b;
+            }
+            xy / (xx * yy).sqrt().max(1e-30)
+        };
+        // beat 1 is 0.4 s (sample 19200); a 1/16 is 4800 samples
+        let plain = render("");
+        let stut = render("automate a.stutter\n0 >1 16\n");
+        assert!(corr(&plain, 30000, 4800) < 0.5, "the sweep alone repeats");
+        assert!(
+            corr(&stut, 30000, 4800) > 0.99,
+            "a 1/16 stutter at 150 bpm: correlation {:.3} one repeat back",
+            corr(&stut, 30000, 4800)
+        );
+        // the bus: a one-beat stop from beat 1 is over by beat 2 (0.8 s)
+        let rms = |x: &[f32], a: usize, b: usize| {
+            (x[a..b].iter().map(|v| (v * v) as f64).sum::<f64>() / (b - a) as f64).sqrt()
+        };
+        let stop = render("automate tape_stop\n0 >1 1\n");
+        assert!(rms(&plain, 42000, 72000) > 0.01);
+        assert!(rms(&stop, 42000, 72000) < 1e-4, "a stopped bus: rms {:.6}", rms(&stop, 42000, 72000));
+        // before it engages, the mix is untouched
+        assert_eq!(&stop[..19000], &plain[..19000]);
+        // a reverse lane's opening 0 sets the reverser listening, so its
+        // first slice (beat 1 to 2) is beat 0 to 1 played backwards
+        let rev = render("automate a.reverse\n0 >1 4\n");
+        let (mut xy, mut xx, mut yy) = (0.0f64, 0.0f64, 0.0f64);
+        for u in 500..18700 {
+            let (a, b) = (rev[19200 + u] as f64, plain[19199 - u] as f64);
+            xy += a * b;
+            xx += a * a;
+            yy += b * b;
+        }
+        let c = xy / (xx * yy).sqrt().max(1e-30);
+        assert!(c > 0.95, "the first reversed slice against beat 0-1 backwards: {c:.3}");
     }
 
     /// A `sample=` track becomes a sampler slot on its own channel, its

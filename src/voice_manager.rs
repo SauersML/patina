@@ -506,6 +506,9 @@ pub struct ChannelMix {
     /// so it runs on through silence and lets its tails ring out.
     voice_sum: (f32, f32),
     voice_fed: bool,
+    /// The glitch insert (glitch.rs: beat repeat, reverse, tape stop),
+    /// first on the strip; None until a song touches it.
+    glitch: Option<Box<crate::glitch::Glitch>>,
 }
 
 /// The duck envelope's stage. Release is where it rests (decaying toward
@@ -615,6 +618,7 @@ impl ChannelMix {
             shape_k: crate::smoothing::approach(0.002, sample_rate),
             voice_sum: (0.0, 0.0),
             voice_fed: false,
+            glitch: None,
         }
     }
 
@@ -659,7 +663,8 @@ impl ChannelMix {
     }
 
     /// The strip holds an insert with memory (an EQ's filters, the drive
-    /// stage's antialiasing and hold, the compressor's detector). Such a
+    /// stage's antialiasing and hold, the compressor's detector, the
+    /// glitch insert's recorded slice). Such a
     /// strip must hear its channel's mix once a sample: run per voice
     /// card, as a plain strip is, its state would advance once per card
     /// and mix the cards' samples (a 4-note chord drove an EQ's biquad at
@@ -667,7 +672,7 @@ impl ChannelMix {
     /// for all of them, +2.5 dB), and its nonlinearity would distort each
     /// note alone instead of the chord.
     fn stateful(&self) -> bool {
-        self.comp.is_some() || self.eq.is_some() || self.dist.is_some()
+        self.comp.is_some() || self.eq.is_some() || self.dist.is_some() || self.glitch.is_some()
     }
 
     /// A key trigger: run the duck envelope from where it stands.
@@ -758,6 +763,12 @@ fn strip_one(m: &mut ChannelMix, l: f32, r: f32, sends: &mut SendBus) -> (f32, f
     // Detecting in volts read every part ~20 dB hot.
     const TO_BUS: f32 = 0.7 / PROGRAM_V;
     let (mut l, mut r) = (l, r);
+    // The glitch insert comes first, so everything on the strip (EQ,
+    // drive, fader, compressor, sends) hears the repeat, the reversal or
+    // the stop, as a beat-repeat pedal patched into the channel would be
+    if let Some(g) = m.glitch.as_mut() {
+        (l, r) = g.process(l, r);
+    }
     // The inserts sit before the fader, as on a console channel: the EQ,
     // then the drive stage (so the EQ shapes what distorts)
     if let Some(eq) = m.eq.as_mut() {
@@ -1069,6 +1080,9 @@ pub struct VoiceManager {
     /// strip shapers: the beat this sample is at, and beats per sample.
     song_beat: f64,
     beat_step: f64,
+    /// The glitch insert across the mix bus (unscoped `stutter`,
+    /// `reverse`, `tape_stop`), after the tape; None until a song uses it.
+    bus_glitch: Option<Box<crate::glitch::Glitch>>,
     /// The master clipper and look-ahead limiter (limiter.rs), between
     /// the stereo width and the arrangement trim.
     master_peak: crate::limiter::MasterPeak,
@@ -1152,6 +1166,7 @@ impl VoiceManager {
             sounded: ChannelMap::default(),
             song_beat: 0.0,
             beat_step: 120.0 / 60.0 / sample_rate as f64,
+            bus_glitch: None,
             master_peak: crate::limiter::MasterPeak::new(sample_rate),
             solo: None,
             card_pool: None,
@@ -1303,6 +1318,45 @@ impl VoiceManager {
         }
     }
 
+    /// Turn a glitch knob (`stutter`, `reverse`, `tape_stop`) on a track's
+    /// strip, or with channel 0 on the bus insert. A stutter and a stop
+    /// start from the moment they engage, so their insert is built at the
+    /// first value that engages one, and until then a lane's zeros cost
+    /// nothing. The reverser plays back the slice before it engaged, so
+    /// any value builds it, and a lane's opening 0 sets it listening.
+    pub fn set_glitch(&mut self, channel: u16, param: crate::song::Param, value: f32) {
+        use crate::song::Param as P;
+        if value.is_nan() {
+            return;
+        }
+        let value = param.clamp(value);
+        let build = value != 0.0 || param == P::Reverse;
+        let sr = self.sample_rate;
+        let spb = 1.0 / self.beat_step;
+        let slot = if channel == 0 {
+            &mut self.bus_glitch
+        } else {
+            if !build && self.channel_mix.get(&channel).map_or(true, |m| m.glitch.is_none()) {
+                return;
+            }
+            &mut self.strip_mut(channel).glitch
+        };
+        if !build && slot.is_none() {
+            return;
+        }
+        let g = slot.get_or_insert_with(|| {
+            let mut g = crate::glitch::Glitch::new(sr);
+            g.set_tempo(spb);
+            Box::new(g)
+        });
+        match param {
+            P::Stutter => g.set_stutter(value),
+            P::Reverse => g.set_reverse(value),
+            P::TapeStop => g.set_tape_stop(value),
+            _ => {}
+        }
+    }
+
     /// A channel's strip, set up at unity on first use.
     fn strip_mut(&mut self, channel: u16) -> &mut ChannelMix {
         let sr = self.sample_rate;
@@ -1334,6 +1388,15 @@ impl VoiceManager {
         if beat.is_finite() && bpm.is_finite() && bpm > 0.0 {
             self.song_beat = beat;
             self.beat_step = bpm / 60.0 / self.sample_rate as f64;
+            let spb = 1.0 / self.beat_step;
+            for m in self.channel_mix.values_mut() {
+                if let Some(g) = m.glitch.as_mut() {
+                    g.set_tempo(spb);
+                }
+            }
+            if let Some(g) = self.bus_glitch.as_mut() {
+                g.set_tempo(spb);
+            }
         }
     }
 
@@ -1364,6 +1427,12 @@ impl VoiceManager {
     }
 
     pub fn set_channel_param(&mut self, channel: u16, param: crate::song::Param, value: f32) {
+        use crate::song::Param as P;
+        // The glitch inserts: on the track's strip, or unscoped on the bus
+        if matches!(param, P::Stutter | P::Reverse | P::TapeStop) {
+            self.set_glitch(channel, param, value);
+            return;
+        }
         // A strip control lands on the channel's strip. Scoped to a track,
         // the bus compressor's knobs turn that strip's compressor.
         if param.is_strip() || (channel != 0 && param.is_strip_comp_knob()) {
@@ -2451,7 +2520,7 @@ impl VoiceManager {
                 && !self
                     .channel_mix
                     .get(&ch)
-                    .map_or(false, |m| m.eq.is_some() || m.dist.is_some())
+                    .map_or(false, |m| m.eq.is_some() || m.dist.is_some() || m.glitch.is_some())
             {
                 continue;
             }
@@ -2513,6 +2582,12 @@ impl VoiceManager {
         // of clipping the peaks the compressor would have tucked in.
         let (left, right) = self.comp.process(left, right);
         let (left, right) = self.tape.process(left, right);
+        // The bus glitch takes the finished two-track: the whole mix,
+        // rooms and tape included, catches, plays backwards or stops
+        let (left, right) = match self.bus_glitch.as_mut() {
+            Some(g) => g.process(left, right),
+            None => (left, right),
+        };
 
         // Master width: scale the side signal of the finished mix, smoothed
         // like the output trim so automating it never clicks.

@@ -22,6 +22,7 @@ format for programmatic playback and parameter automation.
 - 📼 A tape-deck sampler: any WAV becomes an instrument on the keys (`track keys sample=tape.wav`) — band-limited windowed-sinc playback (Kaiser β=8.6, kernel stretched by the read speed so varispeed doesn't alias in *either* direction), sustain loops with equal-power crossfades (a Mellotron whose tape never runs out), `chop=N` slice pads mapped chromatically (the MPC workflow), `beats=N` tempo-fitting (break-matching solved at parse), a per-slot resonant ZDF lowpass (the SP/Akai filter-sweep sound), vintage converter emulation (`bits=12 rate=26040` is the SP-1200: band-limited decimation at load, truncation, and a zero-order-hold DAC whose imaging spray is the point), reverse transport, gate/one-shot modes, per-note choke (`mono`), and a live-automatable transport: `smp_pitch` is a varispeed knob (tape-stops on demand), `smp_start` scrubs the needle-drop, `smp_cutoff`/`smp_res` sweep the filter, `smp_gain`/`smp_pan`/`smp_attack`/`smp_release` reshape it mid-song. The heads mix onto the same volt bus as everything else — sampler playback sags the power rail, runs through the fuzz/spring/reverb/chorus/tape chain, and bends with the pitch wheel
 - 🥊 Kick-bass on any voice: a per-note pitch envelope (start, time, curve) diving onto the note, key sync, and an antialiased drive stage (tanh, clip, wavefolder) ahead of the ladder as post-filter; plus a seven-saw supersaw bank and a filtered noise oscillator per card for walls and risers
 - 🫦 Note bends (`C4:2>G3` glides to the target over the note), and the throat: pitch-synchronous grains that move a voice's formants apart from its pitch, so a sampled voice drops an octave without turning into a monster (`formant`, `smp_formant`, `vox_formant`)
+- 💥 Glitch inserts on any track or the whole mix bus: beat repeat from 1/8 to 1/64, reverse in note slices, and tape stop (`stutter`, `reverse`, `tape_stop`)
 - 🖥️ Studio-hardware GUI: knobs, ADSR graph, live oscilloscope, keys that light from the engine's real voice state
 - ⌨️ QWERTY keyboard input · 🖱️ click-and-drag keys · 🎹 MIDI input
 - 📜 Text-based song files with per-track sequencing and full parameter automation
@@ -239,6 +240,24 @@ automate riser.noise_cutoff        # sweep a track's own noise
 - **Supersaw**: `supersaw` (0..1) crossfades oscillator 1 into seven polyBLEP saws riding its exact pitch (glide, vibrato, the pitch envelope and bends move all seven), `supersaw_detune` spreads them, `supersaw_mix` brings the six side saws up against the centre at constant loudness. `osc1_level` sets oscillator 1's level in the mixer.
 - **Noise oscillator**: `noise_osc` (0..1) is the card's own white noise through its own resonant filter, `noise_cutoff` (Hz), `noise_res`, `noise_mode` (0 lowpass, 1 bandpass, 2 highpass). Unlike `noise` (one shared source into every voice), each card's noise is its own.
 - Patches: `hardkick` (hardstyle kick-bass), `rawkick` (wavefolded screech), `kick808` (long 808), `superwall`, `riser`. `songs/kick-bass.song` is the demo.
+
+## 💥 Glitch
+
+Three glitch inserts: a beat repeat, a reverser and a tape stop. Automate them on one track (`automate kick.stutter`, on that track's strip) or with no track across the whole mix bus (`automate stutter`, after the tape, so the finished mix catches and stops). Lengths are in notes and beats and follow the tempo lane.
+
+```
+automate kick.stutter              # the roll into a drop: the kick at beat 12 is
+0 >12 8 >13 16 >14 32 >15 64 >16 0 # caught and repeated as 1/8, 1/16, 1/32, 1/64
+automate stab.reverse              # the stab backwards, a beat behind
+0 >8 4 >16 0
+automate tape_stop                 # the whole mix winds down over 3 beats
+0 >25 3
+```
+
+- **Beat repeat**: `stutter N` catches the next 1/N note from the moment it reaches N ≥ 1 (8 an eighth, 16 a sixteenth, 64 a 64th, 12 an eighth-note triplet) and repeats it until it returns to 0. The first pass is live, so the repeat keeps the downbeat it caught. Raising N while it runs shortens the repeat on the caught audio.
+- **Reverse**: `reverse N` plays the track backwards in 1/N-note slices, one slice behind, so it sounds the moment it engages. (The tape deck's `reverse` option flips a reel; this flips whatever the strip hears.)
+- **Tape stop**: `tape_stop B` winds the tape down to a halt over B beats at a constant rate, pitch and level falling together, then holds silence until it returns to 0 and the music comes back live.
+- Every seam (each repeat, each reversed slice, switching in and out) is declicked. A song that never touches them renders exactly as before. `songs/glitch.song` is the demo.
 
 ## 🔌 The Substrate
 
