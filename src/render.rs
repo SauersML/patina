@@ -241,6 +241,9 @@ pub fn export_events(song: &crate::song::Song, path: &str) -> Result<()> {
             crate::song::EventKind::Clock { beat, bpm } => {
                 format!("\"type\":\"clock\",\"beat\":{:.6},\"bpm\":{:.6}", beat, bpm)
             }
+            crate::song::EventKind::DuckHit { channel } => {
+                format!("\"type\":\"duck\",\"ch\":{}", channel)
+            }
         };
         let comma = if i + 1 < n { "," } else { "" };
         writeln!(w, "    {{\"t\":{:.6},{}}}{}", e.time, body, comma)?;

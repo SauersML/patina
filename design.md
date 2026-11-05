@@ -112,6 +112,11 @@ We will use a layered architecture with clear interfaces between components:
      members as before. `bus mix` is a strip on MIX_CHANNEL read after
      the tape and the bus glitch for its fader, duck and shaper only. A
      song without buses sums exactly as before
+   - Duck keys: a kit's kick (default), another channel's note-ons
+     (`duck_from=`), the song's DuckHit events (`duck_at=`, expanded at
+     parse), or an onset detector (inserts.rs OnsetDetector) reading the
+     source channel's raw-output tap one sample late
+     (`duck_from=TRACK.onset`)
    - Cross-track routing (src/xmod.rs): any track's strip signal (after
      its inserts, before its fader) drives another track at audio rate.
      Song syntax, on the driven track: `fm_from=SRC fm=D` (linear FM,

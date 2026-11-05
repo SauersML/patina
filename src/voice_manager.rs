@@ -490,6 +490,12 @@ pub struct ChannelMix {
     duck_stage: DuckStage,
     /// What keys the duck: None = every kit's kick.
     duck_key: Option<DuckKey>,
+    /// `duck_at=` hits key it (the song's DuckHit events), so the kick
+    /// does not unless `duck_from=` asks.
+    duck_listed: bool,
+    /// `duck_from=TRACK.onset`: the transient detector on that channel's
+    /// raw output (read from its tap, one sample late).
+    duck_onset: Option<Box<crate::inserts::OnsetDetector>>,
     /// The strip's own compressor (`comp=`), out when None.
     comp: Option<Box<crate::buscomp::BusComp>>,
     /// Its threshold (0 = out) and any knob a song has turned on it.
@@ -568,6 +574,9 @@ pub enum KeyFilter {
     Any,
     Note(u8),
     Drum(DrumVoice),
+    /// The channel's audio, not its notes: an onset detector on its raw
+    /// output (`duck_from=TRACK.onset`).
+    Onset,
 }
 
 impl DuckKey {
@@ -577,6 +586,7 @@ impl DuckKey {
                 KeyFilter::Any => true,
                 KeyFilter::Note(n) => n == note,
                 KeyFilter::Drum(v) => DrumVoice::for_note(note) == Some(v),
+                KeyFilter::Onset => false,
             }
     }
 }
@@ -643,6 +653,8 @@ impl ChannelMix {
             duck_hold_left: 0,
             duck_stage: DuckStage::Release,
             duck_key: None,
+            duck_listed: false,
+            duck_onset: None,
             comp: None,
             comp_threshold: 0.0,
             comp_knobs: StripCompKnobs::default(),
@@ -1956,7 +1968,32 @@ impl VoiceManager {
     /// Key a strip's duck off another channel's note-ons (`duck_from=`)
     /// instead of every kit's kick.
     pub fn set_duck_key(&mut self, channel: u16, key: DuckKey) {
-        self.strip_mut(channel).duck_key = Some(key);
+        let sr = self.sample_rate;
+        let m = self.strip_mut(channel);
+        m.duck_key = Some(key);
+        if key.filter == KeyFilter::Onset {
+            m.duck_onset = Some(Box::new(crate::inserts::OnsetDetector::new(sr)));
+            if !self.taps.iter().any(|t| t.channel == key.channel) {
+                self.taps.push(Tap {
+                    channel: key.channel,
+                    cur: (0.0, 0.0),
+                    prev: (0.0, 0.0),
+                });
+            }
+        }
+    }
+
+    /// The strip's duck fires on the song's listed hits (`duck_at=`), not
+    /// on every kick.
+    pub fn set_duck_listed(&mut self, channel: u16) {
+        self.strip_mut(channel).duck_listed = true;
+    }
+
+    /// One listed hit (`duck_at=`): the strip's duck fires now.
+    pub fn duck_hit(&mut self, channel: u16) {
+        if let Some(m) = self.channel_mix.get_mut(&channel) {
+            m.trigger_duck();
+        }
     }
 
     /// Give a strip a tempo-synced volume shaper (`shape=`).
@@ -2124,7 +2161,7 @@ impl VoiceManager {
             // nothing in the host it was most needed in.
             if DrumVoice::for_note(note) == Some(DrumVoice::Kick) {
                 for m in self.channel_mix.values_mut() {
-                    if m.duck > 0.0 && m.duck_key.is_none() {
+                    if m.duck > 0.0 && m.duck_key.is_none() && !m.duck_listed {
                         m.trigger_duck();
                     }
                 }
@@ -3067,6 +3104,18 @@ impl VoiceManager {
         for m in self.channel_mix.values_mut() {
             m.cur_gain += (m.gain - m.cur_gain) * knob_k;
             m.cur_pan += (m.pan - m.cur_pan) * knob_k;
+            // an onset key hears its source's last whole sample
+            if let (Some(d), Some(k)) = (m.duck_onset.as_mut(), m.duck_key) {
+                const TO_BUS: f32 = 0.7 / PROGRAM_V;
+                let (l, r) = self
+                    .taps
+                    .iter()
+                    .find(|t| t.channel == k.channel)
+                    .map_or((0.0, 0.0), |t| t.prev);
+                if d.step(0.5 * (l + r) * TO_BUS) {
+                    m.trigger_duck();
+                }
+            }
             m.advance_duck();
             m.advance_shaper(beat);
         }

@@ -463,6 +463,71 @@ pub enum ShapeCurve {
     Steps(Vec<f32>),
 }
 
+/// A transient detector, the key of `duck_from=TRACK.onset`: a fast peak
+/// follower (0.3 ms attack, 15 ms release) against a slow one (100 ms)
+/// that trails it. An onset is the fast follower jumping 6 dB over the
+/// slow one, above -50 dBFS, at most once per 40 ms and only after the
+/// level has fallen back toward the slow follower, so a held note fires
+/// once and a drum loop fires on each hit.
+#[derive(Clone, Debug)]
+pub struct OnsetDetector {
+    fast: f32,
+    slow: f32,
+    att: f32,
+    rel: f32,
+    slow_k: f32,
+    hold: u32,
+    refractory: u32,
+    armed: bool,
+}
+
+impl OnsetDetector {
+    const RISE: f32 = 2.0;
+    const REARM: f32 = 1.4;
+    const FLOOR: f32 = 0.003_162;
+
+    pub fn new(sample_rate: f32) -> Self {
+        Self {
+            fast: 0.0,
+            slow: 0.0,
+            att: crate::smoothing::approach(0.0003, sample_rate),
+            rel: (-1.0 / (0.015 * sample_rate)).exp(),
+            slow_k: crate::smoothing::approach(0.1, sample_rate),
+            hold: 0,
+            refractory: (0.04 * sample_rate) as u32,
+            armed: true,
+        }
+    }
+
+    /// One sample of the source (mono, at bus scale): true on an onset.
+    #[inline]
+    pub fn step(&mut self, x: f32) -> bool {
+        let a = x.abs();
+        if !a.is_finite() {
+            return false;
+        }
+        if a > self.fast {
+            self.fast += (a - self.fast) * self.att;
+        } else {
+            self.fast *= self.rel;
+        }
+        self.slow += (self.fast - self.slow) * self.slow_k;
+        if self.hold > 0 {
+            self.hold -= 1;
+        }
+        if !self.armed && self.fast < Self::REARM * self.slow {
+            self.armed = true;
+        }
+        if self.armed && self.hold == 0 && self.fast > Self::FLOOR && self.fast > Self::RISE * self.slow
+        {
+            self.armed = false;
+            self.hold = self.refractory;
+            return true;
+        }
+        false
+    }
+}
+
 /// A tempo-synced volume shaper (`shape=` on a track line).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Shaper {

@@ -40,7 +40,13 @@
 //                                # 1 = silence at the dip), keyed by every
 //                                # kick, or by `duck_from=TRACK` (that
 //                                # track's notes) / `duck_from=TRACK.BD`
-//                                # (one drum voice, or one note, of it);
+//                                # (one drum voice, or one note, of it) /
+//                                # `duck_from=TRACK.onset` (that track's
+//                                # audio: an onset detector on its raw
+//                                # output, so a gain=0 track or a bus can
+//                                # key it), or by a list of beats,
+//                                # `duck_at=4,8,12.5,16..32/0.5,DROP..DROP.end`
+//                                # (beats, sections, A..B/step ranges);
 //                                # duck_attack= duck_hold= (seconds; 0 =
 //                                # snap / no hold) and duck_release= (the
 //                                # time constant back to full).
@@ -388,7 +394,7 @@
 // console's group. A track sits on one bus at most; a bus takes tracks,
 // not other buses, and plays no notes. Its stem is the group through it;
 // a member's stem goes through its bus.
-//   bus mix [gain= duck= duck_from= duck_attack= duck_hold= duck_release=
+//   bus mix [gain= duck= duck_from= duck_at= duck_attack= duck_hold= duck_release=
 //            shape= shape_beats= shape_depth= shape_smooth=]
 // is the whole mix after the tape and the bus glitch: its fader, duck
 // and gate ride the finished two-track, and `automate mix.stutter` is the
@@ -1973,6 +1979,8 @@ pub enum EventKind {
     /// (`shape=`) carry these: one at the downbeat, then one wherever the
     /// tempo lane moves.
     Clock { beat: f64, bpm: f64 },
+    /// A listed sidechain hit (`duck_at=`): the strip on `channel` ducks.
+    DuckHit { channel: u16 },
 }
 
 pub struct SongEvent {
@@ -2028,6 +2036,8 @@ pub struct SongMix {
     /// `bus NAME tracks=a,b`: (the bus's channel, its member channels);
     /// `bus mix` is (MIX_CHANNEL, none).
     pub buses: Vec<(u16, Vec<u16>)>,
+    /// `duck_at=`: strips keyed by the song's listed hits.
+    pub duck_lists: Vec<u16>,
 }
 
 /// `glass` or `room..cathedral`: a body, and the body its morph runs to.
@@ -2142,6 +2152,7 @@ fn dispatch(vm: &mut VoiceManager, kind: &EventKind) {
             seconds,
         } => vm.bend_note(channel, note, semitones, seconds as f32),
         &EventKind::Clock { beat, bpm } => vm.set_song_clock(beat, bpm),
+        &EventKind::DuckHit { channel } => vm.duck_hit(channel),
     }
 }
 
@@ -2240,6 +2251,9 @@ fn register_channels(vm: &mut VoiceManager, song: &Song) {
     }
     for &(channel, key) in &song.mix.duck_keys {
         vm.set_duck_key(channel, key);
+    }
+    for &channel in &song.mix.duck_lists {
+        vm.set_duck_listed(channel);
     }
     for (channel, shaper) in &song.mix.shapers {
         vm.set_shaper(*channel, shaper.clone());
@@ -2702,6 +2716,7 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                 let mut shape_spec: Option<String> = None;
                 let mut shape_beats: Option<f64> = None;
                 let mut opts: Vec<(Param, f32)> = Vec::new();
+                let mut duck_at: Option<Vec<f64>> = None;
                 for opt in it {
                     if let Some(v) = opt.strip_prefix("tracks=") {
                         if is_mix {
@@ -2726,6 +2741,8 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                         );
                     } else if let Some(v) = opt.strip_prefix("duck_from=") {
                         duck_from.push((line_no, channel, v.to_string()));
+                    } else if let Some(v) = opt.strip_prefix("duck_at=") {
+                        duck_at = Some(parse_hit_list(v, &sections).map_err(err)?);
                     } else if let Some((k, v)) = opt.split_once('=').filter(|(k, _)| {
                         Param::from_name(k).map_or(false, |p| {
                             (p.is_strip() || p.is_strip_comp_knob())
@@ -2771,6 +2788,9 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                 } else if shape_beats.is_some() {
                     return Err(err("shape_beats= needs a shape= on the same line".into()));
                 }
+                if let Some(hits) = duck_at {
+                    push_duck_hits(&mut events, &mut mix, channel, &hits);
+                }
                 for (param, value) in opts {
                     events.push((0.0, 1, param_event(param, value, channel)));
                 }
@@ -2811,6 +2831,7 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                 // become Param events at beat 0 on this track's channel
                 let mut mix_opts: Vec<(Param, f32)> = Vec::new();
                 let mut track_duck_from: Option<String> = None;
+                let mut track_duck_at: Option<Vec<f64>> = None;
                 let mut track_routes: Vec<(crate::xmod::Dest, String)> = Vec::new();
                 let mut track_spec_from: Option<String> = None;
                 let mut track_body: Option<String> = None;
@@ -2848,6 +2869,9 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                         // Key this strip's duck off another track's notes
                         // (resolved below, once every track is known)
                         track_duck_from = Some(v.to_string());
+                    } else if let Some(v) = opt.strip_prefix("duck_at=") {
+                        // ...or off a list of beats
+                        track_duck_at = Some(parse_hit_list(v, &sections).map_err(err)?);
                     } else if let Some((dest, v)) = opt
                         .split_once('=')
                         .and_then(|(k, v)| crate::xmod::Dest::from_option(k).map(|d| (d, v)))
@@ -3169,6 +3193,9 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                 }
                 if let Some(spec) = track_duck_from {
                     duck_from.push((line_no, channel, spec));
+                }
+                if let Some(hits) = track_duck_at {
+                    push_duck_hits(&mut events, &mut mix, channel, &hits);
                 }
                 for (dest, spec) in track_routes {
                     xmod_from.push((line_no, channel, dest, spec));
@@ -3956,17 +3983,24 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
             .find(|(t, _)| t == name)
             .map(|(_, c)| *c)
             .ok_or_else(|| e(format!("no track named '{}'", name)))?;
-        if crate::voice_manager::bus_for_channel(source).is_some()
-            || source == crate::voice_manager::MIX_CHANNEL
-        {
+        let onset = part == Some("onset");
+        if source == crate::voice_manager::MIX_CHANNEL {
+            return Err(e("the mix cannot key a duck; key off a track or a bus".into()));
+        }
+        if crate::voice_manager::bus_for_channel(source).is_some() && !onset {
             return Err(e(format!(
-                "'{}' is a bus, which plays no notes: key off one of its tracks",
-                name
+                "'{}' is a bus, which plays no notes: key off one of its tracks, or \
+                 off its audio with duck_from={}.onset",
+                name, name
             )));
+        }
+        if source == channel && onset {
+            return Err(e("a strip cannot duck off its own onsets".into()));
         }
         use crate::voice_manager::{DuckKey, KeyFilter};
         let filter = match part {
             None => KeyFilter::Any,
+            Some("onset") => KeyFilter::Onset,
             Some(p) => match crate::drums::kit_for_channel(source)
                 .and_then(|_| crate::drums::DrumVoice::from_name(p))
             {
@@ -3981,6 +4015,30 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                 filter,
             },
         ));
+    }
+
+    // A listed or onset key with no depth anywhere dips nothing
+    let keyed = mix.duck_lists.iter().copied().chain(
+        mix.duck_keys
+            .iter()
+            .filter(|(_, k)| k.filter == crate::voice_manager::KeyFilter::Onset)
+            .map(|(c, _)| *c),
+    );
+    for channel in keyed.collect::<Vec<u16>>() {
+        let deep = events.iter().any(|(_, _, k)| {
+            matches!(k, EventKind::Param { param: Param::DuckAmount, value, channel: c }
+                if *c == channel && *value > 0.0)
+        });
+        if !deep {
+            let track = track_channels
+                .iter()
+                .find(|(_, c)| *c == channel)
+                .map_or("?", |(t, _)| t.as_str());
+            warnings.push(format!(
+                "'{}' keys its duck but never sets duck= (its depth), so it dips nothing",
+                track
+            ));
+        }
     }
 
     // `excite=NAME`: the instrument hears track NAME's raw output
@@ -4619,6 +4677,72 @@ impl GenSegment {
             }
         }
         Ok(out)
+    }
+}
+
+/// The most hits one `duck_at=` list expands to.
+const MAX_DUCK_HITS: usize = 100_000;
+
+/// `duck_at=4,8,12.5,16..32/0.5,DROP..DROP.end`: the beats a strip's duck
+/// fires on. An item is a beat or a section (as a seek names one), or a
+/// range `A..B/S`: every S beats (default 1) from A up to, not including,
+/// B. Sorted, repeats dropped.
+fn parse_hit_list(
+    spec: &str,
+    sections: &std::collections::HashMap<String, (f64, f64)>,
+) -> Result<Vec<f64>, String> {
+    let mut hits = Vec::new();
+    for item in spec.split(',').filter(|i| !i.is_empty()) {
+        let e = |m: &str| format!("duck_at={}: '{}' {}", spec, item, m);
+        match item.split_once("..") {
+            None => hits.push(resolve_seek(item, sections).map_err(|m| e(&m))?),
+            Some((a, rest)) => {
+                let (b, step) = match rest.split_once('/') {
+                    Some((b, s)) => (
+                        b,
+                        s.parse_finite::<f64>()
+                            .map_err(|_| e("has a step that is not a number"))?,
+                    ),
+                    None => (rest, 1.0),
+                };
+                let a = resolve_seek(a, sections).map_err(|m| e(&m))?;
+                let b = resolve_seek(b, sections).map_err(|m| e(&m))?;
+                if step <= 0.0 {
+                    return Err(e("needs a step above 0"));
+                }
+                if b <= a {
+                    return Err(e("ends before it starts"));
+                }
+                let mut k = 0usize;
+                loop {
+                    let t = a + k as f64 * step;
+                    if t >= b - 1e-9 {
+                        break;
+                    }
+                    hits.push(t);
+                    k += 1;
+                    if hits.len() > MAX_DUCK_HITS {
+                        return Err(e(&format!("lists more than {} hits", MAX_DUCK_HITS)));
+                    }
+                }
+            }
+        }
+    }
+    if hits.is_empty() {
+        return Err(format!("duck_at={}: lists no beats", spec));
+    }
+    hits.sort_by(f64::total_cmp);
+    hits.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+    Ok(hits)
+}
+
+/// A strip's listed hits become DuckHit events at their beats.
+fn push_duck_hits(events: &mut Vec<RawEvent>, mix: &mut SongMix, channel: u16, hits: &[f64]) {
+    for &b in hits {
+        events.push((b, 2, EventKind::DuckHit { channel }));
+    }
+    if !mix.duck_lists.contains(&channel) {
+        mix.duck_lists.push(channel);
     }
 }
 
@@ -7858,6 +7982,126 @@ mod tests {
                 .map(|e| e.time)
                 .collect();
             assert_eq!(at, vec![0.0, 2.0], "{seek}");
+        }
+    }
+
+    /// `duck_at=` lists the beats a strip ducks on (beats, sections and
+    /// `A..B/S` ranges); a listed strip ignores the kick unless
+    /// `duck_from=` asks for it.
+    #[test]
+    fn duck_at_dips_on_the_listed_beats() {
+        let hits = |spec: &str| {
+            let mut sections = std::collections::HashMap::new();
+            sections.insert("DROP".to_string(), (8.0, 10.0));
+            parse_hit_list(spec, &sections)
+        };
+        assert_eq!(hits("4,1,2.5").unwrap(), vec![1.0, 2.5, 4.0]);
+        assert_eq!(hits("0..2/0.5").unwrap(), vec![0.0, 0.5, 1.0, 1.5]);
+        assert_eq!(hits("DROP..DROP.end,3,3").unwrap(), vec![3.0, 8.0, 9.0]);
+        assert!(hits("4..2").unwrap_err().contains("ends before it starts"));
+        assert!(hits("0..4/0").unwrap_err().contains("step above 0"));
+        assert!(hits("NOPE").unwrap_err().contains("not a beat or a defined section"));
+        let base = "bpm 120\ntail 0\nautomate reverb_wet\n0\ntrack kick kit=909 gain=0\n\
+                    BD BD BD BD BD BD BD BD\n";
+        let pad = |opts: &str| -> Vec<(f32, f32)> {
+            let song = parse_song(&format!("{base}track pad {opts}\n[C4 E4 G4]:4\n")).unwrap();
+            assert!(song.warnings.is_empty(), "{:?}", song.warnings);
+            render_offline(&song, 48000.0).take(96000).collect()
+        };
+        let open = pad("");
+        let listed = pad("duck=1 duck_release=0.05 duck_at=1.5,3");
+        let kicked = pad("duck=1 duck_release=0.05");
+        // just after beat 1.5 (0.75 s) and 3 (1.5 s): ducked; just after
+        // the kicks on beats 1 and 2: not (and the kick-keyed strip is)
+        let w = |x: &[(f32, f32)], t: f64| frames_rms(x, t + 0.004, t + 0.03, 48000.0);
+        for t in [0.75, 1.5] {
+            assert!(w(&listed, t) < 0.4 * w(&open, t), "listed hit at {t} s");
+        }
+        for t in [0.5, 1.0] {
+            assert!(w(&listed, t) > 0.8 * w(&open, t), "no kick duck at {t} s");
+            assert!(w(&kicked, t) < 0.4 * w(&open, t), "kick duck at {t} s");
+        }
+        let song = parse_song(&format!("{base}track pad duck_at=1\nC4\n")).unwrap();
+        assert!(song.warnings[0].contains("never sets duck="), "{:?}", song.warnings);
+        // a bus takes the list too
+        let song = parse_song(&format!(
+            "{base}track pad\nC4\nbus music tracks=pad duck=0.7 duck_at=0..4\n"
+        ))
+        .unwrap();
+        let n = song.events.iter().filter(|e| matches!(e.kind, EventKind::DuckHit { .. })).count();
+        assert_eq!(n, 4);
+    }
+
+    /// `duck_from=TRACK.onset` keys a duck off that track's audio: a
+    /// silent kick (gain=0 still drives it) dips the pad on each hit,
+    /// within a few milliseconds of where its note-ons would.
+    #[test]
+    fn an_onset_key_ducks_on_the_audio_hits() {
+        let base = "bpm 120\ntail 0\nautomate reverb_wet\n0\ntrack kick kit=909 gain=0\n\
+                    R:0.5 BD BD BD\n";
+        let render = |key: &str| -> Vec<(f32, f32)> {
+            let song = parse_song(&format!(
+                "{base}track pad duck=1 duck_release=0.05 duck_from={key}\n[C4 E4 G4]:4\n"
+            ))
+            .unwrap();
+            assert!(song.warnings.is_empty(), "{:?}", song.warnings);
+            render_offline(&song, 48000.0).take(96000).collect()
+        };
+        let by_onset = render("kick.onset");
+        let by_note = render("kick");
+        let open = render("kick.CH");
+        let w = |x: &[(f32, f32)], t: f64| frames_rms(x, t + 0.006, t + 0.03, 48000.0);
+        for t in [0.25, 0.75, 1.25] {
+            assert!(w(&by_onset, t) < 0.4 * w(&open, t), "onset duck at {t} s");
+            assert!(
+                (w(&by_onset, t) - w(&by_note, t)).abs() < 0.05 * w(&open, t),
+                "onset vs note key at {t} s"
+            );
+            // and not before the hit
+            let pre = |x: &[(f32, f32)]| frames_rms(x, t - 0.03, t - 0.002, 48000.0);
+            assert!(pre(&by_onset) > 0.8 * pre(&open), "early at {t} s");
+        }
+        // a bus can key off its audio, not its notes
+        let ok = parse_song(&format!(
+            "{base}track pad duck=0.5 duck_from=drums.onset\nC4\nbus drums tracks=kick\n"
+        ));
+        assert!(ok.is_ok(), "{:?}", ok.err());
+        let e = parse_song(&format!(
+            "{base}track pad duck=0.5 duck_from=drums\nC4\nbus drums tracks=kick\n"
+        ))
+        .err()
+        .unwrap();
+        assert!(e.contains("duck_from=drums.onset"), "{e}");
+    }
+
+    /// The onset detector fires once per transient: on a drum hit, once
+    /// for a held tone's start, and never on silence or a steady level.
+    #[test]
+    fn the_onset_detector_fires_once_per_transient() {
+        let sr = 48000.0;
+        let mut d = crate::inserts::OnsetDetector::new(sr);
+        let mut fired = Vec::new();
+        for n in 0..96000usize {
+            let t = n as f32 / sr;
+            // a 220 Hz tone from 0.2 s to 1.2 s, and clicks at 1.5 and 1.8 s
+            let mut x = if (0.2..1.2).contains(&t) {
+                0.3 * (std::f32::consts::TAU * 220.0 * t).sin()
+            } else {
+                0.0
+            };
+            for c in [1.5f32, 1.8] {
+                let k = t - c;
+                if (0.0..0.05).contains(&k) {
+                    x += 0.5 * (-k / 0.008).exp() * (std::f32::consts::TAU * 80.0 * k).sin();
+                }
+            }
+            if d.step(x) {
+                fired.push(t);
+            }
+        }
+        assert_eq!(fired.len(), 3, "{fired:?}");
+        for (got, want) in fired.iter().zip([0.2f32, 1.5, 1.8]) {
+            assert!((got - want).abs() < 0.003, "{fired:?}");
         }
     }
 }
