@@ -209,6 +209,9 @@ pub fn export_events(song: &crate::song::Song, path: &str) -> Result<()> {
                 "\"type\":\"bend\",\"note\":{},\"semitones\":{:.4},\"secs\":{:.6},\"ch\":{}",
                 note, semitones, seconds, channel
             ),
+            crate::song::EventKind::Clock { beat, bpm } => {
+                format!("\"type\":\"clock\",\"beat\":{:.6},\"bpm\":{:.6}", beat, bpm)
+            }
         };
         let comma = if i + 1 < n { "," } else { "" };
         writeln!(w, "    {{\"t\":{:.6},{}}}{}", e.time, body, comma)?;

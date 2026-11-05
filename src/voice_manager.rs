@@ -453,11 +453,13 @@ impl Hasher for ChannelHasher {
 /// A map keyed by channel id.
 pub type ChannelMap<V> = HashMap<u16, V, BuildHasherDefault<ChannelHasher>>;
 
-/// One track's mixer strip. `gain`/`pan` sit between the voice and the
-/// bus; the sends feed the spring, echo, reverb and chorus directly; and
-/// `duck` is the sidechain — every kick trigger snaps the envelope to 1,
-/// the strip's gain dips by `duck * env`, and `duck_release` sets how
-/// fast it breathes back.
+/// One track's mixer strip, in signal order: the inserts (EQ, then the
+/// drive stage), the fader (`gain`, times the duck and the volume
+/// shaper), the strip compressor, `pan`, and the sends into the spring,
+/// echo, reverb and chorus. `duck` is the sidechain: a key trigger (every
+/// kick, or the notes of the track named by `duck_from=`) runs the
+/// envelope through attack, hold and release, and the strip's gain dips
+/// by `duck * env`.
 #[derive(Clone)]
 pub struct ChannelMix {
     pub gain: f32,
@@ -471,8 +473,88 @@ pub struct ChannelMix {
     cur_gain: f32,
     cur_pan: f32,
     duck_env: f32,
+    /// No note has played on this channel yet. While that holds, a fader
+    /// or pan move lands where it is set instead of gliding there from
+    /// unity: the de-zipper is for moves under sound, and gliding from 1
+    /// let a kit track's first hit (`gain=0.2`, or `gain=0` meant to mute
+    /// it) through at full level. A strip first set after its channel has
+    /// played still glides from unity, where the channel stood.
+    fresh: bool,
+    /// Per-sample rise of the duck envelope (0 = it snaps to full, the
+    /// kick duck's original behavior).
+    duck_attack_step: f32,
+    /// Samples the envelope holds at full before it releases.
+    duck_hold: u32,
+    duck_hold_left: u32,
+    duck_stage: DuckStage,
+    /// What keys the duck: None = every kit's kick.
+    duck_key: Option<DuckKey>,
     /// The strip's own compressor (`comp=`), out when None.
     comp: Option<Box<crate::buscomp::BusComp>>,
+    /// Its threshold (0 = out) and any knob a song has turned on it.
+    comp_threshold: f32,
+    comp_knobs: StripCompKnobs,
+    eq: Option<Box<crate::inserts::Eq3>>,
+    dist: Option<Box<crate::inserts::Dist>>,
+    /// The tempo-synced volume shaper (`shape=`) and its smoothed gain.
+    shaper: Option<Box<(crate::inserts::Shaper, f32)>>,
+    shape_depth: f32,
+    shape_k: f32,
+    /// This sample's voice cards on the channel, summed: a strip with a
+    /// stateful insert processes the channel's mix once a sample (see
+    /// `ChannelMix::stateful`), and `voice_fed` marks it a voice channel
+    /// so it runs on through silence and lets its tails ring out.
+    voice_sum: (f32, f32),
+    voice_fed: bool,
+}
+
+/// The duck envelope's stage. Release is where it rests (decaying toward
+/// 0); a trigger with no attack and no hold snaps to full and releases
+/// from the very next sample, exactly the original kick duck.
+#[derive(Clone, Copy, PartialEq)]
+enum DuckStage {
+    Attack,
+    Hold,
+    Release,
+}
+
+/// A strip's sidechain key (`duck_from=`): the note-ons of one channel,
+/// optionally only one drum voice or one note of it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DuckKey {
+    pub channel: u16,
+    pub filter: KeyFilter,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum KeyFilter {
+    Any,
+    Note(u8),
+    Drum(DrumVoice),
+}
+
+impl DuckKey {
+    fn hears(&self, channel: u16, note: u8) -> bool {
+        channel == self.channel
+            && match self.filter {
+                KeyFilter::Any => true,
+                KeyFilter::Note(n) => n == note,
+                KeyFilter::Drum(v) => DrumVoice::for_note(note) == Some(v),
+            }
+    }
+}
+
+/// The bus compressor's knobs as a song has set them on one strip's
+/// compressor (`automate drums.comp_ratio`); None keeps the strip's
+/// channel-compressor voicing (see `ChannelMix::apply_comp`).
+#[derive(Clone, Copy, Default)]
+struct StripCompKnobs {
+    ratio: Option<usize>,
+    attack: Option<usize>,
+    release: Option<usize>,
+    makeup: Option<f32>,
+    mix: Option<f32>,
+    sc_hpf: Option<f32>,
 }
 
 /// A song track owns its modulation oscillator. Live panel voices still
@@ -517,32 +599,126 @@ impl ChannelMix {
             cur_gain: 1.0,
             cur_pan: 0.0,
             duck_env: 0.0,
+            fresh: true,
+            duck_attack_step: 0.0,
+            duck_hold: 0,
+            duck_hold_left: 0,
+            duck_stage: DuckStage::Release,
+            duck_key: None,
             comp: None,
+            comp_threshold: 0.0,
+            comp_knobs: StripCompKnobs::default(),
+            eq: None,
+            dist: None,
+            shaper: None,
+            shape_depth: 1.0,
+            shape_k: crate::smoothing::approach(0.002, sample_rate),
+            voice_sum: (0.0, 0.0),
+            voice_fed: false,
         }
     }
 
-    /// Put the strip's compressor in at `threshold` dBFS (0 = out). The
+    /// Put the strip's compressor in at `threshold` dBFS (0 = out).
+    fn set_comp(&mut self, threshold: f32, sample_rate: f32) {
+        self.comp_threshold = threshold;
+        self.apply_comp(sample_rate);
+    }
+
+    /// (Re)voice the strip compressor. Unless a song turns its knobs, the
     /// voicing is a channel compressor on a drum loop: 4:1 with the fastest
     /// attack (0.1 ms) so it catches the hits' peaks — a drum's peak lives in
     /// its first millisecond, and anything slower lets it through while the
     /// body is clamped, which makes the part spikier, not denser (measured:
     /// 1 ms raised a 909 loop's crest from 11.6 to 15.5 dB) — program-
     /// dependent release so the room and tails come back up between hits,
-    /// and make-up for about a third of the threshold.
-    fn set_comp(&mut self, threshold: f32, sample_rate: f32) {
+    /// and make-up for about a third of the threshold. Every setter it
+    /// calls stores a value (set_makeup is guarded), so re-asserting is
+    /// free.
+    fn apply_comp(&mut self, sample_rate: f32) {
+        let threshold = self.comp_threshold;
         if threshold >= -0.01 {
             self.comp = None;
             return;
         }
+        let k = self.comp_knobs;
         let comp = self
             .comp
             .get_or_insert_with(|| Box::new(crate::buscomp::BusComp::new(sample_rate)));
         comp.set_threshold(threshold);
-        comp.set_ratio(1);
-        comp.set_attack(0);
-        comp.set_release(4);
-        comp.set_makeup((-threshold * 0.33).min(12.0));
+        comp.set_ratio(k.ratio.unwrap_or(1));
+        comp.set_attack(k.attack.unwrap_or(0));
+        comp.set_release(k.release.unwrap_or(4));
+        comp.set_makeup(k.makeup.unwrap_or((-threshold * 0.33).min(12.0)));
+        if let Some(mix) = k.mix {
+            comp.set_mix(mix);
+        }
+        if let Some(hz) = k.sc_hpf {
+            comp.set_sc_hpf(hz);
+        }
         comp.set_engaged(true);
+    }
+
+    /// The strip holds an insert with memory (an EQ's filters, the drive
+    /// stage's antialiasing and hold, the compressor's detector). Such a
+    /// strip must hear its channel's mix once a sample: run per voice
+    /// card, as a plain strip is, its state would advance once per card
+    /// and mix the cards' samples (a 4-note chord drove an EQ's biquad at
+    /// four times the rate; a sample-rate reducer held one card's sample
+    /// for all of them, +2.5 dB), and its nonlinearity would distort each
+    /// note alone instead of the chord.
+    fn stateful(&self) -> bool {
+        self.comp.is_some() || self.eq.is_some() || self.dist.is_some()
+    }
+
+    /// A key trigger: run the duck envelope from where it stands.
+    fn trigger_duck(&mut self) {
+        if self.duck_attack_step > 0.0 {
+            self.duck_stage = DuckStage::Attack;
+        } else {
+            self.duck_env = 1.0;
+            self.start_hold();
+        }
+    }
+
+    fn start_hold(&mut self) {
+        if self.duck_hold > 0 {
+            self.duck_stage = DuckStage::Hold;
+            self.duck_hold_left = self.duck_hold;
+        } else {
+            self.duck_stage = DuckStage::Release;
+        }
+    }
+
+    /// One sample of the duck envelope.
+    #[inline]
+    fn advance_duck(&mut self) {
+        match self.duck_stage {
+            DuckStage::Release => self.duck_env *= self.duck_decay,
+            DuckStage::Attack => {
+                self.duck_env += self.duck_attack_step;
+                if self.duck_env >= 1.0 {
+                    self.duck_env = 1.0;
+                    self.start_hold();
+                }
+            }
+            DuckStage::Hold => {
+                if self.duck_hold_left > 0 {
+                    self.duck_hold_left -= 1;
+                } else {
+                    self.duck_stage = DuckStage::Release;
+                    self.duck_env *= self.duck_decay;
+                }
+            }
+        }
+    }
+
+    /// One sample of the volume shaper at song beat `beat`.
+    #[inline]
+    fn advance_shaper(&mut self, beat: f64) {
+        if let Some(sh) = self.shaper.as_mut() {
+            let target = 1.0 - self.shape_depth * (1.0 - sh.0.level(beat));
+            sh.1 += (target - sh.1) * self.shape_k;
+        }
     }
 }
 
@@ -568,18 +744,41 @@ fn strip(
     r: f32,
     sends: &mut SendBus,
 ) -> (f32, f32) {
-    let Some(m) = mixes.get_mut(&ch) else {
-        return (l, r);
-    };
-    let g = m.cur_gain * (1.0 - m.duck * m.duck_env);
+    match mixes.get_mut(&ch) {
+        Some(m) => strip_one(m, l, r, sends),
+        None => (l, r),
+    }
+}
+
+/// One strip, one stereo sample (see `strip`).
+#[inline]
+fn strip_one(m: &mut ChannelMix, l: f32, r: f32, sends: &mut SendBus) -> (f32, f32) {
+    // Strips run in volts; thresholds and drive are dBFS at the bus (after
+    // the summing amp converts volts to sample units at unity volume).
+    // Detecting in volts read every part ~20 dB hot.
+    const TO_BUS: f32 = 0.7 / PROGRAM_V;
+    let (mut l, mut r) = (l, r);
+    // The inserts sit before the fader, as on a console channel: the EQ,
+    // then the drive stage (so the EQ shapes what distorts)
+    if let Some(eq) = m.eq.as_mut() {
+        if eq.is_active() {
+            (l, r) = eq.process(l, r);
+        }
+    }
+    if let Some(d) = m.dist.as_mut() {
+        if d.is_active() {
+            let (dl, dr) = d.process(l * TO_BUS, r * TO_BUS);
+            (l, r) = (dl / TO_BUS, dr / TO_BUS);
+        }
+    }
+    let mut g = m.cur_gain * (1.0 - m.duck * m.duck_env);
+    if let Some(sh) = m.shaper.as_ref() {
+        g *= sh.1;
+    }
     let (mut l, mut r) = (l * g, r * g);
     // the strip's compressor sits after the fader and before pan and sends,
     // so the rooms hear the compressed part
     if let Some(c) = m.comp.as_mut() {
-        // Strips run in volts; the compressor's threshold is dBFS at the bus
-        // (after the summing amp converts volts to sample units at unity
-        // volume). Detecting in volts read every part ~20 dB hot.
-        const TO_BUS: f32 = 0.7 / PROGRAM_V;
         let (cl, cr) = c.process(l * TO_BUS, r * TO_BUS);
         (l, r) = (cl / TO_BUS, cr / TO_BUS);
     }
@@ -863,6 +1062,16 @@ pub struct VoiceManager {
     /// Per-track mixer strip: gain, pan, effect sends, sidechain duck.
     /// Channels absent from the map pass through untouched.
     channel_mix: ChannelMap<ChannelMix>,
+    /// Every channel a note has played on: a strip set up before its
+    /// channel's first note lands its fader at once (ChannelMix::fresh).
+    sounded: ChannelMap<()>,
+    /// The song's beat clock (song `Clock` events), for tempo-synced
+    /// strip shapers: the beat this sample is at, and beats per sample.
+    song_beat: f64,
+    beat_step: f64,
+    /// The master clipper and look-ahead limiter (limiter.rs), between
+    /// the stereo width and the arrangement trim.
+    master_peak: crate::limiter::MasterPeak,
     /// Solo one channel (stem bounces): every other channel still
     /// renders — oscillators free-run — but never reaches the bus.
     solo: Option<u16>,
@@ -940,6 +1149,10 @@ impl VoiceManager {
             channel_params,
             channel_lfos,
             channel_mix: ChannelMap::default(),
+            sounded: ChannelMap::default(),
+            song_beat: 0.0,
+            beat_step: 120.0 / 60.0 / sample_rate as f64,
+            master_peak: crate::limiter::MasterPeak::new(sample_rate),
             solo: None,
             card_pool: None,
             card_in: Vec::new(),
@@ -1004,42 +1217,156 @@ impl VoiceManager {
     }
 
     pub fn set_track_mix(&mut self, channel: u16, param: crate::song::Param, value: f32) {
+        use crate::inserts::EqKnob;
         use crate::song::Param as P;
+        if value.is_nan() {
+            return;
+        }
         let sr = self.sample_rate;
-        let m = self
-            .channel_mix
-            .entry(channel)
-            .or_insert_with(|| ChannelMix::new(sr));
+        let m = self.strip_mut(channel);
         // one clamp, from the table row of whichever strip control this is
         let value = param.clamp(value);
+        let eq = |m: &mut ChannelMix, knob: EqKnob| {
+            m.eq
+                .get_or_insert_with(|| Box::new(crate::inserts::Eq3::new(sr)))
+                .set(knob, value)
+        };
+        fn dist(m: &mut ChannelMix, sr: f32) -> &mut crate::inserts::Dist {
+            m.dist
+                .get_or_insert_with(|| Box::new(crate::inserts::Dist::new(sr)))
+        }
         match param {
-            P::TrackGain => m.gain = value,
-            P::TrackPan => m.pan = value,
+            P::TrackGain => {
+                m.gain = value;
+                if m.fresh {
+                    m.cur_gain = value;
+                }
+            }
+            P::TrackPan => {
+                m.pan = value;
+                if m.fresh {
+                    m.cur_pan = value;
+                }
+            }
             P::ReverbSend => m.rev_send = value,
             P::SpringSend => m.spr_send = value,
             P::ChorusSend => m.cho_send = value,
             P::EchoSend => m.echo_send = value,
             P::DuckAmount => m.duck = value,
             P::DuckRelease => m.duck_decay = duck_decay_for(value, sr),
-            P::TrackComp => m.set_comp(value, sr),
+            P::DuckAttack => {
+                m.duck_attack_step = if value > 0.0 {
+                    1.0 / (value * sr)
+                } else {
+                    0.0
+                }
+            }
+            P::DuckHold => m.duck_hold = (value * sr).round() as u32,
+            P::TrackComp | P::CompThreshold => m.set_comp(value, sr),
+            P::CompRatio => {
+                m.comp_knobs.ratio = Some(value.round() as usize);
+                m.apply_comp(sr);
+            }
+            P::CompAttack => {
+                m.comp_knobs.attack = Some(value.round() as usize);
+                m.apply_comp(sr);
+            }
+            P::CompRelease => {
+                m.comp_knobs.release = Some(value.round() as usize);
+                m.apply_comp(sr);
+            }
+            P::CompMakeup => {
+                m.comp_knobs.makeup = Some(value);
+                m.apply_comp(sr);
+            }
+            P::CompMix => {
+                m.comp_knobs.mix = Some(value);
+                m.apply_comp(sr);
+            }
+            P::CompScHpf => {
+                m.comp_knobs.sc_hpf = Some(value);
+                m.apply_comp(sr);
+            }
+            P::ShapeDepth => m.shape_depth = value,
+            P::ShapeSmooth => m.shape_k = crate::smoothing::approach(value, sr),
+            P::Dist => dist(m, sr).set_amount(value),
+            P::DistMode => dist(m, sr).set_mode(value),
+            P::DistMix => dist(m, sr).set_mix(value),
+            P::EqLow => eq(m, EqKnob::LowGain),
+            P::EqLowFreq => eq(m, EqKnob::LowFreq),
+            P::EqMid => eq(m, EqKnob::MidGain),
+            P::EqMidFreq => eq(m, EqKnob::MidFreq),
+            P::EqMidQ => eq(m, EqKnob::MidQ),
+            P::EqHigh => eq(m, EqKnob::HighGain),
+            P::EqHighFreq => eq(m, EqKnob::HighFreq),
             _ => {}
         }
     }
 
+    /// A channel's strip, set up at unity on first use.
+    fn strip_mut(&mut self, channel: u16) -> &mut ChannelMix {
+        let sr = self.sample_rate;
+        let fresh = !self.sounded.contains_key(&channel);
+        self.channel_mix.entry(channel).or_insert_with(|| {
+            let mut m = ChannelMix::new(sr);
+            m.fresh = fresh;
+            m
+        })
+    }
+
+    /// Key a strip's duck off another channel's note-ons (`duck_from=`)
+    /// instead of every kit's kick.
+    pub fn set_duck_key(&mut self, channel: u16, key: DuckKey) {
+        self.strip_mut(channel).duck_key = Some(key);
+    }
+
+    /// Give a strip a tempo-synced volume shaper (`shape=`).
+    pub fn set_shaper(&mut self, channel: u16, shaper: crate::inserts::Shaper) {
+        let beat = self.song_beat;
+        let m = self.strip_mut(channel);
+        let start = 1.0 - m.shape_depth * (1.0 - shaper.level(beat));
+        m.shaper = Some(Box::new((shaper, start)));
+    }
+
+    /// The song's beat clock: at this sample the song is at `beat`,
+    /// moving at `bpm`. Strip shapers ride it between events.
+    pub fn set_song_clock(&mut self, beat: f64, bpm: f64) {
+        if beat.is_finite() && bpm.is_finite() && bpm > 0.0 {
+            self.song_beat = beat;
+            self.beat_step = bpm / 60.0 / self.sample_rate as f64;
+        }
+    }
+
+    /// Run the master peak control from this sample on, catching only
+    /// overs until a song sets its threshold: a song that limits or clips
+    /// anywhere is armed at its downbeat, so engaging later never drops
+    /// the look-ahead's 1.5 ms of silence into the middle of the mix.
+    pub fn arm_master_peak(&mut self) {
+        self.master_peak.arm();
+    }
+
+    /// The master clipper's drive, dB (0 = out).
+    pub fn set_master_clip(&mut self, db: f32) {
+        self.master_peak.set_clip(Param::Clip.clamp(db));
+    }
+
+    /// The master limiter's threshold, dBFS (0 = out).
+    pub fn set_limit(&mut self, db: f32) {
+        self.master_peak.set_threshold(Param::Limit.clamp(db));
+    }
+
+    pub fn set_limit_ceiling(&mut self, db: f32) {
+        self.master_peak.set_ceiling(Param::LimitCeiling.clamp(db));
+    }
+
+    pub fn set_limit_release(&mut self, seconds: f32) {
+        self.master_peak.set_release(Param::LimitRelease.clamp(seconds));
+    }
+
     pub fn set_channel_param(&mut self, channel: u16, param: crate::song::Param, value: f32) {
-        use crate::song::Param as P;
-        if matches!(
-            param,
-            P::TrackGain
-                | P::TrackPan
-                | P::ReverbSend
-                | P::SpringSend
-                | P::ChorusSend
-            | P::EchoSend
-                | P::DuckAmount
-                | P::DuckRelease
-                | P::TrackComp
-        ) {
+        // A strip control lands on the channel's strip. Scoped to a track,
+        // the bus compressor's knobs turn that strip's compressor.
+        if param.is_strip() || (channel != 0 && param.is_strip_comp_knob()) {
             self.set_track_mix(channel, param, value);
             return;
         }
@@ -1071,7 +1398,7 @@ impl VoiceManager {
             for voice in self.voices.iter_mut().filter(|v| v.channel() == channel) {
                 voice.apply_params(&p);
             }
-            if matches!(param, P::PitchShift) {
+            if matches!(param, Param::PitchShift) {
                 self.update_channel_pitch_shift(channel, p.pitch_shift);
             }
         } else {
@@ -1080,6 +1407,18 @@ impl VoiceManager {
     }
 
     pub fn note_on_channel(&mut self, note: u8, velocity: f32, channel: u16) {
+        // From its first note on, a channel's fader moves glide
+        if self.sounded.insert(channel, ()).is_none() {
+            if let Some(m) = self.channel_mix.get_mut(&channel) {
+                m.fresh = false;
+            }
+        }
+        // `duck_from=` keys: any strip keyed off this channel's notes
+        for m in self.channel_mix.values_mut() {
+            if m.duck_key.map_or(false, |k| k.hears(channel, note)) {
+                m.trigger_duck();
+            }
+        }
         // The rhythm section is not a keyboard voice: a kit-channel note
         // is a trigger pulse onto that kit's 909 board's trigger bus,
         // velocity riding the accent line
@@ -1094,8 +1433,8 @@ impl VoiceManager {
             // nothing in the host it was most needed in.
             if DrumVoice::for_note(note) == Some(DrumVoice::Kick) {
                 for m in self.channel_mix.values_mut() {
-                    if m.duck > 0.0 {
-                        m.duck_env = 1.0;
+                    if m.duck > 0.0 && m.duck_key.is_none() {
+                        m.trigger_duck();
                     }
                 }
             }
@@ -1953,11 +2292,14 @@ impl VoiceManager {
         // Advance every mixer strip once per sample: smoothed gain and
         // pan (no zipper under automation), duck envelopes breathing back
         let knob_k = self.knob_smooth_k;
+        let beat = self.song_beat;
         for m in self.channel_mix.values_mut() {
             m.cur_gain += (m.gain - m.cur_gain) * knob_k;
             m.cur_pan += (m.pan - m.cur_pan) * knob_k;
-            m.duck_env *= m.duck_decay;
+            m.advance_duck();
+            m.advance_shaper(beat);
         }
+        self.song_beat += self.beat_step;
 
         let mut left = 0.0;
         let mut right = 0.0;
@@ -2017,13 +2359,32 @@ impl VoiceManager {
             if ch == VOX_CHANNEL {
                 carrier += l + r;
             } else if self.solo.map_or(true, |s| s == ch) {
-                let (l, r) = strip(
-                    &mut self.channel_mix,
-                    ch,
-                    l,
-                    r,
-                    &mut sends,
-                );
+                match self.channel_mix.get_mut(&ch) {
+                    // a strip with memory takes the channel's sum, below
+                    Some(m) if m.stateful() => {
+                        m.voice_sum.0 += l;
+                        m.voice_sum.1 += r;
+                        m.voice_fed = true;
+                    }
+                    Some(m) => {
+                        let (l, r) = strip_one(m, l, r, &mut sends);
+                        left += l;
+                        right += r;
+                    }
+                    None => {
+                        left += l;
+                        right += r;
+                    }
+                }
+            }
+        }
+        // Voice channels whose strips have memory: the channel's summed
+        // cards, once a sample, silence included (an EQ rings out, a
+        // compressor releases in real time)
+        for (&ch, m) in self.channel_mix.iter_mut() {
+            if m.voice_fed && m.stateful() && self.solo.map_or(true, |s| s == ch) {
+                let (l, r) = std::mem::take(&mut m.voice_sum);
+                let (l, r) = strip_one(m, l, r, &mut sends);
                 left += l;
                 right += r;
             }
@@ -2082,10 +2443,18 @@ impl VoiceManager {
         self.sampler
             .render_next_slots(panel_pitch_mult, &mut slot_out);
         for (i, &(sl, sr)) in slot_out.iter().enumerate() {
-            if sl == 0.0 && sr == 0.0 {
+            let ch = crate::sampler::SAMPLER_CHANNEL_BASE + i as u16;
+            // A silent slot skips its strip, except one with an EQ or a
+            // drive stage, which runs on so its filters ring out
+            if sl == 0.0
+                && sr == 0.0
+                && !self
+                    .channel_mix
+                    .get(&ch)
+                    .map_or(false, |m| m.eq.is_some() || m.dist.is_some())
+            {
                 continue;
             }
-            let ch = crate::sampler::SAMPLER_CHANNEL_BASE + i as u16;
             if self.solo.map_or(true, |s| s == ch) {
                 let (sl, sr) = strip(
                     &mut self.channel_mix,
@@ -2156,11 +2525,32 @@ impl VoiceManager {
         // de-clicking slew permits a decisive stop without leaving the
         // reverb tank audible or hard-truncating a non-zero sample.
         self.output_gain += (self.params.output - self.output_gain) * self.output_smooth_k;
-        let left = left * self.output_gain;
-        let right = right * self.output_gain;
-
-        let left = soft_limit(self.dc_left.process(left));
-        let right = soft_limit(self.dc_right.process(right));
+        let (left, right) = if self.master_peak.is_active() {
+            // The master clipper and limiter: the finished mix's peak
+            // control, before the arrangement trim so a fade still fades.
+            // Engaged, it is the engine's last word on peaks: the DC
+            // blocker runs before it (a 34.5 Hz high-pass after a
+            // brickwall rotates the kick's phase and put peaks 1.5 dB over
+            // the ceiling), and the tanh soft limit gives way to a plain
+            // safety clamp (tanh took a -1 dBFS ceiling down to -3 dBFS
+            // and saturated everything held near it). The trim is at most
+            // 1, so the ceiling is the output's true peak.
+            let left = self.dc_left.process(left);
+            let right = self.dc_right.process(right);
+            let (left, right) = self.master_peak.process(left, right);
+            (
+                (left * self.output_gain).clamp(-1.0, 1.0),
+                (right * self.output_gain).clamp(-1.0, 1.0),
+            )
+        } else {
+            // Out (the default): exactly the engine's original stage
+            let left = left * self.output_gain;
+            let right = right * self.output_gain;
+            (
+                soft_limit(self.dc_left.process(left)),
+                soft_limit(self.dc_right.process(right)),
+            )
+        };
 
         if self.scope.len() >= SCOPE_LEN {
             self.scope.pop_front();
@@ -2706,6 +3096,106 @@ mod tests {
             "the meter should show the compressor working: {}",
             vm.comp_gain_reduction_db()
         );
+    }
+
+    /// `duck_from=`: the strip's envelope rises over the attack, sits at
+    /// full for the hold, and releases, keyed by its source channel's
+    /// notes alone — a keyed strip no longer hears every kick.
+    #[test]
+    fn a_keyed_duck_attacks_holds_and_releases() {
+        let sr = 48000.0;
+        let mut vm = VoiceManager::new(sr, 8);
+        vm.set_channel_param(1, Param::DuckAmount, 1.0);
+        vm.set_channel_param(1, Param::DuckAttack, 0.01);
+        vm.set_channel_param(1, Param::DuckHold, 0.05);
+        vm.set_channel_param(1, Param::DuckRelease, 0.02);
+        vm.set_duck_key(
+            1,
+            DuckKey {
+                channel: 2,
+                filter: KeyFilter::Any,
+            },
+        );
+        let env = |vm: &VoiceManager| vm.channel_mix[&1].duck_env;
+        vm.note_on_channel(36, 1.0, DRUM_CHANNEL);
+        vm.render_next();
+        assert_eq!(env(&vm), 0.0, "a keyed strip must ignore the kick");
+        vm.note_on_channel(60, 1.0, 2);
+        let mut seen = Vec::new();
+        for _ in 0..(sr * 0.2) as usize {
+            vm.render_next();
+            seen.push(env(&vm));
+        }
+        assert!((seen[239] - 0.5).abs() < 0.01, "5 ms into a 10 ms attack: {}", seen[239]);
+        assert!(seen[480..2880].iter().all(|&e| e == 1.0), "the hold must sit at full");
+        assert!(seen[2900] < 1.0, "the release must start after the hold");
+        assert!(seen[7680] < 0.01, "five time constants on: {}", seen[7680]);
+        // a filtered key: only that drum voice
+        let mut vm = VoiceManager::new(sr, 8);
+        vm.set_channel_param(1, Param::DuckAmount, 1.0);
+        vm.set_duck_key(
+            1,
+            DuckKey {
+                channel: DRUM_CHANNEL,
+                filter: KeyFilter::Drum(DrumVoice::Snare),
+            },
+        );
+        vm.note_on_channel(36, 1.0, DRUM_CHANNEL);
+        assert_eq!(env(&vm), 0.0);
+        vm.note_on_channel(38, 1.0, DRUM_CHANNEL);
+        assert_eq!(env(&vm), 1.0);
+    }
+
+    /// With no attack and no hold the envelope is the original kick duck,
+    /// sample for sample: snap to 1, then `env *= decay` from the very
+    /// next render.
+    #[test]
+    fn the_plain_kick_duck_is_unchanged() {
+        let sr = 48000.0;
+        let mut vm = VoiceManager::new(sr, 8);
+        vm.set_channel_param(1, Param::DuckAmount, 0.8);
+        vm.set_channel_param(1, Param::DuckRelease, 0.3);
+        vm.note_on_channel(36, 1.0, DRUM_CHANNEL);
+        let decay = duck_decay_for(0.3, sr);
+        let mut want = 1.0f32;
+        for _ in 0..4800 {
+            vm.render_next();
+            want *= decay;
+            assert_eq!(vm.channel_mix[&1].duck_env, want);
+        }
+    }
+
+    /// The strip compressor answers the bus compressor's knobs: 10:1
+    /// takes more off the same loop than the default 4:1, and a knob set
+    /// before `comp=` puts it in is remembered.
+    #[test]
+    fn the_strip_compressor_takes_the_bus_knobs() {
+        let take = |ratio: Option<f32>| {
+            let mut vm = VoiceManager::new(48000.0, 8);
+            vm.warm_up();
+            if let Some(r) = ratio {
+                vm.set_channel_param(DRUM_CHANNEL, Param::CompRatio, r);
+            }
+            vm.set_channel_param(DRUM_CHANNEL, Param::TrackComp, -30.0);
+            let mut e = 0.0f64;
+            for i in 0..96000 {
+                if i % 12000 == 0 {
+                    vm.note_on_channel(36, 1.0, DRUM_CHANNEL);
+                }
+                let (l, _) = vm.render_next();
+                if i > 24000 {
+                    e += (l * l) as f64;
+                }
+            }
+            e
+        };
+        let (four, ten) = (take(None), take(Some(2.0)));
+        assert!(ten < four * 0.8, "10:1 {ten} vs 4:1 {four}");
+        // unscoped, the same knob is the bus compressor's, not a strip's
+        let mut vm = VoiceManager::new(48000.0, 8);
+        vm.set_channel_param(0, Param::CompRatio, 2.0);
+        assert!(vm.channel_mix.get(&0).is_none());
+        assert_eq!(vm.params.comp_ratio, 2.0);
     }
 
     /// The sidechain must hear the kick by EITHER route. The reserved low

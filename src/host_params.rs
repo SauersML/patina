@@ -370,22 +370,44 @@ const EXCLUDED: &[Param] = &[
     Param::EchoSend,
     Param::DuckAmount,
     Param::DuckRelease,
+    Param::DuckAttack,
+    Param::DuckHold,
     Param::TrackComp,
+    Param::ShapeDepth,
+    Param::ShapeSmooth,
+    Param::Dist,
+    Param::DistMode,
+    Param::DistMix,
+    Param::EqLow,
+    Param::EqLowFreq,
+    Param::EqMid,
+    Param::EqMidFreq,
+    Param::EqMidQ,
+    Param::EqHigh,
+    Param::EqHighFreq,
     Param::ChorusMix,
     // Note bends are written on song notes (`C4:2>G3`); their curve has
     // nothing to shape in a plugin
     Param::BendCurve,
+    // The song's master peak control (a clipper and a look-ahead limiter
+    // before the arrangement trim): a mastering stage for bounces, not an
+    // instrument knob — a host has its own on the master bus
+    Param::Clip,
+    Param::Limit,
+    Param::LimitCeiling,
+    Param::LimitRelease,
 ];
 
 /// THE host parameter table, built from the presentation rows above with
-/// each row's range/taper read straight from `Param::range`. Order here is
+/// each row's range/taper read straight from `Param::knob_range` (the
+/// table range, except the 909 voice levels' stock 0..1). Order here is
 /// the order hosts display parameters in, and the index is the Audio Unit
 /// parameter ID.
 pub fn param_defs() -> Vec<ParamDef> {
     PRESENTATION
         .iter()
         .map(|row| {
-            let (min, max, _curve) = row.param.range();
+            let (min, max, _curve) = row.param.knob_range();
             let id = row.param.name();
             let default = init_value(row.param);
             match row.kind {
@@ -577,6 +599,22 @@ mod tests {
                 Waveform::Triangle => "Triangle",
             };
             assert_eq!(*name, expected, "waveform variant {i}");
+        }
+    }
+
+    /// The 909 voice levels reach 4 from a song, but the plugin's knobs
+    /// keep the stock panel's 0..1, so a saved session holds its levels.
+    #[test]
+    fn drum_level_knobs_keep_the_panel_range() {
+        for def in param_defs() {
+            if let ParamDef::Float(f) = def {
+                if matches!(
+                    f.param,
+                    Param::BdLevel | Param::SdLevel | Param::RsLevel | Param::CpLevel | Param::HhLevel
+                ) {
+                    assert_eq!((f.min, f.max), (0.0, 1.0), "{}", f.id);
+                }
+            }
         }
     }
 

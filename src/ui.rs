@@ -237,7 +237,7 @@ fn param_knob(
     value: &mut f32,
     fmt: impl Fn(f32) -> String,
 ) {
-    let (lo, hi, curve) = param.range();
+    let (lo, hi, curve) = param.knob_range();
     // Double-click returns a knob to where Init has it: the panel's reset
     // position is the power-on patch, not a second list of defaults.
     let default = crate::patch::init_value(param).unwrap_or(lo);
@@ -255,7 +255,7 @@ fn param_knob_sm(
     param: Param,
     value: &mut f32,
 ) {
-    let (lo, hi, curve) = param.range();
+    let (lo, hi, curve) = param.knob_range();
     let default = crate::patch::init_value(param).unwrap_or(lo);
     if knob_sized(
         ui,

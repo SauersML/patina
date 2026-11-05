@@ -84,6 +84,16 @@ We will use a layered architecture with clear interfaces between components:
    - Add analog-style chorus
    - Implement tape-style delay
    - Add reverb emulation
+   - Per-track strip inserts (src/inserts.rs): a three-band EQ, a drive
+     stage (tanh / hard clip / foldback, ADAA-antialiased; bitcrush and
+     sample-rate reduction), a tempo-synced volume shaper, a sidechain
+     duck keyed by any track; and the master clipper and look-ahead
+     limiter (src/limiter.rs) before the arrangement trim. All out by
+     default, and out is bit-identical. A strip with an insert that has
+     memory (EQ, drive, compressor) takes its channel's summed voice
+     cards once a sample; plain strips still run per card. Engaged, the
+     master stage replaces the tanh soft limit, so its ceiling is the
+     true peak
    - Mix-bus compressor (src/buscomp.rs): the SSL G-series bus comp,
      after the effect returns and before the tape, like a console bus
      compressor printing to cassette. Out by default and bit-identical
@@ -148,7 +158,10 @@ We will use a layered architecture with clear interfaces between components:
      `set_rate` / `set_depth`, `Tape::set_drive` / `set_age`,
      `VoxBox::set_mode`, `BusComp::set_makeup` (every other `BusComp`
      setter stores a value or a time constant and needs no guard;
-     `buscomp::tests::reasserting_settings_is_a_no_op` pins it).
+     `buscomp::tests::reasserting_settings_is_a_no_op` pins it), the strip
+     inserts' `Eq3::set` (redesigns a band only on a change) and
+     `Dist::set_mode` (reseeds its ADAA memory only on a change;
+     `inserts::tests::reasserting_a_setting_is_a_no_op`).
    - The next structural parameter you add will hit this trap: write the
      guard first, and a test that re-asserting the same value leaves
      internal state untouched (see `chorus::tests::reasserting_the_same_mode_is_a_no_op`).

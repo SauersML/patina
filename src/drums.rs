@@ -251,6 +251,21 @@ fn knob(current: f32, v: f32) -> f32 {
     }
 }
 
+/// A voice LEVEL knob: a linear gain from silence to LEVEL_MAX. The panel
+/// level of 1 is the stock board's full level; the range above it (to
+/// +12 dB) is the desk channel's trim, there so a hat or rim can be
+/// brought up against the kick. Same NaN rule as `knob`.
+pub const LEVEL_MAX: f32 = 4.0;
+
+#[inline]
+fn level_knob(current: f32, v: f32) -> f32 {
+    if v.is_nan() {
+        current
+    } else {
+        v.clamp(0.0, LEVEL_MAX)
+    }
+}
+
 /// Per-sample decay coefficient for an RC discharge with time constant
 /// `tau` seconds. T60 = 6.91 * tau.
 #[inline]
@@ -985,7 +1000,7 @@ impl DrumMachine {
     // --- Panel ---------------------------------------------------------
 
     pub fn set_bd_level(&mut self, v: f32) {
-        self.kick.level = knob(self.kick.level, v);
+        self.kick.level = level_knob(self.kick.level, v);
     }
     pub fn set_bd_tune(&mut self, v: f32) {
         self.kick.tune = knob(self.kick.tune, v);
@@ -1003,7 +1018,7 @@ impl DrumMachine {
         self.kick.drive = knob(self.kick.drive, v);
     }
     pub fn set_sd_level(&mut self, v: f32) {
-        self.snare.level = knob(self.snare.level, v);
+        self.snare.level = level_knob(self.snare.level, v);
     }
     pub fn set_sd_tune(&mut self, v: f32) {
         self.snare.tune = knob(self.snare.tune, v);
@@ -1018,19 +1033,19 @@ impl DrumMachine {
         self.snare.decay = knob(self.snare.decay, v);
     }
     pub fn set_rs_level(&mut self, v: f32) {
-        self.rim.level = knob(self.rim.level, v);
+        self.rim.level = level_knob(self.rim.level, v);
     }
     pub fn set_rs_tune(&mut self, v: f32) {
         self.rim.tune = knob(self.rim.tune, v);
     }
     pub fn set_cp_level(&mut self, v: f32) {
-        self.clap.level = knob(self.clap.level, v);
+        self.clap.level = level_knob(self.clap.level, v);
     }
     pub fn set_cp_decay(&mut self, v: f32) {
         self.clap.decay = knob(self.clap.decay, v);
     }
     pub fn set_hh_level(&mut self, v: f32) {
-        self.hats.level = knob(self.hats.level, v);
+        self.hats.level = level_knob(self.hats.level, v);
     }
     pub fn set_hh_tune(&mut self, v: f32) {
         self.hats.tune = knob(self.hats.tune, v);
@@ -1438,6 +1453,31 @@ mod tests {
                 peak = peak.max(l.abs());
             }
             assert!(peak < 60.0, "velocity {vel} blew the rail, peak={peak}");
+        }
+    }
+
+    /// Every voice level reaches +12 dB over the panel's full level (a
+    /// linear 4), and the stock 0..1 positions are where they were.
+    #[test]
+    fn voice_levels_reach_twelve_db_over_full() {
+        type Knob = fn(&mut DrumMachine, f32);
+        let voices: [(Knob, u8); 5] = [
+            (DrumMachine::set_bd_level, 36),
+            (DrumMachine::set_sd_level, 38),
+            (DrumMachine::set_rs_level, 37),
+            (DrumMachine::set_cp_level, 39),
+            (DrumMachine::set_hh_level, 42),
+        ];
+        for (set, note) in voices {
+            let peak = |level: f32| {
+                let mut dm = DrumMachine::new(SR);
+                set(&mut dm, level);
+                dm.trigger_note(note, 1.0);
+                (0..(0.3 * SR) as usize).fold(0f32, |m, _| m.max(dm.render_next().0.abs()))
+            };
+            let ratio = 20.0 * (peak(4.0) / peak(1.0)).log10();
+            assert!((ratio - 12.04).abs() < 0.01, "note {note}: {ratio:.3} dB");
+            assert_eq!(peak(9.0), peak(4.0), "note {note}: the top stops at 4");
         }
     }
 

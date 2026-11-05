@@ -30,11 +30,49 @@
 //                                # swing=0.56 leans every offbeat 16th late
 //                                # by (swing-0.5) of the pair (0.5 = straight).
 //                                # Mixer-strip options set the track's desk
-//                                # channel at bar one: gain= pan= (-1..1)
+//                                # channel at bar one (every one is also a
+//                                # lane: `automate lead.gain`):
+//                                # gain= (linear 0..4: 0 mutes, 2 = +6 dB,
+//                                # 4 = +12 dB) pan= (-1..1)
 //                                # reverb_send= spring_send= chorus_send=
 //                                # echo_send= (0..1, into the shared tanks at unity)
-//                                # duck= (kick-keyed sidechain depth) and
-//                                # duck_release= (seconds back to full).
+//                                # duck= (sidechain depth 0..1: 0.5 = -6 dB,
+//                                # 1 = silence at the dip), keyed by every
+//                                # kick, or by `duck_from=TRACK` (that
+//                                # track's notes) / `duck_from=TRACK.BD`
+//                                # (one drum voice, or one note, of it);
+//                                # duck_attack= duck_hold= (seconds; 0 =
+//                                # snap / no hold) and duck_release= (the
+//                                # time constant back to full).
+//                                # shape=pump|saw|ramp|sine|square|tri or
+//                                # shape=x.x.xx.x (a trance gate: x open,
+//                                # . shut, 0-9 ninths, one 16th a step):
+//                                # a volume shaper on the song's beat;
+//                                # shape_beats= (cycle length; 1 for the
+//                                # curves, steps/4 for a pattern),
+//                                # shape_depth= (0..1, default 1),
+//                                # shape_smooth= (step edges, seconds).
+//                                # Inserts, before the fader: eq_low=
+//                                # eq_mid= eq_high= (dB, 0 = out) at
+//                                # eq_low_freq= (100) eq_mid_freq= (1000,
+//                                # Q eq_mid_q= 0.7) eq_high_freq= (8000);
+//                                # dist= (0..1, 0 = out) through
+//                                # dist_mode= (0 tanh, 1 hard clip, 2
+//                                # foldback, 3 bitcrush, 4 sample-rate
+//                                # reduce), dist_mix= (wet 0..1). The
+//                                # shapers drive up to +36 dB and make up
+//                                # half of it in dB: denser, peaks down,
+//                                # RMS up (a -9 dBFS supersaw chord at
+//                                # dist=0.5 tanh: peak -2.3 dB, RMS
+//                                # +4.4 dB, crest 14.4 -> 7.7 dB); trim
+//                                # with gain=. The EQ, the drive and the
+//                                # compressor hear the track's summed
+//                                # voices, once a sample.
+//                                # comp= (strip compressor threshold dBFS,
+//                                # 0 = out) and, on the strip, the bus
+//                                # compressor's own knobs: comp_ratio=
+//                                # comp_attack= comp_release= comp_makeup=
+//                                # comp_mix= comp_sc_hpf=.
 //     E5:2 D5 C5 R:4 [C4 E4 G4]:2@0.6  | A4
 //
 //   track beat kit=909 len=0.5   # a drum track: kit= routes it to the
@@ -112,7 +150,8 @@
 // Note-track tokens:
 //   C4  F#3  Eb5  60      note names (C4 = MIDI 60) or raw MIDI numbers
 //   [C4 E4 G4]            chord (notes start and stop together)
-//   R  or  .              rest
+//   R  or  .              rest (`R:0`, any rest of 1e-6 beats or less,
+//                         is nothing: rounding noise from a generator)
 //   :2                    duration suffix, in beats (floats allowed)
 //   @0.7                  velocity suffix (0..1)
 //   ~+0.02  ~-0.01        microtiming, in beats: push or drag this hit
@@ -194,6 +233,21 @@
 // repeats alternate sides). A fixed 120 Hz high-pass in the loop thins
 // each repeat so echoes never pile up under the music.
 //
+// The master peak control (limiter.rs; after the width, before the output
+// trim): clip (dB of drive into a soft-knee clipper at the ceiling, 0 =
+// out), limit (look-ahead brickwall limiter threshold, dBFS, -30..0, 0 =
+// out: the mix comes up by -limit and is held under the ceiling),
+// limit_ceiling (dBFS, -12..0, default -1), limit_release (seconds, default
+// 0.08). Engaged, it replaces the engine's tanh soft limit (the ceiling is
+// the bounce's true peak), and a song that sets limit < 0 or clip > 0
+// anywhere runs it from the downbeat. The threshold is absolute: the
+// loudest peak loses about (raw mix peak - limit - ceiling) dB.
+//
+// Out-of-range values are clamped to the parameter's range (`patina
+// --params`) and the loader warns, one line each: "line 12: gain 3.8
+// clamped to 4". So do the gate, vel=, a note's @ velocity, the sampler
+// options and the values in a patch= file.
+//
 // The mix-bus compressor (buscomp.rs; SSL G-series bus comp, printing to
 // the tape): comp_in (0 = out, 1 = in; plain sets), comp_threshold (dBFS
 // peak, -48..0), comp_ratio (0 = 2:1, 1 = 4:1, 2 = 10:1), comp_attack (0..5
@@ -202,7 +256,9 @@
 // comp_mix (0..1 parallel blend, 1 = compressor alone), comp_sc_hpf
 // (sidechain high-pass Hz, 20..400; 20 = the card's own coupling).
 //
-// Rhythm section (the 909 board; all 0..1 panel knobs): bd_level, bd_tune,
+// Rhythm section (the 909 board; 0..1 panel knobs, except the five voice
+// levels bd_ sd_ rs_ cp_ hh_level, linear gains to 4 = +12 dB over the
+// panel's full 1): bd_level, bd_tune,
 // bd_attack, bd_decay, bd_sweep, bd_drive, sd_level, sd_tune, sd_tone,
 // sd_snappy, sd_decay, rs_level, rs_tune, cp_level, cp_decay, hh_level,
 // hh_tune, hh_metal, ch_decay, oh_decay, dr_drive, dr_tone (bus lowpass:
@@ -440,23 +496,26 @@ param_table! {
     // patches, `automate bd_tune`) a knob turns every kit's board; scoped
     // (`automate beat.bd_tune`) it turns that kit track's board alone.
     // Unitless 0..1 panel knob rotations; the circuits map them onto
-    // their electrical ranges
-    BdLevel:         "bd_level",       Some(20),  (0.0, 1.0, Lin);
+    // their electrical ranges. The five voice levels are linear gains
+    // reaching 4 (+12 dB over a full panel level of 1): the stock knob
+    // positions (0..1) sound exactly as they did, and a hat or rim can be
+    // brought up to sit against the kick
+    BdLevel:         "bd_level",       Some(20),  (0.0, 4.0, Lin);
     BdTune:          "bd_tune",        Some(21),  (0.0, 1.0, Lin);
     BdAttack:        "bd_attack",      Some(22),  (0.0, 1.0, Lin);
     BdDecay:         "bd_decay",       Some(23),  (0.0, 1.0, Lin);
     BdSweep:         "bd_sweep",       Some(24),  (0.0, 1.0, Lin);
     BdDrive:         "bd_drive",       Some(25),  (0.0, 1.0, Lin);
-    SdLevel:         "sd_level",       Some(26),  (0.0, 1.0, Lin);
+    SdLevel:         "sd_level",       Some(26),  (0.0, 4.0, Lin);
     SdTune:          "sd_tune",        Some(27),  (0.0, 1.0, Lin);
     SdTone:          "sd_tone",        Some(28),  (0.0, 1.0, Lin);
     SdSnappy:        "sd_snappy",      Some(29),  (0.0, 1.0, Lin);
     SdDecay:         "sd_decay",       Some(30),  (0.0, 1.0, Lin);
-    RsLevel:         "rs_level",       Some(31),  (0.0, 1.0, Lin);
+    RsLevel:         "rs_level",       Some(31),  (0.0, 4.0, Lin);
     RsTune:          "rs_tune",        Some(52),  (0.0, 1.0, Lin);
-    CpLevel:         "cp_level",       Some(53),  (0.0, 1.0, Lin);
+    CpLevel:         "cp_level",       Some(53),  (0.0, 4.0, Lin);
     CpDecay:         "cp_decay",       Some(54),  (0.0, 1.0, Lin);
-    HhLevel:         "hh_level",       Some(55),  (0.0, 1.0, Lin);
+    HhLevel:         "hh_level",       Some(55),  (0.0, 4.0, Lin);
     HhTune:          "hh_tune",        Some(56),  (0.0, 1.0, Lin);
     HhMetal:         "hh_metal",       Some(57),  (0.0, 1.0, Lin);
     ChDecay:         "ch_decay",       Some(58),  (0.0, 1.0, Lin);
@@ -490,7 +549,8 @@ param_table! {
     SmpRes:          "smp_res",        Some(4),   (0.0, 1.0, Lin);
     // The mixer desk (voice_manager::ChannelMix): every track owns a
     // strip. Channel-scoped: address them as `automate <track>.<param>`.
-    TrackGain:       "gain",           None,      (0.0, 2.0, Lin);
+    // Linear: 0 mutes, 4 is +12 dB
+    TrackGain:       "gain",           None,      (0.0, 4.0, Lin);
     TrackPan:        "pan",            None,      (-1.0, 1.0, Lin);
     ReverbSend:      "reverb_send",    None,      (0.0, 1.0, Lin);
     SpringSend:      "spring_send",    None,      (0.0, 1.0, Lin);
@@ -498,10 +558,42 @@ param_table! {
     EchoSend:        "echo_send",      None,      (0.0, 1.0, Lin);
     DuckAmount:      "duck",           None,      (0.0, 1.0, Lin);
     DuckRelease:     "duck_release",   None,      (0.02, 2.0, Lin);
+    // The duck envelope's attack (seconds to full depth; 0 = snap) and
+    // hold (seconds at full depth before the release)
+    DuckAttack:      "duck_attack",    None,      (0.0, 1.0, Lin);
+    DuckHold:        "duck_hold",      None,      (0.0, 2.0, Lin);
     // A compressor on the track's own strip: threshold in dBFS, 0 = out.
     // The bus compressor glues the mix; this one shapes one part (a
     // drum loop) before it reaches the bus, the way a console channel does.
     TrackComp:       "comp",           None,      (-48.0, 0.0, Lin);
+    // The tempo-synced volume shaper (`shape=` on the track line): how
+    // far the curve pulls the strip down (0 = off, 1 = to silence), and
+    // how long each step edge takes, seconds
+    ShapeDepth:      "shape_depth",    None,      (0.0, 1.0, Lin);
+    ShapeSmooth:     "shape_smooth",   None,      (0.0005, 0.05, Log);
+    // The strip's drive stage (inserts.rs), before the fader: amount
+    // (0 = out), the circuit (0 tanh, 1 hard clip, 2 foldback, 3 bitcrush,
+    // 4 sample-rate reduce) and the wet/dry blend
+    Dist:            "dist",           None,      (0.0, 1.0, Lin);
+    DistMode:        "dist_mode",      None,      (0.0, 4.0, Step);
+    DistMix:         "dist_mix",       None,      (0.0, 1.0, Lin);
+    // The strip's three-band EQ, before the drive: gains in dB (0 = the
+    // band is out), corners in Hz, the mid band's Q
+    EqLow:           "eq_low",         None,      (-24.0, 24.0, Lin);
+    EqLowFreq:       "eq_low_freq",    None,      (20.0, 1000.0, Log);
+    EqMid:           "eq_mid",         None,      (-24.0, 24.0, Lin);
+    EqMidFreq:       "eq_mid_freq",    None,      (100.0, 10000.0, Log);
+    EqMidQ:          "eq_mid_q",       None,      (0.2, 10.0, Log);
+    EqHigh:          "eq_high",        None,      (-24.0, 24.0, Lin);
+    EqHighFreq:      "eq_high_freq",   None,      (1000.0, 20000.0, Log);
+    // The master bus's peak control (limiter.rs), after the width and
+    // before the arrangement trim: clipper drive in dB (0 = out), limiter
+    // threshold in dBFS (0 = out; the mix comes up by -threshold), the
+    // shared ceiling in dBFS, and the limiter's release in seconds
+    Clip:            "clip",           None,      (0.0, 24.0, Lin);
+    Limit:           "limit",          None,      (-30.0, 0.0, Lin);
+    LimitCeiling:    "limit_ceiling",  None,      (-12.0, 0.0, Lin);
+    LimitRelease:    "limit_release",  None,      (0.005, 1.0, Log);
     // Global chorus insert mix override (the mode switch re-derives it)
     ChorusMix:       "chorus_mix",     None,      (0.0, 1.0, Lin);
     // The kick-bass voice (voice.rs): a pitch envelope fired by every
@@ -570,11 +662,26 @@ impl Param {
         v.clamp(lo, hi)
     }
 
-    /// Map a normalized controller position (0..1) into this parameter's
-    /// native range, honoring its curve.
+    /// The span a knob sweeps: a MIDI controller, a plugin's host
+    /// parameter, the app's panel. The table range, except the five 909
+    /// voice levels: a song line reaches 4 (+12 dB, the desk channel's
+    /// trim), while a knob turns the stock panel's 0..1, as it always has
+    /// (CC 55 at full is hh_level 1, a saved plugin session holds its
+    /// levels, a .mid file's level CCs render as they did).
+    pub fn knob_range(self) -> (f32, f32, Curve) {
+        match self {
+            Param::BdLevel | Param::SdLevel | Param::RsLevel | Param::CpLevel | Param::HhLevel => {
+                (0.0, 1.0, Curve::Lin)
+            }
+            _ => self.range(),
+        }
+    }
+
+    /// Map a normalized controller position (0..1) onto this parameter's
+    /// knob span, honoring its curve.
     pub fn midi_value(self, t: f32) -> f32 {
         let t = t.clamp(0.0, 1.0);
-        let (lo, hi, curve) = self.range();
+        let (lo, hi, curve) = self.knob_range();
         match curve {
             Curve::Lin => lo + (hi - lo) * t,
             Curve::Log => lo * (hi / lo).powf(t),
@@ -752,7 +859,25 @@ impl Param {
             | Param::EchoSend
             | Param::DuckAmount
             | Param::DuckRelease
-            | Param::TrackComp => vm.set_track_mix(0, self, value),
+            | Param::DuckAttack
+            | Param::DuckHold
+            | Param::TrackComp
+            | Param::ShapeDepth
+            | Param::ShapeSmooth
+            | Param::Dist
+            | Param::DistMode
+            | Param::DistMix
+            | Param::EqLow
+            | Param::EqLowFreq
+            | Param::EqMid
+            | Param::EqMidFreq
+            | Param::EqMidQ
+            | Param::EqHigh
+            | Param::EqHighFreq => vm.set_track_mix(0, self, value),
+            Param::Clip => vm.set_master_clip(value),
+            Param::Limit => vm.set_limit(value),
+            Param::LimitCeiling => vm.set_limit_ceiling(value),
+            Param::LimitRelease => vm.set_limit_release(value),
             Param::ChorusMix => vm.set_chorus_mix(value),
             Param::WaveformSel => vm.set_waveform(waveform_from_value(value)),
             Param::Detune => vm.set_detune(value),
@@ -919,16 +1044,10 @@ impl Param {
         if self.apply_to_params(&mut ParamValues::default(), self.range().0) {
             return true;
         }
+        if self.is_strip() || self.is_strip_comp_knob() {
+            return true;
+        }
         match self {
-            P::TrackGain
-            | P::TrackPan
-            | P::ReverbSend
-            | P::SpringSend
-            | P::ChorusSend
-            | P::EchoSend
-            | P::DuckAmount
-            | P::DuckRelease
-            | P::TrackComp => true,
             P::SmpPitch
             | P::SmpStart
             | P::SmpGain
@@ -970,6 +1089,72 @@ impl Param {
             | P::VoxIntonation
             | P::VoxFormant => channel == crate::vox::VOX_CHANNEL,
             _ => false,
+        }
+    }
+
+    /// A control on a track's own mixer strip (voice_manager::ChannelMix):
+    /// a track-line option (`gain=0.8`) and a scoped lane
+    /// (`automate lead.gain`). Unscoped, it turns the panel channel's strip.
+    pub(crate) fn is_strip(self) -> bool {
+        use Param as P;
+        matches!(
+            self,
+            P::TrackGain
+                | P::TrackPan
+                | P::ReverbSend
+                | P::SpringSend
+                | P::ChorusSend
+                | P::EchoSend
+                | P::DuckAmount
+                | P::DuckRelease
+                | P::DuckAttack
+                | P::DuckHold
+                | P::TrackComp
+                | P::ShapeDepth
+                | P::ShapeSmooth
+                | P::Dist
+                | P::DistMode
+                | P::DistMix
+                | P::EqLow
+                | P::EqLowFreq
+                | P::EqMid
+                | P::EqMidFreq
+                | P::EqMidQ
+                | P::EqHigh
+                | P::EqHighFreq
+        )
+    }
+
+    /// The bus compressor's knobs. Unscoped they turn the mix-bus
+    /// compressor; scoped to a track (`automate drums.comp_ratio`, or
+    /// `comp_ratio=` on its track line) they turn that track's strip
+    /// compressor, the one `comp=` puts in.
+    pub(crate) fn is_strip_comp_knob(self) -> bool {
+        use Param as P;
+        matches!(
+            self,
+            P::CompThreshold
+                | P::CompRatio
+                | P::CompAttack
+                | P::CompRelease
+                | P::CompMakeup
+                | P::CompMix
+                | P::CompScHpf
+        )
+    }
+
+    /// The values the engine takes for this parameter: the table range,
+    /// except where an engine-safety limit is deliberately wider (see
+    /// `clamp`). The song parser clamps to this and warns when it must.
+    pub fn accepts(self) -> (f32, f32) {
+        match self {
+            Param::Detune => (0.0, 50.0),
+            Param::Glide => (0.0, 5.0),
+            Param::PitchBendSemis => (-24.0, 24.0),
+            _ => {
+                let (lo, hi, _) = self.range();
+                (lo, hi)
+            }
         }
     }
 
@@ -1192,6 +1377,11 @@ pub enum EventKind {
         semitones: f32,
         seconds: f64,
     },
+    /// The song's beat clock: at this event the song is at `beat`, moving
+    /// at `bpm` until the next one. Only songs whose strips ride the beat
+    /// (`shape=`) carry these: one at the downbeat, then one wherever the
+    /// tempo lane moves.
+    Clock { beat: f64, bpm: f64 },
 }
 
 pub struct SongEvent {
@@ -1218,7 +1408,26 @@ pub struct Song {
     /// Every `track` line's name and the channel it landed on, in file
     /// order — the map that stem bounces and event exports speak.
     pub tracks: Vec<(String, u16)>,
+    /// Strip routing set once at the downbeat: sidechain keys and shapers.
+    pub mix: SongMix,
+    /// What the parser had to change to play the song (a value clamped
+    /// into its parameter's range), one line each, e.g.
+    /// "line 12: gain 3.8 clamped to 4". The loader prints them.
+    pub warnings: Vec<String>,
 }
+
+/// The mixer-strip routing a song's track lines declare.
+#[derive(Default)]
+pub struct SongMix {
+    /// `duck_from=`: (keyed strip's channel, its key).
+    pub duck_keys: Vec<(u16, crate::voice_manager::DuckKey)>,
+    /// `shape=`: (channel, its tempo-synced volume shaper).
+    pub shapers: Vec<(u16, crate::inserts::Shaper)>,
+}
+
+/// A rest this short is rounding noise from a generator, not a rest:
+/// it plays as nothing (`R:0` used to be a hard error).
+pub(crate) const REST_EPSILON_BEATS: f64 = 1e-6;
 
 /// Seconds rendered after the last event unless a song says otherwise.
 pub(crate) const DEFAULT_TAIL_SECONDS: f64 = 4.0;
@@ -1255,7 +1464,20 @@ pub fn load_song_with_patch(path: &str, patch: Option<&str>) -> Result<Song, Str
     }
     let text = std::fs::read_to_string(path)
         .map_err(|e| format!("could not read song file '{}': {}", path, e))?;
-    parse_song(&text)
+    let song = parse_song(&text)?;
+    // A generator's systematic slip can clamp thousands of values: the
+    // first ones say what and where, the count says how many
+    const SHOWN: usize = 20;
+    for w in song.warnings.iter().take(SHOWN) {
+        eprintln!("warning: {}", w);
+    }
+    if song.warnings.len() > SHOWN {
+        eprintln!(
+            "warning: ... and {} more values clamped",
+            song.warnings.len() - SHOWN
+        );
+    }
+    Ok(song)
 }
 
 /// A voice from `patches/NAME.patch` — a song track's `patch=`, or the
@@ -1299,6 +1521,7 @@ fn dispatch(vm: &mut VoiceManager, kind: &EventKind) {
             semitones,
             seconds,
         } => vm.bend_note(channel, note, semitones, seconds as f32),
+        &EventKind::Clock { beat, bpm } => vm.set_song_clock(beat, bpm),
     }
 }
 
@@ -1335,6 +1558,20 @@ fn register_channels(vm: &mut VoiceManager, song: &Song) {
             matches!(p, Param::SmpFormant | Param::SmpFormantKeep) && (c == ch || c == 0)
         });
         vm.set_sampler_slot(i, slot);
+    }
+    for &(channel, key) in &song.mix.duck_keys {
+        vm.set_duck_key(channel, key);
+    }
+    for (channel, shaper) in &song.mix.shapers {
+        vm.set_shaper(*channel, shaper.clone());
+    }
+    // A song that limits or clips anywhere runs the master peak control
+    // from its downbeat (see VoiceManager::arm_master_peak)
+    if song.events.iter().any(|e| {
+        matches!(e.kind, EventKind::Param { param: Param::Limit, value, .. } if value < 0.0)
+            || matches!(e.kind, EventKind::Param { param: Param::Clip, value, .. } if value > 0.0)
+    }) {
+        vm.arm_master_peak();
     }
 }
 
@@ -1496,6 +1733,12 @@ fn parse_song(text: &str) -> Result<Song, String> {
     // Named beat ranges (`section CH1 144..180`), for seeks and `during`
     let mut sections: std::collections::HashMap<String, (f64, f64)> =
         std::collections::HashMap::new();
+    // Values the parser clamped into range, reported line by line
+    let mut warnings: Vec<String> = Vec::new();
+    // Strip routing: shapers as they come, `duck_from=` keys resolved
+    // once every track is known (line, keyed channel, key spec)
+    let mut mix = SongMix::default();
+    let mut duck_from: Vec<(usize, u16, String)> = Vec::new();
 
     let mut mode = TrackMode::None;
     let mut track_beat = 0.0_f64;
@@ -1523,6 +1766,7 @@ fn parse_song(text: &str) -> Result<Song, String> {
                     .trim()
                     .parse_finite::<f64>()
                     .map_err(|_| err("invalid gate".into()))?;
+                warnings.extend(range_warning("gate", gate as f32, 0.05, 1.0).map(&err));
                 gate = gate.clamp(0.05, 1.0);
             }
             "tail" => {
@@ -1586,11 +1830,16 @@ fn parse_song(text: &str) -> Result<Song, String> {
                 // mixer-strip options (gain= pan= reverb_send= ... duck=)
                 // become Param events at beat 0 on this track's channel
                 let mut mix_opts: Vec<(Param, f32)> = Vec::new();
+                let mut track_duck_from: Option<String> = None;
+                let mut shape_spec: Option<String> = None;
+                let mut shape_beats: Option<f64> = None;
                 for opt in line.split_whitespace().skip(2) {
                     if let Some(v) = opt.strip_prefix("vel=") {
                         vel = v
                             .parse_finite::<f32>()
                             .map_err(|_| err(format!("invalid vel '{}'", v)))?;
+                        warnings.extend(range_warning("vel", vel, 0.0, 1.0).map(&err));
+                        vel = vel.clamp(0.0, 1.0);
                     } else if let Some(v) = opt.strip_prefix("len=") {
                         len = v
                             .parse_finite::<f64>()
@@ -1602,26 +1851,28 @@ fn parse_song(text: &str) -> Result<Song, String> {
                         if !(0.4..=0.8).contains(&swing) {
                             return Err(err("swing must be 0.4-0.8 (0.5 = straight)".into()));
                         }
+                    } else if let Some(v) = opt.strip_prefix("duck_from=") {
+                        // Key this strip's duck off another track's notes
+                        // (resolved below, once every track is known)
+                        track_duck_from = Some(v.to_string());
+                    } else if let Some(v) = opt.strip_prefix("shape=") {
+                        shape_spec = Some(v.to_string());
+                    } else if let Some(v) = opt.strip_prefix("shape_beats=") {
+                        shape_beats = Some(
+                            v.parse_finite::<f64>()
+                                .map_err(|_| err(format!("invalid shape_beats '{}'", v)))?,
+                        );
                     } else if let Some((k, v)) = opt.split_once('=').filter(|(k, _)| {
-                        matches!(
-                            Param::from_name(k),
-                            Some(
-                                Param::TrackGain
-                                    | Param::TrackPan
-                                    | Param::ReverbSend
-                                    | Param::SpringSend
-                                    | Param::ChorusSend
-                                    | Param::EchoSend
-                                    | Param::DuckAmount
-                                    | Param::DuckRelease
-                                    | Param::TrackComp
-                            )
-                        )
+                        Param::from_name(k).map_or(false, |p| p.is_strip() || p.is_strip_comp_knob())
                     }) {
                         let value = v
                             .parse_finite::<f32>()
                             .map_err(|_| err(format!("invalid {} '{}'", k, v)))?;
-                        mix_opts.push((Param::from_name(k).unwrap(), value));
+                        let param = Param::from_name(k).unwrap();
+                        if let Some(w) = clamp_warning(param, value) {
+                            warnings.push(err(w));
+                        }
+                        mix_opts.push((param, value));
                     } else if let Some(kit) = opt.strip_prefix("kit=") {
                         // A drum track: `kit=909` gives the track a 909
                         // board of its own on its own channel (the first
@@ -1692,7 +1943,14 @@ fn parse_song(text: &str) -> Result<Song, String> {
                     } else if let Some(v) = opt.strip_prefix("patch=") {
                         // A private patch for this track: the file's
                         // voice-level parameters become this channel
-                        channels.push(load_patch_file(v).map_err(err)?);
+                        let text = read_patch_file(v).map_err(err)?;
+                        for (param, value) in patch_lines(&text).map_err(err)? {
+                            warnings.extend(
+                                clamp_warning(param, value)
+                                    .map(|w| err(format!("patch '{}': {}", v, w))),
+                            );
+                        }
+                        channels.push(params_from_patch(&text).map_err(err)?);
                         channel = channels.len() as u16;
                     } else if let Some(v) = opt.strip_prefix("sample=") {
                         smp_data = Some(std::sync::Arc::new(
@@ -1726,7 +1984,10 @@ fn parse_song(text: &str) -> Result<Song, String> {
                         }
                         smp_beats = Some(n);
                     } else if let Some(cfg) = smp.as_mut() {
-                        parse_sampler_option(cfg, opt, &mut smp_mode_set).map_err(err)?;
+                        let mut clamped = Vec::new();
+                        parse_sampler_option(cfg, opt, &mut smp_mode_set, &mut clamped)
+                            .map_err(err)?;
+                        warnings.extend(clamped.into_iter().map(err));
                     } else {
                         return Err(err(format!("unknown track option '{}'", opt)));
                     }
@@ -1761,7 +2022,12 @@ fn parse_song(text: &str) -> Result<Song, String> {
                             ),
                         };
                         let secs = (b - a).max(1e-3);
-                        cfg.speed = (secs / (beats * 60.0 / bpm)).clamp(0.03, 32.0) as f32;
+                        let speed = secs / (beats * 60.0 / bpm);
+                        warnings.extend(
+                            range_warning(&format!("beats={} needs playback speed", beats), speed as f32, 0.03, 32.0)
+                                .map(&err),
+                        );
+                        cfg.speed = speed.clamp(0.03, 32.0) as f32;
                     }
                     if samplers.len() >= crate::sampler::MAX_SLOTS {
                         return Err(err(format!(
@@ -1783,15 +2049,23 @@ fn parse_song(text: &str) -> Result<Song, String> {
                     channels.push(ParamValues::default());
                     channel = channels.len() as u16;
                 }
+                if let Some(spec) = shape_spec {
+                    let shaper = crate::inserts::Shaper::parse(&spec, shape_beats).map_err(err)?;
+                    // one strip per channel: a later shape on a shared
+                    // board replaces the earlier one
+                    mix.shapers.retain(|(c, _)| *c != channel);
+                    mix.shapers.push((channel, shaper));
+                } else if shape_beats.is_some() {
+                    return Err(err("shape_beats= needs a shape= on the same track".into()));
+                }
+                if let Some(spec) = track_duck_from {
+                    duck_from.push((line_no, channel, spec));
+                }
                 for (param, value) in mix_opts {
                     events.push((
                         0.0,
                         1,
-                        EventKind::Param {
-                            param,
-                            value,
-                            channel,
-                        },
+                        param_event(param, value, channel),
                     ));
                 }
                 track_channels.push((name, channel));
@@ -1859,6 +2133,9 @@ fn parse_song(text: &str) -> Result<Song, String> {
                     let value: f32 = toks[2]
                         .parse_finite()
                         .map_err(|_| err(format!("invalid value '{}'", toks[2])))?;
+                    if let Some(w) = clamp_warning(param, value) {
+                        warnings.push(err(w));
+                    }
                     let names = toks.get(4).copied().ok_or_else(|| {
                         err("`during` needs section names, e.g. during CH1,CH2".into())
                     })?;
@@ -1876,15 +2153,14 @@ fn parse_song(text: &str) -> Result<Song, String> {
                     if toks.len() > 7 {
                         return Err(err(format!("unexpected token '{}'", toks[7])));
                     }
+                    if let Some(w) = base.and_then(|b| clamp_warning(param, b)) {
+                        warnings.push(err(w));
+                    }
                     if let Some(base) = base {
                         events.push((
                             0.0,
                             1,
-                            EventKind::Param {
-                                param,
-                                value: base,
-                                channel,
-                            },
+                            param_event(param, base, channel),
                         ));
                     }
                     for sname in names.split(',').filter(|s| !s.is_empty()) {
@@ -1894,21 +2170,13 @@ fn parse_song(text: &str) -> Result<Song, String> {
                         events.push((
                             a,
                             1,
-                            EventKind::Param {
-                                param,
-                                value,
-                                channel,
-                            },
+                            param_event(param, value, channel),
                         ));
                         if let Some(base) = base {
                             events.push((
                                 b,
                                 1,
-                                EventKind::Param {
-                                    param,
-                                    value: base,
-                                    channel,
-                                },
+                                param_event(param, base, channel),
                             ));
                         }
                     }
@@ -1980,6 +2248,13 @@ fn parse_song(text: &str) -> Result<Song, String> {
                                 )));
                             }
                         }
+                        // the track's own vel= is clamped already: this is an
+                        // explicit `@` past the range
+                        warnings.extend(
+                            range_warning(&format!("token '{}': velocity", token), vel, 0.0, 1.0)
+                                .map(&err),
+                        );
+                        let vel = vel.clamp(0.0, 1.0);
                         // swing: every offbeat 16th in the pair leans late
                         // by (swing - 0.5) of the pair; the cursor stays
                         // on the grid so durations never accumulate error
@@ -2088,18 +2363,20 @@ fn parse_song(text: &str) -> Result<Song, String> {
                         match seg {
                             AutoToken::Hold(dur) => track_beat += dur,
                             AutoToken::Set(value) => {
+                                if let Some(w) = clamp_warning(param, value) {
+                                    warnings.push(err(w));
+                                }
                                 events.push((
                                     track_beat,
                                     1,
-                                    EventKind::Param {
-                                        param,
-                                        value,
-                                        channel,
-                                    },
+                                    param_event(param, value, channel),
                                 ));
                                 *current = Some(value);
                             }
                             AutoToken::Ramp { to, dur, shape } => {
+                                if let Some(w) = clamp_warning(param, to) {
+                                    warnings.push(err(w));
+                                }
                                 let from = current.ok_or_else(|| {
                                     err(format!(
                                         "token '{}': first token of an automate track must be a plain starting value",
@@ -2213,6 +2490,64 @@ fn parse_song(text: &str) -> Result<Song, String> {
             "the song runs to beat {max_beat}, past the {MAX_SONG_BEATS}-beat limit"
         ));
     }
+
+    // `duck_from=NAME` keys a strip off every note of track NAME;
+    // `duck_from=NAME.X` off one drum voice (BD SD RS CP CH OH) or one
+    // note of it
+    for (line_no, channel, spec) in duck_from {
+        let e = |m: String| format!("line {}: duck_from={}: {}", line_no + 1, spec, m);
+        let (name, part) = match spec.split_once('.') {
+            Some((n, p)) => (n, Some(p)),
+            None => (spec.as_str(), None),
+        };
+        let source = track_channels
+            .iter()
+            .find(|(t, _)| t == name)
+            .map(|(_, c)| *c)
+            .ok_or_else(|| e(format!("no track named '{}'", name)))?;
+        use crate::voice_manager::{DuckKey, KeyFilter};
+        let filter = match part {
+            None => KeyFilter::Any,
+            Some(p) => match crate::drums::kit_for_channel(source)
+                .and_then(|_| crate::drums::DrumVoice::from_name(p))
+            {
+                Some(voice) => KeyFilter::Drum(voice),
+                None => KeyFilter::Note(parse_note(p).map_err(e)?),
+            },
+        };
+        mix.duck_keys.push((
+            channel,
+            DuckKey {
+                channel: source,
+                filter,
+            },
+        ));
+    }
+
+    // Shapers ride the beat: give the engine the song's clock, once at the
+    // downbeat and again at every grid step where the tempo moves
+    if !mix.shapers.is_empty() {
+        let grid = bpm_grid(bpm, &tempo_lane, max_beat);
+        let mut last = f64::NAN;
+        for i in 0..grid.len() - 1 {
+            let beat = i as f64 / AUTOMATION_STEPS_PER_BEAT;
+            if beat > max_beat {
+                break;
+            }
+            // the tempo map advances each step at the mean of its ends
+            let mid = 0.5 * (grid[i] + grid[i + 1]) as f64;
+            if mid != last {
+                events.push((beat, 1, EventKind::Clock { beat, bpm: mid }));
+                last = mid;
+            }
+        }
+        events.sort_by(|a, b| {
+            a.0.partial_cmp(&b.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.1.cmp(&b.1))
+        });
+    }
+
     let time_of = tempo_map(bpm, &tempo_lane, max_beat);
     Ok(Song {
         events: events
@@ -2234,7 +2569,38 @@ fn parse_song(text: &str) -> Result<Song, String> {
         vox_pitch,
         samplers,
         tracks: track_channels,
+        mix,
+        warnings,
     })
+}
+
+/// The warning for a value outside what `param` takes, if it is.
+fn clamp_warning(param: Param, value: f32) -> Option<String> {
+    clamp_warning_as(param.name(), param, value)
+}
+
+/// The same, naming the value as the song wrote it (`res=` on a sampler
+/// track is the smp_res parameter).
+fn clamp_warning_as(label: &str, param: Param, value: f32) -> Option<String> {
+    let (lo, hi) = param.accepts();
+    range_warning(label, value, lo, hi)
+}
+
+/// The warning for a value the song wrote outside `lo..=hi`, if it is.
+fn range_warning(label: &str, value: f32, lo: f32, hi: f32) -> Option<String> {
+    (value < lo || value > hi)
+        .then(|| format!("{} {} clamped to {}", label, value, value.clamp(lo, hi)))
+}
+
+/// A parameter event, its value clamped to what the engine takes (and
+/// so to what any warning said it would be).
+fn param_event(param: Param, value: f32, channel: u16) -> EventKind {
+    let (lo, hi) = param.accepts();
+    EventKind::Param {
+        param,
+        value: value.clamp(lo, hi),
+        channel,
+    }
 }
 
 /// One key cannot be held twice: striking it again ends the earlier press.
@@ -2283,6 +2649,25 @@ fn end_notes_at_restrike(events: &mut Vec<(f64, u8, EventKind)>) {
 /// events keep their musical positions and time stretches around them.
 fn tempo_map(base_bpm: f64, lane: &[(f64, AutoToken)], max_beat: f64) -> impl Fn(f64) -> f64 {
     let res = AUTOMATION_STEPS_PER_BEAT;
+    let bpm_at = bpm_grid(base_bpm, lane, max_beat);
+    let n = bpm_at.len();
+    let mut time = vec![0.0f64; n];
+    for i in 1..n {
+        let mid = 0.5 * (bpm_at[i - 1] + bpm_at[i]) as f64;
+        time[i] = time[i - 1] + (60.0 / mid) / res;
+    }
+    move |beat: f64| {
+        let x = (beat * res).max(0.0);
+        let i = (x as usize).min(n - 2);
+        let frac = x - i as f64;
+        time[i] + (time[i + 1] - time[i]) * frac
+    }
+}
+
+/// The tempo lane sampled at automation resolution: bpm at every 1/32
+/// beat from 0 to 8 beats past `max_beat`.
+fn bpm_grid(base_bpm: f64, lane: &[(f64, AutoToken)], max_beat: f64) -> Vec<f32> {
+    let res = AUTOMATION_STEPS_PER_BEAT;
     let n = ((max_beat + 8.0) * res).ceil() as usize + 2;
     let mut bpm_at = vec![base_bpm as f32; n];
     for &(beat, ref tok) in lane {
@@ -2307,17 +2692,7 @@ fn tempo_map(base_bpm: f64, lane: &[(f64, AutoToken)], max_beat: f64) -> impl Fn
             AutoToken::Hold(_) => {}
         }
     }
-    let mut time = vec![0.0f64; n];
-    for i in 1..n {
-        let mid = 0.5 * (bpm_at[i - 1] + bpm_at[i]) as f64;
-        time[i] = time[i - 1] + (60.0 / mid) / res;
-    }
-    move |beat: f64| {
-        let x = (beat * res).max(0.0);
-        let i = (x as usize).min(n - 2);
-        let frac = x - i as f64;
-        time[i] + (time[i + 1] - time[i]) * frac
-    }
+    bpm_at
 }
 
 /// One tape-deck track option. Times are seconds on the source recording;
@@ -2326,11 +2701,17 @@ fn parse_sampler_option(
     cfg: &mut crate::sampler::SlotConfig,
     opt: &str,
     mode_set: &mut bool,
+    warnings: &mut Vec<String>,
 ) -> Result<(), String> {
     use crate::sampler::PlayMode;
     let secs = |v: &str, what: &str| -> Result<f32, String> {
         v.parse_finite::<f32>()
             .map_err(|_| format!("invalid {} '{}'", what, v))
+    };
+    let key = opt.split_once('=').map_or(opt, |(k, _)| k);
+    let mut clamp = |param: Param, v: f32| -> f32 {
+        warnings.extend(clamp_warning_as(key, param, v));
+        param.clamp(v)
     };
     if let Some(v) = opt.strip_prefix("root=") {
         cfg.root = parse_note(v)?;
@@ -2351,7 +2732,9 @@ fn parse_sampler_option(
         }
         cfg.loop_pts = Some((a, b));
     } else if let Some(v) = opt.strip_prefix("xfade=") {
-        cfg.xfade = secs(v, "xfade")?.clamp(0.0, 2.0);
+        let x = secs(v, "xfade")?;
+        warnings.extend(range_warning("xfade", x, 0.0, 2.0));
+        cfg.xfade = x.clamp(0.0, 2.0);
     } else if let Some(v) = opt.strip_prefix("chop=") {
         let n: usize = v
             .parse()
@@ -2386,21 +2769,23 @@ fn parse_sampler_option(
     } else if opt == "mono" || opt == "choke" {
         cfg.mono = true;
     } else if let Some(v) = opt.strip_prefix("gain=") {
-        cfg.gain = Param::SmpGain.clamp(secs(v, "gain")?);
+        cfg.gain = clamp(Param::SmpGain, secs(v, "gain")?);
     } else if let Some(v) = opt.strip_prefix("pan=") {
-        cfg.pan = Param::SmpPan.clamp(secs(v, "pan")?);
+        cfg.pan = clamp(Param::SmpPan, secs(v, "pan")?);
     } else if let Some(v) = opt.strip_prefix("pitch=") {
-        cfg.pitch_semis = Param::SmpPitch.clamp(secs(v, "pitch")?);
+        cfg.pitch_semis = clamp(Param::SmpPitch, secs(v, "pitch")?);
     } else if let Some(v) = opt.strip_prefix("attack=") {
-        cfg.attack = Param::SmpAttack.clamp(secs(v, "attack")?);
+        cfg.attack = clamp(Param::SmpAttack, secs(v, "attack")?);
     } else if let Some(v) = opt.strip_prefix("release=") {
-        cfg.release = Param::SmpRelease.clamp(secs(v, "release")?);
+        cfg.release = clamp(Param::SmpRelease, secs(v, "release")?);
     } else if let Some(v) = opt.strip_prefix("vel_amt=") {
-        cfg.vel_amt = secs(v, "vel_amt")?.clamp(0.0, 1.0);
+        let x = secs(v, "vel_amt")?;
+        warnings.extend(range_warning("vel_amt", x, 0.0, 1.0));
+        cfg.vel_amt = x.clamp(0.0, 1.0);
     } else if let Some(v) = opt.strip_prefix("cutoff=") {
-        cfg.cutoff = Param::SmpCutoff.clamp(secs(v, "cutoff")?);
+        cfg.cutoff = clamp(Param::SmpCutoff, secs(v, "cutoff")?);
     } else if let Some(v) = opt.strip_prefix("res=") {
-        cfg.res = Param::SmpRes.clamp(secs(v, "res")?);
+        cfg.res = clamp(Param::SmpRes, secs(v, "res")?);
     } else {
         return Err(format!("unknown track option '{}'", opt));
     }
@@ -2421,11 +2806,7 @@ fn emit_ramp(
         events.push((
             start_beat + dur,
             1,
-            EventKind::Param {
-                param,
-                value: to,
-                channel,
-            },
+            param_event(param, to, channel),
         ));
         return;
     }
@@ -2436,11 +2817,7 @@ fn emit_ramp(
         events.push((
             start_beat + dur * t,
             1,
-            EventKind::Param {
-                param,
-                value,
-                channel,
-            },
+            param_event(param, value, channel),
         ));
     }
 }
@@ -2488,6 +2865,11 @@ fn parse_automation_token(token: &str) -> Result<AutoToken, String> {
         let d = s[i + 1..]
             .parse_finite::<f64>()
             .map_err(|_| "invalid duration".to_string())?;
+        let hold = &s[..i] == "." || s[..i].eq_ignore_ascii_case("r");
+        // A hold within rounding of zero (`R:0`) is nothing
+        if hold && d.abs() <= REST_EPSILON_BEATS {
+            return Ok(AutoToken::Hold(0.0));
+        }
         if d <= 0.0 {
             return Err("duration must be positive".into());
         }
@@ -2636,6 +3018,11 @@ fn parse_note_token(
             .map_err(|_| "invalid duration".to_string())?;
         s = &s[..i];
     }
+    let rest = s == "." || s.eq_ignore_ascii_case("r");
+    // A rest within rounding of zero (`R:0` from a generator) is nothing
+    if rest && dur.abs() <= REST_EPSILON_BEATS {
+        return Ok((Vec::new(), 0.0, vel, 0.0));
+    }
     if dur <= 0.0 {
         return Err("duration must be positive".into());
     }
@@ -2648,7 +3035,7 @@ fn parse_note_token(
         }
         parse_note(s)
     };
-    let notes = if s == "." || s.eq_ignore_ascii_case("r") {
+    let notes = if rest {
         Vec::new()
     } else if let Some(inner) = s.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
         inner
@@ -2659,7 +3046,8 @@ fn parse_note_token(
         vec![one(s)?]
     };
 
-    Ok((notes, dur, vel.clamp(0.0, 1.0), shift))
+    // unclamped: the caller clamps it, and warns when it must
+    Ok((notes, dur, vel, shift))
 }
 
 /// Where a note bend goes: a note (`>G3`, `>55`) or a signed interval in
@@ -4374,5 +4762,377 @@ mod tests {
             "gain=0 track must be far quieter than gain=1 track through \
              per-slot strips: b={solo_b} a={solo_a}"
         );
+    }
+
+
+    /// The peak of each of a render's hits, `every` seconds apart.
+    fn hit_peaks(frames: &[(f32, f32)], every: f64, hits: usize) -> Vec<f32> {
+        let w = (every * 48000.0) as usize;
+        (0..hits)
+            .map(|k| {
+                frames[k * w..((k + 1) * w).min(frames.len())]
+                    .iter()
+                    .fold(0f32, |m, &(l, r)| m.max(l.abs()).max(r.abs()))
+            })
+            .collect()
+    }
+
+    /// hypha's report: a kit track's `gain` barely moved its level
+    /// (G=0 -14.5 dBFS, G=0.2 -14.4, G=1 -13.1). The fader itself was
+    /// linear; the strip was born at unity and glided to G over ~26 ms,
+    /// and a drum's peak lives in its first millisecond, so the first hit
+    /// always played at full level and set the song's peak. A strip set
+    /// before its channel's first note now starts where it is set.
+    #[test]
+    fn kit_gain_is_a_true_fader_from_the_first_hit() {
+        let take = |gain: &str| {
+            let text = format!(
+                "automate reverb_wet\n0\nautomate echo\n0\n\
+                 track s kit=909 gain={gain}\n(SD:0.25@0.8)x8\n"
+            );
+            let song = parse_song(&text).unwrap();
+            let frames: Vec<(f32, f32)> = render_offline(&song, 48000.0).collect();
+            hit_peaks(&frames, 0.125, 8)
+        };
+        let unity = take("1");
+        let db = |x: f32, r: f32| 20.0 * (x / r).log10();
+        for (g, want) in [("0.2", -13.98f32), ("0.5", -6.02)] {
+            let peaks = take(g);
+            for (k, (&p, &u)) in peaks.iter().zip(&unity).enumerate() {
+                assert!(
+                    (db(p, u) - want).abs() < 0.3,
+                    "gain={g}, hit {k}: {:.2} dB from unity, want {want}",
+                    db(p, u)
+                );
+            }
+        }
+        // 0 mutes, the first hit included
+        assert!(take("0").iter().all(|&p| p == 0.0), "gain=0 must mute");
+        // and the lane form: a ramp from 0.2 to 2 spans 20 dB, first hit on
+        let text = "automate reverb_wet\n0\nautomate echo\n0\ntrack s kit=909\n\
+                    (SD:0.25@0.8)x17\nautomate s.gain\n0.2 2:4\n";
+        let frames: Vec<(f32, f32)> =
+            render_offline(&parse_song(text).unwrap(), 48000.0).collect();
+        let peaks = hit_peaks(&frames, 0.125, 17);
+        let span = db(peaks[16], peaks[0]);
+        // the master's tanh soft limit takes ~0.5 dB off the loudest hit
+        assert!(span > 19.0, "a 0.2 -> 2 gain lane moved the hits {span:.1} dB");
+    }
+
+    /// A strip first set after its channel has played still glides there
+    /// from unity, as it always did: no step under a sounding note.
+    #[test]
+    fn a_fader_set_mid_note_still_glides() {
+        let text = "track a\nC4:4\nautomate a.gain\n>1 0.25\n";
+        let song = parse_song(text).unwrap();
+        let frames: Vec<(f32, f32)> = render_offline(&song, 48000.0).collect();
+        // 1 beat at 120 bpm = 0.5 s; for the first 8 ms after the move
+        // the strip is still near unity, not already at a quarter
+        let before = frames_rms(&frames, 0.40, 0.5, 48000.0);
+        let just_after = frames_rms(&frames, 0.5, 0.508, 48000.0);
+        let later = frames_rms(&frames, 0.7, 0.75, 48000.0);
+        assert!(just_after > 0.6 * before, "the fader stepped: {just_after} vs {before}");
+        assert!(later < 0.35 * before, "the fader never arrived: {later} vs {before}");
+    }
+
+    /// The range is 0..4 now (+12 dB), and anything outside a parameter's
+    /// range is clamped with a warning that names the line.
+    #[test]
+    fn out_of_range_values_are_clamped_with_a_warning() {
+        let text = "track a gain=5 pan=-3\nC4\nautomate a.gain\n0 6:4 3.8:2\n\
+                    automate detune\n40\nautomate cutoff\n90000\n";
+        let song = parse_song(text).unwrap();
+        assert_eq!(
+            song.warnings,
+            vec![
+                "line 1: gain 5 clamped to 4",
+                "line 1: pan -3 clamped to -1",
+                "line 4: gain 6 clamped to 4",
+                "line 8: cutoff 90000 clamped to 20000",
+            ],
+            "detune 40 is inside its engine range (0..50) and stays quiet"
+        );
+        for e in &song.events {
+            if let EventKind::Param { param, value, .. } = e.kind {
+                let (lo, hi) = param.accepts();
+                assert!((lo..=hi).contains(&value), "{} {}", param.name(), value);
+            }
+        }
+        // a 3.8 swell reaches 3.8, not the old ceiling of 2
+        let top = song
+            .events
+            .iter()
+            .filter_map(|e| match e.kind {
+                EventKind::Param {
+                    param: Param::TrackGain,
+                    value,
+                    ..
+                } => Some(value),
+                _ => None,
+            })
+            .last()
+            .unwrap();
+        assert!((top - 3.8).abs() < 1e-6, "{top}");
+        // sampler options warn the same way
+        let wav = write_test_wav("clamp_warn");
+        let song = parse_song(&format!("track k sample={wav} res=3\nC4\n")).unwrap();
+        assert_eq!(song.warnings, vec!["line 1: res 3 clamped to 1"]);
+        // values that are not table parameters but are clamped all the same:
+        // the gate, a track's vel=, a note's @ velocity, sampler options
+        let song = parse_song(&format!(
+            "gate 1.5\ntrack a vel=1.3\nC4 D4@1.2 E4@0.5\ntrack k sample={wav} xfade=3 vel_amt=-1\nC4\n"
+        ))
+        .unwrap();
+        assert_eq!(
+            song.warnings,
+            vec![
+                "line 1: gate 1.5 clamped to 1",
+                "line 2: vel 1.3 clamped to 1",
+                "line 3: token 'D4@1.2': velocity 1.2 clamped to 1",
+                "line 4: xfade 3 clamped to 2",
+                "line 4: vel_amt -1 clamped to 0",
+            ]
+        );
+        let a = channel_of(&song, "a");
+        let vels: Vec<f32> = song
+            .events
+            .iter()
+            .filter_map(|e| match e.kind {
+                EventKind::NoteOn {
+                    velocity, channel, ..
+                } if channel == a => Some(velocity),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(vels, vec![1.0, 1.0, 0.5]);
+    }
+
+    /// The five 909 voice levels reach 4 (+12 dB) from a song, while a
+    /// knob (a MIDI controller, the plugin's host parameter, the app's
+    /// panel) still turns the stock 0..1: CC 55 at full is hh_level 1.
+    #[test]
+    fn drum_levels_reach_four_in_a_song_but_a_knob_turns_the_panel() {
+        for p in [Param::BdLevel, Param::SdLevel, Param::RsLevel, Param::CpLevel, Param::HhLevel] {
+            assert_eq!(p.range().1, 4.0, "{}", p.name());
+            assert_eq!(p.midi_value(1.0), 1.0, "{}", p.name());
+            assert_eq!(p.knob_range().1, 1.0, "{}", p.name());
+        }
+        let song = parse_song("track d kit=909\nCH\nautomate d.hh_level\n4\n").unwrap();
+        assert!(song.warnings.is_empty(), "{:?}", song.warnings);
+    }
+
+    /// Generated scores round tiny rests to `R:0`; those play as nothing.
+    #[test]
+    fn zero_length_rests_are_nothing() {
+        let song = parse_song("track a\nC4 R:0 D4 .:0.0000004 R:-0.0000001 E4\n").unwrap();
+        let ons: Vec<f64> = song
+            .events
+            .iter()
+            .filter(|e| matches!(e.kind, EventKind::NoteOn { .. }))
+            .map(|e| e.time)
+            .collect();
+        assert_eq!(ons, vec![0.0, 0.5, 1.0]);
+        assert!(parse_song("track a\nC4\nautomate cutoff\n500 R:0 800:1\n").is_ok());
+        assert!(parse_song("bpm 100\nautomate bpm\n100 R:0 90:4\ntrack a\nC4\n").is_ok());
+        // real negative rests and zero-length notes are still errors
+        assert!(parse_song("track a\nC4 R:-1 D4\n").is_err());
+        assert!(parse_song("track a\nC4:0\n").is_err());
+        assert!(parse_song("track a\nC4\nautomate cutoff\n500 R:-0.5\n").is_err());
+    }
+
+    #[test]
+    fn duck_from_keys_a_strip_off_another_track() {
+        let text = "track pad duck=0.5 duck_from=kick\nC4:4\n\
+                    track hats duck=0.3 duck_from=beat.CH\nC5\n\
+                    track keyed duck=0.3 duck_from=lead.C4\nE4\n\
+                    track kick kit=909\nBD\ntrack beat kit=909\nCH\ntrack lead\nC4\n";
+        let song = parse_song(text).unwrap();
+        use crate::voice_manager::{DuckKey, KeyFilter};
+        let key = |t: &str| {
+            song.mix
+                .duck_keys
+                .iter()
+                .find(|(c, _)| *c == channel_of(&song, t))
+                .unwrap()
+                .1
+        };
+        assert_eq!(
+            key("pad"),
+            DuckKey {
+                channel: channel_of(&song, "kick"),
+                filter: KeyFilter::Any
+            }
+        );
+        assert_eq!(
+            key("hats").filter,
+            KeyFilter::Drum(crate::drums::DrumVoice::ClosedHat)
+        );
+        assert_eq!(key("keyed").filter, KeyFilter::Note(60));
+        assert!(parse_song("track pad duck_from=nobody\nC4\n").is_err());
+        assert!(parse_song("track pad duck_from=lead.Q9\nC4\ntrack lead\nC4\n").is_err());
+    }
+
+    /// The duck keyed off a track dips the strip by exactly its depth
+    /// while it holds, in the bounce: duck=0.5 is -6 dB. Judged against
+    /// the same bounce unducked, since a detuned saw stack beats by a
+    /// couple of dB on its own.
+    #[test]
+    fn duck_from_dips_by_the_set_depth() {
+        let take = |depth: &str| {
+            let text = format!(
+                "automate reverb_wet\n0\nautomate echo\n0\n\
+                 track pad duck={depth} duck_from=key duck_hold=0.2 duck_release=0.05\n\
+                 C4:8\ntrack key kit=909 gain=0\nR:2 SD\n"
+            );
+            let song = parse_song(&text).unwrap();
+            let pad = channel_of(&song, "pad");
+            render_offline_solo(&song, 48000.0, Some(pad)).collect::<Vec<(f32, f32)>>()
+        };
+        let (dry, ducked) = (take("0"), take("0.5"));
+        let energy = |f: &[(f32, f32)], t0: f64, t1: f64| {
+            f[(t0 * 48000.0) as usize..(t1 * 48000.0) as usize]
+                .iter()
+                .map(|&(l, r)| (l * l + r * r) as f64)
+                .sum::<f64>()
+        };
+        let db = |t0: f64, t1: f64| {
+            10.0 * (energy(&ducked, t0, t1) / energy(&dry, t0, t1)).log10()
+        };
+        // the key track's snare at beat 2 (1.0 s) keys it: full depth for
+        // the 0.2 s hold, then a 50 ms release back to open
+        assert!(db(0.5, 0.99).abs() < 0.05, "open before the key: {:.2} dB", db(0.5, 0.99));
+        let held = db(1.001, 1.199);
+        assert!((held + 6.02).abs() < 0.1, "duck=0.5 held at {held:.2} dB");
+        assert!(db(1.6, 1.9).abs() < 0.05, "released: {:.2} dB", db(1.6, 1.9));
+    }
+
+    #[test]
+    fn shapers_bring_the_song_clock_and_others_do_not() {
+        let plain = parse_song("track a\nC4:4\n").unwrap();
+        assert!(!plain
+            .events
+            .iter()
+            .any(|e| matches!(e.kind, EventKind::Clock { .. })));
+        let gated = parse_song("bpm 100\ntrack a shape=x.\nC4:4\n").unwrap();
+        let clocks: Vec<(f64, f64)> = gated
+            .events
+            .iter()
+            .filter_map(|e| match e.kind {
+                EventKind::Clock { beat, bpm } => Some((beat, bpm)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(clocks, vec![(0.0, 100.0)], "a steady tempo needs one clock");
+        let ramp = parse_song("bpm 100\nautomate bpm\n100 R:1 140:1\ntrack a shape=pump\nC4:4\n")
+            .unwrap();
+        let n = ramp
+            .events
+            .iter()
+            .filter(|e| matches!(e.kind, EventKind::Clock { .. }))
+            .count();
+        assert!(n > 30, "a tempo ramp re-clocks every grid step: {n}");
+        assert!(parse_song("track a shape=x?\nC4\n").is_err());
+        assert!(parse_song("track a shape_beats=2\nC4\n").is_err());
+    }
+
+    /// A trance gate opens and shuts on the beat grid.
+    #[test]
+    fn a_trance_gate_follows_the_beat() {
+        // 120 bpm: a sixteenth is 0.125 s; `x.` opens the first and shuts
+        // the second of each pair
+        let text = "automate reverb_wet\n0\nautomate echo\n0\ntrack a shape=x.\nC4:8\n";
+        let song = parse_song(text).unwrap();
+        let frames: Vec<(f32, f32)> = render_offline(&song, 48000.0).collect();
+        let open = frames_rms(&frames, 0.51, 0.62, 48000.0);
+        let shut = frames_rms(&frames, 0.64, 0.74, 48000.0);
+        assert!(
+            20.0 * (shut / open).log10() < -40.0,
+            "gate shut only {:.1} dB",
+            20.0 * (shut / open).log10()
+        );
+    }
+
+    #[test]
+    fn strip_inserts_and_the_strip_compressor_are_addressable() {
+        let head = "track d kit=909 comp=-20 comp_ratio=2 comp_makeup=3 dist=0.3 dist_mode=2 \
+                    eq_low=-4 eq_mid_freq=400\nBD\n";
+        for lane in [
+            "d.comp_ratio",
+            "d.comp_attack",
+            "d.dist",
+            "d.eq_high",
+            "d.shape_depth",
+            "d.duck_hold",
+        ] {
+            assert!(
+                parse_song(&format!("{head}automate {lane}\n1\n")).is_ok(),
+                "{lane} refused"
+            );
+        }
+        // the bus compressor's IN switch has no strip meaning
+        assert!(parse_song(&format!("{head}automate d.comp_in\n1\n")).is_err());
+        // unscoped, master controls
+        assert!(parse_song(&format!("{head}automate limit\n-8\nautomate clip\n3\n")).is_ok());
+    }
+
+    /// A strip insert with memory hears the track's summed voices once a
+    /// sample. Run per voice card, a sample-rate reducer at 29.6 kHz held
+    /// one card's sample for all eight cards of a chord and raised the
+    /// track 2.5 dB; on the summed chord it is all but transparent, as it
+    /// is on one signal.
+    #[test]
+    fn strip_inserts_hear_the_whole_chord() {
+        let take = |opts: &str| -> Vec<(f32, f32)> {
+            let text = format!(
+                "tail 0.1\nautomate reverb_wet\n0\nautomate echo\n0\n\
+                 track p patch=superwall {opts}\n[F3 G#3 C4 F4]:4\n"
+            );
+            render_offline(&parse_song(&text).unwrap(), 48000.0).collect()
+        };
+        let rms = |f: &[(f32, f32)]| {
+            (f.iter().map(|&(l, r)| (l * l + r * r) as f64).sum::<f64>() / f.len() as f64).sqrt()
+        };
+        let plain = rms(&take(""));
+        let held = rms(&take("dist=0.1 dist_mode=4"));
+        let db = 20.0 * (held / plain).log10();
+        assert!(db.abs() < 0.2, "a near-transparent hold moved the chord {db:+.2} dB");
+    }
+
+    /// The master limiter's ceiling is the bounce's true peak (the DC
+    /// blocker runs before it and no tanh after), it lowers a dense loop's
+    /// crest, and a threshold first set mid-song lands without a dropout:
+    /// the song is armed at its downbeat.
+    #[test]
+    fn the_master_limiter_holds_its_ceiling_in_a_bounce() {
+        let body = "track k kit=909\n(BD)x16\ntrack h kit=909\n(R:0.5 OH:0.5)x16\n\
+                    track b patch=deepsine gain=2\n(F1:0.5 F2:0.5)x16\n";
+        let take = |head: &str| -> Vec<(f32, f32)> {
+            let song = parse_song(&format!("bpm 128\ntail 0.2\n{head}{body}")).unwrap();
+            render_offline(&song, 48000.0).collect()
+        };
+        let peak = |f: &[(f32, f32)]| f.iter().fold(0f32, |m, &(l, r)| m.max(l.abs()).max(r.abs()));
+        let rms = |f: &[(f32, f32)]| {
+            (f.iter().map(|&(l, r)| (l * l + r * r) as f64).sum::<f64>() / (2 * f.len()) as f64)
+                .sqrt() as f32
+        };
+        let crest = |f: &[(f32, f32)]| 20.0 * (peak(f) / rms(f)).log10();
+        let plain = take("");
+        let limited = take("automate limit\n-16\nautomate limit_ceiling\n-2\n");
+        let ceiling = 10f32.powf(-2.0 / 20.0);
+        assert!(peak(&limited) <= ceiling, "peak {} over {ceiling}", peak(&limited));
+        assert!(peak(&limited) > ceiling * 0.99, "the ceiling is reached: {}", peak(&limited));
+        assert!(
+            crest(&limited) < crest(&plain) - 4.0,
+            "crest {:.1} -> {:.1}",
+            crest(&plain),
+            crest(&limited)
+        );
+        // set at beat 4 (1.875 s): no run of silence where it lands
+        let late = take("automate limit\n0 R:4 -16:0.01@step\n");
+        let at = (4.0 * 60.0 / 128.0 * 48000.0) as usize;
+        let quiet = late[at - 200..at + 400]
+            .windows(24)
+            .any(|w| w.iter().all(|&(l, r)| l == 0.0 && r == 0.0));
+        assert!(!quiet, "engaging the limiter dropped a run of silence into the mix");
     }
 }
