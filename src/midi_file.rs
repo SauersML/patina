@@ -144,6 +144,7 @@ pub fn parse_midi(bytes: &[u8], voice: ParamValues) -> Result<Song, String> {
         samplers: Vec::new(),
         tracks: map.tracks,
         mix: Default::default(),
+        instruments: Vec::new(),
         warnings: Vec::new(),
     })
 }

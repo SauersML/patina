@@ -147,6 +147,12 @@
 //                           # (0..1) keeps that much of them. Automate
 //                           # smp_formant / smp_formant_keep alike.
 //
+//   track wire string str_stiff=0.0004    # an instrument track: each note
+//     A1:4 E2:4                           # plucks a waveguide string tuned
+//   track bell modal=bell                 # to it, or strikes a modal body
+//     C4:2 G4:2                           # (physical.rs; see "Physical
+//                                         # instruments" below)
+//
 // Note-track tokens:
 //   C4  F#3  Eb5  60      note names (C4 = MIDI 60) or raw MIDI numbers
 //   [C4 E4 G4]            chord (notes start and stop together)
@@ -385,6 +391,49 @@
 //   track mod patch=deepsine gain=0         # heard only through lead
 //   track lead fm_from=mod fm=3 ringmod_from=mod ringmod=0.2
 //   track loop feed_from=loop feed=1.2 feed_time=0.0023 feed_tone=3000 dist=0.3
+//
+// Physical instruments (physical.rs), one per track, each its own stem:
+//   string (string=pluck|strike|bow|none) is a digital waveguide: a delay
+// loop whose phase at the note is exactly one period (every filter's delay
+// counted), a loss filter giving the fundamental a T60 of str_decay
+// seconds (0.05..60) and partial f the T60 str_decay / (1 + str_damp
+// (f/f1 - 1)), and for stiffness a cascade of 8 to 32 allpasses fitted so
+// partial k sits at k f0 sqrt(1 + B k^2), B = str_stiff (0..0.01): within
+// 2 cents through the 16th partial up to 0.001 (piano-like), about 8 cents
+// at 0.002; a stiffer low string runs out of loop and stretches less. The excitation enters str_pos of the way
+// from the bridge (0.01..0.5, default 0.13; harmonics with a node there
+// stay out): a pluck (noise one period long, brighter with str_hard and
+// the velocity), a strike (a felt hammer, shorter and brighter with
+// str_hard and the velocity), a bow (stick-slip friction: the velocity is
+// the bow's speed, so its loudness, and str_pressure 0..1 a light to a
+// heavy bow; clean Helmholtz motion near the bridge, str_pos 0.08..0.15,
+// multi-slip further out), or none. A note-off lets the string ring on;
+// str_mute (0..1) damps it, toward 60 ms at 1. 16 voices.
+//   modal=bar|glass|plate|bell|string|gong|cymbal|NAME is a modal bank,
+// Hypha's reference (specs/modal.py) line for line: one two-pole resonator
+// per mode (up to 512), mode m at f0 ratio_m (1 + modal_stretch (ratio_m
+// - 1)) with T60 modal_decay t60_m / (1 + modal_damp (ratio_m - 1)) and
+// gain ratio_m^(modal_bright - 1), normalised; odd modes left, even right
+// by modal_spread; the lowest modal_modes modes sound. modal_excite: 0
+// strike (a mallet pulse, harder with modal_hard and the velocity), 1 a
+// noise burst modal_burst seconds long, 2 a noise bow (sustained while the
+// note is held), 3 none. modal_mute damps a released note. 8 voices.
+//   modes NAME ratio[:t60[:gain]] ...   a body of the song's own for
+// modal=NAME (t60 default 3 s, gain default 1/ratio), defined above it.
+//   excite=TRACK feeds TRACK's audio into the body: its raw output before
+// its strip, so a source at gain=0 is silent in the mix and still drives
+// it, times excite_gain (0..16). The instrument's notes tune the body and
+// hold it open to the input, the gate shaped by attack= and release= on
+// the track line (as are the bows). An excited body only listens unless
+// its own excitation is set too (modal_excite=0 strikes it as well).
+// Notes bend (`C4:2>G3` slides the string's stop, retunes the bank). Every
+// knob is a track option, a lane (`automate wire.str_decay`), or unscoped
+// turns every instrument that has it.
+//   modes chime 1 2.76:2 5.4:1:0.5
+//   track drums kit=909
+//   track plate modal=plate excite=drums modal_decay=2   # rung by the kit
+//   track wire modal=string modal_excite=2 modal_stretch=0.002 modal_damp=0.2 modal_spread=0.4 attack=0.4
+//   track cello string=bow str_pressure=0.6 str_pos=0.11 attack=0.15
 
 use std::sync::Arc;
 use std::thread;
@@ -743,6 +792,39 @@ param_table! {
     Stutter:         "stutter",        None,      (0.0, 64.0, Lin);
     Reverse:         "reverse",        None,      (0.0, 64.0, Lin);
     TapeStop:        "tape_stop",      None,      (0.0, 16.0, Lin);
+    // The waveguide string (physical.rs, `track NAME string`): excitation
+    // (0 pluck, 1 strike, 2 bow, 3 none: only the excite input), T60 of
+    // the fundamental in seconds, high-partial damping (T60(f) = decay /
+    // (1 + damp (f/f1 - 1))), stiffness as the inharmonicity coefficient B
+    // (partial k at k f0 sqrt(1 + B k^2)), the pluck/hammer/bow point as a
+    // fraction of the length from the bridge, plectrum/hammer hardness,
+    // bow pressure, and how hard a note-off damps it
+    StrExcite:       "str_excite",     None,      (0.0, 3.0, Step);
+    StrDecay:        "str_decay",      None,      (0.05, 60.0, Log);
+    StrDamp:         "str_damp",       None,      (0.0, 4.0, Lin);
+    StrStiff:        "str_stiff",      None,      (0.0, 0.01, Lin);
+    StrPos:          "str_pos",        None,      (0.01, 0.5, Lin);
+    StrHard:         "str_hard",       None,      (0.0, 1.0, Lin);
+    StrPressure:     "str_pressure",   None,      (0.0, 1.0, Lin);
+    StrMute:         "str_mute",       None,      (0.0, 1.0, Lin);
+    // The modal bank (physical.rs, `track NAME modal=bell`): excitation
+    // (0 strike, 1 noise burst, 2 noise bow, 3 none), every T60 scaled,
+    // high modes damped (t60 / (1 + damp (ratio - 1))), inharmonic stretch
+    // (ratio * (1 + stretch (ratio - 1))), gain tilt (ratio^(bright - 1)),
+    // odd modes left and even right by spread, how many modes sound, strike
+    // hardness, the noise burst's length, how hard a note-off damps it
+    ModalExcite:     "modal_excite",   None,      (0.0, 3.0, Step);
+    ModalDecay:      "modal_decay",    None,      (0.01, 20.0, Log);
+    ModalDamp:       "modal_damp",     None,      (0.0, 4.0, Lin);
+    ModalStretch:    "modal_stretch",  None,      (-0.5, 0.5, Lin);
+    ModalBright:     "modal_bright",   None,      (-1.0, 2.0, Lin);
+    ModalSpread:     "modal_spread",   None,      (0.0, 1.0, Lin);
+    ModalModes:      "modal_modes",    None,      (1.0, 512.0, Step);
+    ModalHard:       "modal_hard",     None,      (0.0, 1.0, Lin);
+    ModalBurst:      "modal_burst",    None,      (0.001, 4.0, Log);
+    ModalMute:       "modal_mute",     None,      (0.0, 1.0, Lin);
+    // How hard an instrument's `excite=` track drives its body (linear)
+    ExciteGain:      "excite_gain",    None,      (0.0, 16.0, Lin);
 }
 
 pub(crate) fn waveform_from_value(value: f32) -> Waveform {
@@ -1147,6 +1229,27 @@ impl Param {
             | Param::NoiseRes
             | Param::NoiseModeSel
             | Param::BendCurve => vm.set_source_param(self, value),
+            // Un-addressed, an instrument knob turns every instrument
+            // that has it (a track prefix routes by channel first)
+            Param::StrExcite
+            | Param::StrDecay
+            | Param::StrDamp
+            | Param::StrStiff
+            | Param::StrPos
+            | Param::StrHard
+            | Param::StrPressure
+            | Param::StrMute
+            | Param::ModalExcite
+            | Param::ModalDecay
+            | Param::ModalDamp
+            | Param::ModalStretch
+            | Param::ModalBright
+            | Param::ModalSpread
+            | Param::ModalModes
+            | Param::ModalHard
+            | Param::ModalBurst
+            | Param::ModalMute
+            | Param::ExciteGain => vm.set_instrument_all(self, value),
         }
     }
 
@@ -1209,6 +1312,9 @@ impl Param {
             | P::VoxModeSel
             | P::VoxIntonation
             | P::VoxFormant => channel == crate::vox::VOX_CHANNEL,
+            _ if crate::physical::is_instrument_param(self) => {
+                crate::physical::instrument_for_channel(channel).is_some()
+            }
             _ => false,
         }
     }
@@ -1538,6 +1644,9 @@ pub struct Song {
     pub tracks: Vec<(String, u16)>,
     /// Strip routing set once at the downbeat: sidechain keys and shapers.
     pub mix: SongMix,
+    /// Physical-model instruments: instrument i (= channel
+    /// physical::INSTRUMENT_CHANNEL_BASE + i) from `string` / `modal=` tracks.
+    pub instruments: Vec<crate::physical::InstrumentSpec>,
     /// What the parser had to change to play the song (a value clamped
     /// into its parameter's range), one line each, e.g.
     /// "line 12: gain 3.8 clamped to 4". The loader prints them.
@@ -1689,6 +1798,9 @@ fn register_channels(vm: &mut VoiceManager, song: &Song) {
             matches!(p, Param::SmpFormant | Param::SmpFormantKeep) && (c == ch || c == 0)
         });
         vm.set_sampler_slot(i, slot);
+    }
+    for (i, spec) in song.instruments.iter().enumerate() {
+        vm.set_instrument(i, spec);
     }
     for &(channel, key) in &song.mix.duck_keys {
         vm.set_duck_key(channel, key);
@@ -1912,6 +2024,12 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
     // Cross-track routes, resolved like duck keys once every track is
     // known (line, driven channel, where it lands, source track)
     let mut xmod_from: Vec<(usize, u16, crate::xmod::Dest, String)> = Vec::new();
+    // Physical-model instruments, their `excite=` sources (resolved once
+    // every track is known) and the `modes` bodies defined so far
+    let mut instruments: Vec<crate::physical::InstrumentSpec> = Vec::new();
+    let mut excite_from: Vec<(usize, usize, String)> = Vec::new();
+    let mut mode_sets: std::collections::HashMap<String, crate::physical::ModeSet> =
+        std::collections::HashMap::new();
 
     let mut mode = TrackMode::None;
     let mut track_beat = 0.0_f64;
@@ -1998,6 +2116,42 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                     return Err(err(format!("section '{}' defined twice", name)));
                 }
             }
+            "modes" => {
+                // `modes NAME ratio[:t60[:gain]] ...`: a modal body of
+                // your own for `modal=NAME` tracks
+                let mut it = line.split_whitespace().skip(1);
+                let name = it.next().ok_or_else(|| {
+                    err("modes needs a name and its modes: modes wire 1 2.01:3 3.03:2:0.5".into())
+                })?;
+                if crate::physical::ModeSet::preset(name).is_some() {
+                    return Err(err(format!("modes '{}' is a built-in body's name", name)));
+                }
+                let mut set = crate::physical::ModeSet {
+                    ratios: Vec::new(),
+                    t60: Vec::new(),
+                    gains: Vec::new(),
+                };
+                for tok in it {
+                    let (r, t, g) = crate::physical::ModeSet::parse_mode(tok).map_err(&err)?;
+                    set.ratios.push(r);
+                    set.t60.push(t);
+                    set.gains.push(g);
+                }
+                if set.ratios.is_empty() {
+                    return Err(err(format!("modes {} lists no modes", name)));
+                }
+                if set.ratios.len() > crate::physical::MAX_MODES {
+                    return Err(err(format!(
+                        "modes {}: {} modes, at most {}",
+                        name,
+                        set.ratios.len(),
+                        crate::physical::MAX_MODES
+                    )));
+                }
+                if mode_sets.insert(name.to_string(), set).is_some() {
+                    return Err(err(format!("modes '{}' defined twice", name)));
+                }
+            }
             "track" => {
                 track_beat = 0.0;
                 let name = line
@@ -2030,6 +2184,16 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                 let mut track_routes: Vec<(crate::xmod::Dest, String)> = Vec::new();
                 let mut shape_spec: Option<String> = None;
                 let mut shape_beats: Option<f64> = None;
+                // A physical-model instrument: its body, its excite source
+                // and its own knobs (`str_decay=8`), set at the downbeat
+                let mut inst_kind: Option<crate::physical::InstrumentKind> = None;
+                let mut inst_excite: Option<String> = None;
+                let mut inst_opts: Vec<(Param, f32)> = Vec::new();
+                // (on an instrument's line, attack= and release= shape its
+                // gate; on a tape track they are the slot's own)
+                let inst_line = line.split_whitespace().skip(2).any(|o| {
+                    o == "string" || o.starts_with("string=") || o == "modal" || o.starts_with("modal=")
+                });
                 for opt in line.split_whitespace().skip(2) {
                     if let Some(v) = opt.strip_prefix("vel=") {
                         vel = v
@@ -2069,6 +2233,59 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                             v.parse_finite::<f64>()
                                 .map_err(|_| err(format!("invalid shape_beats '{}'", v)))?,
                         );
+                    } else if opt == "string" || opt.starts_with("string=") {
+                        if inst_kind.is_some() {
+                            return Err(err("a track plays one instrument".into()));
+                        }
+                        inst_kind = Some(crate::physical::InstrumentKind::String);
+                        if let Some(v) = opt.strip_prefix("string=") {
+                            let e = match v {
+                                "pluck" => 0.0,
+                                "strike" => 1.0,
+                                "bow" => 2.0,
+                                "none" => 3.0,
+                                _ => {
+                                    return Err(err(format!(
+                                        "string={} : the excitation is pluck, strike, bow or none",
+                                        v
+                                    )))
+                                }
+                            };
+                            inst_opts.push((Param::StrExcite, e));
+                        }
+                    } else if opt == "modal" || opt.starts_with("modal=") {
+                        if inst_kind.is_some() {
+                            return Err(err("a track plays one instrument".into()));
+                        }
+                        let name = opt.strip_prefix("modal=").unwrap_or("bar");
+                        let set = mode_sets
+                            .get(name)
+                            .cloned()
+                            .or_else(|| crate::physical::ModeSet::preset(name))
+                            .ok_or_else(|| {
+                                err(format!(
+                                    "modal={}: not a built-in body ({}) or a `modes` line above",
+                                    name,
+                                    crate::physical::MODAL_PRESETS.join(" ")
+                                ))
+                            })?;
+                        inst_kind = Some(crate::physical::InstrumentKind::Modal(set));
+                    } else if let Some(v) = opt.strip_prefix("excite=") {
+                        inst_excite = Some(v.to_string());
+                    } else if let Some((k, v)) = opt.split_once('=').filter(|(k, _)| {
+                        Param::from_name(k).map_or(false, |p| {
+                            crate::physical::is_instrument_param(p)
+                                || (inst_line && matches!(p, Param::Attack | Param::Release))
+                        })
+                    }) {
+                        let value = v
+                            .parse_finite::<f32>()
+                            .map_err(|_| err(format!("invalid {} '{}'", k, v)))?;
+                        let param = Param::from_name(k).unwrap();
+                        if let Some(w) = clamp_warning(param, value) {
+                            warnings.push(err(w));
+                        }
+                        inst_opts.push((param, value));
                     } else if let Some((k, v)) = opt.split_once('=').filter(|(k, _)| {
                         Param::from_name(k).map_or(false, |p| p.is_strip() || p.is_strip_comp_knob())
                     }) {
@@ -2198,6 +2415,52 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                     } else {
                         return Err(err(format!("unknown track option '{}'", opt)));
                     }
+                }
+                if let Some(kind) = inst_kind {
+                    if smp.is_some() || channel != 0 {
+                        return Err(err(
+                            "an instrument track (string, modal=) cannot also be a sample=, \
+                             kit=, vox or patch= track"
+                                .into(),
+                        ));
+                    }
+                    if instruments.len() >= crate::physical::MAX_INSTRUMENTS {
+                        return Err(err(format!(
+                            "too many instrument tracks (max {})",
+                            crate::physical::MAX_INSTRUMENTS
+                        )));
+                    }
+                    let is_string = kind == crate::physical::InstrumentKind::String;
+                    for &(param, _) in &inst_opts {
+                        if (crate::physical::is_string_param(param) && !is_string)
+                            || (crate::physical::is_modal_param(param) && is_string)
+                        {
+                            return Err(err(format!(
+                                "{}= belongs to a {} track",
+                                param.name(),
+                                if is_string { "modal=" } else { "string" }
+                            )));
+                        }
+                    }
+                    channel =
+                        crate::physical::INSTRUMENT_CHANNEL_BASE + instruments.len() as u16;
+                    if let Some(src) = inst_excite.take() {
+                        excite_from.push((line_no, instruments.len(), src));
+                    }
+                    instruments.push(crate::physical::InstrumentSpec { kind, excite: None });
+                    for (param, value) in inst_opts.drain(..) {
+                        events.push((0.0, 1, param_event(param, value, channel)));
+                    }
+                } else if let Some((param, _)) = inst_opts.first() {
+                    return Err(err(format!(
+                        "unknown track option '{}=' (it belongs to an instrument track: \
+                         string or modal=)",
+                        param.name()
+                    )));
+                } else if inst_excite.is_some() {
+                    return Err(err(
+                        "excite= needs an instrument track to excite (string or modal=)".into(),
+                    ));
                 }
                 if let Some(mut cfg) = smp {
                     let mut data = smp_data
@@ -2334,6 +2597,21 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                                 ))
                             })?;
                         if let Some(param) = Param::from_name(pname) {
+                            if let Some(i) = crate::physical::instrument_for_channel(ch) {
+                                let is_string = instruments.get(i).map_or(false, |s| {
+                                    s.kind == crate::physical::InstrumentKind::String
+                                });
+                                if (crate::physical::is_string_param(param) && !is_string)
+                                    || (crate::physical::is_modal_param(param) && is_string)
+                                {
+                                    return Err(err(format!(
+                                        "automate '{}': {} belongs to a {} track",
+                                        name,
+                                        pname,
+                                        if is_string { "modal=" } else { "string" }
+                                    )));
+                                }
+                            }
                             if !param.reaches_track(ch) {
                                 return Err(err(format!(
                                     "automate '{}': {} is shared by every track, so a \
@@ -2914,6 +3192,15 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                     .into(),
             ));
         }
+        if dest.needs_pitch_or_filter()
+            && crate::physical::instrument_for_channel(channel).is_some()
+        {
+            return Err(e(
+                "an instrument track (string, modal=) has no oscillator or filter to \
+                 modulate; excite= drives its body, ringmod_from= and feed_from= its strip"
+                    .into(),
+            ));
+        }
         if mix.routes.iter().any(|r| r.dst == channel && r.dest == dest) {
             return Err(e(format!(
                 "this track's channel already takes a {} route (kit=<track> shares one board)",
@@ -2980,6 +3267,42 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
         ));
     }
 
+    // `excite=NAME`: the instrument hears track NAME's raw output
+    for (line_no, idx, name) in excite_from {
+        let source = track_channels
+            .iter()
+            .find(|(t, _)| *t == name)
+            .map(|(_, c)| *c)
+            .ok_or_else(|| {
+                format!("line {}: excite={}: no track named '{}'", line_no + 1, name, name)
+            })?;
+        if crate::physical::instrument_for_channel(source) == Some(idx) {
+            return Err(format!(
+                "line {}: excite={}: an instrument cannot excite itself",
+                line_no + 1,
+                name
+            ));
+        }
+        instruments[idx].excite = Some(source);
+        let channel = crate::physical::INSTRUMENT_CHANNEL_BASE + idx as u16;
+        if !events
+            .iter()
+            .any(|(_, _, k)| matches!(k, EventKind::NoteOn { channel: c, .. } if *c == channel))
+        {
+            let track = track_channels
+                .iter()
+                .find(|(_, c)| *c == channel)
+                .map_or("?", |(t, _)| t.as_str());
+            warnings.push(format!(
+                "line {}: excite={}: track '{}' plays no notes, so its body never opens to \
+                 the input (its notes tune it and hold it open)",
+                line_no + 1,
+                name,
+                track
+            ));
+        }
+    }
+
     // Shapers ride the beat and glitch lengths follow the tempo: give the
     // engine the song's clock, once at the downbeat and again at every
     // grid step where the tempo moves
@@ -3039,6 +3362,7 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
         samplers,
         tracks: track_channels,
         mix,
+        instruments,
         warnings,
     })
 }
@@ -4978,6 +5302,111 @@ mod tests {
 
     fn channel_of(song: &Song, track: &str) -> u16 {
         song.tracks.iter().find(|(t, _)| t == track).unwrap().1
+    }
+
+    fn stem_of(song: &Song, track: &str) -> Vec<(f32, f32)> {
+        render_offline_solo(song, 48000.0, Some(channel_of(song, track))).collect()
+    }
+
+    fn energy_of(x: &[(f32, f32)]) -> f64 {
+        x.iter().map(|&(l, r)| (l * l + r * r) as f64).sum()
+    }
+
+    /// String and modal tracks, a `modes` body of the song's own and an
+    /// excited body: each plays on its own instrument channel and sounds
+    /// in its own stem.
+    #[test]
+    fn instrument_tracks_parse_and_sound() {
+        let song = parse_song(
+            "automate reverb_wet\n0\ntail 0.5\n\
+             modes chime 1 2.76:2 5.4:1:0.5\n\
+             track drums kit=909\nBD SD BD SD\n\
+             track wire string str_decay=6 str_stiff=0.0004\nA2:2 E3:2\n\
+             track bell modal=bell modal_bright=0.3\nC4:4\n\
+             track chime modal=chime\nG5:4\n\
+             track plate modal=plate excite=drums excite_gain=2\nC3:4\n",
+        )
+        .unwrap();
+        assert!(song.warnings.is_empty(), "{:?}", song.warnings);
+        assert_eq!(song.instruments.len(), 4);
+        assert_eq!(song.instruments[3].excite, Some(channel_of(&song, "drums")));
+        for (i, name) in ["wire", "bell", "chime", "plate"].iter().enumerate() {
+            assert_eq!(
+                channel_of(&song, name),
+                crate::physical::INSTRUMENT_CHANNEL_BASE + i as u16
+            );
+            let e = energy_of(&stem_of(&song, name));
+            assert!(e > 1.0, "{name} is silent: {e}");
+        }
+    }
+
+    #[test]
+    fn instrument_options_are_checked() {
+        let bad = [
+            "track a modal=nonsense\nC4\n",
+            "track a modal=bell str_decay=2\nC4\n",
+            "track a string modal_damp=2\nC4\n",
+            "track a str_decay=2\nC4\n",
+            "track a string string\nC4\n",
+            "track a string=pick\nC4\n",
+            "track a string kit=909\nBD\n",
+            "track a string excite=nobody\nC4\n",
+            "track a string excite=a\nC4\n",
+            "track a excite=b\nC4\ntrack b\nC4\n",
+            "track a string fm_from=a\nC4\n",
+            "track a modal=bell\nC4\nautomate a.str_decay\n2\n",
+            "modes bar 1 2\n",
+            "modes w 1 2\nmodes w 1 3\n",
+            "modes w\n",
+            "modes w 1:0\n",
+        ];
+        for text in bad {
+            assert!(parse_song(text).is_err(), "accepted: {text:?}");
+        }
+        // unscoped, an instrument knob turns every instrument that has it
+        assert!(parse_song("track a string\nC4\nautomate str_decay\n2 8:4\n").is_ok());
+        assert!(parse_song("track a modal=glass\nC4\nautomate a.modal_decay\n1 0.2:4\n").is_ok());
+        // an excited body that plays no notes never opens: a warning
+        let quiet = parse_song("track d kit=909\nBD\ntrack p modal=plate excite=d\nR:4\n").unwrap();
+        assert!(quiet.warnings.iter().any(|w| w.contains("plays no notes")), "{:?}", quiet.warnings);
+    }
+
+    /// An excited body hears its source's own output, before the source's
+    /// strip: a source at gain=0 is silent in the mix yet still rings the
+    /// body, and the body is silent where its notes do not hold it open.
+    #[test]
+    fn an_excite_track_drives_the_body_while_its_notes_hold() {
+        let take = |notes: &str| {
+            parse_song(&format!(
+                "automate reverb_wet\n0\ntail 0.2\n\
+                 track src gain=0 vel=1\nC3:8\n\
+                 track body modal=string excite=src\n{notes}\n"
+            ))
+            .unwrap()
+        };
+        let held = take("C3:8");
+        assert!(energy_of(&stem_of(&held, "src")) < 1e-12);
+        let e_held = energy_of(&stem_of(&held, "body"));
+        assert!(e_held > 1.0, "{e_held}");
+        // held for the first half only: the second half rings down from
+        // the release, far below the first
+        let half = take("C3:4 R:4");
+        let x = stem_of(&half, "body");
+        let n = x.len();
+        let (a, b) = (energy_of(&x[..n / 3]), energy_of(&x[2 * n / 3..]));
+        assert!(b < 1e-3 * a, "kept ringing with the gate shut: {a} then {b}");
+    }
+
+    /// A string track sounds its note's pitch through the whole engine.
+    #[test]
+    fn a_string_track_plays_in_tune() {
+        let song = parse_song(
+            "automate reverb_wet\n0\ntail 0.1\ntrack s string str_decay=8\nA3:4\n",
+        )
+        .unwrap();
+        let x: Vec<f32> = stem_of(&song, "s").iter().map(|&(l, _)| l).collect();
+        let hz = crate::physical::tests::measure_hz(&x, 48000.0, 220.0, 0.3, 1.2);
+        assert!((1200.0 * (hz / 220.0).log2()).abs() < 0.1, "{hz}");
     }
 
     /// Every `kit=909` track is a 909 board of its own: the first on the

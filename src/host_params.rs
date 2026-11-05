@@ -407,6 +407,27 @@ const EXCLUDED: &[Param] = &[
     Param::Limit,
     Param::LimitCeiling,
     Param::LimitRelease,
+    // Physical-model instruments live on song tracks (`track NAME string`,
+    // `modal=`), each its own body; the plugin's voices are the synth's
+    Param::StrExcite,
+    Param::StrDecay,
+    Param::StrDamp,
+    Param::StrStiff,
+    Param::StrPos,
+    Param::StrHard,
+    Param::StrPressure,
+    Param::StrMute,
+    Param::ModalExcite,
+    Param::ModalDecay,
+    Param::ModalDamp,
+    Param::ModalStretch,
+    Param::ModalBright,
+    Param::ModalSpread,
+    Param::ModalModes,
+    Param::ModalHard,
+    Param::ModalBurst,
+    Param::ModalMute,
+    Param::ExciteGain,
 ];
 
 /// THE host parameter table, built from the presentation rows above with

@@ -775,10 +775,13 @@ fn strip_unheard(mixes: &mut ChannelMap<ChannelMix>, ch: u16, l: f32, r: f32) {
 }
 
 /// A channel the voice cards play (a synth track or the panel), as
-/// opposed to the voice box, a kit board or a tape slot, which reach
-/// their strips by their own paths.
+/// opposed to the voice box, a kit board, a tape slot or an instrument,
+/// which reach their strips by their own paths.
 fn card_channel(ch: u16) -> bool {
-    ch != VOX_CHANNEL && kit_for_channel(ch).is_none() && slot_for_channel(ch).is_none()
+    ch != VOX_CHANNEL
+        && kit_for_channel(ch).is_none()
+        && slot_for_channel(ch).is_none()
+        && crate::physical::instrument_for_channel(ch).is_none()
 }
 
 /// One strip, one stereo sample (see `strip`).
@@ -1051,6 +1054,27 @@ impl Drop for CardPool {
     }
 }
 
+/// One tapped channel's raw stereo output: this sample's running sum and
+/// the last sample's whole one (what a reader gets when the channel has
+/// not rendered yet this sample, so a loop between instruments is one
+/// sample late instead of silent).
+#[derive(Clone, Copy)]
+struct Tap {
+    channel: u16,
+    cur: (f32, f32),
+    prev: (f32, f32),
+}
+
+#[inline]
+fn tap_add(taps: &mut [Tap], channel: u16, l: f32, r: f32) {
+    for t in taps.iter_mut() {
+        if t.channel == channel {
+            t.cur.0 += l;
+            t.cur.1 += r;
+        }
+    }
+}
+
 pub struct VoiceManager {
     pub voices: Vec<Voice>,
     /// The rhythm section: 909-style analog drum boards sharing the
@@ -1068,6 +1092,12 @@ pub struct VoiceManager {
     /// The tape deck: sampler slots (`sample=` tracks) whose playback
     /// heads mix onto the same volt bus as everything else.
     pub sampler: SamplerBank,
+    /// Physical-model instruments (`string` and `modal=` tracks), slot i
+    /// on channel physical::INSTRUMENT_CHANNEL_BASE + i.
+    instruments: Vec<Option<Box<crate::physical::Instrument>>>,
+    /// Channels whose raw output (before their strip) another track
+    /// listens to this sample: an instrument's `excite=` source.
+    taps: Vec<Tap>,
     reverb: Reverb,
     chorus: Chorus,
     /// The console's mix-bus compressor, printing to the tape.
@@ -1174,6 +1204,8 @@ impl VoiceManager {
             kits: Vec::new(),
             vox: VoxBox::new(sample_rate),
             sampler: SamplerBank::new(sample_rate),
+            instruments: Vec::new(),
+            taps: Vec::new(),
             reverb: Reverb::new(sample_rate),
             chorus: Chorus::new(sample_rate),
             comp: BusComp::new(sample_rate),
@@ -1581,6 +1613,14 @@ impl VoiceManager {
         if kit_for_channel(channel).is_some() && self.set_kit_knob(channel, param, value) {
             return;
         }
+        // An instrument track's own knobs turn its body
+        if let Some(i) = crate::physical::instrument_for_channel(channel) {
+            if let Some(inst) = self.instruments.get_mut(i).and_then(|s| s.as_mut()) {
+                if inst.set_param(param, value) {
+                    return;
+                }
+            }
+        }
         let mut p = self
             .channel_params
             .get(&channel)
@@ -1594,6 +1634,16 @@ impl VoiceManager {
                 .or_insert_with(|| ChannelLfo::new(self.sample_rate, &p));
             for voice in self.voices.iter_mut().filter(|v| v.channel() == channel) {
                 voice.apply_params(&p);
+            }
+            // an instrument's bow and excite gate follow its track's
+            // attack and release
+            if let Some(i) = crate::physical::instrument_for_channel(channel) {
+                if let Some(inst) = self.instruments.get_mut(i).and_then(|s| s.as_mut()) {
+                    inst.set_gate(crate::physical::Gate {
+                        attack: p.attack,
+                        release: p.release,
+                    });
+                }
             }
             if matches!(param, Param::PitchShift) {
                 self.update_channel_pitch_shift(channel, p.pitch_shift);
@@ -1644,6 +1694,13 @@ impl VoiceManager {
         // never claim a keyboard voice
         if let Some(slot) = slot_for_channel(channel) {
             self.sampler.note_on(slot, note, velocity);
+            return;
+        }
+        // An instrument track's notes strike, pluck or bow its body
+        if let Some(i) = crate::physical::instrument_for_channel(channel) {
+            if let Some(inst) = self.instruments.get_mut(i).and_then(|s| s.as_mut()) {
+                inst.note_on(note, 0.0, velocity);
+            }
             return;
         }
         // A vox note both speaks (the modulator articulates a syllable)
@@ -1892,6 +1949,16 @@ impl VoiceManager {
             );
             return;
         }
+        if let Some(i) = crate::physical::instrument_for_channel(channel) {
+            let curve = self
+                .channel_params
+                .get(&channel)
+                .map_or(self.params.bend_curve, |p| p.bend_curve);
+            if let Some(inst) = self.instruments.get_mut(i).and_then(|s| s.as_mut()) {
+                inst.bend(note, semitones, seconds, crate::voice::curve_power(curve));
+            }
+            return;
+        }
         for voice in self
             .voices
             .iter_mut()
@@ -1909,6 +1976,12 @@ impl VoiceManager {
         }
         if let Some(slot) = slot_for_channel(channel) {
             self.sampler.note_off(slot, note);
+            return;
+        }
+        if let Some(i) = crate::physical::instrument_for_channel(channel) {
+            if let Some(inst) = self.instruments.get_mut(i).and_then(|s| s.as_mut()) {
+                inst.note_off(note);
+            }
             return;
         }
         // The voice hears the key lift (last one up speaks the coda);
@@ -2372,6 +2445,44 @@ impl VoiceManager {
     // --- The tape deck --------------------------------------------------
 
     /// Load a reel + transport into a sampler slot (song registration).
+    /// Build instrument `index` (channel INSTRUMENT_CHANNEL_BASE + index)
+    /// for a song's `string` / `modal=` track, and tap its excite source.
+    pub fn set_instrument(&mut self, index: usize, spec: &crate::physical::InstrumentSpec) {
+        if index >= crate::physical::MAX_INSTRUMENTS {
+            return;
+        }
+        if self.instruments.len() <= index {
+            self.instruments.resize_with(index + 1, || None);
+        }
+        let channel = crate::physical::INSTRUMENT_CHANNEL_BASE + index as u16;
+        let p = *self
+            .channel_params
+            .entry(channel)
+            .or_insert_with(ParamValues::default);
+        let mut inst = crate::physical::Instrument::new(spec, self.sample_rate);
+        inst.set_gate(crate::physical::Gate {
+            attack: p.attack,
+            release: p.release,
+        });
+        if let Some(src) = spec.excite {
+            if !self.taps.iter().any(|t| t.channel == src) {
+                self.taps.push(Tap {
+                    channel: src,
+                    cur: (0.0, 0.0),
+                    prev: (0.0, 0.0),
+                });
+            }
+        }
+        self.instruments[index] = Some(Box::new(inst));
+    }
+
+    /// An instrument knob with no track prefix: every instrument that has it.
+    pub fn set_instrument_all(&mut self, param: Param, value: f32) {
+        for inst in self.instruments.iter_mut().flatten() {
+            inst.set_param(param, value);
+        }
+    }
+
     pub fn set_sampler_slot(&mut self, index: usize, slot: SamplerSlot) {
         self.sampler.set_slot(index, slot);
     }
@@ -2434,6 +2545,10 @@ impl VoiceManager {
 
     pub fn render_next(&mut self) -> (f32, f32) {
         self.samples_rendered = self.samples_rendered.wrapping_add(1);
+        for t in self.taps.iter_mut() {
+            t.prev = t.cur;
+            t.cur = (0.0, 0.0);
+        }
         // One shared noise generator distributed to every active voice
         // (903A / Juno-106 architecture) — filtered per voice, gated by
         // each voice's envelope, but a single correlated source
@@ -2566,6 +2681,9 @@ impl VoiceManager {
                 continue;
             };
             let ch = self.voices[i].channel();
+            if !self.taps.is_empty() {
+                tap_add(&mut self.taps, ch, l, r);
+            }
             if ch == VOX_CHANNEL {
                 carrier += l + r;
             } else if self.solo.map_or(true, |s| s == ch)
@@ -2613,6 +2731,9 @@ impl VoiceManager {
         // the carrier, plus however much raw voice vox_dry lets out. Mono,
         // center — one mouth (with its own strip on the desk).
         let vox_out = self.vox.process(carrier);
+        if !self.taps.is_empty() {
+            tap_add(&mut self.taps, VOX_CHANNEL, vox_out, vox_out);
+        }
         if self.solo.map_or(true, |s| s == VOX_CHANNEL) {
             let (vl, vr) = strip(
                 &mut self.channel_mix,
@@ -2633,6 +2754,9 @@ impl VoiceManager {
         // rail, so a hard kick microscopically sags every oscillator:
         // the drum machine is IN the instrument, not beside it.
         let (dl, dr) = self.drums.render_next();
+        if !self.taps.is_empty() {
+            tap_add(&mut self.taps, DRUM_CHANNEL, dl, dr);
+        }
         if self.solo.map_or(true, |s| s == DRUM_CHANNEL) {
             let (dl, dr) = strip(
                 &mut self.channel_mix,
@@ -2649,6 +2773,9 @@ impl VoiceManager {
         // Every further kit track's board, each through its own strip
         for (ch, board) in self.kits.iter_mut() {
             let (dl, dr) = board.render_next();
+            if !self.taps.is_empty() {
+                tap_add(&mut self.taps, *ch, dl, dr);
+            }
             if self.solo.map_or(true, |s| s == *ch) {
                 let (dl, dr) = strip(&mut self.channel_mix, *ch, dl, dr, &mut sends);
                 left += dl;
@@ -2669,6 +2796,9 @@ impl VoiceManager {
             .render_next_slots(panel_pitch_mult, &mut slot_out);
         for (i, &(sl, sr)) in slot_out.iter().enumerate() {
             let ch = crate::sampler::SAMPLER_CHANNEL_BASE + i as u16;
+            if !self.taps.is_empty() {
+                tap_add(&mut self.taps, ch, sl, sr);
+            }
             // A silent slot skips its strip, except one with an EQ or a
             // drive stage, which runs on so its filters ring out, and a
             // routed one, which lends (or takes) a signal every sample
@@ -2692,6 +2822,45 @@ impl VoiceManager {
                 right += sr;
             } else {
                 strip_unheard(&mut self.channel_mix, ch, sl, sr);
+            }
+        }
+
+        // The instruments: each body hears its excite track (this sample's,
+        // or the last sample's for an instrument further down the list),
+        // then rings through its own strip
+        for i in 0..self.instruments.len() {
+            let Some(inst) = self.instruments[i].as_mut() else {
+                continue;
+            };
+            let ch = crate::physical::INSTRUMENT_CHANNEL_BASE + i as u16;
+            let input = match inst.excite {
+                Some(src) => self.taps.iter().find(|t| t.channel == src).map_or(0.0, |t| {
+                    let later = crate::physical::instrument_for_channel(src).map_or(false, |j| j >= i);
+                    let (l, r) = if later { t.prev } else { t.cur };
+                    0.5 * (l + r)
+                }),
+                None => 0.0,
+            };
+            // a silent body skips its strip, as a silent tape slot does
+            // (an EQ, drive or glitch rings on; a routed strip runs always)
+            if inst.is_silent()
+                && input == 0.0
+                && !self.channel_mix.get(&ch).map_or(false, |m| {
+                    m.eq.is_some() || m.dist.is_some() || m.glitch.is_some() || m.xmod.is_some()
+                })
+            {
+                continue;
+            }
+            let (il, ir) = inst.render(input);
+            if !self.taps.is_empty() {
+                tap_add(&mut self.taps, ch, il, ir);
+            }
+            if self.solo.map_or(true, |s| s == ch) {
+                let (il, ir) = strip(&mut self.channel_mix, ch, il, ir, &mut sends);
+                left += il;
+                right += ir;
+            } else {
+                strip_unheard(&mut self.channel_mix, ch, il, ir);
             }
         }
 

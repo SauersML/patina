@@ -52,6 +52,7 @@ pub mod limiter;
 pub mod noise;
 pub mod oscillator;
 pub mod patch;
+pub mod physical;
 pub mod render;
 pub mod reverb;
 pub mod rng;
