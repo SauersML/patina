@@ -511,6 +511,9 @@ pub struct VoxSource {
     noise: NoiseSource,
     res: [Resonator; 4],
     fric_res: Resonator,
+    /// The throat (`vox_formant`): every resonance and its bandwidth
+    /// scaled together, a bigger or smaller mouth on the same pitch.
+    formant_scale: f32,
 }
 
 impl VoxSource {
@@ -554,6 +557,15 @@ impl VoxSource {
             noise: NoiseSource::new(sample_rate),
             res: [Resonator::default(); 4],
             fric_res: Resonator::default(),
+            formant_scale: 1.0,
+        }
+    }
+
+    /// Move the throat `semitones` (resonances scale with it; the pitch
+    /// does not).
+    pub fn set_formant(&mut self, semitones: f32) {
+        if semitones.is_finite() {
+            self.formant_scale = (semitones.clamp(-24.0, 24.0) / 12.0).exp2();
         }
     }
 
@@ -1061,18 +1073,23 @@ impl VoxSource {
         let source =
             self.tilt_lp * self.voiced * shimmer + n * (self.asp + self.breath * self.voiced * 0.5);
 
-        // The tract: cascade resonators F1-F3 moving, F4 fixed
+        // The tract: cascade resonators F1-F3 moving, F4 fixed — all of
+        // them scaled by the throat (x1 when it is not moved), held under
+        // Nyquist when it is moved up
+        let fs = self.formant_scale;
+        let top = 0.45 * self.sample_rate;
         let mut x = source;
         for i in 0..3 {
-            self.res[i].set(self.f[i], self.bw[i], self.sample_rate);
+            self.res[i]
+                .set((self.f[i] * fs).min(top), self.bw[i] * fs, self.sample_rate);
             x = self.res[i].tick(x);
         }
-        self.res[3].set(F4, B4, self.sample_rate);
+        self.res[3].set((F4 * fs).min(top), B4 * fs, self.sample_rate);
         x = self.res[3].tick(x);
 
         // Frication: noise through its own place-of-articulation resonator
         self.fric_res
-            .set(self.fric_f, self.fric_bw, self.sample_rate);
+            .set((self.fric_f * fs).min(top), self.fric_bw * fs, self.sample_rate);
         let hiss = self.fric_res.tick(n) * self.fric;
 
         // Voiced tract vs frication balance: vowels lead, but the
@@ -1222,6 +1239,13 @@ pub struct VoxBox {
     /// sample, indexed by `wav_pos` — the modulator's own clock.
     pitch_curve: Option<Vec<f32>>,
     held: u32,
+    /// The throat (`vox_formant`, semitones): the formant voice scales its
+    /// resonances; a recorded modulator is read through a throat-only
+    /// PSOLA (its epochs found once at load when a song moves the throat).
+    formant: f32,
+    formant_ready: bool,
+    wav_epochs: Option<Vec<(f64, f64, bool)>>,
+    throat: crate::sampler::ThroatReader,
     // Smoothed output gains
     level: f32,
     level_t: f32,
@@ -1244,6 +1268,10 @@ impl VoxBox {
             wav_active: false,
             pitch_curve: None,
             held: 0,
+            formant: 0.0,
+            formant_ready: false,
+            wav_epochs: None,
+            throat: crate::sampler::ThroatReader::new(),
             level: 0.8,
             level_t: 0.8,
             dry: 0.0,
@@ -1270,6 +1298,27 @@ impl VoxBox {
         }
         self.mode = mode;
         self.vocoder.set_mode(mode);
+    }
+
+    /// Move the voice's throat `semitones` without moving its pitch.
+    pub fn set_formant(&mut self, semitones: f32) {
+        if !semitones.is_finite() {
+            return;
+        }
+        self.formant = semitones.clamp(-24.0, 24.0);
+        self.source.set_formant(self.formant);
+    }
+
+    /// A song moves the throat: find a recorded modulator's glottal
+    /// epochs (now, or as it loads) so the throat can move it.
+    pub fn prepare_formant(&mut self) {
+        self.formant_ready = true;
+        if self.wav_epochs.is_none() {
+            self.wav_epochs = self
+                .wav
+                .as_ref()
+                .map(|w| crate::sampler::epochs_of(w, self.sample_rate));
+        }
     }
 
     /// Talker circuit only: caricature (0) <-> legible (1).
@@ -1321,6 +1370,10 @@ impl VoxBox {
         self.wav = (!out.is_empty()).then_some(out);
         self.wav_active = false;
         self.wav_pos = 0;
+        self.wav_epochs = None;
+        if self.formant_ready {
+            self.prepare_formant();
+        }
     }
 
     /// Load the performance pitch line (`pitch=` on a vox track): MIDI
@@ -1363,6 +1416,7 @@ impl VoxBox {
         if self.wav.is_some() && self.held == 0 && !self.wav_active {
             self.wav_pos = 0;
             self.wav_active = true;
+            self.throat.reset();
         }
         self.held += 1;
         self.source.note_on(note, velocity);
@@ -1383,11 +1437,20 @@ impl VoxBox {
             // `get`, not `[]`: this runs inside the host's audio callback,
             // where an index panic takes the whole DAW down
             let len = self.wav.as_ref().map_or(0, |w| w.len());
-            let s = self
-                .wav
-                .as_ref()
-                .and_then(|w| w.get(self.wav_pos).copied())
-                .unwrap_or(0.0);
+            let s = match (&self.wav, &self.wav_epochs) {
+                // a moved throat reads the recording through its grains
+                (Some(w), Some(ep)) if self.formant != 0.0 => self.throat.tick(
+                    w,
+                    ep,
+                    self.wav_pos as f64,
+                    (self.formant as f64 / 12.0).exp2(),
+                ),
+                _ => self
+                    .wav
+                    .as_ref()
+                    .and_then(|w| w.get(self.wav_pos).copied())
+                    .unwrap_or(0.0),
+            };
             self.wav_pos += 1;
             if self.wav_pos >= len {
                 self.wav_active = false;
@@ -2186,6 +2249,107 @@ mod tests {
 
     /// WAV round trip: write a file with the engine's own writer format
     /// (float32 stereo), read it back mono, use it as the modulator.
+    /// Power-weighted frequency of the strongest harmonic of `f0` in
+    /// `lo..hi` Hz and its two neighbours on each side: where the throat
+    /// rings, read at the harmonics a voice actually has.
+    fn throat_peak(seg: &[f32], sr: f32, f0: f32, lo: f32, hi: f32) -> f32 {
+        let power = |f: f32| {
+            let (mut re, mut im) = (0.0f64, 0.0f64);
+            for (i, s) in seg.iter().enumerate() {
+                let ph = std::f64::consts::TAU * f as f64 * i as f64 / sr as f64;
+                re += *s as f64 * ph.cos();
+                im += *s as f64 * ph.sin();
+            }
+            re * re + im * im
+        };
+        let ks: Vec<usize> = ((lo / f0).ceil() as usize..=(hi / f0) as usize).collect();
+        let p: Vec<f64> = ks.iter().map(|&k| power(k as f32 * f0)).collect();
+        let top = (0..p.len()).max_by(|&a, &b| p[a].total_cmp(&p[b])).unwrap();
+        let near = top.saturating_sub(2)..(top + 3).min(p.len());
+        let w: f64 = p[near.clone()].iter().sum();
+        near.map(|j| p[j] * ks[j] as f64).sum::<f64>() as f32 / w as f32 * f0
+    }
+
+    /// vox_formant on the formant voice scales every resonance and leaves
+    /// the pitch alone: AA's second formant moves up by 2^(5/12) with +5,
+    /// and the 110 Hz note stays 110 Hz.
+    #[test]
+    fn vox_formant_scales_the_formant_voice() {
+        let sr = 48000.0;
+        let take = |semis: f32| -> Vec<f32> {
+            let mut v = VoxSource::new(sr);
+            v.set_vibrato(0.0);
+            v.set_intonation(0.0);
+            v.set_formant(semis);
+            v.set_syllable(parse_lyric("AA").unwrap());
+            v.note_on(45, 0.9); // A2 = 110 Hz
+            let out: Vec<f32> = (0..sr as usize / 2).map(|_| v.render()).collect();
+            out[12000..12000 + 8192].to_vec()
+        };
+        let (plain, moved) = (take(0.0), take(5.0));
+        let f2 = throat_peak(&plain, sr, 110.0, 950.0, 1400.0);
+        let f2_moved = throat_peak(&moved, sr, 110.0, 1250.0, 1900.0);
+        let want = f2 * (5.0f32 / 12.0).exp2();
+        assert!(
+            (f2_moved / want).log2().abs() < 0.08,
+            "F2 {f2:.0} Hz moved to {f2_moved:.0}, want ~{want:.0}"
+        );
+        // the pitch: the strongest low harmonic spacing is still 110 Hz
+        let h = |seg: &[f32], f: f32| throat_peak(seg, sr, f, f * 0.9, f * 1.1);
+        assert!((h(&moved, 110.0) / 110.0 - 1.0).abs() < 0.02);
+    }
+
+    /// vox_formant on a recorded modulator: the throat-only PSOLA moves
+    /// a 1400 Hz ring to 2800 Hz with +12 and keeps the recording's 150 Hz
+    /// pitch and its clock.
+    #[test]
+    fn vox_formant_moves_a_recorded_throat() {
+        let sr = 48000.0;
+        let n = sr as usize;
+        let period = 320; // 150 Hz
+        let w = TAU * 1400.0 / sr;
+        let (mut y1, mut y2) = (0.0f32, 0.0f32);
+        let rec: Vec<f32> = (0..n)
+            .map(|i| {
+                let imp = if i % period == 0 { 1.0 } else { 0.0 };
+                let y = imp + 2.0 * 0.995 * w.cos() * y1 - 0.995 * 0.995 * y2;
+                y2 = y1;
+                y1 = y;
+                y * 0.05
+            })
+            .collect();
+        let take = |semis: f32| -> Vec<f32> {
+            let mut vb = VoxBox::new(sr);
+            vb.prepare_formant();
+            vb.set_wav(&rec, sr as u32);
+            vb.set_formant(semis);
+            vb.set_level(0.0);
+            vb.set_dry(1.0);
+            vb.note_on(45, 1.0);
+            let out: Vec<f32> = (0..n / 2).map(|_| vb.process(0.0)).collect();
+            out[12000..12000 + 8192].to_vec()
+        };
+        let (plain, moved) = (take(0.0), take(12.0));
+        let f_plain = throat_peak(&plain, sr, 150.0, 900.0, 2000.0);
+        let f_moved = throat_peak(&moved, sr, 150.0, 2000.0, 3600.0);
+        assert!((f_plain / 1400.0).log2().abs() < 0.1, "plain throat at {f_plain:.0}");
+        assert!((f_moved / 2800.0).log2().abs() < 0.1, "+12 throat at {f_moved:.0}");
+        // pitch: the 150 Hz harmonic still dominates its neighbours at
+        // 140/160 Hz (a moved pitch would leave the 150 Hz bin empty)
+        let at = |f: f32| throat_peak(&moved, sr, f, f * 0.99, f * 1.01);
+        assert!((at(150.0) - 150.0).abs() < 2.0);
+        let e = |f: f32| {
+            let (mut re, mut im) = (0.0f32, 0.0f32);
+            for (i, s) in moved.iter().enumerate() {
+                let a = TAU * f * i as f32 / sr;
+                re += s * a.cos();
+                im += s * a.sin();
+            }
+            re * re + im * im
+        };
+        assert!(e(150.0) > 10.0 * e(165.0), "the 150 Hz pitch must survive");
+    }
+
     #[test]
     fn wav_modulator_loads_and_speaks() {
         let dir = std::env::temp_dir().join("patina_vox_test");

@@ -70,6 +70,8 @@ pub fn is_sampler_param(param: Param) -> bool {
             | Param::SmpRelease
             | Param::SmpCutoff
             | Param::SmpRes
+            | Param::SmpFormant
+            | Param::SmpFormantKeep
     )
 }
 
@@ -84,6 +86,13 @@ const EDGE_DECLICK_SECS: f32 = 0.003;
 /// A choked head dies in ~4 ms — fast enough to read as a cut, slow
 /// enough not to snap.
 const CHOKE_RELEASE_SECS: f32 = 0.004;
+
+/// Grains one head can overlap. Plain `psola` keeps its original four;
+/// a moved throat stretches grains (formants down) while the pitch packs
+/// them closer (notes up), so a formant head may need 2 x pitch / throat
+/// at once.
+const PSOLA_GRAINS: usize = 4;
+const FORMANT_GRAINS: usize = 16;
 
 /// The reel: decoded audio at its source rate. Shared by Arc so cloning a
 /// slot (song loading, tests) never copies minutes of audio.
@@ -157,6 +166,19 @@ pub struct SlotConfig {
     /// duration is independent of pitch (`speed` becomes time-stretch).
     /// Loop/reverse are ignored in this mode.
     pub psola: bool,
+    /// The throat controls (`formant=`/`formant_keep=`, smp_formant,
+    /// smp_formant_keep). A formant slot is analyzed for glottal epochs
+    /// at load like a psola slot, and its heads play through the same
+    /// pitch-synchronous grains, now read at a speed of their own: the
+    /// grain read speed sets the throat, the grain spacing the pitch, the
+    /// cursor the time. On a varispeed slot pitch and time stay the
+    /// tape's; `formant_keep` (0..1) is how much of each note's varispeed
+    /// the throat refuses (1 = the recording's own throat at every key),
+    /// and `formant_semis` moves the throat on top. A psola slot already
+    /// keeps its throat; `formant_semis` moves it.
+    pub formant: bool,
+    pub formant_semis: f32,
+    pub formant_keep: f32,
 }
 
 impl Default for SlotConfig {
@@ -184,6 +206,9 @@ impl Default for SlotConfig {
             speed: 1.0,
             zoh: false,
             psola: false,
+            formant: false,
+            formant_semis: 0.0,
+            formant_keep: 0.0,
         }
     }
 }
@@ -234,8 +259,14 @@ struct Head {
     ps_cursor: f64,
     ps_next: f64,
     ps_n: f64,
-    ps_grains: [(usize, f64); 4],
-    ps_live: [bool; 4],
+    ps_grains: [(usize, f64); FORMANT_GRAINS],
+    ps_live: [bool; FORMANT_GRAINS],
+    /// A note bend (`C4:2>G3`): `bend_semis` reached over the note's held
+    /// length along 1 - (1 - x)^power, then held. 0 = no bend.
+    bend_semis: f32,
+    bend_x: f32,
+    bend_inc: f32,
+    bend_power: f32,
 }
 
 impl Head {
@@ -259,8 +290,12 @@ impl Head {
             ps_cursor: 0.0,
             ps_next: 0.0,
             ps_n: 0.0,
-            ps_grains: [(0, 0.0); 4],
-            ps_live: [false; 4],
+            ps_grains: [(0, 0.0); FORMANT_GRAINS],
+            ps_live: [false; FORMANT_GRAINS],
+            bend_semis: 0.0,
+            bend_x: 1.0,
+            bend_inc: 1.0,
+            bend_power: 1.0,
         }
     }
 }
@@ -272,10 +307,16 @@ impl Head {
 /// 50% overlap reconstructs them nearly exactly).
 pub fn analyze_epochs(data: &SampleData) -> Vec<(f64, f64, bool)> {
     let n = data.left.len();
-    let rate = data.rate as f32;
     let mono: Vec<f32> = (0..n)
         .map(|i| 0.5 * (data.left[i] + data.right[i]))
         .collect();
+    epochs_of(&mono, data.rate as f32)
+}
+
+/// `analyze_epochs` on one channel at `rate` (the voice box's recorded
+/// modulator, already on the engine clock).
+pub(crate) fn epochs_of(mono: &[f32], rate: f32) -> Vec<(f64, f64, bool)> {
+    let n = mono.len();
     let frame = (rate * 0.025) as usize;
     let hop = (rate * 0.010) as usize;
     let lo = (rate / 500.0) as usize;
@@ -475,6 +516,74 @@ fn sinc_table() -> &'static [f32] {
     })
 }
 
+/// A throat-only PSOLA read of one mono recording on its own clock (the
+/// voice box's recorded modulator): grains cut at the recording's epochs
+/// are laid back at their own spacing, so pitch and time stay put, and
+/// each grain is read at `throat` times its own speed, so only the
+/// formants move (2 = up an octave, 0.5 = down one).
+pub(crate) struct ThroatReader {
+    /// Clock position at which the next grain launches.
+    next: f64,
+    grains: [(usize, f64); FORMANT_GRAINS],
+    live: [bool; FORMANT_GRAINS],
+}
+
+impl ThroatReader {
+    pub(crate) fn new() -> Self {
+        Self {
+            next: 0.0,
+            grains: [(0, 0.0); FORMANT_GRAINS],
+            live: [false; FORMANT_GRAINS],
+        }
+    }
+
+    /// Start over at clock 0 (the recording restarts from the top).
+    pub(crate) fn reset(&mut self) {
+        self.next = 0.0;
+        self.live = [false; FORMANT_GRAINS];
+    }
+
+    /// One sample of `x` around clock position `pos` (frames).
+    pub(crate) fn tick(&mut self, x: &[f32], ep: &[(f64, f64, bool)], pos: f64, throat: f64) -> f32 {
+        if ep.is_empty() || x.is_empty() {
+            return 0.0;
+        }
+        if pos >= self.next {
+            let mut eix = match ep.binary_search_by(|e| e.0.total_cmp(&pos)) {
+                Ok(i) => i,
+                Err(i) => i.min(ep.len() - 1),
+            };
+            if eix > 0 && (ep[eix].0 - pos).abs() > (ep[eix - 1].0 - pos).abs() {
+                eix -= 1;
+            }
+            if let Some(g) = self.live.iter().position(|&l| !l) {
+                self.grains[g] = (eix, 0.0);
+                self.live[g] = true;
+            }
+            self.next = pos + ep[eix].1.max(1.0);
+        }
+        let stretch = throat as f32;
+        let mut out = 0.0f32;
+        for g in 0..FORMANT_GRAINS {
+            if !self.live[g] {
+                continue;
+            }
+            let (eix, gpos) = self.grains[g];
+            let (center, period, _) = ep[eix];
+            let half = period.min(600.0);
+            let width = 2.0 * half;
+            if gpos >= width {
+                self.live[g] = false;
+                continue;
+            }
+            let w = 0.5 - 0.5 * (std::f64::consts::TAU * gpos / width).cos();
+            out += sinc_read(x, x, center - half + gpos, stretch).0 * w as f32;
+            self.grains[g].1 = gpos + throat;
+        }
+        out
+    }
+}
+
 /// Band-limited stereo read at a fractional source position. `stretch`
 /// >= 1 widens the kernel for anti-aliased down-shifting (pass the read
 /// speed when it exceeds 1). Edge-clamped; weights shared across L/R.
@@ -592,7 +701,7 @@ impl SamplerBank {
         for h in self.heads.iter_mut().filter(|h| h.slot == index) {
             h.stage = Stage::Off;
         }
-        self.epochs[index] = if slot.cfg.psola {
+        self.epochs[index] = if slot.cfg.psola || slot.cfg.formant {
             Some(Arc::new(analyze_epochs(&slot.data)))
         } else {
             None
@@ -637,6 +746,8 @@ impl SamplerBank {
             Param::SmpRelease => c.release = value,
             Param::SmpCutoff => c.cutoff = value,
             Param::SmpRes => c.res = value,
+            Param::SmpFormant => c.formant_semis = value,
+            Param::SmpFormantKeep => c.formant_keep = value,
             _ => return false,
         }
         true
@@ -771,9 +882,30 @@ impl SamplerBank {
             ps_cursor: 0.0,
             ps_next: 0.0,
             ps_n: 0.0,
-            ps_grains: [(0, 0.0); 4],
-            ps_live: [false; 4],
+            ps_grains: [(0, 0.0); FORMANT_GRAINS],
+            ps_live: [false; FORMANT_GRAINS],
+            bend_semis: 0.0,
+            bend_x: 1.0,
+            bend_inc: 1.0,
+            bend_power: 1.0,
         };
+    }
+
+    /// Bend the held heads playing `note` on a slot by `semitones` over
+    /// `seconds`, shaped by `power` (see `voice::curve_power`).
+    pub fn bend_note(&mut self, slot_idx: usize, note: u8, semitones: f32, seconds: f32, power: f32) {
+        if !semitones.is_finite() || !seconds.is_finite() || !power.is_finite() {
+            return;
+        }
+        let inc = 1.0 / (seconds.max(1e-3) * self.sample_rate);
+        for h in self.heads.iter_mut() {
+            if h.slot == slot_idx && h.note == note && h.held && h.stage != Stage::Off {
+                h.bend_semis = semitones.clamp(-48.0, 48.0);
+                h.bend_x = 0.0;
+                h.bend_inc = inc;
+                h.bend_power = power;
+            }
+        }
     }
 
     pub fn note_off(&mut self, slot_idx: usize, note: u8) {
@@ -829,6 +961,18 @@ impl SamplerBank {
             } else {
                 cfg.pitch_semis
             };
+            // A note bend rides on top, keytracked or not
+            let semis = if h.bend_semis != 0.0 {
+                let shape = if h.bend_x >= 1.0 {
+                    1.0
+                } else {
+                    1.0 - (1.0 - h.bend_x).powf(h.bend_power)
+                };
+                h.bend_x = (h.bend_x + h.bend_inc).min(1.0);
+                semis + h.bend_semis * shape
+            } else {
+                semis
+            };
             let step = (src_rate / out_rate)
                 * ((semis / 12.0).exp2() as f64)
                 * cfg.speed.clamp(0.03, 32.0) as f64
@@ -881,8 +1025,10 @@ impl SamplerBank {
             // PSOLA: the note changes, the throat doesn't. Grains cut at
             // the reel's glottal epochs, re-spaced at the target period;
             // the cursor advances at natural (or `speed`-stretched) time,
-            // so pitch and duration are independent.
-            if cfg.psola {
+            // so pitch and duration are independent. A formant slot runs
+            // the same grains at the tape's own pitch and time, and reads
+            // each grain at a speed of its own: that speed is the throat.
+            if cfg.psola || cfg.formant {
                 // A reel too short to hold one analysis step yields no
                 // epochs at all; grain launching would index an empty
                 // table. Fall through to the ordinary varispeed read.
@@ -890,10 +1036,42 @@ impl SamplerBank {
                     if h.ps_n == 0.0 {
                         h.ps_cursor = h.pos.max(r0);
                     }
-                    let ratio = ((semis / 12.0).exp2() * pitch_mult.max(0.01)) as f64;
                     let rate_ratio = src_rate / out_rate;
-                    // launch a grain when its time comes
-                    if h.ps_n >= h.ps_next {
+                    // Pitch (the grain spacing), time (source frames the
+                    // cursor moves per output sample) and throat (how fast
+                    // a grain is read: 1 = the reel's own formants)
+                    let moved = if cfg.formant_semis != 0.0 {
+                        (cfg.formant_semis as f64 / 12.0).exp2()
+                    } else {
+                        1.0
+                    };
+                    let (ratio, advance, throat) = if cfg.psola {
+                        (
+                            ((semis / 12.0).exp2() * pitch_mult.max(0.01)) as f64,
+                            rate_ratio * cfg.speed.clamp(0.03, 32.0) as f64,
+                            moved,
+                        )
+                    } else {
+                        // the tape's varispeed: keytrack, smp_pitch,
+                        // speed, bend bus and note bend, as `step` has it
+                        let tape = step / rate_ratio;
+                        let keep = cfg.formant_keep.clamp(0.0, 1.0) as f64;
+                        (tape, step, tape.powf(1.0 - keep) * moved)
+                    };
+                    // Plain psola ignores loop and reverse, as it always
+                    // has; a formant slot plays both
+                    let back = !cfg.psola && h.reverse;
+                    let looping = if cfg.psola { None } else { h.looping };
+                    let legacy = cfg.psola && throat == 1.0;
+                    let grains = if legacy { PSOLA_GRAINS } else { FORMANT_GRAINS };
+                    let past_end = if back {
+                        h.ps_cursor <= r0
+                    } else {
+                        h.ps_cursor >= r1
+                    };
+                    // launch a grain when its time comes (a formant head
+                    // out of tape launches no more)
+                    if h.ps_n >= h.ps_next && (cfg.psola || !past_end) {
                         // nearest epoch to the cursor
                         let mut eix =
                             match ep.binary_search_by(|e| e.0.partial_cmp(&h.ps_cursor).unwrap()) {
@@ -905,7 +1083,7 @@ impl SamplerBank {
                         {
                             eix -= 1;
                         }
-                        for g in 0..h.ps_grains.len() {
+                        for g in 0..grains {
                             if !h.ps_live[g] {
                                 h.ps_grains[g] = (eix, 0.0);
                                 h.ps_live[g] = true;
@@ -916,8 +1094,12 @@ impl SamplerBank {
                         let r_eff = if voiced { ratio } else { 1.0 };
                         h.ps_next += (period / r_eff) / rate_ratio;
                     }
-                    // mix the live grains
-                    for g in 0..h.ps_grains.len() {
+                    // mix the live grains, each read at the throat's speed
+                    // (band-limited when that reads faster than the reel)
+                    let read_speed = rate_ratio * throat;
+                    let stretch = if legacy { 1.0 } else { read_speed as f32 };
+                    let floor = if cfg.psola { 0.0 } else { r0 };
+                    for g in 0..grains {
                         if !h.ps_live[g] {
                             continue;
                         }
@@ -929,25 +1111,49 @@ impl SamplerBank {
                             h.ps_live[g] = false;
                             continue;
                         }
-                        let src_pos = center - half + gpos;
-                        if src_pos >= 0.0 && src_pos < r1 {
+                        // a reversed head plays every grain backwards
+                        let src_pos = if back {
+                            center + half - gpos
+                        } else {
+                            center - half + gpos
+                        };
+                        if src_pos >= floor && src_pos < r1 {
                             let w = 0.5 - 0.5 * (std::f64::consts::TAU * gpos / width).cos();
-                            let (a, b) = sinc_read(&data.left, &data.right, src_pos, 1.0);
+                            let (a, b) = sinc_read(&data.left, &data.right, src_pos, stretch);
                             l += a * w as f32;
                             r += b * w as f32;
                         }
-                        h.ps_grains[g].1 = gpos + rate_ratio;
+                        h.ps_grains[g].1 = gpos + read_speed;
                     }
-                    h.ps_cursor += rate_ratio * cfg.speed.clamp(0.03, 32.0) as f64;
-                    h.ps_n += 1.0;
-                    if h.ps_cursor >= r1 {
-                        if h.held {
-                            // hold the tail like a gate reaching tape end
-                            h.stage = Stage::Release;
-                            h.held = false;
-                        } else {
-                            h.stage = Stage::Release;
+                    if back {
+                        h.ps_cursor -= advance;
+                    } else {
+                        h.ps_cursor += advance;
+                    }
+                    // a looping formant head wraps its cursor; the grains'
+                    // overlap is the crossfade
+                    if let Some((la, lb)) = looping {
+                        let body = (lb - la).max(1e-9);
+                        if back && h.ps_cursor <= la {
+                            h.ps_cursor = lb - (la - h.ps_cursor).rem_euclid(body);
+                        } else if !back && h.ps_cursor >= lb {
+                            h.ps_cursor = la + (h.ps_cursor - lb).rem_euclid(body);
                         }
+                    }
+                    h.ps_n += 1.0;
+                    if cfg.psola {
+                        if h.ps_cursor >= r1 {
+                            if h.held {
+                                // hold the tail like a gate reaching tape end
+                                h.stage = Stage::Release;
+                                h.held = false;
+                            } else {
+                                h.stage = Stage::Release;
+                            }
+                        }
+                    } else if past_end && looping.is_none() && !h.ps_live[..grains].contains(&true) {
+                        // out of tape and the last grain played out
+                        h.stage = Stage::Off;
                     }
                     // shared filter/pan path, mirrored from below
                     let fc = &mut self.filt[h.slot];
@@ -1876,6 +2082,8 @@ mod tests {
             Param::SmpRelease,
             Param::SmpCutoff,
             Param::SmpRes,
+            Param::SmpFormant,
+            Param::SmpFormantKeep,
         ];
         let read = |cfg: &SlotConfig, p: Param| match p {
             Param::SmpPitch => cfg.pitch_semis,
@@ -1886,6 +2094,8 @@ mod tests {
             Param::SmpRelease => cfg.release,
             Param::SmpCutoff => cfg.cutoff,
             Param::SmpRes => cfg.res,
+            Param::SmpFormant => cfg.formant_semis,
+            Param::SmpFormantKeep => cfg.formant_keep,
             _ => unreachable!(),
         };
         for p in params {
@@ -1935,6 +2145,249 @@ mod tests {
                 def.name
             );
         }
+    }
+
+    /// A note bend on a sampler head: a 440 Hz reel played at its root
+    /// and bent up an octave over 0.25 s ends up reading at 880 Hz, and
+    /// holds there.
+    #[test]
+    fn a_bent_head_lands_an_octave_up() {
+        let mut bank = bank_with(SlotConfig {
+            root: 69,
+            attack: 0.001,
+            loop_pts: Some((0.1, 0.9)),
+            ..Default::default()
+        });
+        bank.note_on(0, 69, 1.0);
+        bank.bend_note(0, 69, 12.0, 0.25, 1.0);
+        let _ = crossings(&mut bank, 12000); // the bend itself
+        let up = crossings(&mut bank, 24000); // half a second after it
+        assert!((up as i32 - 440).abs() <= 3, "bent up an octave: {up} crossings in 0.5 s");
+        // another key's bend leaves this head alone
+        let mut bank = bank_with(SlotConfig {
+            root: 69,
+            attack: 0.001,
+            loop_pts: Some((0.1, 0.9)),
+            ..Default::default()
+        });
+        bank.note_on(0, 69, 1.0);
+        bank.bend_note(0, 70, 12.0, 0.25, 1.0);
+        let _ = crossings(&mut bank, 12000);
+        let same = crossings(&mut bank, 24000);
+        assert!((same as i32 - 220).abs() <= 3, "unbent: {same} crossings in 0.5 s");
+    }
+
+    /// A 150 Hz pulse train ringing a two-pole resonator at `formant` Hz:
+    /// the pitch lives in the pulse spacing, the throat in the ring.
+    fn throat_reel(rate: usize, secs: f32, f0: usize, formant: f32) -> Arc<SampleData> {
+        let n = (rate as f32 * secs) as usize;
+        let mut x = vec![0.0f32; n];
+        let period = rate / f0;
+        let (mut y1, mut y2) = (0.0f32, 0.0f32);
+        let w = std::f32::consts::TAU * formant / rate as f32;
+        let rq = 0.995f32;
+        for (i, s) in x.iter_mut().enumerate() {
+            let imp = if i % period == 0 { 1.0 } else { 0.0 };
+            let y = imp + 2.0 * rq * w.cos() * y1 - rq * rq * y2;
+            y2 = y1;
+            y1 = y;
+            *s = y * 0.05;
+        }
+        Arc::new(SampleData {
+            left: x.clone(),
+            right: x,
+            rate: rate as u32,
+        })
+    }
+
+    /// f0 by autocorrelation over 70..500 Hz.
+    fn f0_of(seg: &[f32], rate: f32) -> f32 {
+        let mean = seg.iter().sum::<f32>() / seg.len() as f32;
+        let (mut best, mut best_c) = (1usize, f32::MIN);
+        for lag in (rate / 500.0) as usize..(rate / 60.0) as usize {
+            let c: f32 = (0..seg.len() - lag)
+                .map(|i| (seg[i] - mean) * (seg[i + lag] - mean))
+                .sum();
+            if c > best_c {
+                best_c = c;
+                best = lag;
+            }
+        }
+        rate / best as f32
+    }
+
+    /// Where the throat rings: the harmonics of `seg`'s own f0 between
+    /// `lo` and `hi` Hz, read at their exact frequencies (a fixed scan
+    /// grid lands between the harmonics of a low voice), and the power
+    /// centroid of the strongest and its two neighbours on each side.
+    fn peak_of(seg: &[f32], rate: f32, lo: f32, hi: f32) -> f32 {
+        let f0 = f0_of(seg, rate);
+        let power = |f: f32| {
+            let (mut re, mut im) = (0.0f64, 0.0f64);
+            for (i, s) in seg.iter().enumerate() {
+                let ph = std::f64::consts::TAU * f as f64 * i as f64 / rate as f64;
+                re += *s as f64 * ph.cos();
+                im += *s as f64 * ph.sin();
+            }
+            re * re + im * im
+        };
+        let ks: Vec<usize> = ((lo / f0).ceil() as usize..=(hi / f0) as usize).collect();
+        let p: Vec<f64> = ks.iter().map(|&k| power(k as f32 * f0)).collect();
+        let top = (0..p.len()).max_by(|&a, &b| p[a].total_cmp(&p[b])).unwrap();
+        let near = top.saturating_sub(2)..(top + 3).min(p.len());
+        let w: f64 = p[near.clone()].iter().sum();
+        let c: f64 = near.map(|j| p[j] * ks[j] as f64).sum::<f64>() / w;
+        c as f32 * f0
+    }
+
+    /// Render `note` on a slot built from `cfg` over the throat reel for
+    /// `secs`, left channel.
+    fn throat_take(cfg: SlotConfig, note: u8, secs: f32) -> Vec<f32> {
+        let rate = 48000usize;
+        let mut bank = SamplerBank::new(rate as f32);
+        bank.set_slot(
+            0,
+            SamplerSlot {
+                data: throat_reel(rate, 1.2, 150, 1400.0),
+                cfg,
+            },
+        );
+        bank.note_on(0, note, 1.0);
+        (0..(secs * rate as f32) as usize)
+            .map(|_| bank.render_next(1.0).0)
+            .collect()
+    }
+
+    /// The throat on a varispeed slot. Played an octave under its root,
+    /// plain tape halves the pitch AND the formant (the monster voice);
+    /// `formant` (keep 1) halves the pitch, keeps the 1400 Hz throat, and
+    /// still takes the tape's time (the reel lasts twice as long).
+    #[test]
+    fn a_kept_throat_drops_the_pitch_not_the_formant() {
+        let rate = 48000.0;
+        let base = SlotConfig {
+            root: 60,
+            attack: 0.001,
+            release: 0.01,
+            ..Default::default()
+        };
+        let tape = throat_take(base, 48, 2.6);
+        let kept = throat_take(
+            SlotConfig {
+                formant: true,
+                formant_keep: 1.0,
+                ..base
+            },
+            48,
+            2.6,
+        );
+        for (name, out, formant) in [("tape", &tape, 700.0), ("kept", &kept, 1400.0)] {
+            let seg = &out[24000..24000 + 8192];
+            let f0 = f0_of(seg, rate);
+            assert!((f0 / 75.0).log2().abs() < 0.05, "{name}: f0 {f0:.1}, want 75");
+            let peak = peak_of(seg, rate, 400.0, 2400.0);
+            assert!((peak / formant).log2().abs() < 0.15, "{name}: formant {peak:.0}, want {formant}");
+            // the tape's time: 1.2 s of reel takes 2.4 s an octave down
+            let late = &out[(2.2 * rate) as usize..(2.3 * rate) as usize];
+            let rms = (late.iter().map(|s| s * s).sum::<f32>() / late.len() as f32).sqrt();
+            assert!(rms > 1e-3, "{name}: the slowed reel should still sound at 2.2 s: {rms}");
+        }
+    }
+
+    /// smp_formant moves the throat alone: on a psola slot at the root,
+    /// +12 puts the 1400 Hz ring at 2800 Hz and leaves 150 Hz alone; -7
+    /// on a kept varispeed slot played a fifth up holds the pitch up and
+    /// lowers the throat.
+    #[test]
+    fn smp_formant_moves_the_throat_not_the_pitch() {
+        let rate = 48000.0;
+        let psola = SlotConfig {
+            root: 60,
+            psola: true,
+            formant_semis: 12.0,
+            attack: 0.001,
+            ..Default::default()
+        };
+        let out = throat_take(psola, 60, 0.8);
+        let seg = &out[12000..12000 + 8192];
+        assert!((f0_of(seg, rate) / 150.0).log2().abs() < 0.05);
+        let peak = peak_of(seg, rate, 1500.0, 4000.0);
+        assert!((peak / 2800.0).log2().abs() < 0.12, "+12: formant {peak:.0}");
+        let kept_down = SlotConfig {
+            root: 60,
+            formant: true,
+            formant_keep: 1.0,
+            attack: 0.001,
+            ..Default::default()
+        };
+        let mut bank = SamplerBank::new(rate);
+        bank.set_slot(
+            0,
+            SamplerSlot {
+                data: throat_reel(48000, 1.2, 150, 1400.0),
+                cfg: kept_down,
+            },
+        );
+        assert!(bank.set_param(0, Param::SmpFormant, -7.0));
+        bank.note_on(0, 67, 1.0);
+        let out: Vec<f32> = (0..30000).map(|_| bank.render_next(1.0).0).collect();
+        let seg = &out[12000..12000 + 8192];
+        let f0 = f0_of(seg, rate);
+        assert!((f0 / 224.7).log2().abs() < 0.05, "a fifth up: {f0:.1}");
+        let peak = peak_of(seg, rate, 500.0, 2400.0);
+        let want = 1400.0 * (-7.0f32 / 12.0).exp2();
+        assert!((peak / want).log2().abs() < 0.15, "-7: formant {peak:.0}, want {want:.0}");
+    }
+
+    /// A formant head plays reverse and loops like a tape head: reversed,
+    /// a reel that decays plays as a swell; looped, a short reel sustains.
+    #[test]
+    fn a_formant_head_reverses_and_loops() {
+        let rate = 48000usize;
+        let n = rate; // one second, decaying
+        let base = throat_reel(rate, 1.0, 150, 1000.0);
+        let x: Vec<f32> = base
+            .left
+            .iter()
+            .enumerate()
+            .map(|(i, s)| s * (-3.0 * i as f32 / n as f32).exp())
+            .collect();
+        let data = Arc::new(SampleData {
+            left: x.clone(),
+            right: x,
+            rate: rate as u32,
+        });
+        let take = |cfg: SlotConfig, secs: f32| -> Vec<f32> {
+            let mut bank = SamplerBank::new(rate as f32);
+            bank.set_slot(0, SamplerSlot { data: data.clone(), cfg });
+            bank.note_on(0, 60, 1.0);
+            (0..(secs * rate as f32) as usize)
+                .map(|_| bank.render_next(1.0).0)
+                .collect()
+        };
+        let rms = |s: &[f32]| (s.iter().map(|v| v * v).sum::<f32>() / s.len() as f32).sqrt();
+        let cfg = SlotConfig {
+            root: 60,
+            formant: true,
+            formant_keep: 1.0,
+            attack: 0.001,
+            ..Default::default()
+        };
+        let back = take(SlotConfig { reverse: true, ..cfg }, 1.0);
+        let (early, late) = (rms(&back[2400..12000]), rms(&back[36000..45600]));
+        assert!(late > 4.0 * early, "reversed decay must swell: {early} then {late}");
+        let looped = take(
+            SlotConfig {
+                loop_pts: Some((0.1, 0.3)),
+                ..cfg
+            },
+            2.0,
+        );
+        let tail = rms(&looped[84000..93600]);
+        assert!(tail > 1e-3, "a looped formant head must sustain: {tail}");
+        // and with no loop it lifts off the reel when the tape runs out
+        let once = take(cfg, 1.31);
+        assert!(rms(&once[52800..62400]) < 1e-6, "out of tape must go quiet");
     }
 
     #[test]

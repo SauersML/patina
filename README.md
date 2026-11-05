@@ -21,6 +21,7 @@ format for programmatic playback and parameter automation.
 - 🗣️ A voice box: a Klatt-style formant speech synthesizer (glottal pulse + cascade resonators, ARPAbet phonemes) driving a 20-band channel vocoder whose carrier is the synth's own voices, with a VSM-201-style voiced/unvoiced switch that snaps the carrier to noise on consonant frames so words stay legible. Two circuits on the mode switch: the '97 DigiTech Talker "TalkBox" voicing (tube-choked lows, honky mids, instant articulation, amp grit) and a full-range studio board. Lyrics ride the notes in songs (`track choir vox`, `[A2 E3 A3]:2=HH-EH-L-OW`) with per-phoneme duration and dynamics; `wav=` feeds any recorded voice through the same circuit, and `patina --say "HH-AH-L-OW"` speaks from the command line
 - 📼 A tape-deck sampler: any WAV becomes an instrument on the keys (`track keys sample=tape.wav`) — band-limited windowed-sinc playback (Kaiser β=8.6, kernel stretched by the read speed so varispeed doesn't alias in *either* direction), sustain loops with equal-power crossfades (a Mellotron whose tape never runs out), `chop=N` slice pads mapped chromatically (the MPC workflow), `beats=N` tempo-fitting (break-matching solved at parse), a per-slot resonant ZDF lowpass (the SP/Akai filter-sweep sound), vintage converter emulation (`bits=12 rate=26040` is the SP-1200: band-limited decimation at load, truncation, and a zero-order-hold DAC whose imaging spray is the point), reverse transport, gate/one-shot modes, per-note choke (`mono`), and a live-automatable transport: `smp_pitch` is a varispeed knob (tape-stops on demand), `smp_start` scrubs the needle-drop, `smp_cutoff`/`smp_res` sweep the filter, `smp_gain`/`smp_pan`/`smp_attack`/`smp_release` reshape it mid-song. The heads mix onto the same volt bus as everything else — sampler playback sags the power rail, runs through the fuzz/spring/reverb/chorus/tape chain, and bends with the pitch wheel
 - 🥊 Kick-bass on any voice: a per-note pitch envelope (start, time, curve) diving onto the note, key sync, and an antialiased drive stage (tanh, clip, wavefolder) ahead of the ladder as post-filter; plus a seven-saw supersaw bank and a filtered noise oscillator per card for walls and risers
+- 🫦 Note bends (`C4:2>G3` glides to the target over the note), and the throat: pitch-synchronous grains that move a voice's formants apart from its pitch, so a sampled voice drops an octave without turning into a monster (`formant`, `smp_formant`, `vox_formant`)
 - 🖥️ Studio-hardware GUI: knobs, ADSR graph, live oscilloscope, keys that light from the engine's real voice state
 - ⌨️ QWERTY keyboard input · 🖱️ click-and-drag keys · 🎹 MIDI input
 - 📜 Text-based song files with per-track sequencing and full parameter automation
@@ -131,6 +132,7 @@ automate vox_mode: 1 during CH1 base 0   # one-line section automation
 ```
 
 - **Notes**: names (`C4`, `F#3`, `Eb5`, with C4 = MIDI 60) or raw MIDI numbers; `[..]` for chords; `R` or `.` for rests; `:beats` duration; `@vel` velocity; `|` bar lines (ignored).
+- **Note bends**: `>target` makes a note glide from its own pitch to the target over its held length, then hold it: `C4:2>G3` (or `C4>G3:2`), `A1:4>-12` (signed semitones, fractions allowed), `[C4 E4 G4]:2>+2` (the whole chord), `[C4>D4 G4]:2` (one chord note). `automate <track>.bend_curve` (−1..1) shapes the glide: 0 is a straight line in pitch, positive moves early and settles, negative holds and falls late. Synth, vox (the carrier) and sampler tracks bend.
 - **Automation**: `automate <param>` starts a curve track. The first token is the starting value; `V:D@shape` ramps to `V` over `D` beats; `R:D` holds. Shapes: `lin`, `exp` (geometric — right for frequencies), `log`, `smooth`, `step`.
 - **Parameters**: `patina --params` prints the complete chart — every automatable name with its range, taper, and MIDI CC, straight from the single source-of-truth table in `src/song.rs` (`param_table!`). Highlights: `waveform` (0–3), `vox_mode` (0 TalkBox / 1 vocoder / 2 Talker / 3 spectral), `vox_level` (0–2: the band vocoder's per-band tanh caps its own level, so post-makeup headroom is the only push), `chorus_mode` (0–4), the 909's `bd_*`/`sd_*`/`hh_*` knobs (per kit track via `automate <track>.hh_tune`, or unscoped to every kit), and the tape deck's `smp_*` transport (per sampler track via `automate <track>.smp_pitch`, or global to all slots).
 - **Kits**: every `track NAME kit=909` is a 909 board of its own on its own channel, so two kit tracks can carry different tuning, decay, pan, level, track compressor and sends, and each gets its own stem. `automate NAME.sd_tune` (any `bd_`/`sd_`/`rs_`/`cp_`/`hh_`/`ch_`/`oh_`/`dr_` knob) turns that track's board alone; unscoped, a drum knob turns every board. `kit=OTHER` plays the board of an earlier kit track `OTHER` instead (one machine, strip and stem; its closed hat still chokes the other track's open hat).
@@ -163,6 +165,11 @@ stress digits on vowels (`OW1` primary, `AH0` reduced) shaping loudness,
 length, and pitch accents. A trailing `.` or `?` ends the phrase with a
 fall or rise. `vox_intonation` scales the voice's own prosody (accents,
 declination, final falls): keep it low when singing, high when speaking.
+`vox_formant` (−24..24 semitones) moves the voice's throat without moving
+its pitch: the formant voice scales every resonance, and a `wav=`
+recording plays through throat-only PSOLA (its pitch and clock untouched).
+Negative is a bigger mouth, positive a smaller one; automate it like any
+vox knob (`automate choir.vox_formant`).
 
 - `patina --say "HH-AH-L-OW1. AY1 K-AE-N S-P-IY1-K." [--out say.wav]` speaks from the command line.
 - `scripts/borrow-voice.sh "text" out.wav [voice]` renders a recording for `wav=` with the house voice: **Kokoro-82M** on MLX (Apache 2.0, ~300 MB, #1 on TTS Arena at 82M params — chosen by shootout over Piper and Chatterbox Turbo, which have been retired from the repo). `[voice]` picks any of Kokoro's ~50 voices: `af_heart` (default, warm) for songs, `am_michael` (low, steady) for Talker-circuit leads, `bf_emma`/`bm_george` for British color, plus Spanish/French/Hindi/Italian/Japanese/Portuguese/Chinese sets. One-time setup: `uv venv --python 3.12 .venv-voice && uv pip install --python .venv-voice/bin/python mlx-audio "misaki[en]" torch`. Falls back to the macOS system voice when the venv is absent.
@@ -183,7 +190,19 @@ automate keys.smp_pitch          # a varispeed knob, in semitones:
 0 R:24 -24:6@smooth              # ...a two-octave tape-stop to end the song
 ```
 
-- **Options**: `root=` (key of natural speed), `start=`/`end=` (trim), `loop` or `loop=a:b` + `xfade=` (sustain loop, equal-power crossfade), `chop=N` (slice pads, natural speed, one-shot), `beats=N` (varispeed the region/loop to span exactly N beats at the song tempo — drop a breakbeat in and it locks), `bits=`/`rate=` (vintage converters + un-reconstructed ZOH playback; `bits=12 rate=26040` is the SP-1200, `bits=8` the early Fairlight school), `cutoff=`/`res=` (the slot's resonant lowpass), `mode=gate|oneshot`, `reverse`, `fixed` (no keytracking), `mono`/`choke`, `gain=`, `pan=`, `pitch=`, `attack=`, `release=`, `vel_amt=`.
+- **Options**: `root=` (key of natural speed), `start=`/`end=` (trim), `loop` or `loop=a:b` + `xfade=` (sustain loop, equal-power crossfade), `chop=N` (slice pads, natural speed, one-shot), `beats=N` (varispeed the region/loop to span exactly N beats at the song tempo — drop a breakbeat in and it locks), `bits=`/`rate=` (vintage converters + un-reconstructed ZOH playback; `bits=12 rate=26040` is the SP-1200, `bits=8` the early Fairlight school), `cutoff=`/`res=` (the slot's resonant lowpass), `mode=gate|oneshot`, `reverse`, `fixed` (no keytracking), `mono`/`choke`, `gain=`, `pan=`, `pitch=`, `attack=`, `release=`, `vel_amt=`, and the throat options below.
+- **The throat (formants)**: varispeed moves a voice's formants with its pitch, so an octave down sounds like a monster and an octave up like a chipmunk. Three ways out, all on pitch-synchronous grains cut at the recording's glottal pulses:
+  - `formant` keeps the recording's own formants at every key while the tape keeps its varispeed time (an octave down is half speed with the same mouth). `formant_keep=K` keeps that fraction of them (0..1).
+  - `psola` keeps the formants AND the time: notes change only the pitch (loop and reverse do not apply).
+  - `formant=S` (−24..24 semitones) moves the formants on top of either, or alone: `formant=-5` is a bigger throat on the same notes.
+  - Automate them as `smp_formant` and `smp_formant_keep` (`automate vox.smp_formant`). Formant heads loop and reverse like tape heads.
+
+```
+track vox sample=renders/throat.wav root=C4 formant      # a melody across the keys, one throat
+C4:2 G3:2 D#3:4 C3:8                                     # C3 is half speed, not a monster
+automate vox.smp_formant                                 # then shrink the throat over 8 beats
+0 R:8 7:8@smooth
+```
 - `songs/magnetic-memory.song` is the demo: the instrument sampling its own bounce of *Hold On* — looped tape choir, vocal chops, reverse swells, and a tape-stop ending.
 
 ## 🥊 Kick-bass, walls and risers

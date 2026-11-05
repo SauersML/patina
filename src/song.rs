@@ -99,6 +99,15 @@
 //                           # notes drop the needle; smp_cutoff/smp_res
 //                           # sweep the filter; smp_gain, smp_pan,
 //                           # smp_attack, smp_release reshape it live.
+//                           # The throat: `psola` keeps a voice's
+//                           # formants and time while notes change its
+//                           # pitch. `formant` keeps the formants on the
+//                           # varispeed tape instead (pitch AND time still
+//                           # follow the key: an octave down is half
+//                           # speed, not a monster); formant=S moves them
+//                           # S semitones (-24..24) on top, formant_keep=K
+//                           # (0..1) keeps that much of them. Automate
+//                           # smp_formant / smp_formant_keep alike.
 //
 // Note-track tokens:
 //   C4  F#3  Eb5  60      note names (C4 = MIDI 60) or raw MIDI numbers
@@ -108,6 +117,16 @@
 //   @0.7                  velocity suffix (0..1)
 //   ~+0.02  ~-0.01        microtiming, in beats: push or drag this hit
 //                         off the grid (the cursor stays on it)
+//   >G3  >-12  >+0.5      note bend: the note glides from its own pitch
+//                         to the target over its held length, then holds
+//                         it (C4:2>G3 and C4>G3:2 are the same; a note,
+//                         a MIDI number, or signed semitones).
+//                         [C4 E4]:2>-12 bends a whole chord;
+//                         [C4>D4 G4]:2 bends one chord note. The track's
+//                         bend_curve (-1..1) shapes the glide: 0 straight
+//                         in pitch, + moves early, - holds and falls
+//                         late. Synth tracks, vox tracks (the carrier)
+//                         and sampler tracks bend; kit hits cannot.
 //   |                     bar line, ignored (readability only)
 //
 // Automation tracks ramp a synth parameter through breakpoints:
@@ -147,6 +166,9 @@
 // carrier's tone; plain sets),
 // vox_intonation (0..1 autonomous pitch prosody: accents, declination,
 // final falls — keep low when singing, high when speaking),
+// vox_formant (semitones, -24..24: the voice's throat moved without its
+// pitch — the formant voice's resonances scale, a wav= recording plays
+// through throat-only PSOLA; -5 is a bigger mouth, +5 a smaller one),
 // glide (portamento seconds, 0 = off), mono (1 = one voice per track,
 // last-note priority, overlapping notes slur legato; plain sets),
 // vel_amp (0..1 how far a soft strike drops the level, default 0.7),
@@ -192,7 +214,12 @@
 // global to all slots): smp_pitch (semitones, -48..48 — four octaves of
 // varispeed, enough for a tape-stop swoop), smp_start (0..1
 // needle-drop point), smp_gain (0..2), smp_pan (-1..1), smp_attack,
-// smp_release (seconds), smp_cutoff (Hz, 20000 = open), smp_res (0..1).
+// smp_release (seconds), smp_cutoff (Hz, 20000 = open), smp_res (0..1),
+// smp_formant (semitones, -24..24: the throat moved without the pitch),
+// smp_formant_keep (0..1: how much of each note's varispeed the throat
+// refuses; 1 = the recording's own formants at every key and smp_pitch).
+// The two need the slot's epochs, found at load for a `psola`/`formant`
+// slot or any slot a smp_formant lane reaches.
 //
 // Kick-bass, walls and risers (voice-card knobs, so per track via
 // `automate <track>.<param>` like cutoff): pitch_env (semitones, -48..96:
@@ -506,6 +533,13 @@ param_table! {
     NoiseModeSel:    "noise_mode",     None,      (0.0, 2.0, Step);
     // The shape of a note bend (`C4:2>G3`): 0 straight, + early, - late
     BendCurve:       "bend_curve",     None,      (-1.0, 1.0, Lin);
+    // The throat (sampler.rs, vox.rs): formants moved without moving the
+    // pitch, in semitones, on a tape-deck slot or the voice box's voice;
+    // and how much of each note's varispeed a slot's throat refuses
+    // (1 = the recording's own formants at every key)
+    SmpFormant:      "smp_formant",    None,      (-24.0, 24.0, Lin);
+    SmpFormantKeep:  "smp_formant_keep", None,    (0.0, 1.0, Lin);
+    VoxFormant:      "vox_formant",    None,      (-24.0, 24.0, Lin);
 }
 
 pub(crate) fn waveform_from_value(value: f32) -> Waveform {
@@ -840,6 +874,7 @@ impl Param {
             Param::VoxVibrato => vm.set_vox_vibrato(value),
             Param::VoxModeSel => vm.set_vox_mode(value),
             Param::VoxIntonation => vm.set_vox_intonation(value),
+            Param::VoxFormant => vm.set_vox_formant(value),
             // Un-addressed sampler automation reaches every slot (the
             // per-track path routes by channel before it gets here)
             Param::SmpPitch
@@ -849,7 +884,9 @@ impl Param {
             | Param::SmpAttack
             | Param::SmpRelease
             | Param::SmpCutoff
-            | Param::SmpRes => vm.set_sampler_all(self, value),
+            | Param::SmpRes
+            | Param::SmpFormant
+            | Param::SmpFormantKeep => vm.set_sampler_all(self, value),
             Param::PitchEnv
             | Param::PitchEnvTime
             | Param::PitchEnvCurve
@@ -899,7 +936,9 @@ impl Param {
             | P::SmpAttack
             | P::SmpRelease
             | P::SmpCutoff
-            | P::SmpRes => crate::sampler::slot_for_channel(channel).is_some(),
+            | P::SmpRes
+            | P::SmpFormant
+            | P::SmpFormantKeep => crate::sampler::slot_for_channel(channel).is_some(),
             P::BdLevel
             | P::BdTune
             | P::BdAttack
@@ -928,7 +967,8 @@ impl Param {
             | P::VoxClarity
             | P::VoxVibrato
             | P::VoxModeSel
-            | P::VoxIntonation => channel == crate::vox::VOX_CHANNEL,
+            | P::VoxIntonation
+            | P::VoxFormant => channel == crate::vox::VOX_CHANNEL,
             _ => false,
         }
     }
@@ -1143,6 +1183,15 @@ pub enum EventKind {
         note: u8,
         velocity: f32,
     },
+    /// A note bend (`C4:2>G3`): the note just struck on `channel` glides
+    /// `semitones` from its own pitch over `seconds` (its held length),
+    /// along the track's `bend_curve`. Sorts right after its note-on.
+    Bend {
+        note: u8,
+        channel: u16,
+        semitones: f32,
+        seconds: f64,
+    },
 }
 
 pub struct SongEvent {
@@ -1244,6 +1293,12 @@ fn dispatch(vm: &mut VoiceManager, kind: &EventKind) {
             note,
             velocity,
         } => vm.vox_speak(syl, *note, *velocity),
+        &EventKind::Bend {
+            note,
+            channel,
+            semitones,
+            seconds,
+        } => vm.bend_note(channel, note, semitones, seconds as f32),
     }
 }
 
@@ -1256,6 +1311,17 @@ fn register_channels(vm: &mut VoiceManager, song: &Song) {
     for &(_, channel) in &song.tracks {
         vm.add_kit(channel);
     }
+    // A throat lane on the voice box or a slot needs its recording's
+    // glottal epochs, found once here rather than mid-song
+    let throat_lane = |on: &dyn Fn(Param, u16) -> bool| {
+        song.events.iter().any(|e| match e.kind {
+            EventKind::Param { param, channel, .. } => on(param, channel),
+            _ => false,
+        })
+    };
+    if throat_lane(&|p, _| p == Param::VoxFormant) {
+        vm.vox.prepare_formant();
+    }
     if let Some((samples, rate)) = &song.vox_wav {
         vm.set_vox_wav(samples, *rate);
     }
@@ -1263,7 +1329,12 @@ fn register_channels(vm: &mut VoiceManager, song: &Song) {
         vm.set_vox_pitch(samples, *rate);
     }
     for (i, slot) in song.samplers.iter().enumerate() {
-        vm.set_sampler_slot(i, slot.clone());
+        let mut slot = slot.clone();
+        let ch = crate::sampler::SAMPLER_CHANNEL_BASE + i as u16;
+        slot.cfg.formant |= throat_lane(&|p, c| {
+            matches!(p, Param::SmpFormant | Param::SmpFormantKeep) && (c == ch || c == 0)
+        });
+        vm.set_sampler_slot(i, slot);
     }
 }
 
@@ -1889,8 +1960,26 @@ fn parse_song(text: &str) -> Result<Song, String> {
                             Some(i) => (token[..i].to_string(), Some(&token[i + 1..])),
                             None => (token.clone(), None),
                         };
+                        // `>target` note bends ride the note (`C4:2>G3`,
+                        // `[C4>D4 G4]`, `[..]>-12`); split them off too
+                        let (token, bends) = split_bends(&token)
+                            .map_err(|m| err(format!("token '{}': {}", token, m)))?;
                         let (notes, dur, vel, shift) = parse_note_token(&token, vel, len, drums)
                             .map_err(|m| err(format!("token '{}': {}", token, m)))?;
+                        if !bends.is_empty() {
+                            if notes.is_empty() {
+                                return Err(err(format!(
+                                    "token '{}': a rest has no pitch to bend",
+                                    token
+                                )));
+                            }
+                            if drums {
+                                return Err(err(format!(
+                                    "token '{}': a drum hit has no pitch to bend",
+                                    token
+                                )));
+                            }
+                        }
                         // swing: every offbeat 16th in the pair leans late
                         // by (swing - 0.5) of the pair; the cursor stays
                         // on the grid so durations never accumulate error
@@ -1954,6 +2043,27 @@ fn parse_song(text: &str) -> Result<Song, String> {
                         }
                         for &note in &notes {
                             events.push((off_beat, 0, EventKind::NoteOff { note, channel }));
+                        }
+                        // Each bend glides over its note's held length;
+                        // `seconds` holds the off beat until the tempo map
+                        // turns it into a length below
+                        for (k, &note) in notes.iter().enumerate() {
+                            let Some(target) = bends.target(k) else {
+                                continue;
+                            };
+                            let semitones = target.semitones_from(note);
+                            if semitones != 0.0 {
+                                events.push((
+                                    sound_beat,
+                                    3,
+                                    EventKind::Bend {
+                                        note,
+                                        channel,
+                                        semitones,
+                                        seconds: off_beat,
+                                    },
+                                ));
+                            }
                         }
                         track_beat += dur;
                     }
@@ -2107,9 +2217,15 @@ fn parse_song(text: &str) -> Result<Song, String> {
     Ok(Song {
         events: events
             .into_iter()
-            .map(|(beats, _, kind)| SongEvent {
-                time: time_of(beats),
-                kind,
+            .map(|(beats, _, mut kind)| {
+                // A bend's off beat becomes its length in seconds
+                if let EventKind::Bend { seconds, .. } = &mut kind {
+                    *seconds = (time_of(*seconds) - time_of(beats)).max(0.0);
+                }
+                SongEvent {
+                    time: time_of(beats),
+                    kind,
+                }
             })
             .collect(),
         tail_seconds,
@@ -2253,6 +2369,16 @@ fn parse_sampler_option(
         *mode_set = true;
     } else if opt == "psola" {
         cfg.psola = true;
+    } else if opt == "formant" {
+        // the recording's own throat at every key
+        cfg.formant = true;
+        cfg.formant_keep = 1.0;
+    } else if let Some(v) = opt.strip_prefix("formant=") {
+        cfg.formant = true;
+        cfg.formant_semis = Param::SmpFormant.clamp(secs(v, "formant")?);
+    } else if let Some(v) = opt.strip_prefix("formant_keep=") {
+        cfg.formant = true;
+        cfg.formant_keep = Param::SmpFormantKeep.clamp(secs(v, "formant_keep")?);
     } else if opt == "reverse" {
         cfg.reverse = true;
     } else if opt == "fixed" {
@@ -2536,6 +2662,101 @@ fn parse_note_token(
     Ok((notes, dur, vel.clamp(0.0, 1.0), shift))
 }
 
+/// Where a note bend goes: a note (`>G3`, `>55`) or a signed interval in
+/// semitones (`>-12`, `>+0.5`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum BendTarget {
+    Note(u8),
+    By(f32),
+}
+
+impl BendTarget {
+    fn parse(s: &str) -> Result<Self, String> {
+        if s.starts_with('+') || s.starts_with('-') {
+            let by = s
+                .parse_finite::<f32>()
+                .map_err(|_| format!("invalid bend interval '{}'", s))?;
+            if by.abs() > 48.0 {
+                return Err(format!("bend interval {} is past +/-48 semitones", s));
+            }
+            return Ok(BendTarget::By(by));
+        }
+        parse_note(s)
+            .map(BendTarget::Note)
+            .map_err(|m| format!("bend target: {}", m))
+    }
+
+    fn semitones_from(self, note: u8) -> f32 {
+        match self {
+            BendTarget::Note(n) => n as f32 - note as f32,
+            BendTarget::By(by) => by,
+        }
+    }
+}
+
+/// The bends a note token carries: one for the whole token, or one per
+/// chord note (empty when the token bends nothing).
+#[derive(Debug, Default, PartialEq)]
+struct Bends {
+    all: Option<BendTarget>,
+    each: Vec<Option<BendTarget>>,
+}
+
+impl Bends {
+    fn is_empty(&self) -> bool {
+        self.all.is_none() && self.each.iter().all(|b| b.is_none())
+    }
+
+    fn target(&self, k: usize) -> Option<BendTarget> {
+        self.all.or_else(|| self.each.get(k).copied().flatten())
+    }
+}
+
+/// Split note bends off a note token, returning the plain token for
+/// `parse_note_token`. `C4:2>G3` and `C4>G3:2` bend the note to G3 over
+/// its held length; `[C4 E4]:2>-12` bends a whole chord down an octave;
+/// `[C4>D4 G4]:2` bends one chord note and holds the other.
+fn split_bends(token: &str) -> Result<(String, Bends), String> {
+    if !token.contains('>') {
+        return Ok((token.to_string(), Bends::default()));
+    }
+    // A target runs from its '>' to the next suffix (':', '@', '~') or the end
+    let take_target = |rest: &str| -> Result<(String, Option<BendTarget>), String> {
+        let Some(i) = rest.find('>') else {
+            return Ok((rest.to_string(), None));
+        };
+        let after = &rest[i + 1..];
+        let end = after.find([':', '@', '~']).unwrap_or(after.len());
+        if after[end..].contains('>') {
+            return Err("a note bends to one target".into());
+        }
+        let target = BendTarget::parse(&after[..end])?;
+        Ok((format!("{}{}", &rest[..i], &after[end..]), Some(target)))
+    };
+    let mut bends = Bends::default();
+    if let Some(inner) = token.strip_prefix('[') {
+        let close = inner.find(']').ok_or("unmatched '['")?;
+        let mut notes = Vec::new();
+        for part in inner[..close].split_whitespace() {
+            let (note, target) = match part.split_once('>') {
+                Some((n, t)) => (n, Some(BendTarget::parse(t)?)),
+                None => (part, None),
+            };
+            notes.push(note);
+            bends.each.push(target);
+        }
+        let (rest, all) = take_target(&inner[close + 1..])?;
+        if all.is_some() && bends.each.iter().any(|b| b.is_some()) {
+            return Err("a chord bends as a whole (`]>`) or note by note, not both".into());
+        }
+        bends.all = all;
+        return Ok((format!("[{}]{}", notes.join(" "), rest), bends));
+    }
+    let (plain, all) = take_target(token)?;
+    bends.all = all;
+    Ok((plain, bends))
+}
+
 /// Parse a note name like C4, F#3, Eb5 (C4 = MIDI 60), or a raw MIDI number.
 fn parse_note(s: &str) -> Result<u8, String> {
     if s.chars().all(|c| c.is_ascii_digit()) {
@@ -2706,6 +2927,67 @@ mod tests {
         assert_eq!(parse_note("60").unwrap(), 60);
         assert!(parse_note("H4").is_err());
         assert!(parse_note("C99").is_err());
+    }
+
+    /// Note bends ride their note tokens and glide over the held length:
+    /// a note to a note, a chord note by note, a whole chord by an
+    /// interval, a fractional interval; each sorts right after its note-on.
+    #[test]
+    fn note_bends_ride_their_notes() {
+        let song = parse_song(
+            "bpm 120\ngate 1\ntrack a\nC4:2>G3 [C4>D4 G4]:1 [C4 E4]:1>-12 A3>+0.5:1 C4>C4\n",
+        )
+        .unwrap();
+        let bends: Vec<(f64, u8, f32, f64)> = song
+            .events
+            .iter()
+            .filter_map(|e| match e.kind {
+                EventKind::Bend {
+                    note,
+                    semitones,
+                    seconds,
+                    ..
+                } => Some((e.time, note, semitones, seconds)),
+                _ => None,
+            })
+            .collect();
+        let want = [
+            (0.0, 60, -5.0, 1.0),
+            (1.0, 60, 2.0, 0.5),
+            (1.5, 60, -12.0, 0.5),
+            (1.5, 64, -12.0, 0.5),
+            (2.0, 57, 0.5, 0.5),
+        ];
+        assert_eq!(bends.len(), want.len(), "{bends:?}");
+        for (got, want) in bends.iter().zip(want) {
+            assert!((got.0 - want.0).abs() < 1e-9, "{got:?} vs {want:?}");
+            assert_eq!((got.1, got.2), (want.1, want.2));
+            assert!((got.3 - want.3).abs() < 1e-6, "{got:?} vs {want:?}");
+        }
+        // every bend follows its own note-on
+        for (i, e) in song.events.iter().enumerate() {
+            if let EventKind::Bend { note, channel, .. } = e.kind {
+                let on = song.events[..i].iter().rev().find(|p| {
+                    matches!(p.kind, EventKind::NoteOn { note: n, channel: c, .. } if n == note && c == channel)
+                });
+                assert!(on.map_or(false, |p| p.time == e.time), "bend before its note");
+            }
+        }
+        // the plain token survives for the note parser
+        let (plain, bends) = split_bends("[C4>D4 G4]:1@0.5").unwrap();
+        assert_eq!(plain, "[C4 G4]:1@0.5");
+        assert_eq!(bends.target(0), Some(BendTarget::Note(62)));
+        assert_eq!(bends.target(1), None);
+        for bad in [
+            "track a\nR>C4\n",
+            "track b kit=909\nBD>C4\n",
+            "track a\n[C4>D4 E4]>E4\n",
+            "track a\nC4>G3>A3\n",
+            "track a\nC4>+60\n",
+            "track a\nC4>H9\n",
+        ] {
+            assert!(parse_song(bad).is_err(), "should reject {bad:?}");
+        }
     }
 
     #[test]
@@ -3012,6 +3294,47 @@ mod tests {
         let path = std::env::temp_dir().join(name);
         std::fs::write(&path, data).unwrap();
         path.to_string_lossy().into_owned()
+    }
+
+    /// The throat options parse into the slot, and a smp_formant lane on a
+    /// slot with none of them still reaches it: the lane alone makes the
+    /// slot a formant slot at load, so +12 moves its sound up.
+    #[test]
+    fn throat_options_and_lanes_reach_the_slot() {
+        let wav = write_test_wav("patina-throat-test.wav");
+        let song = parse_song(&format!(
+            "track a sample={wav} formant\nC4\n\
+             track b sample={wav} formant=-5 formant_keep=0.5\nC4\n\
+             track c sample={wav}\nC4\n"
+        ))
+        .unwrap();
+        let cfg = |i: usize| song.samplers[i].cfg;
+        assert!(cfg(0).formant && cfg(0).formant_keep == 1.0 && cfg(0).formant_semis == 0.0);
+        assert!(cfg(1).formant && cfg(1).formant_keep == 0.5 && cfg(1).formant_semis == -5.0);
+        assert!(!cfg(2).formant);
+        let centroid = |lane: &str| {
+            let song = parse_song(&format!(
+                "track keys sample={wav} root=C4 loop\nC4:2\nautomate keys.{lane}\n"
+            ))
+            .unwrap();
+            let x: Vec<f32> = render_offline(&song, 48000.0).map(|(l, _)| l).collect();
+            let seg = &x[24000..24000 + 4096];
+            let (mut num, mut den) = (0.0f64, 0.0f64);
+            for k in 1..400 {
+                let f = k as f64 * 20.0;
+                let (mut re, mut im) = (0.0f64, 0.0f64);
+                for (i, &v) in seg.iter().enumerate() {
+                    let ph = std::f64::consts::TAU * f * i as f64 / 48000.0;
+                    re += v as f64 * ph.cos();
+                    im += v as f64 * ph.sin();
+                }
+                num += f * (re * re + im * im);
+                den += re * re + im * im;
+            }
+            num / den
+        };
+        let (plain, moved) = (centroid("smp_gain\n0.8"), centroid("smp_formant\n12"));
+        assert!(moved > 1.4 * plain, "a +12 throat lane: centroid {plain:.0} -> {moved:.0} Hz");
     }
 
     /// A `sample=` track becomes a sampler slot on its own channel, its

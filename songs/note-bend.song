@@ -1,0 +1,48 @@
+# Note Bend — 70 bpm, half-time, F minor. A demo of `>target` note bends:
+# a note glides from its own pitch to the target over its held length,
+# then holds it, and the track's bend_curve shapes the glide.
+#
+#   beats  0-4    a bare sine falls an octave, A3 to A2, over its 4 beats
+#                 (gate 1: the glide spans the whole note)
+#   beats  4-20   808s that sink a fourth as they ring (F1:4>-5), a pad
+#                 chord that sags a semitone at the end of each bar
+#                 (]>-1, bend_curve -0.9: it holds, then falls late), and
+#                 a lead that scoops each phrase's last note down and up
+
+bpm 70
+gate 1
+tail 2
+
+section PROBE 0..4
+section DROP 4..20
+
+automate reverb_wet
+0.15
+automate reverb_decay
+0.75
+automate tape_drive
+0.3
+
+track probe vel=0.8 gain=0.9
+A3:4>A2
+automate probe.waveform
+0
+automate probe.osc2_level
+0
+automate probe.osc3_level
+0
+automate probe.release
+0.05
+
+track boom patch=kick808 vel=0.9 gain=1.3
+>DROP F1:4>-5 | C#2:2>-2 C#2:2>-7 | G#1:4>-5 | D#1:2 D#1:2>-12
+
+track pad patch=softpad vel=0.5 gain=0.45 reverb_send=0.35
+>DROP [F3 G#3 C4]:4>-1 [C#3 F3 G#3]:4>-1 [C3 D#3 G#3]:4>-1 [A#2 D#3 G3]:4>-1
+automate pad.bend_curve
+-0.9
+
+track lead patch=glasslead vel=0.7 gain=0.5 echo_send=0.25
+>DROP C5:1 D#5:0.5 F5:0.5 G#5:2>G5 | F5:1 D#5:1 C5:2>-3 | C5:1 D#5:0.5 F5:0.5 C6:2>+2 | A#5:1 G#5:1 G5:2>C5
+automate lead.bend_curve
+0.6

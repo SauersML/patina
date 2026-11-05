@@ -211,7 +211,7 @@ pub struct Voice {
 /// straight line, +1 moves sixteen times faster at the start, -1 holds
 /// back until the end.
 #[inline]
-fn curve_power(curve: f32) -> f32 {
+pub(crate) fn curve_power(curve: f32) -> f32 {
     (4.0 * curve.clamp(-1.0, 1.0)).exp2()
 }
 

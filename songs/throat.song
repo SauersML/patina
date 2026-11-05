@@ -1,0 +1,50 @@
+# Throat — 80 bpm. A demo of the sampler's formant controls: one spoken
+# phrase dropped an octave three ways.
+#
+# Make the reel first (any voice works; this one is the macOS system voice):
+#   scripts/borrow-voice.sh "[[rate 70]] Hollow. [[slnc 200]] We are the hollow ones." renders/throat.wav Daniel
+#
+#   beats  0-8    the phrase at its own speed (C4 is the root)
+#   beats  8-16   C3 on plain tape: half speed, and the throat drops an
+#                 octave with it (the monster voice)
+#   beats 16-24   C3 with `formant`: half speed, the recording's own throat
+#   beats 24-32   C3 with `psola`: the pitch drops, the time and throat stay
+#   beats 32-40   a melody across the keys with `formant`, the throat
+#                 shrinking a fifth as it goes (smp_formant 0 -> 7)
+#   beats 40-48   the voice box's own voice sings "hollow" twice on one
+#                 note: as it is, then with vox_formant -7 (a bigger mouth)
+
+bpm 80
+gate 1
+tail 1
+
+automate reverb_wet
+0
+
+track natural sample=renders/throat.wav root=C4
+C4:8
+
+track tape sample=renders/throat.wav root=C4
+>8 C3:8
+
+track kept sample=renders/throat.wav root=C4 formant
+>16 C3:8
+
+track still sample=renders/throat.wav root=C4 psola
+>24 C3:8
+
+track tune sample=renders/throat.wav root=C4 formant mono
+>32 C4:2 G3:2 D#3:2 C3:2
+automate tune.smp_formant
+0 >32 0 7:8
+
+track mouth vox
+>40 A2:4=HH-AA1-L-OW [A2]:4=HH-AA1-L-OW
+automate mouth.vox_formant
+0 >44 -7
+automate mouth.vox_dry
+1
+automate mouth.vox_level
+0
+automate mouth.vox_vibrato
+0

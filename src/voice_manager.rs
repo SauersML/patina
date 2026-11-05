@@ -1330,6 +1330,41 @@ impl VoiceManager {
     }
 
     /// Release a note on one specific channel only.
+    /// A note bend (`C4:2>G3` in a song): the sounding `note` on
+    /// `channel` glides `semitones` away from its pitch over `seconds`
+    /// (the note's held length), along the channel's `bend_curve`, then
+    /// holds there. Keyboard cards and sampler heads bend; a kit hit has
+    /// no pitch to bend. Sent right after the note's note-on.
+    pub fn bend_note(&mut self, channel: u16, note: u8, semitones: f32, seconds: f32) {
+        if !semitones.is_finite() || !seconds.is_finite() || semitones == 0.0 {
+            return;
+        }
+        if kit_for_channel(channel).is_some() {
+            return;
+        }
+        if let Some(slot) = slot_for_channel(channel) {
+            let curve = self
+                .channel_params
+                .get(&channel)
+                .map_or(self.params.bend_curve, |p| p.bend_curve);
+            self.sampler.bend_note(
+                slot,
+                note,
+                semitones,
+                seconds,
+                crate::voice::curve_power(curve),
+            );
+            return;
+        }
+        for voice in self
+            .voices
+            .iter_mut()
+            .filter(|v| v.is_held() && v.channel() == channel && v.note == Some(note))
+        {
+            voice.start_bend(semitones, seconds);
+        }
+    }
+
     pub fn note_off_channel(&mut self, note: u8, channel: u16) {
         // Drum voices are one-shots fired by their trigger pulse; the
         // gate's falling edge does nothing on the hardware either
@@ -1849,6 +1884,11 @@ impl VoiceManager {
         self.vox.set_mode(crate::vocoder::VocoderMode::from_value(
             self.params.vox_mode,
         ));
+    }
+
+    /// The voice's throat, semitones (0 = as spoken or recorded).
+    pub fn set_vox_formant(&mut self, v: f32) {
+        self.vox.set_formant(Param::VoxFormant.clamp(v));
     }
 
     pub fn set_vox_intonation(&mut self, v: f32) {
@@ -2744,6 +2784,48 @@ mod tests {
             }
             assert!(peak < 1e3, "sr {sr} blew up, peak {peak}");
         }
+    }
+
+    /// A note bend (`C4:2>G3`) read off oscillator 1's running frequency
+    /// against the same card unbent: halfway along a straight bend the
+    /// note sits half the interval away, it lands on the target when the
+    /// held length runs out, and it holds there through the release.
+    #[test]
+    fn a_note_bend_lands_on_its_target_and_holds() {
+        let sr = 48000.0;
+        let (semis, secs) = (-5.0f32, 0.25f32);
+        let run = |bend: bool| -> Vec<f32> {
+            let mut vm = VoiceManager::new(sr, 4);
+            vm.set_channel_params(1, ParamValues::default());
+            vm.note_on_channel(60, 1.0, 1);
+            if bend {
+                vm.bend_note(1, 60, semis, secs);
+            }
+            let mut hz = Vec::new();
+            for n in 0..(0.45 * sr) as usize {
+                if n == (secs * sr) as usize {
+                    vm.note_off_channel(60, 1);
+                }
+                vm.render_next();
+                let v = vm.voices.iter().find(|v| v.note == Some(60)).unwrap();
+                hz.push(v.oscs[0].last_hz());
+            }
+            hz
+        };
+        let (bent, flat) = (run(true), run(false));
+        let ratio = |n: usize| bent[n] / flat[n];
+        let want = |frac: f32| (semis * frac / 12.0).exp2();
+        let half = (0.5 * secs * sr) as usize;
+        assert!((ratio(half) / want(0.5) - 1.0).abs() < 2e-3, "halfway: {}", ratio(half));
+        let end = (secs * sr) as usize + 10;
+        assert!((ratio(end) / want(1.0) - 1.0).abs() < 2e-3, "landed: {}", ratio(end));
+        let late = (0.44 * sr) as usize;
+        assert!((ratio(late) / want(1.0) - 1.0).abs() < 2e-3, "held: {}", ratio(late));
+        // a bend on a note nobody holds, or on a kit, does nothing
+        let mut vm = VoiceManager::new(sr, 4);
+        vm.bend_note(1, 61, 3.0, 0.1);
+        vm.bend_note(DRUM_CHANNEL, 36, 3.0, 0.1);
+        vm.render_next();
     }
 
     #[test]
