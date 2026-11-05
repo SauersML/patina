@@ -1,0 +1,38 @@
+# Resample — 120 bpm, E minor. The song samples itself: two bars of
+# drums and bass are bounced to a reel, and a slice track cuts them into
+# sixteenths and plays them back in a new order.
+#
+#   beats  0-8    SOURCE  the drums and bass, bounced as `knot`
+#   beats  8-16   CHOP    the reel in 32 slices: repeats, reversed hits,
+#                         an octave up by resample, panned picks
+#   beats 16-24   STRETCH the same slices pitched to the chords by grains
+#                         (`stretch`: the length kept), under the chop
+
+bpm 120
+gate 0.95
+tail 1
+
+section SOURCE 0..8
+section CHOP 8..16
+section STRETCH 16..24
+
+automate reverb_wet
+0.1
+
+track kick kit=909
+(BD R:0.5 BD:0.5 SD R BD:0.5 BD:0.5 SD)x2
+
+track hats kit=909 len=0.5 vel=0.5
+(CH CH OH CH)x4
+
+track bass patch=deepsine vel=0.9 len=0.5
+E2:0.75 R:0.25 E2:0.5 E3:0.5 R:0.5 E2:0.5 D2:1 | C2:0.75 R:0.25 C2:0.5 C3:0.5 R:0.5 C2:0.5 D2:1
+
+bounce knot from SOURCE tracks=kick,hats,bass
+
+track mem sample=@knot slice=32 cutoff=9000 vel=1
+>CHOP 0 1 2 3 0 0 6 7 | 8 9 10 0r 12 13 4+12 4+12 | 16 17 18 19 16p-0.8 16p0.8 22 23 | [24 0] 25 26 27 28r 28 30g-6 31g-12
+>STRETCH 0 1 2 3 4 5 6 7 | 8 9 10 11 12 13 14 15 | 16 17 18 19 20 21 22 23 | 24 25 26 27 28 29 30r 31r
+
+track tune sample=@knot slice=32 stretch vel=0.8 pan=0.3
+>STRETCH 6+7:1 6+3:1 6:1 6-2:1 | 6+5:1 6+3:1 6+2:1 6-5:1

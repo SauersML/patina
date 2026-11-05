@@ -117,6 +117,22 @@ We will use a layered architecture with clear interfaces between components:
      parse), or an onset detector (inserts.rs OnsetDetector) reading the
      source channel's raw-output tap one sample late
      (`duck_from=TRACK.onset`)
+   - Resampling (`bounce NAME from A..B tracks=...`, song.rs
+     resolve_bounces): after the parse, each bounce is an offline render
+     of the song soloed to its tracks, cut to its span and loaded into
+     the reels of the `sample=@NAME` tracks. Bounces render in
+     dependency order (one that hears a track playing another renders
+     after it); a cycle is a parse error. The reel is scaled by the
+     inverse of the deck gain, the bus scale and the output trim, so a
+     pick at velocity 1 replays at the printed level
+   - Slice tracks (`slice=N`, sampler.rs): a pick is a SliceOn event
+     whose SliceHit carries the slice, direction, semitones, gain and
+     pan; the head plays that slice as its region. Transposition is by
+     resample, or with `stretch` by 40 ms Hann grains at half overlap,
+     each placed by WSOLA (best correlation over +/-8 ms with what the
+     playing grain reads next), read at the pitch's speed while the
+     time cursor walks at the tape's own speed. Keyboard notes take the
+     old path unchanged (hit gain 1, pan 0, no hit semitones)
    - Cross-track routing (src/xmod.rs): any track's strip signal (after
      its inserts, before its fader) drives another track at audio rate.
      Song syntax, on the driven track: `fm_from=SRC fm=D` (linear FM,

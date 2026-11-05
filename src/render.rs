@@ -244,6 +244,11 @@ pub fn export_events(song: &crate::song::Song, path: &str) -> Result<()> {
             crate::song::EventKind::DuckHit { channel } => {
                 format!("\"type\":\"duck\",\"ch\":{}", channel)
             }
+            crate::song::EventKind::SliceOn { channel, hit } => format!(
+                "\"type\":\"slice\",\"slice\":{},\"note\":{},\"vel\":{:.4},\"reverse\":{},\
+                 \"semis\":{:.4},\"gain\":{:.4},\"pan\":{:.4},\"ch\":{}",
+                hit.slice, hit.note, hit.velocity, hit.reverse, hit.semis, hit.gain, hit.pan, channel
+            ),
         };
         let comma = if i + 1 < n { "," } else { "" };
         writeln!(w, "    {{\"t\":{:.6},{}}}{}", e.time, body, comma)?;

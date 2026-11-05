@@ -146,6 +146,7 @@ pub fn parse_midi(bytes: &[u8], voice: ParamValues) -> Result<Song, String> {
         mix: Default::default(),
         instruments: Vec::new(),
         warnings: Vec::new(),
+        bounces: Vec::new(),
     })
 }
 

@@ -153,6 +153,27 @@
 //                           # (0..1) keeps that much of them. Automate
 //                           # smp_formant / smp_formant_keep alike.
 //
+//   bounce knot from 0..16 tracks=drums,bass   # resampling: beats 0-16 of
+//                           # this song (those tracks, or every track
+//                           # without tracks=; a bus brings its own), A..B
+//                           # beats or sections, B exclusive, or one
+//                           # section alone (`from VERSE`), rendered at
+//                           # load through the master chain to a reel.
+//   track mem sample=@knot slice=16          # `sample=@NAME` plays a
+//     3 3 7 0r | 5+12 [2 9]:0.5 7g-6p-0.5 R  # bounce (defined above) as a
+//                           # tape (at the level it printed); slice=N
+//                           # (1-128, a WAV too) cuts the region into N
+//                           # slices and the track's tokens pick them:
+//                           # the slice index, then any of r (reversed),
+//                           # +S/-S (semitones), gD (dB), pP (pan, added to
+//                           # pan=), and the note tokens' :beats @vel
+//                           # ~shift; [a b] picks two at once, R rests. A
+//                           # pick lasts one slice unless :beats says. It
+//                           # transposes by resample (shorter up, longer
+//                           # down); `stretch` keeps the slice's own time
+//                           # (WSOLA grains). A bounce that hears a track
+//                           # playing it is an error (it would need itself).
+//
 //   track wire string str_stiff=0.0004    # an instrument track: each note
 //     A1:4 E2:4                           # plucks a waveguide string tuned
 //   track bell modal=bell                 # to it, or strikes a modal body
@@ -1981,6 +2002,11 @@ pub enum EventKind {
     Clock { beat: f64, bpm: f64 },
     /// A listed sidechain hit (`duck_at=`): the strip on `channel` ducks.
     DuckHit { channel: u16 },
+    /// A pick on a slice track (`slice=N`): a tape head on one slice.
+    SliceOn {
+        channel: u16,
+        hit: crate::sampler::SliceHit,
+    },
 }
 
 pub struct SongEvent {
@@ -2016,6 +2042,28 @@ pub struct Song {
     /// into its parameter's range), one line each, e.g.
     /// "line 12: gain 3.8 clamped to 4". The loader prints them.
     pub warnings: Vec<String>,
+    /// `bounce` lines: spans of the song rendered to reels for the
+    /// sampler tracks that play them (`sample=@NAME`), filled at load.
+    pub bounces: Vec<Bounce>,
+}
+
+/// A `bounce NAME from A..B tracks=x,y` line: the song's own render of
+/// that span (of those tracks, or of the whole mix), un-normalized and
+/// through the master chain, as a reel at 48 kHz.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Bounce {
+    pub name: String,
+    pub from_beat: f64,
+    pub to_beat: f64,
+    /// The span through the tempo lane, in seconds.
+    pub from_s: f64,
+    pub to_s: f64,
+    /// The channels it hears (a bus brings its tracks); None = the mix.
+    pub tracks: Option<Vec<u16>>,
+    /// The slots that play it, with the reel preparation their track
+    /// lines asked for, run once the bounce exists: (slot, bits=, rate=,
+    /// seconds the `beats=` fit stretches the region to).
+    pub reels: Vec<(usize, Option<u32>, Option<u32>, Option<f64>)>,
 }
 
 /// The mixer-strip routing a song's track lines declare.
@@ -2153,6 +2201,7 @@ fn dispatch(vm: &mut VoiceManager, kind: &EventKind) {
         } => vm.bend_note(channel, note, semitones, seconds as f32),
         &EventKind::Clock { beat, bpm } => vm.set_song_clock(beat, bpm),
         &EventKind::DuckHit { channel } => vm.duck_hit(channel),
+        EventKind::SliceOn { channel, hit } => vm.slice_on(*channel, hit),
     }
 }
 
@@ -2416,10 +2465,22 @@ pub fn render_offline(song: &Song, sample_rate: f32) -> OfflineRender<'_> {
 /// Stream a stem: all events and circuits still run, but only the solo
 /// channel's strip reaches the bus and effect sends.
 pub fn render_offline_solo(song: &Song, sample_rate: f32, solo: Option<u16>) -> OfflineRender<'_> {
+    render_offline_set(song, sample_rate, solo.map(|c| vec![c]))
+}
+
+/// The same with several channels heard (a `bounce` of some tracks).
+pub fn render_offline_set(
+    song: &Song,
+    sample_rate: f32,
+    solo: Option<Vec<u16>>,
+) -> OfflineRender<'_> {
     // Unison multiplies voice demand. Offline bounces use 64 distinct
     // voice boards to keep busy arrangements from stealing held notes.
     let mut vm = VoiceManager::new(sample_rate, 64);
-    vm.set_solo(solo);
+    match solo {
+        Some(set) => vm.set_solo_set(set),
+        None => vm.set_solo(None),
+    }
     vm.warm_up();
     register_channels(&mut vm, song);
     let end = song.events.last().map(|e| e.time).unwrap_or(0.0) + song.tail_seconds;
@@ -2463,6 +2524,9 @@ enum TrackMode {
         swing: f64,
         /// index into `track_channels`: whose notes these are
         track: usize,
+        /// a slice track's (slices, one slice in beats): its tokens are
+        /// slice picks, not notes
+        slices: Option<(usize, f64)>,
     },
     Automation {
         param: Param,
@@ -2500,6 +2564,12 @@ struct GenClock {
 }
 
 fn parse_song(text: &str) -> Result<Song, String> {
+    let mut song = parse_song_gens(text)?;
+    resolve_bounces(&mut song)?;
+    Ok(song)
+}
+
+fn parse_song_gens(text: &str) -> Result<Song, String> {
     if !text.contains('{') {
         return parse_song_pass(text, &mut GenClock::default());
     }
@@ -2550,6 +2620,10 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
     // `bus` lines: (line, bus channel, member track names), resolved once
     // every track is known
     let mut bus_from: Vec<(usize, u16, Vec<String>)> = Vec::new();
+    // `bounce` lines: (line, name, from beat, to beat, track names), and
+    // the reels that play them: (bounce, slot, bits, rate, fit seconds)
+    let mut bounce_lines: Vec<(usize, String, f64, f64, Option<Vec<String>>)> = Vec::new();
+    let mut bounce_reels: Vec<(usize, usize, Option<u32>, Option<u32>, Option<f64>)> = Vec::new();
     let mut mode_sets: std::collections::HashMap<String, crate::physical::ModeSet> =
         std::collections::HashMap::new();
     // `spec_from=` morph sources, resolved like the duck keys once every
@@ -2690,6 +2764,52 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                     return Err(err(format!("modes '{}' defined twice", name)));
                 }
             }
+            "bounce" => {
+                // `bounce NAME from A..B [tracks=x,y]`: a span of this song
+                // rendered to a reel for `sample=@NAME` tracks
+                let mut it = line.split_whitespace().skip(1);
+                let usage = "bounce NAME from A..B [tracks=x,y] (A and B beats or sections)";
+                let name = it.next().ok_or_else(|| err(format!("bounce needs a name: {usage}")))?;
+                if bounce_lines.iter().any(|b| b.1 == name) {
+                    return Err(err(format!("bounce '{}' defined twice", name)));
+                }
+                if it.next() != Some("from") {
+                    return Err(err(format!("bounce {} needs its span: {usage}", name)));
+                }
+                let span = it
+                    .next()
+                    .ok_or_else(|| err(format!("bounce {} needs its span: {usage}", name)))?;
+                let (a, b) = match span.split_once("..") {
+                    Some((a, b)) => (
+                        resolve_seek(a, &sections).map_err(&err)?,
+                        resolve_seek(b, &sections).map_err(&err)?,
+                    ),
+                    None => *sections.get(span).ok_or_else(|| {
+                        err(format!("bounce {}: '{}' is not A..B or a section", name, span))
+                    })?,
+                };
+                if b <= a {
+                    return Err(err(format!("bounce {}: the span ends before it starts", name)));
+                }
+                let mut tracks = None;
+                for opt in it {
+                    match opt.strip_prefix("tracks=") {
+                        Some(v) => {
+                            tracks = Some(
+                                v.split(',')
+                                    .filter(|t| !t.is_empty())
+                                    .map(str::to_string)
+                                    .collect::<Vec<String>>(),
+                            )
+                        }
+                        None => {
+                            return Err(err(format!("unknown bounce option '{}' ({usage})", opt)))
+                        }
+                    }
+                }
+                bounce_lines.push((line_no, name.to_string(), a, b, tracks));
+                mode = TrackMode::None;
+            }
             "bus" => {
                 // A group bus: its tracks' strips sum into one strip of
                 // its own (or `bus mix`, the finished two-track)
@@ -2821,6 +2941,10 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                         None
                     };
                 let mut smp_data: Option<std::sync::Arc<crate::sampler::SampleData>> = None;
+                // `sample=@NAME`: the bounce this reel waits for
+                let mut smp_bounce: Option<usize> = None;
+                // a slice track: (slices, one slice's length in beats)
+                let mut slice_track: Option<(usize, f64)> = None;
                 let mut smp_mode_set = false;
                 // Reel-preparation options, applied once the file is known
                 let mut smp_bits: Option<u32> = None;
@@ -3039,6 +3163,20 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                         }
                         channels.push(params_from_patch(&text).map_err(err)?);
                         channel = channels.len() as u16;
+                    } else if let Some(name) = opt.strip_prefix("sample=@") {
+                        // a bounce of this song, rendered once it parses
+                        let k = bounce_lines.iter().position(|b| b.1 == name).ok_or_else(|| {
+                            err(format!(
+                                "sample=@{}: no `bounce {} from ...` line above",
+                                name, name
+                            ))
+                        })?;
+                        smp_bounce = Some(k);
+                        smp_data = Some(std::sync::Arc::new(crate::sampler::SampleData {
+                            left: Vec::new(),
+                            right: Vec::new(),
+                            rate: 48000,
+                        }));
                     } else if let Some(v) = opt.strip_prefix("sample=") {
                         smp_data = Some(std::sync::Arc::new(
                             crate::sampler::load_wav_stereo(v).map_err(err)?,
@@ -3133,6 +3271,52 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                     if cfg.chop > 1 && !smp_mode_set {
                         cfg.mode = crate::sampler::PlayMode::OneShot;
                     }
+                    if cfg.slices > 0 {
+                        if cfg.chop > 1 {
+                            return Err(err("slice= and chop= are two ways to cut a reel; pick one".into()));
+                        }
+                        if cfg.psola || cfg.formant {
+                            return Err(err("a slice track pitches by resample or by `stretch`, not psola or formant".into()));
+                        }
+                        if !smp_mode_set {
+                            cfg.mode = crate::sampler::PlayMode::Gate;
+                        }
+                        // one slice's length in beats, the picks' default
+                        let beats = match (smp_beats, smp_bounce) {
+                            (Some(b), _) => b,
+                            (None, Some(k)) => {
+                                let (a, b) = (bounce_lines[k].2, bounce_lines[k].3);
+                                let total = (b - a) * 60.0 / bpm;
+                                let r0 = (cfg.start as f64).min(total);
+                                let r1 = if cfg.end > 0.0 { (cfg.end as f64).min(total) } else { total };
+                                (r1 - r0).max(0.0) * bpm / 60.0
+                            }
+                            (None, None) => {
+                                let rate = data.rate.max(1) as f64;
+                                let total = data.frames() as f64 / rate;
+                                let r0 = (cfg.start as f64).min(total);
+                                let r1 = if cfg.end > 0.0 { (cfg.end as f64).min(total) } else { total };
+                                (r1 - r0).max(0.0) / cfg.speed.max(0.03) as f64 * bpm / 60.0
+                            }
+                        };
+                        let one = beats / cfg.slices as f64;
+                        if one <= REST_EPSILON_BEATS {
+                            return Err(err("the reel's slices have no length".into()));
+                        }
+                        slice_track = Some((cfg.slices, one));
+                    } else if cfg.stretch {
+                        return Err(err("`stretch` pitches a slice track's picks: add slice=N".into()));
+                    }
+                    if let Some(k) = smp_bounce {
+                        // bits=, rate= and beats= wait for the bounce
+                        bounce_reels.push((
+                            k,
+                            samplers.len(),
+                            smp_bits.take(),
+                            smp_rate.take(),
+                            smp_beats.take().map(|b| b * 60.0 / bpm),
+                        ));
+                    }
                     // Vintage converters: resample/truncate the reel once
                     // at load, and play it back through the ZOH DAC
                     if smp_bits.is_some() || smp_rate.is_some() {
@@ -3222,6 +3406,7 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                     channel,
                     swing,
                     track: track_channels.len() - 1,
+                    slices: slice_track,
                 };
             }
             "automate" => {
@@ -3456,9 +3641,10 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                     channel,
                     swing,
                     track,
+                    slices,
                 } => {
                     let swing = *swing;
-                    let (vel, len, channel, track) = (*vel, *len, *channel, *track);
+                    let (vel, len, channel, track, slices) = (*vel, *len, *channel, *track, *slices);
                     let first_event = events.len();
                     let drums = crate::drums::kit_for_channel(channel).is_some();
                     let line = expand_groups(line).map_err(err)?;
@@ -3468,6 +3654,38 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                         }
                         if let Some(beat) = seek_target(&token) {
                             track_beat = resolve_seek(beat, &sections).map_err(err)?;
+                            continue;
+                        }
+                        // A slice track's picks: `7`, `7r`, `7+3`, `[2 9]:0.5`
+                        if let Some((n, one)) = slices {
+                            let (picks, dur, vel, shift) = parse_slice_token(&token, n, vel)
+                                .map_err(|m| err(format!("token '{}': {}", token, m)))?;
+                            let dur = if dur.is_nan() { one } else { dur };
+                            if dur <= REST_EPSILON_BEATS {
+                                continue;
+                            }
+                            warnings.extend(
+                                range_warning(&format!("token '{}': velocity", token), vel, 0.0, 1.0)
+                                    .map(&err),
+                            );
+                            let vel = vel.clamp(0.0, 1.0);
+                            let ph = track_beat.rem_euclid(0.5);
+                            let lean = if swing != 0.5 && (ph - 0.25).abs() < 1e-6 {
+                                (swing - 0.5) * 0.5
+                            } else {
+                                0.0
+                            };
+                            let sound_beat = (track_beat + shift + lean).max(0.0);
+                            let gap = ((1.0 - gate) * dur).min(GATE_GAP_MAX_S * bpm / 60.0);
+                            let off_beat = sound_beat + dur - gap;
+                            for mut hit in picks.iter().copied() {
+                                hit.velocity = vel;
+                                events.push((sound_beat, 2, EventKind::SliceOn { channel, hit }));
+                            }
+                            for hit in &picks {
+                                events.push((off_beat, 0, EventKind::NoteOff { note: hit.note, channel }));
+                            }
+                            track_beat += dur;
                             continue;
                         }
                         // `=lyric` rides the note it belongs to; split it
@@ -4151,6 +4369,50 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
         gen.scouted = Some((bpm, tempo_lane.clone(), max_beat));
     }
     let time_of = tempo_map(bpm, &tempo_lane, max_beat);
+    // `bounce` lines: their spans in seconds, the channels they hear, and
+    // the reels waiting on them
+    let mut bounces = Vec::new();
+    for (k, (line_no, name, a, b, names)) in bounce_lines.into_iter().enumerate() {
+        let tracks = match names {
+            None => None,
+            Some(names) => {
+                let mut chans = Vec::new();
+                for n in &names {
+                    let ch = track_channels
+                        .iter()
+                        .find(|(t, _)| t == n)
+                        .map(|(_, c)| *c)
+                        .ok_or_else(|| {
+                            format!("line {}: bounce {}: no track named '{}'", line_no + 1, name, n)
+                        })?;
+                    if ch == crate::voice_manager::MIX_CHANNEL {
+                        return Err(format!(
+                            "line {}: bounce {}: the mix is every track; leave tracks= out",
+                            line_no + 1,
+                            name
+                        ));
+                    }
+                    if !chans.contains(&ch) {
+                        chans.push(ch);
+                    }
+                }
+                Some(chans)
+            }
+        };
+        bounces.push(Bounce {
+            name,
+            from_beat: a,
+            to_beat: b,
+            from_s: time_of(a),
+            to_s: time_of(b),
+            tracks,
+            reels: bounce_reels
+                .iter()
+                .filter(|r| r.0 == k)
+                .map(|r| (r.1, r.2, r.3, r.4))
+                .collect(),
+        });
+    }
     Ok(Song {
         events: events
             .into_iter()
@@ -4174,6 +4436,7 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
         mix,
         instruments,
         warnings,
+        bounces,
     })
 }
 
@@ -4229,8 +4492,15 @@ fn end_notes_at_restrike(events: &mut Vec<(f64, u8, EventKind)>) {
     let mut held: std::collections::HashMap<(u16, u8), u32> = std::collections::HashMap::new();
     let mut i = 0;
     while i < events.len() {
+        // a slice pick is a note-on of its slice's id
+        let on = match events[i].2 {
+            EventKind::NoteOn { note, channel, .. } => Some((note, channel)),
+            EventKind::SliceOn { channel, hit } => Some((hit.note, channel)),
+            _ => None,
+        };
         match events[i].2 {
-            EventKind::NoteOn { note, channel, .. } => {
+            _ if on.is_some() => {
+                let (note, channel) = on.unwrap();
                 let count = held.entry((channel, note)).or_insert(0);
                 if *count > 0 {
                     let stale = events[i + 1..].iter().position(|e| {
@@ -4406,6 +4676,16 @@ fn parse_sampler_option(
             return Err("chop count must be 2-128".into());
         }
         cfg.chop = n;
+    } else if let Some(v) = opt.strip_prefix("slice=") {
+        let n: usize = v
+            .parse()
+            .map_err(|_| format!("invalid slice count '{}'", v))?;
+        if !(1..=128).contains(&n) {
+            return Err("slice count must be 1-128".into());
+        }
+        cfg.slices = n;
+    } else if opt == "stretch" {
+        cfg.stretch = true;
     } else if let Some(v) = opt.strip_prefix("mode=") {
         cfg.mode = match v {
             "gate" => PlayMode::Gate,
@@ -4678,6 +4958,224 @@ impl GenSegment {
         }
         Ok(out)
     }
+}
+
+/// One slice-track token: `7` (slice 7), `7r` (reversed), `7+3` / `7-5`
+/// (semitones), `7g-6` (gain, dB), `7p0.5` (pan, added to the slot's), in
+/// any order after the index, then the note tokens' `:beats` `@vel`
+/// `~shift`; `[2 9r]` picks two at once, `R` rests. Returns (picks,
+/// duration or NaN for one slice, velocity, shift).
+fn parse_slice_token(
+    token: &str,
+    slices: usize,
+    default_vel: f32,
+) -> Result<(Vec<crate::sampler::SliceHit>, f64, f32, f64), String> {
+    let t = token.trim();
+    let (heads, tail) = if let Some(rest) = t.strip_prefix('[') {
+        let close = rest.find(']').ok_or("unmatched '['")?;
+        (rest[..close].split_whitespace().collect::<Vec<_>>(), &rest[close + 1..])
+    } else {
+        let cut = t.find([':', '@', '~']).unwrap_or(t.len());
+        (vec![&t[..cut]], &t[cut..])
+    };
+    // the timing suffixes are the note tokens' own
+    let rest = heads.len() == 1 && (heads[0] == "." || heads[0].eq_ignore_ascii_case("r"));
+    let (_, dur, vel, shift) = parse_note_token(&format!("C4{}", tail), default_vel, f64::NAN, false)?;
+    if rest {
+        return Ok((Vec::new(), dur, vel, 0.0));
+    }
+    let mut picks = Vec::new();
+    for h in heads {
+        let b = h.as_bytes();
+        let mut i = 0;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == 0 {
+            return Err(format!("'{}' is not a slice: a pick starts with its number (0-{})", h, slices - 1));
+        }
+        let slice: usize = h[..i].parse().map_err(|_| format!("invalid slice '{}'", h))?;
+        if slice >= slices {
+            return Err(format!("slice {} past the last one ({} slices, 0-{})", slice, slices, slices - 1));
+        }
+        let mut hit = crate::sampler::SliceHit {
+            slice: slice as u16,
+            note: slice as u8,
+            velocity: default_vel,
+            reverse: false,
+            semis: 0.0,
+            gain: 1.0,
+            pan: 0.0,
+        };
+        // a signed number from byte `i` on
+        let number = |i: &mut usize| -> Result<f32, String> {
+            let start = *i;
+            if *i < b.len() && (b[*i] == b'+' || b[*i] == b'-') {
+                *i += 1;
+            }
+            while *i < b.len() && (b[*i].is_ascii_digit() || b[*i] == b'.') {
+                *i += 1;
+            }
+            h[start..*i].parse_finite::<f32>().map_err(|_| format!("'{}': a number after {} is missing", h, &h[..start]))
+        };
+        while i < b.len() {
+            match b[i] {
+                b'r' => {
+                    hit.reverse = true;
+                    i += 1;
+                }
+                b'+' | b'-' => hit.semis = number(&mut i)?.clamp(-48.0, 48.0),
+                b'g' => {
+                    i += 1;
+                    let db = number(&mut i)?;
+                    if !(-96.0..=24.0).contains(&db) {
+                        return Err(format!("'{}': gain g{} dB is outside -96..24", h, db));
+                    }
+                    hit.gain = 10f32.powf(db / 20.0);
+                }
+                b'p' => {
+                    i += 1;
+                    hit.pan = number(&mut i)?.clamp(-1.0, 1.0);
+                }
+                _ => {
+                    return Err(format!(
+                        "'{}': after the slice, r reverses, +S/-S transposes, gD sets dB, pP pans",
+                        h
+                    ))
+                }
+            }
+        }
+        picks.push(hit);
+    }
+    Ok((picks, dur, vel, shift))
+}
+
+/// Render every `bounce` and load its reels: in dependency order (a
+/// bounce that hears a track playing another bounce renders after it),
+/// each a solo render of its tracks (or the whole mix) cut to its span.
+fn resolve_bounces(song: &mut Song) -> Result<(), String> {
+    if song.bounces.is_empty() {
+        return Ok(());
+    }
+    const RATE: f32 = 48000.0;
+    let n = song.bounces.len();
+    let slot_channel = |slot: usize| crate::sampler::SAMPLER_CHANNEL_BASE + slot as u16;
+    let bus_of = |ch: u16| {
+        song.mix
+            .buses
+            .iter()
+            .find(|(_, m)| m.contains(&ch))
+            .map(|(b, _)| *b)
+    };
+    let hears = |k: usize, ch: u16| match &song.bounces[k].tracks {
+        None => true,
+        Some(t) => t.contains(&ch) || bus_of(ch).map_or(false, |b| t.contains(&b)),
+    };
+    let deps: Vec<Vec<usize>> = (0..n)
+        .map(|k| {
+            (0..n)
+                .filter(|&j| song.bounces[j].reels.iter().any(|r| hears(k, slot_channel(r.0))))
+                .collect()
+        })
+        .collect();
+    let mut order = Vec::new();
+    let mut state = vec![0u8; n];
+    fn visit(k: usize, deps: &[Vec<usize>], state: &mut [u8], order: &mut Vec<usize>, names: &[String]) -> Result<(), String> {
+        match state[k] {
+            2 => return Ok(()),
+            1 => {
+                return Err(format!(
+                    "bounce {} hears a track that plays it (sample=@{}), so it would need itself \
+                     to render; give it tracks= without that one",
+                    names[k], names[k]
+                ))
+            }
+            _ => {}
+        }
+        state[k] = 1;
+        for &j in &deps[k] {
+            visit(j, deps, state, order, names)?;
+        }
+        state[k] = 2;
+        order.push(k);
+        Ok(())
+    }
+    let names: Vec<String> = song.bounces.iter().map(|b| b.name.clone()).collect();
+    for k in 0..n {
+        visit(k, &deps, &mut state, &mut order, &names)?;
+    }
+    for k in order {
+        let (from, to) = (song.bounces[k].from_s, song.bounces[k].to_s);
+        let a = (from * RATE as f64).round() as usize;
+        let b = (to * RATE as f64).round() as usize;
+        let (mut left, mut right) = (Vec::with_capacity(b - a), Vec::with_capacity(b - a));
+        for (i, (l, r)) in render_offline_set(song, RATE, song.bounces[k].tracks.clone())
+            .take(b)
+            .enumerate()
+        {
+            if i >= a {
+                left.push(l);
+                right.push(r);
+            }
+        }
+        // a span past the song's end bounces the silence after it
+        left.resize(b - a, 0.0);
+        right.resize(b - a, 0.0);
+        let data = crate::sampler::SampleData { left, right, rate: RATE as u32 };
+        // The reel loads at deck unity: a pick at vel=1 through a unity
+        // strip prints at the bounce's own level, so the deck's default
+        // gain (0.8; a track's own gain= still scales it), the bus's
+        // volts-to-samples scale (0.7 x volume) and the output trim, as
+        // they stood where the bounce starts, are taken back out
+        let knob = |param: Param, default: f32| {
+            song.events
+                .iter()
+                .take_while(|e| e.time <= from)
+                .filter_map(|e| match e.kind {
+                    EventKind::Param { param: p, value, channel: 0 } if p == param => Some(value),
+                    _ => None,
+                })
+                .last()
+                .unwrap_or(default)
+        };
+        let printed = 0.7 * knob(Param::Volume, ParamValues::default().volume)
+            * knob(Param::Output, ParamValues::default().output);
+        let reels = song.bounces[k].reels.clone();
+        for (slot, bits, rate, fit) in reels {
+            let s = &mut song.samplers[slot];
+            let deck = crate::sampler::SlotConfig::default().gain;
+            let unity = (1.0 / (deck * printed).max(0.01)).min(100.0);
+            let mut reel = crate::sampler::SampleData {
+                left: data.left.iter().map(|x| x * unity).collect(),
+                right: data.right.iter().map(|x| x * unity).collect(),
+                rate: data.rate,
+            };
+            if bits.is_some() || rate.is_some() {
+                reel = crate::sampler::crunch(&reel, bits, rate);
+                s.cfg.zoh = true;
+            }
+            if let Some(want) = fit {
+                let total = reel.frames() as f64 / reel.rate.max(1) as f64;
+                let (x, y) = match s.cfg.loop_pts {
+                    Some((x, y)) => ((x as f64).max(s.cfg.start as f64), (y as f64).min(total)),
+                    None => (
+                        s.cfg.start as f64,
+                        if s.cfg.end > 0.0 { s.cfg.end as f64 } else { total },
+                    ),
+                };
+                let speed = (y - x).max(1e-3) / want.max(1e-6);
+                if !(0.03..=32.0).contains(&speed) {
+                    song.warnings.push(format!(
+                        "bounce {}: beats= needs playback speed {:.3}, clamped to 0.03..32",
+                        song.bounces[k].name, speed
+                    ));
+                }
+                s.cfg.speed = speed.clamp(0.03, 32.0) as f32;
+            }
+            s.data = std::sync::Arc::new(reel);
+        }
+    }
+    Ok(())
 }
 
 /// The most hits one `duck_at=` list expands to.
@@ -8103,5 +8601,108 @@ mod tests {
         for (got, want) in fired.iter().zip([0.2f32, 1.5, 1.8]) {
             assert!((got - want).abs() < 0.003, "{fired:?}");
         }
+    }
+
+    /// `bounce` renders a span of the song to a reel; a sampler track
+    /// plays it (`sample=@NAME`) at the level it printed, and a slice
+    /// track's picks play its slices.
+    #[test]
+    fn a_bounce_replays_its_span_at_its_own_level() {
+        let text = "bpm 120\ntail 0.5\nautomate reverb_wet\n0\ntrack pad\n[C4 E4 G4]:4\n\
+                    bounce b from 0..4 tracks=pad\ntrack mem sample=@b slice=1 vel=1\n>6 0\n";
+        let song = parse_song(text).unwrap();
+        assert_eq!(song.bounces.len(), 1);
+        let b = &song.bounces[0];
+        assert_eq!((b.from_s, b.to_s, b.tracks.clone()), (0.0, 2.0, Some(vec![1])));
+        assert_eq!(song.samplers[0].data.frames(), 96000);
+        // the pick is one slice long: 4 beats from beat 6 (3 s), less the
+        // gate's 80 ms
+        let offs: Vec<f64> = song
+            .events
+            .iter()
+            .filter(|e| matches!(e.kind, EventKind::NoteOff { channel, .. } if channel != 1))
+            .map(|e| e.time)
+            .collect();
+        assert!((offs[0] - 4.92).abs() < 1e-6, "{offs:?}");
+        let out: Vec<(f32, f32)> = render_offline(&song, 48000.0).collect();
+        let first = frames_rms(&out, 0.2, 1.8, 48000.0);
+        let again = frames_rms(&out, 3.2, 4.8, 48000.0);
+        let db = 20.0 * (again / first).log10();
+        assert!(db.abs() < 1.0, "the replay is {db} dB off the original");
+        // and the track's own gain= still sets the replay's level
+        let half = parse_song(&text.replace("slice=1 vel=1", "slice=1 vel=1 gain=0.5")).unwrap();
+        let out: Vec<(f32, f32)> = render_offline(&half, 48000.0).collect();
+        let db = 20.0 * (frames_rms(&out, 3.2, 4.8, 48000.0) / first).log10();
+        assert!((db + 6.0).abs() < 1.0, "gain=0.5 replays {db} dB off the original");
+    }
+
+    /// Slice-track tokens: an index, `r`, `+S`/`-S`, `gD` (dB), `pP`, in
+    /// any order, with the note tokens' `:beats` `@vel` `~shift`; chords
+    /// pick several, `R` rests, and a pick lasts one slice by default.
+    #[test]
+    fn slice_tokens_pick_reverse_pitch_gain_and_pan() {
+        let (picks, dur, vel, shift) = parse_slice_token("7r+3g-6p0.5:0.5@0.6~0.01", 16, 0.8).unwrap();
+        assert_eq!(picks.len(), 1);
+        let h = picks[0];
+        assert_eq!((h.slice, h.reverse, h.semis, h.pan), (7, true, 3.0, 0.5));
+        assert!((h.gain - 0.501).abs() < 0.001);
+        assert_eq!((dur, vel, shift), (0.5, 0.6, 0.01));
+        let (picks, dur, ..) = parse_slice_token("[2 9r-12]", 16, 0.8).unwrap();
+        assert_eq!(picks.iter().map(|h| (h.slice, h.reverse, h.semis)).collect::<Vec<_>>(),
+                   vec![(2, false, 0.0), (9, true, -12.0)]);
+        assert!(dur.is_nan(), "no duration: the track's slice length");
+        let (picks, dur, ..) = parse_slice_token("R:2", 16, 0.8).unwrap();
+        assert!(picks.is_empty() && dur == 2.0);
+        assert!(parse_slice_token("16", 16, 0.8).unwrap_err().contains("past the last one"));
+        assert!(parse_slice_token("3x", 16, 0.8).unwrap_err().contains("r reverses"));
+        assert!(parse_slice_token("3g", 16, 0.8).unwrap_err().contains("number"));
+        // on a track: picks default to one slice (a 4-beat bounce in 16
+        // slices: a sixteenth each) and land as slice events
+        let song = parse_song(
+            "bpm 120\ntrack k kit=909\nBD BD BD BD\nbounce b from 0..4 tracks=k\n\
+             track mem sample=@b slice=16\n>4 3 3 7 0r\n",
+        )
+        .unwrap();
+        let ons: Vec<(f64, u16, bool)> = song
+            .events
+            .iter()
+            .filter_map(|e| match e.kind {
+                EventKind::SliceOn { hit, .. } => Some((e.time, hit.slice, hit.reverse)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ons, vec![(2.0, 3, false), (2.125, 3, false), (2.25, 7, false), (2.375, 0, true)]);
+    }
+
+    /// What bounce and slice lines refuse, with a reason; and bounces
+    /// render in the order they need (a bounce of a track that plays
+    /// another bounce comes after it).
+    #[test]
+    fn bounces_render_in_order_and_refuse_cycles() {
+        let base = "bpm 120\ntrack k kit=909\nBD BD BD BD\n";
+        for (tail, want) in [
+            ("track m sample=@nope slice=4\n0\n", "no `bounce nope from ...` line above"),
+            ("bounce a 0..4\n", "needs its span"),
+            ("bounce a from 4..2\n", "ends before it starts"),
+            ("bounce a from 0..4 tracks=zz\n", "no track named 'zz'"),
+            ("bounce a from 0..4\nbounce a from 0..2\n", "defined twice"),
+            ("bounce a from 0..4\ntrack m sample=@a slice=4 chop=4\n0\n", "pick one"),
+            ("bounce a from 0..4\ntrack m sample=@a stretch\nC4\n", "add slice=N"),
+            ("bounce a from 0..4\ntrack m sample=@a slice=4\n0\n", "hears a track that plays it"),
+            ("bounce a from 0..4\ntrack m sample=@a slice=4\n0 4\n", "past the last one"),
+        ] {
+            let e = parse_song(&format!("{base}{tail}")).err().unwrap_or_default();
+            assert!(e.contains(want), "{tail:?}: {e}");
+        }
+        // b hears m, which plays a: a renders first, and b's reel is not
+        // silent where m plays
+        let song = parse_song(&format!(
+            "{base}bounce a from 0..1 tracks=k\ntrack m sample=@a slice=1 vel=1\n>4 0\n\
+             bounce b from 4..5 tracks=m\ntrack n sample=@b slice=1\n>8 0\n"
+        ))
+        .unwrap();
+        let reel = &song.samplers[1].data;
+        let peak = reel.left.iter().fold(0.0f32, |a, x| a.max(x.abs()));
+        assert!(peak > 0.05, "bounce b heard m playing bounce a: peak {peak}");
     }
 }

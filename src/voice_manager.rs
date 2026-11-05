@@ -2134,6 +2134,27 @@ impl VoiceManager {
         }
     }
 
+    /// One pick on a slice track (`slice=N`): a tape head on that slice,
+    /// keying any strip ducked off this track as a note-on would.
+    pub fn slice_on(&mut self, channel: u16, hit: &crate::sampler::SliceHit) {
+        if self.sounded.insert(channel, ()).is_none() {
+            if let Some(m) = self.channel_mix.get_mut(&channel) {
+                m.fresh = false;
+            }
+        }
+        for m in self.channel_mix.values_mut() {
+            if m.duck_key.map_or(false, |k| k.hears(channel, hit.note)) {
+                m.trigger_duck();
+            }
+        }
+        if let Some(slot) = slot_for_channel(channel) {
+            if let Some((victim, held)) = self.sampler.slice_on(slot, hit) {
+                let victim = crate::sampler::SAMPLER_CHANNEL_BASE + victim as u16;
+                self.record_steal(victim, channel, held, true);
+            }
+        }
+    }
+
     pub fn note_on_channel(&mut self, note: u8, velocity: f32, channel: u16) {
         // From its first note on, a channel's fader moves glide
         if self.sounded.insert(channel, ()).is_none() {

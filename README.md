@@ -19,7 +19,7 @@ format for programmatic playback and parameter automation.
 - 🗜️ A mix-bus "glue" compressor modeled on the SSL 4000 G-series centre-section bus compressor, printing to the tape: feed-forward, stereo-linked, a Blackmer (dbx 202-family) VCA with its real even-order colour, a log-converter soft knee, a ratio switch (2/4/10:1; a song or patch sets any ratio from 1 to 20:1), attack (0.1–30 ms) and release (0.1–1.2 s) switches with a dual-time-constant program-dependent AUTO, make-up, parallel mix, a sidechain high-pass, and a moving-coil gain-reduction meter on the panel. Out by default — and out means bit-identical (`comp_in`, `comp_threshold`, … in songs and patches)
 - 🥁 A TR-909 rhythm section built from the service-manual circuits — swept bridged-T kick with click path and waveshaper, twin-shell snare with snappy noise, three-mode rim knock, flam-envelope clap, and a no-samples hi-hat (six-oscillator metal bank through the 909's swept high-pass and choke VCAs) — living on the same volt bus, effects, and power rail as the keyboard voices. Modern range extensions: kick DRIVE from clean sub to full grit, SWEEP depth, rumble-length decays, and an antialiased bus drive. Triggered from drum tracks in songs (`track beat kit=909` with `BD SD RS CP CH OH`; every kit track is a board of its own), MIDI channel 10 (GM map), pads on the panel, or the plugin
 - 🗣️ A voice box: a Klatt-style formant speech synthesizer (glottal pulse + cascade resonators, ARPAbet phonemes) driving a 20-band channel vocoder whose carrier is the synth's own voices, with a VSM-201-style voiced/unvoiced switch that snaps the carrier to noise on consonant frames so words stay legible. Two circuits on the mode switch: the '97 DigiTech Talker "TalkBox" voicing (tube-choked lows, honky mids, instant articulation, amp grit) and a full-range studio board. Lyrics ride the notes in songs (`track choir vox`, `[A2 E3 A3]:2=HH-EH-L-OW`) with per-phoneme duration and dynamics; `wav=` feeds any recorded voice through the same circuit, and `patina --say "HH-AH-L-OW"` speaks from the command line
-- 📼 A tape-deck sampler: any WAV becomes an instrument on the keys (`track keys sample=tape.wav`) — band-limited windowed-sinc playback (Kaiser β=8.6, kernel stretched by the read speed so varispeed doesn't alias in *either* direction), sustain loops with equal-power crossfades (a Mellotron whose tape never runs out), `chop=N` slice pads mapped chromatically (the MPC workflow), `beats=N` tempo-fitting (break-matching solved at parse), a per-slot resonant ZDF lowpass (the SP/Akai filter-sweep sound), vintage converter emulation (`bits=12 rate=26040` is the SP-1200: band-limited decimation at load, truncation, and a zero-order-hold DAC whose imaging spray is the point), reverse transport, gate/one-shot modes, per-note choke (`mono`), and a live-automatable transport: `smp_pitch` is a varispeed knob (tape-stops on demand), `smp_start` scrubs the needle-drop, `smp_cutoff`/`smp_res` sweep the filter, `smp_gain`/`smp_pan`/`smp_attack`/`smp_release` reshape it mid-song. The heads mix onto the same volt bus as everything else — sampler playback sags the power rail, runs through the fuzz/spring/reverb/chorus/tape chain, and bends with the pitch wheel
+- 📼 A tape-deck sampler: any WAV becomes an instrument on the keys (`track keys sample=tape.wav`) — band-limited windowed-sinc playback (Kaiser β=8.6, kernel stretched by the read speed so varispeed doesn't alias in *either* direction), sustain loops with equal-power crossfades (a Mellotron whose tape never runs out), `chop=N` slice pads mapped chromatically (the MPC workflow), resampling (`bounce NAME from A..B` renders a span of the song to a reel that `sample=@NAME` plays) with `slice=N` slice tracks whose tokens pick slices (`3 3 7 0r`, each with its own reverse, transposition by resample or by `stretch`, gain and pan), `beats=N` tempo-fitting (break-matching solved at parse), a per-slot resonant ZDF lowpass (the SP/Akai filter-sweep sound), vintage converter emulation (`bits=12 rate=26040` is the SP-1200: band-limited decimation at load, truncation, and a zero-order-hold DAC whose imaging spray is the point), reverse transport, gate/one-shot modes, per-note choke (`mono`), and a live-automatable transport: `smp_pitch` is a varispeed knob (tape-stops on demand), `smp_start` scrubs the needle-drop, `smp_cutoff`/`smp_res` sweep the filter, `smp_gain`/`smp_pan`/`smp_attack`/`smp_release` reshape it mid-song. The heads mix onto the same volt bus as everything else — sampler playback sags the power rail, runs through the fuzz/spring/reverb/chorus/tape chain, and bends with the pitch wheel
 - 🥊 Kick-bass on any voice: a per-note pitch envelope (start, time, curve) diving onto the note, key sync, and an antialiased drive stage (tanh, clip, wavefolder) ahead of the ladder as post-filter; plus a seven-saw supersaw bank and a filtered noise oscillator per card for walls and risers
 - 🫦 Note bends (`C4:2>G3` glides to the target over the note), and the throat: pitch-synchronous grains that move a voice's formants apart from its pitch, so a sampled voice drops an octave without turning into a monster (`formant`, `smp_formant`, `vox_formant`)
 - 💥 Glitch inserts on any track, any bus or the whole mix: beat repeat from 1/8 to 1/64 that can halve itself into a roll, reverse in note slices, and a tape stop with a curve (`stutter`, `stutter_halve`, `reverse`, `tape_stop`, `tape_stop_curve`)
@@ -248,6 +248,32 @@ automate vox.smp_formant                                 # then shrink the throa
 0 R:8 7:8@smooth
 ```
 - `songs/magnetic-memory.song` is the demo: the instrument sampling its own bounce of *Hold On* — looped tape choir, vocal chops, reverse swells, and a tape-stop ending.
+
+### Resampling and slices
+
+A song can sample itself. `bounce NAME from A..B` renders beats A to B
+(B exclusive; beats or sections, or one section alone, `from VERSE`) of
+the song at load, through the master chain, and `sample=@NAME` puts that
+render on a tape track. `tracks=x,y` bounces only those tracks (a bus
+brings its members); without it the bounce is the whole mix. The reel
+replays at the level it printed: a pick at `vel=1` is the bounce again.
+
+`slice=N` (1-128, on a bounce or a WAV) cuts the region into N slices,
+and the track's tokens pick them instead of playing notes:
+
+```
+bounce knot from 0..4 tracks=drums,bass
+track mem sample=@knot slice=16 cutoff=6000
+>16 3 3 7 0r | 5+12 [2 9]:0.5 7g-6p-0.5 R      # picks, a sixteenth each
+track mem2 sample=@knot slice=16 stretch
+>24 3+7 3-5 3:0.5                              # pitched, length kept
+```
+
+- A pick is the slice index, then any of `r` (reversed), `+S`/`-S` (semitones), `gD` (gain in dB), `pP` (pan, added to `pan=`), then the note tokens' `:beats`, `@vel` and `~shift`. `[2 9r]` picks two at once and `R` rests.
+- A pick lasts one slice (the span's beats over N, or `beats=`'s) unless `:beats` says otherwise; the track gates like a keyboard track (`mode=oneshot` plays the slice out).
+- Transposition is by resample, so `+12` is an octave up in half the time. `stretch` pitches by WSOLA grains instead and keeps the slice's length.
+- A bounce may hear a track that plays another bounce (they render in order), but not one that plays itself; `slice=` with `chop=`, `psola` or `formant` is an error, and so is `stretch` without `slice=`.
+- `songs/resample.song` is the demo.
 
 ## 🥊 Kick-bass, walls and risers
 

@@ -179,7 +179,34 @@ pub struct SlotConfig {
     pub formant: bool,
     pub formant_semis: f32,
     pub formant_keep: f32,
+    /// `slice=N`: the region cut into N slices that a slice track's picks
+    /// play (`3 3 7 0r`); 0 = a keyboard track.
+    pub slices: usize,
+    /// `stretch`: a slice pick's transposition re-pitches grains read at
+    /// the slice's own time (its length kept) instead of varispeeding it.
+    pub stretch: bool,
 }
+
+/// One pick on a slice track (`7r+3g-6p0.5`): which slice, reversed or
+/// not, transposed by `semis`, at `gain` (linear) and `pan` (added to the
+/// slot's). `note` is the id its note-off releases.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SliceHit {
+    pub slice: u16,
+    pub note: u8,
+    pub velocity: f32,
+    pub reverse: bool,
+    pub semis: f32,
+    pub gain: f32,
+    pub pan: f32,
+}
+
+/// The stretch path's grains: 40 ms Hann windows at half overlap, each
+/// aligned (WSOLA) to the waveform the last one is playing, searched over
+/// +/-8 ms of the reel.
+const STRETCH_GRAIN_SECS: f64 = 0.04;
+const STRETCH_SEARCH_SECS: f64 = 0.008;
+const STRETCH_GRAINS: usize = 3;
 
 impl Default for SlotConfig {
     fn default() -> Self {
@@ -209,6 +236,8 @@ impl Default for SlotConfig {
             formant: false,
             formant_semis: 0.0,
             formant_keep: 0.0,
+            slices: 0,
+            stretch: false,
         }
     }
 }
@@ -267,6 +296,19 @@ struct Head {
     bend_x: f32,
     bend_inc: f32,
     bend_power: f32,
+    /// A slice pick's own transposition, gain and pan offset (0, 1, 0 for
+    /// a keyboard note), and whether it pitches by grains (`stretch`).
+    hit_semis: f32,
+    hit_gain: f32,
+    hit_pan: f32,
+    stretch: bool,
+    /// The stretch path: the time cursor on the reel (source frames),
+    /// output samples since the pick, and live grains as (start on the
+    /// reel, output samples into the grain).
+    st_cursor: f64,
+    st_n: u64,
+    st_grains: [(f64, f64); STRETCH_GRAINS],
+    st_live: [bool; STRETCH_GRAINS],
 }
 
 impl Head {
@@ -296,8 +338,72 @@ impl Head {
             bend_x: 1.0,
             bend_inc: 1.0,
             bend_power: 1.0,
+            hit_semis: 0.0,
+            hit_gain: 1.0,
+            hit_pan: 0.0,
+            stretch: false,
+            st_cursor: 0.0,
+            st_n: 0,
+            st_grains: [(0.0, 0.0); STRETCH_GRAINS],
+            st_live: [false; STRETCH_GRAINS],
         }
     }
+}
+
+/// Mono linear read for the stretch path's alignment search.
+#[inline]
+fn mono_at(data: &SampleData, pos: f64) -> f32 {
+    let n = data.left.len();
+    if n == 0 || pos < 0.0 {
+        return 0.0;
+    }
+    let i = pos.floor() as usize;
+    if i + 1 >= n {
+        return 0.0;
+    }
+    let t = (pos - i as f64) as f32;
+    let a = data.left[i] + data.right[i];
+    let b = data.left[i + 1] + data.right[i + 1];
+    a + (b - a) * t
+}
+
+/// WSOLA: where near `nominal` a new grain should start so its opening
+/// matches what the playing grain reads next from `cont` (both read at
+/// `speed` frames a sample in direction `dir`), within `search` frames
+/// and inside the region.
+fn align_grain(
+    data: &SampleData,
+    cont: f64,
+    nominal: f64,
+    speed: f64,
+    dir: f64,
+    search: f64,
+    region: (f64, f64),
+    len: usize,
+) -> f64 {
+    let lo = (nominal - search).max(region.0);
+    let hi = (nominal + search).min(region.1 - 1.0);
+    if hi <= lo {
+        return nominal.clamp(region.0, (region.1 - 1.0).max(region.0));
+    }
+    let (mut best, mut best_at) = (f32::NEG_INFINITY, nominal.clamp(lo, hi));
+    let step_d = (search / 48.0).max(1.0);
+    let mut d = lo;
+    while d <= hi {
+        let mut acc = 0.0f32;
+        let mut i = 0usize;
+        while i < len {
+            let k = i as f64 * speed * dir;
+            acc += mono_at(data, cont + k) * mono_at(data, d + k);
+            i += 8;
+        }
+        if acc > best {
+            best = acc;
+            best_at = d;
+        }
+        d += step_d;
+    }
+    best_at
 }
 
 /// Pitch-synchronous analysis for psola playback: track f0 by
@@ -777,6 +883,22 @@ impl SamplerBank {
     /// was sounding (and whether that was a held note rather than a
     /// release tail), so the engine can say the deck ran out.
     pub fn note_on(&mut self, slot_idx: usize, note: u8, velocity: f32) -> Option<(usize, bool)> {
+        self.start_head(slot_idx, note, velocity, None)
+    }
+
+    /// Start a head on one slice of a slice track (`slice=N`): the pick's
+    /// slice, direction, transposition, gain and pan latched on it.
+    pub fn slice_on(&mut self, slot_idx: usize, hit: &SliceHit) -> Option<(usize, bool)> {
+        self.start_head(slot_idx, hit.note, hit.velocity, Some(hit))
+    }
+
+    fn start_head(
+        &mut self,
+        slot_idx: usize,
+        note: u8,
+        velocity: f32,
+        hit: Option<&SliceHit>,
+    ) -> Option<(usize, bool)> {
         let Some(slot) = self.slots.get(slot_idx).and_then(|s| s.as_ref()) else {
             return None;
         };
@@ -796,9 +918,16 @@ impl SamplerBank {
             frames
         };
 
-        // Chop: the key picks a slice of the region, wrapped so every key
-        // lands on some pad
-        if cfg.chop > 1 {
+        // A slice pick: slice k of N, wrapped into range
+        if let (Some(hit), true) = (hit, cfg.slices > 0) {
+            let n = cfg.slices as f64;
+            let k = (hit.slice as usize % cfg.slices) as f64;
+            let slice = (r1 - r0) / n;
+            r1 = r0 + slice * (k + 1.0);
+            r0 += slice * k;
+        } else if cfg.chop > 1 {
+            // Chop: the key picks a slice of the region, wrapped so every
+            // key lands on some pad
             let n = cfg.chop as i32;
             let k = (note as i32 - cfg.root as i32).rem_euclid(n) as f64;
             let slice = (r1 - r0) / n as f64;
@@ -808,9 +937,10 @@ impl SamplerBank {
 
         // Scrub: drop the needle partway into the (possibly sliced)
         // region — from the far end when the transport runs backwards
+        let reverse = cfg.reverse ^ hit.map_or(false, |h| h.reverse);
         let len = r1 - r0;
         let scrub = (cfg.scrub as f64).clamp(0.0, 0.98) * len;
-        let start = if cfg.reverse {
+        let start = if reverse {
             r1 - 1.0 - scrub
         } else {
             r0 + scrub
@@ -886,10 +1016,11 @@ impl SamplerBank {
             region: (r0, r1),
             looping,
             xfade_frames,
-            reverse: cfg.reverse,
+            reverse,
             // Chop pads are drum pads: natural speed unless keytracking
-            // is explicitly wanted (there is no option for that — CHOICE)
-            keytrack: cfg.keytrack && cfg.chop <= 1,
+            // is explicitly wanted (there is no option for that — CHOICE);
+            // a slice pick is transposed by its own `+S`, not by a key
+            keytrack: cfg.keytrack && cfg.chop <= 1 && hit.is_none(),
             env: 0.0,
             // Velocity curve ^1.5: quiet notes usefully quiet, full
             // velocity unity — the response players expect from pads
@@ -906,6 +1037,14 @@ impl SamplerBank {
             bend_x: 1.0,
             bend_inc: 1.0,
             bend_power: 1.0,
+            hit_semis: hit.map_or(0.0, |h| h.semis),
+            hit_gain: hit.map_or(1.0, |h| h.gain.max(0.0)),
+            hit_pan: hit.map_or(0.0, |h| h.pan),
+            stretch: cfg.stretch && hit.is_some(),
+            st_cursor: start,
+            st_n: 0,
+            st_grains: [(0.0, 0.0); STRETCH_GRAINS],
+            st_live: [false; STRETCH_GRAINS],
         };
         cut
     }
@@ -985,6 +1124,13 @@ impl SamplerBank {
             } else {
                 cfg.pitch_semis
             };
+            // A slice pick's own transposition (by resample; the stretch
+            // path takes it as grain pitch below)
+            let semis = if h.hit_semis != 0.0 && !h.stretch {
+                semis + h.hit_semis
+            } else {
+                semis
+            };
             // A note bend rides on top, keytracked or not
             let semis = if h.bend_semis != 0.0 {
                 let shape = if h.bend_x >= 1.0 {
@@ -1045,6 +1191,105 @@ impl SamplerBank {
             let zoh = cfg.zoh;
             let mut l = 0.0f32;
             let mut r = 0.0f32;
+
+            // Stretch: a slice pick pitched by grains. The cursor walks the
+            // slice at the tape's own time (`speed` and all), and every
+            // half grain a 40 ms Hann grain starts there, aligned to the
+            // waveform the last grain reads next, read at the pitch's
+            // speed; so the pick keeps its length at any transposition.
+            if h.stretch {
+                let rate_ratio = src_rate / out_rate;
+                let time = rate_ratio * cfg.speed.clamp(0.03, 32.0) as f64;
+                let pitch = ((semis + h.hit_semis) as f64 / 12.0).exp2() * pitch_mult.max(0.01) as f64;
+                let read = rate_ratio * pitch;
+                let dir = if h.reverse { -1.0 } else { 1.0 };
+                let glen = (STRETCH_GRAIN_SECS * out_rate).max(8.0);
+                let hop = (glen * 0.5).floor().max(1.0) as u64;
+                let past = if h.reverse { h.st_cursor <= r0 } else { h.st_cursor >= r1 - 1.0 };
+                if h.st_n % hop == 0 && !past {
+                    // align to the grain that started a hop ago
+                    let prev = (0..STRETCH_GRAINS)
+                        .filter(|&g| h.st_live[g])
+                        .min_by(|&a, &b| (h.st_grains[a].1 - hop as f64).abs().total_cmp(&(h.st_grains[b].1 - hop as f64).abs()));
+                    let at = match prev {
+                        Some(g) => {
+                            let (g0, gp) = h.st_grains[g];
+                            align_grain(
+                                data,
+                                g0 + dir * gp * read,
+                                h.st_cursor,
+                                read,
+                                dir,
+                                STRETCH_SEARCH_SECS * src_rate,
+                                (r0, r1),
+                                (hop as usize).min(2048),
+                            )
+                        }
+                        None => h.st_cursor,
+                    };
+                    if let Some(g) = (0..STRETCH_GRAINS).find(|&g| !h.st_live[g]) {
+                        h.st_grains[g] = (at, 0.0);
+                        h.st_live[g] = true;
+                    }
+                }
+                for g in 0..STRETCH_GRAINS {
+                    if !h.st_live[g] {
+                        continue;
+                    }
+                    let (g0, gp) = h.st_grains[g];
+                    if gp >= glen {
+                        h.st_live[g] = false;
+                        continue;
+                    }
+                    let src_pos = g0 + dir * gp * read;
+                    if src_pos >= r0 && src_pos < r1 {
+                        // the pick's first grain opens at full level, so
+                        // a hit keeps its attack (the next grain's fade-in
+                        // meets this one's fade-out)
+                        let first = h.st_n as f64 == gp;
+                        let w = if first && gp < 0.5 * glen {
+                            1.0
+                        } else {
+                            0.5 - 0.5 * (std::f64::consts::TAU * gp / glen).cos()
+                        };
+                        // and fades into the slice's far edge, as the
+                        // resample path does, so a grain running off the
+                        // slice does not click
+                        let dist = if h.reverse { src_pos - r0 } else { r1 - src_pos };
+                        let edge = (dist / (EDGE_DECLICK_SECS as f64 * src_rate).max(1.0)).clamp(0.0, 1.0);
+                        let w = (w * edge) as f32;
+                        let (a, b) = sinc_read(&data.left, &data.right, src_pos, read as f32);
+                        l += a * w;
+                        r += b * w;
+                    }
+                    h.st_grains[g].1 = gp + 1.0;
+                }
+                h.st_cursor += dir * time;
+                h.st_n += 1;
+                if past && !h.st_live.contains(&true) {
+                    h.stage = Stage::Off;
+                    continue;
+                }
+                let fc = &mut self.filt[h.slot];
+                fc.update(cutoff, cfg.res, self.sample_rate);
+                if fc.bypass {
+                    h.svf[1] = l;
+                    h.svf[3] = r;
+                    h.svf[0] = 0.0;
+                    h.svf[2] = 0.0;
+                } else {
+                    let [mut i1l, mut i2l, mut i1r, mut i2r] = h.svf;
+                    l = fc.tick(l, &mut i1l, &mut i2l);
+                    r = fc.tick(r, &mut i1r, &mut i2r);
+                    h.svf = [i1l, i2l, i1r, i2r];
+                }
+                let ph = (cfg.pan + h.hit_pan).clamp(-1.0, 1.0);
+                let ph = (ph + 1.0) * std::f32::consts::FRAC_PI_4;
+                let g = h.env * h.vel_gain * cfg.gain * h.hit_gain * PROGRAM_V;
+                out[h.slot].0 += l * g * ph.cos() * std::f32::consts::SQRT_2;
+                out[h.slot].1 += r * g * ph.sin() * std::f32::consts::SQRT_2;
+                continue;
+            }
 
             // PSOLA: the note changes, the throat doesn't. Grains cut at
             // the reel's glottal epochs, re-spaced at the target period;
@@ -1193,8 +1438,8 @@ impl SamplerBank {
                         r = fc.tick(r, &mut i1r, &mut i2r);
                         h.svf = [i1l, i2l, i1r, i2r];
                     }
-                    let ph = (cfg.pan.clamp(-1.0, 1.0) + 1.0) * std::f32::consts::FRAC_PI_4;
-                    let g = h.env * h.vel_gain * cfg.gain * PROGRAM_V;
+                    let ph = ((cfg.pan + h.hit_pan).clamp(-1.0, 1.0) + 1.0) * std::f32::consts::FRAC_PI_4;
+                    let g = h.env * h.vel_gain * cfg.gain * h.hit_gain * PROGRAM_V;
                     out[h.slot].0 += l * g * ph.cos() * std::f32::consts::SQRT_2;
                     out[h.slot].1 += r * g * ph.sin() * std::f32::consts::SQRT_2;
                     continue;
@@ -1251,9 +1496,10 @@ impl SamplerBank {
                 (dist / declick.max(1.0)).clamp(0.0, 1.0) as f32
             };
 
-            // Constant-power pan, center unity
-            let ph = (cfg.pan.clamp(-1.0, 1.0) + 1.0) * std::f32::consts::FRAC_PI_4;
-            let g = h.env * h.vel_gain * cfg.gain * edge * PROGRAM_V;
+            // Constant-power pan, center unity (a slice pick's pan and gain
+            // ride on the slot's; 0 and 1 for a keyboard note)
+            let ph = ((cfg.pan + h.hit_pan).clamp(-1.0, 1.0) + 1.0) * std::f32::consts::FRAC_PI_4;
+            let g = h.env * h.vel_gain * cfg.gain * h.hit_gain * edge * PROGRAM_V;
             out[h.slot].0 += l * g * ph.cos() * std::f32::consts::SQRT_2;
             out[h.slot].1 += r * g * ph.sin() * std::f32::consts::SQRT_2;
 
@@ -2514,5 +2760,124 @@ mod tests {
             (best_f - 1400.0).abs() < 220.0,
             "psola must hold the formant: peak at {best_f:.0} Hz, want ~1400"
         );
+    }
+
+    fn hit(slice: u16) -> SliceHit {
+        SliceHit {
+            slice,
+            note: slice as u8,
+            velocity: 1.0,
+            reverse: false,
+            semis: 0.0,
+            gain: 1.0,
+            pan: 0.0,
+        }
+    }
+
+    /// Render a head until the deck falls silent (or `max` samples): the
+    /// left channel.
+    fn take_all(bank: &mut SamplerBank, max: usize) -> Vec<f32> {
+        let mut out = Vec::new();
+        for _ in 0..max {
+            out.push(bank.render_next(1.0).0);
+            if !bank.any_active() {
+                break;
+            }
+        }
+        out
+    }
+
+    /// A slice pick plays its slice: on a reel of four steps of level, pick
+    /// 2 holds the third step's level, and `r` plays a ramp backwards.
+    #[test]
+    fn a_slice_pick_plays_its_slice() {
+        let levels = [0.1f32, 0.2, 0.3, 0.4];
+        let n = 48000;
+        let steps: Vec<f32> = (0..n).map(|i| levels[i * 4 / n]).collect();
+        let mut bank = SamplerBank::new(48000.0);
+        let cfg = SlotConfig { slices: 4, attack: 0.001, ..Default::default() };
+        bank.set_slot(0, SamplerSlot {
+            data: Arc::new(SampleData { left: steps.clone(), right: steps, rate: 48000 }),
+            cfg,
+        });
+        let mut level = |slice: u16| {
+            bank.slice_on(0, &hit(slice));
+            let out = take_all(&mut bank, 20000);
+            out[2000..8000].iter().sum::<f32>() / 6000.0
+        };
+        let (a, c) = (level(0), level(2));
+        assert!((c / a - 3.0).abs() < 0.01, "slice 2 / slice 0 = {}", c / a);
+        // a ramp, reversed: falling where the forward pick rises
+        let ramp: Vec<f32> = (0..n).map(|i| i as f32 / n as f32).collect();
+        let mut bank = SamplerBank::new(48000.0);
+        bank.set_slot(0, SamplerSlot {
+            data: Arc::new(SampleData { left: ramp.clone(), right: ramp, rate: 48000 }),
+            cfg,
+        });
+        bank.slice_on(0, &SliceHit { reverse: true, ..hit(1) });
+        let out = take_all(&mut bank, 20000);
+        assert!(out[1000] > out[6000] && out[6000] > out[11000], "{} {} {}", out[1000], out[6000], out[11000]);
+        // slice 1 of the ramp spans 0.25..0.5: reversed it starts at 0.5,
+        // so 1000 samples in it reads 0.5 - 1000/48000
+        let g = out[1000] / (1.0 * 0.8 * PROGRAM_V);
+        assert!((g - (0.5 - 1000.0 / 48000.0)).abs() < 0.002, "{g}");
+    }
+
+    /// `+12` by resample is an octave up in half the time; with `stretch`
+    /// it is an octave up in the slice's own time; `g-6` halves the level
+    /// and `p1` pans hard right.
+    #[test]
+    fn picks_transpose_by_resample_or_stretch() {
+        let run = |stretch: bool, h: SliceHit| {
+            let mut bank = SamplerBank::new(48000.0);
+            bank.set_slot(0, SamplerSlot {
+                data: sine_reel(48000, 1.0, 220.0),
+                cfg: SlotConfig { slices: 2, attack: 0.001, stretch, ..Default::default() },
+            });
+            bank.slice_on(0, &h);
+            let mut l = Vec::new();
+            let mut r = Vec::new();
+            for _ in 0..40000 {
+                let (a, b) = bank.render_next(1.0);
+                l.push(a);
+                r.push(b);
+                if !bank.any_active() {
+                    break;
+                }
+            }
+            (l, r)
+        };
+        let hz = |x: &[f32]| {
+            let w = &x[2400..9600];
+            w.windows(2).filter(|p| p[0] <= 0.0 && p[1] > 0.0).count() as f32 / 0.15
+        };
+        // the slice is half a second
+        let (plain, _) = run(false, hit(0));
+        assert!((hz(&plain) - 220.0).abs() < 10.0, "{}", hz(&plain));
+        assert!((plain.len() as i32 - 24000).abs() < 400, "{}", plain.len());
+        let (up, _) = run(false, SliceHit { semis: 12.0, ..hit(0) });
+        assert!((hz(&up) - 440.0).abs() < 15.0, "{}", hz(&up));
+        assert!((up.len() as i32 - 12000).abs() < 400, "resampled up is half as long: {}", up.len());
+        for (semis, want) in [(12.0f32, 440.0f32), (-12.0, 110.0), (7.0, 329.6)] {
+            let (st, _) = run(true, SliceHit { semis, ..hit(0) });
+            assert!((hz(&st) - want).abs() < 0.05 * want, "stretch {semis}: {} Hz", hz(&st));
+            assert!(
+                (st.len() as i32 - 24000).abs() < 2400,
+                "stretched {semis} keeps the slice's length: {}",
+                st.len()
+            );
+            // and its level holds steady through the grains (no comb dips)
+            let rms = |a: usize| (st[a..a + 2400].iter().map(|v| v * v).sum::<f32>() / 2400.0).sqrt();
+            let (lo, hi) = (2400..18000)
+                .step_by(2400)
+                .map(rms)
+                .fold((f32::MAX, 0.0f32), |(lo, hi), v| (lo.min(v), hi.max(v)));
+            assert!(hi / lo < 1.5, "stretch {semis}: level swings {lo}..{hi}");
+        }
+        let rms = |x: &[f32]| (x[2400..9600].iter().map(|v| v * v).sum::<f32>() / 7200.0).sqrt();
+        let (quiet, _) = run(false, SliceHit { gain: 0.5, ..hit(0) });
+        assert!((rms(&quiet) / rms(&plain) - 0.5).abs() < 0.01);
+        let (l, r) = run(false, SliceHit { pan: 1.0, ..hit(0) });
+        assert!(rms(&l) < 1e-4 && rms(&r) > 0.1, "{} {}", rms(&l), rms(&r));
     }
 }
