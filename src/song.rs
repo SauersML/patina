@@ -363,7 +363,29 @@
 //               to 0, when the music returns live:
 //                 automate tape_stop
 //                   0 >60 4
+//   stutter_halve H   while a stutter runs, halve its repeat every H
+//               beats (1/16, 1/32, 1/64 ... down to 1/256); 0 holds it.
+//               `stutter 16` with `stutter_halve 0.5` is the roll: two
+//               16ths, four 32nds, eight 64ths, an eighth note each.
+//   tape_stop_curve C the slowdown's shape, speed (1 - t/T)^C, latched
+//               when a stop engages (0.25..4; 1, the default, is the
+//               constant rate; 2 drops fast and drags a long tail).
 // Lengths follow the song's tempo lane. Every seam is declicked.
+//
+// Buses: `bus NAME tracks=a,b,c [strip options]` mixes those tracks'
+// strips (after their faders and pans) into one strip of its own, which
+// takes every strip option and lane a track does: gain= pan= the sends,
+// duck= duck_from= shape= (a step gate: shape=xx.x.xx.x.xx....), the EQ,
+// the drive, comp=, and the glitch lanes (`automate music.stutter`).
+// The members' own sends still reach the rooms around the bus, as on a
+// console's group. A track sits on one bus at most; a bus takes tracks,
+// not other buses, and plays no notes. Its stem is the group through it;
+// a member's stem goes through its bus.
+//   bus mix [gain= duck= duck_from= duck_attack= duck_hold= duck_release=
+//            shape= shape_beats= shape_depth= shape_smooth=]
+// is the whole mix after the tape and the bus glitch: its fader, duck
+// and gate ride the finished two-track, and `automate mix.stutter` is the
+// same insert as unscoped `automate stutter`.
 //
 // Cross-modulation (xmod.rs): any track's signal drives another track at
 // audio rate. A route lives on the track it drives, naming its source
@@ -912,6 +934,11 @@ param_table! {
     Stutter:         "stutter",        None,      (0.0, 64.0, Lin);
     Reverse:         "reverse",        None,      (0.0, 64.0, Lin);
     TapeStop:        "tape_stop",      None,      (0.0, 16.0, Lin);
+    // ...and their shapes: a beat repeat that halves every N beats while
+    // it runs (0 = it holds its division), and the tape stop's slowdown
+    // curve, speed (1 - t/T)^C (1 = the constant rate)
+    StutterHalve:    "stutter_halve",  None,      (0.0, 16.0, Lin);
+    TapeStopCurve:   "tape_stop_curve", None,     (0.25, 4.0, Log);
     // The waveguide string (physical.rs, `track NAME string`): excitation
     // (0 pluck, 1 strike, 2 bow, 3 none: only the excite input), T60 of
     // the fundamental in seconds, high-partial damping (T60(f) = decay /
@@ -1281,7 +1308,11 @@ impl Param {
             Param::LimitCeiling => vm.set_limit_ceiling(value),
             Param::LimitRelease => vm.set_limit_release(value),
             // unscoped, the glitch inserts sit across the bus
-            Param::Stutter | Param::Reverse | Param::TapeStop => vm.set_glitch(0, self, value),
+            Param::Stutter
+            | Param::Reverse
+            | Param::TapeStop
+            | Param::StutterHalve
+            | Param::TapeStopCurve => vm.set_glitch(0, self, value),
             // ...and so does the granular engine
             Param::Gran
             | Param::GranSize
@@ -1497,6 +1528,28 @@ impl Param {
     /// so `automate buzz.noise` used to noise up the whole mix.
     pub(crate) fn reaches_track(self, channel: u16) -> bool {
         use Param as P;
+        let glitch = matches!(
+            self,
+            P::Stutter | P::Reverse | P::TapeStop | P::StutterHalve | P::TapeStopCurve
+        );
+        // `bus mix` rides the finished mix: its fader, duck, shaper and
+        // the bus glitch; a group bus is a strip and nothing else
+        if channel == crate::voice_manager::MIX_CHANNEL {
+            return glitch
+                || matches!(
+                    self,
+                    P::TrackGain
+                        | P::DuckAmount
+                        | P::DuckRelease
+                        | P::DuckAttack
+                        | P::DuckHold
+                        | P::ShapeDepth
+                        | P::ShapeSmooth
+                );
+        }
+        if crate::voice_manager::bus_for_channel(channel).is_some() {
+            return glitch || self.is_strip() || self.is_strip_comp_knob();
+        }
         if self.apply_to_params(&mut ParamValues::default(), self.range().0) {
             return true;
         }
@@ -1504,7 +1557,7 @@ impl Param {
             return true;
         }
         match self {
-            P::Stutter | P::Reverse | P::TapeStop => true,
+            P::Stutter | P::Reverse | P::TapeStop | P::StutterHalve | P::TapeStopCurve => true,
             P::SmpPitch
             | P::SmpStart
             | P::SmpGain
@@ -1965,6 +2018,9 @@ pub struct SongMix {
     /// `body=` and the `body` line: (channel, 0 for the bus; the body;
     /// the body its morph runs to).
     pub bodies: Vec<(u16, crate::body::BodyKind, Option<crate::body::BodyKind>)>,
+    /// `bus NAME tracks=a,b`: (the bus's channel, its member channels);
+    /// `bus mix` is (MIX_CHANNEL, none).
+    pub buses: Vec<(u16, Vec<u16>)>,
 }
 
 /// `glass` or `room..cathedral`: a body, and the body its morph runs to.
@@ -2171,6 +2227,9 @@ fn register_channels(vm: &mut VoiceManager, song: &Song) {
     }
     for (i, spec) in song.instruments.iter().enumerate() {
         vm.set_instrument(i, spec);
+    }
+    for (bus, members) in &song.mix.buses {
+        vm.set_bus(*bus, members);
     }
     for &(channel, key) in &song.mix.duck_keys {
         vm.set_duck_key(channel, key);
@@ -2398,6 +2457,8 @@ enum TrackMode {
         track: usize,
         current: Option<f32>,
     },
+    /// A `bus` line: no notes of its own
+    Bus,
 }
 
 // (beats, order-rank, kind); rank makes offs < params < ons at equal times
@@ -2465,6 +2526,9 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
     // every track is known) and the `modes` bodies defined so far
     let mut instruments: Vec<crate::physical::InstrumentSpec> = Vec::new();
     let mut excite_from: Vec<(usize, usize, String)> = Vec::new();
+    // `bus` lines: (line, bus channel, member track names), resolved once
+    // every track is known
+    let mut bus_from: Vec<(usize, u16, Vec<String>)> = Vec::new();
     let mut mode_sets: std::collections::HashMap<String, crate::physical::ModeSet> =
         std::collections::HashMap::new();
     // `spec_from=` morph sources, resolved like the duck keys once every
@@ -2604,6 +2668,112 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                 if mode_sets.insert(name.to_string(), set).is_some() {
                     return Err(err(format!("modes '{}' defined twice", name)));
                 }
+            }
+            "bus" => {
+                // A group bus: its tracks' strips sum into one strip of
+                // its own (or `bus mix`, the finished two-track)
+                use crate::voice_manager::{BUS_CHANNEL_BASE, MAX_BUSES, MIX_CHANNEL};
+                track_beat = 0.0;
+                let mut it = line.split_whitespace().skip(1);
+                let name = it
+                    .next()
+                    .ok_or_else(|| err("bus needs a name: bus music tracks=pad,lead".into()))?
+                    .to_string();
+                if track_channels.iter().any(|(t, _)| *t == name) {
+                    return Err(err(format!("'{}' already names a track or a bus", name)));
+                }
+                let is_mix = name == "mix";
+                let channel = if is_mix {
+                    MIX_CHANNEL
+                } else {
+                    if bus_from.len() >= MAX_BUSES {
+                        return Err(err(format!("too many buses (max {})", MAX_BUSES)));
+                    }
+                    BUS_CHANNEL_BASE + bus_from.len() as u16
+                };
+                let mut members: Option<Vec<String>> = None;
+                let mut shape_spec: Option<String> = None;
+                let mut shape_beats: Option<f64> = None;
+                let mut opts: Vec<(Param, f32)> = Vec::new();
+                for opt in it {
+                    if let Some(v) = opt.strip_prefix("tracks=") {
+                        if is_mix {
+                            return Err(err(
+                                "bus mix is the whole mix; it takes no tracks= (name the \
+                                 group something else)"
+                                    .into(),
+                            ));
+                        }
+                        members = Some(
+                            v.split(',')
+                                .filter(|t| !t.is_empty())
+                                .map(str::to_string)
+                                .collect(),
+                        );
+                    } else if let Some(v) = opt.strip_prefix("shape=") {
+                        shape_spec = Some(v.to_string());
+                    } else if let Some(v) = opt.strip_prefix("shape_beats=") {
+                        shape_beats = Some(
+                            v.parse_finite::<f64>()
+                                .map_err(|_| err(format!("invalid shape_beats '{}'", v)))?,
+                        );
+                    } else if let Some(v) = opt.strip_prefix("duck_from=") {
+                        duck_from.push((line_no, channel, v.to_string()));
+                    } else if let Some((k, v)) = opt.split_once('=').filter(|(k, _)| {
+                        Param::from_name(k).map_or(false, |p| {
+                            (p.is_strip() || p.is_strip_comp_knob())
+                                && crate::xmod::Dest::of_param(p).is_none()
+                        })
+                    }) {
+                        let param = Param::from_name(k).unwrap();
+                        if is_mix && !param.reaches_track(MIX_CHANNEL) {
+                            return Err(err(format!(
+                                "bus mix takes gain, the duck and the shape; {}= belongs on \
+                                 a bus with tracks= or the master's own knobs",
+                                k
+                            )));
+                        }
+                        let value = v
+                            .parse_finite::<f32>()
+                            .map_err(|_| err(format!("invalid {} '{}'", k, v)))?;
+                        if let Some(w) = clamp_warning(param, value) {
+                            warnings.push(err(w));
+                        }
+                        opts.push((param, value));
+                    } else {
+                        return Err(err(format!(
+                            "unknown bus option '{}' (a bus takes tracks= and strip \
+                             options: gain= pan= duck= shape= eq_low= comp= ...)",
+                            opt
+                        )));
+                    }
+                }
+                let members = match (is_mix, members) {
+                    (true, _) => Vec::new(),
+                    (false, Some(m)) if !m.is_empty() => m,
+                    (false, _) => {
+                        return Err(err(format!(
+                            "bus {} needs its tracks: bus {} tracks=pad,lead",
+                            name, name
+                        )))
+                    }
+                };
+                if let Some(spec) = shape_spec {
+                    let shaper = crate::inserts::Shaper::parse(&spec, shape_beats).map_err(err)?;
+                    mix.shapers.push((channel, shaper));
+                } else if shape_beats.is_some() {
+                    return Err(err("shape_beats= needs a shape= on the same line".into()));
+                }
+                for (param, value) in opts {
+                    events.push((0.0, 1, param_event(param, value, channel)));
+                }
+                if !is_mix {
+                    bus_from.push((line_no, channel, members));
+                } else {
+                    mix.buses.push((channel, Vec::new()));
+                }
+                track_channels.push((name, channel));
+                mode = TrackMode::Bus;
             }
             "track" => {
                 track_beat = 0.0;
@@ -3082,6 +3252,22 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                                     )));
                                 }
                             }
+                            let bus = crate::voice_manager::bus_for_channel(ch).is_some()
+                                || ch == crate::voice_manager::MIX_CHANNEL;
+                            if bus && !param.reaches_track(ch) {
+                                return Err(err(format!(
+                                    "automate '{}': {} {}",
+                                    name,
+                                    track,
+                                    if ch == crate::voice_manager::MIX_CHANNEL {
+                                        "is the whole mix: it takes gain, the duck, the shape \
+                                         and the glitch lanes (other mix knobs are unscoped)"
+                                    } else {
+                                        "is a bus: it takes its strip's controls and the \
+                                         glitch lanes, not an instrument's knobs"
+                                    }
+                                )));
+                            }
                             if !param.reaches_track(ch) {
                                 return Err(err(format!(
                                     "automate '{}': {} is shared by every track, so a \
@@ -3223,6 +3409,11 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                 TrackMode::None => {
                     return Err(err(
                         "event tokens before any 'track' or 'automate' line".into()
+                    ));
+                }
+                TrackMode::Bus => {
+                    return Err(err(
+                        "a bus plays no notes: its tracks= do (start a track line first)".into(),
                     ));
                 }
                 TrackMode::Notes {
@@ -3710,6 +3901,40 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
         }
     }
 
+    // `bus NAME tracks=a,b`: each member's strip mixes into the bus. A
+    // member is a track (not a bus, not the mix), on one bus at most;
+    // tracks sharing a channel (kit=<track>) go together
+    for (line_no, bus, names) in bus_from {
+        let e = |m: String| format!("line {}: bus tracks=: {}", line_no + 1, m);
+        let mut chans: Vec<u16> = Vec::new();
+        for n in &names {
+            let ch = track_channels
+                .iter()
+                .find(|(t, _)| t == n)
+                .map(|(_, c)| *c)
+                .ok_or_else(|| e(format!("no track named '{}'", n)))?;
+            if crate::voice_manager::bus_for_channel(ch).is_some()
+                || ch == crate::voice_manager::MIX_CHANNEL
+            {
+                return Err(e(format!(
+                    "'{}' is a bus; a bus takes tracks (list the other bus's tracks here)",
+                    n
+                )));
+            }
+            if let Some((other, _)) = mix.buses.iter().find(|(_, m)| m.contains(&ch)) {
+                let other = track_channels
+                    .iter()
+                    .find(|(_, c)| c == other)
+                    .map_or("?", |(t, _)| t.as_str());
+                return Err(e(format!("'{}' is already on bus {}", n, other)));
+            }
+            if !chans.contains(&ch) {
+                chans.push(ch);
+            }
+        }
+        mix.buses.push((bus, chans));
+    }
+
     // `duck_from=NAME` keys a strip off every note of track NAME;
     // `duck_from=NAME.X` off one drum voice (BD SD RS CP CH OH) or one
     // note of it
@@ -3724,6 +3949,14 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
             .find(|(t, _)| t == name)
             .map(|(_, c)| *c)
             .ok_or_else(|| e(format!("no track named '{}'", name)))?;
+        if crate::voice_manager::bus_for_channel(source).is_some()
+            || source == crate::voice_manager::MIX_CHANNEL
+        {
+            return Err(e(format!(
+                "'{}' is a bus, which plays no notes: key off one of its tracks",
+                name
+            )));
+        }
         use crate::voice_manager::{DuckKey, KeyFilter};
         let filter = match part {
             None => KeyFilter::Any,
@@ -7461,5 +7694,106 @@ mod tests {
         assert!(old.warnings[0].contains("old switch positions 0, 1, 2 are 2, 4 and 10"));
         let over = parse_song("track d kit=909\nBD\nautomate comp_ratio\n30\n").unwrap();
         assert!(over.warnings[0].contains("comp_ratio 30 clamped to 20"), "{:?}", over.warnings);
+    }
+
+    /// A group bus sums its tracks' strips into a strip of its own: the
+    /// bus's fader moves the group and leaves other tracks alone; its
+    /// shaper gates the group on the sixteenths; a member's stem goes
+    /// through its bus and the bus's stem is the group.
+    #[test]
+    fn a_bus_carries_its_tracks_through_its_strip() {
+        use crate::voice_manager::{BUS_CHANNEL_BASE, MIX_CHANNEL};
+        let base = "bpm 120\ntail 0\ntrack pad\n[C4 E4 G4]:4\ntrack bass\nC2:4\n\
+                    track lead\nC5:4\nautomate reverb_wet\n0\nautomate chorus_mix\n0\n";
+        let render = |text: &str, solo: Option<u16>| -> Vec<(f32, f32)> {
+            let song = parse_song(text).unwrap();
+            render_offline_solo(&song, 48000.0, solo).take(96000).collect()
+        };
+        let plain = render(base, None);
+        // unity bus: the same mix (summed in another order)
+        let unity = render(&format!("{base}bus music tracks=pad,bass\n"), None);
+        let err = plain
+            .iter()
+            .zip(&unity)
+            .map(|(a, b)| (a.0 - b.0).abs().max((a.1 - b.1).abs()))
+            .fold(0.0f32, f32::max);
+        assert!(err < 1e-5, "unity bus off by {err}");
+        // the bus fader at 0: only the lead is left, exactly its stem
+        let song = parse_song(&format!("{base}bus music tracks=pad,bass gain=0\n")).unwrap();
+        assert_eq!(song.mix.buses, vec![(BUS_CHANNEL_BASE, vec![1, 2])]);
+        let shut = render(&format!("{base}bus music tracks=pad,bass gain=0\n"), None);
+        let lead = render(base, Some(3));
+        let err = shut
+            .iter()
+            .zip(&lead)
+            .map(|(a, b)| (a.0 - b.0).abs())
+            .fold(0.0f32, f32::max);
+        assert!(err < 1e-6, "a muted bus leaves the lead alone: {err}");
+        // a member's stem goes through its bus, and the bus's is the group
+        let pad = render(&format!("{base}bus music tracks=pad,bass gain=0\n"), Some(1));
+        assert!(pad.iter().all(|f| f.0 == 0.0), "the pad's stem is muted with its bus");
+        let group = render(&format!("{base}bus music tracks=pad,bass\n"), Some(BUS_CHANNEL_BASE));
+        // (the master chain is not linear, so the group is the mix with
+        // the lead's fader down, not the sum of two stems)
+        let pad_bass = render(&base.replace("track lead", "track lead gain=0"), None);
+        let err = group
+            .iter()
+            .zip(&pad_bass)
+            .map(|(a, b)| (a.0 - b.0).abs())
+            .fold(0.0f32, f32::max);
+        assert!(err < 1e-5, "the bus stem is its tracks: {err}");
+        // a step gate on the bus: shut sixteenths drop to silence while
+        // the lead plays on
+        let gated = render(&format!("{base}bus music tracks=pad,bass shape=x.x.x.x.\n"), None);
+        let open = frames_rms(&gated, 0.27, 0.36, 48000.0);
+        let shut = frames_rms(&gated, 0.40, 0.48, 48000.0);
+        let lead_shut = frames_rms(&lead, 0.40, 0.48, 48000.0);
+        assert!(open > 2.0 * shut, "open {open} shut {shut}");
+        assert!((shut - lead_shut).abs() < 0.05 * lead_shut, "shut {shut} lead {lead_shut}");
+        // `bus mix` gates the whole two-track, lead included
+        let mixed = render(&format!("{base}bus mix shape=x.x.x.x.\n"), None);
+        assert!(frames_rms(&mixed, 0.40, 0.48, 48000.0) < 1e-4);
+        assert!(frames_rms(&mixed, 0.27, 0.36, 48000.0) > 0.01);
+        let song = parse_song(&format!("{base}bus mix shape=x.x.x.x.\n")).unwrap();
+        assert_eq!(song.mix.buses, vec![(MIX_CHANNEL, vec![])]);
+    }
+
+    /// `automate mix.stutter` is the mix-bus glitch, the same insert as
+    /// unscoped `automate stutter`.
+    #[test]
+    fn the_mix_bus_takes_the_glitch_lanes() {
+        let base = "bpm 120\ntail 0\ntrack pad\n[C4 E4 G4]:4\nbus mix\n";
+        let a = parse_song(&format!("{base}automate stutter\n0 >1 16 >2 0\n")).unwrap();
+        let b = parse_song(&format!("{base}automate mix.stutter\n0 >1 16 >2 0\n")).unwrap();
+        let ra: Vec<(f32, f32)> = render_offline(&a, 48000.0).take(96000).collect();
+        let rb: Vec<(f32, f32)> = render_offline(&b, 48000.0).take(96000).collect();
+        assert!(ra == rb);
+    }
+
+    /// What a bus line refuses, each with a reason.
+    #[test]
+    fn bus_lines_say_what_is_wrong() {
+        let base = "track pad\nC4\ntrack kick kit=909\nBD\n";
+        for (tail, want) in [
+            ("bus music tracks=pad,nope\n", "no track named 'nope'"),
+            ("bus a tracks=pad\nbus b tracks=pad\n", "'pad' is already on bus a"),
+            ("bus a tracks=pad\nbus b tracks=a\n", "'a' is a bus"),
+            ("bus music tracks=pad\nC4\n", "a bus plays no notes"),
+            ("bus music\n", "bus music needs its tracks"),
+            ("bus mix tracks=pad\n", "takes no tracks="),
+            ("bus mix eq_low=3\n", "bus mix takes gain, the duck and the shape"),
+            ("bus music tracks=pad cutoff=300\n", "unknown bus option 'cutoff=300'"),
+            ("bus music tracks=pad\nautomate music.cutoff\n300\n", "is a bus"),
+            ("bus mix\nautomate mix.eq_low\n3\n", "is the whole mix"),
+            ("bus music tracks=pad duck=0.5 duck_from=music\n", "'music' is a bus"),
+            ("bus pad tracks=kick\n", "already names a track"),
+        ] {
+            let e = parse_song(&format!("{base}{tail}")).err().unwrap_or_default();
+            assert!(e.contains(want), "{tail:?}: {e}");
+        }
+        // a bus keyed off a kick ducks the group on every hit
+        let song =
+            parse_song(&format!("{base}bus music tracks=pad duck=0.8 duck_from=kick.BD\n")).unwrap();
+        assert_eq!(song.mix.duck_keys.len(), 1);
     }
 }

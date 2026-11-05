@@ -828,6 +828,8 @@ fn card_channel(ch: u16) -> bool {
         && kit_for_channel(ch).is_none()
         && slot_for_channel(ch).is_none()
         && crate::physical::instrument_for_channel(ch).is_none()
+        && bus_for_channel(ch).is_none()
+        && ch != MIX_CHANNEL
 }
 
 /// One strip, one stereo sample (see `strip`).
@@ -1126,6 +1128,49 @@ impl Drop for CardPool {
     }
 }
 
+/// Group buses (`bus NAME tracks=a,b`): bus i mixes on channel
+/// BUS_CHANNEL_BASE + i, a strip whose input is its member tracks' strip
+/// outputs summed, so the bus's own glitch, EQ, drive, fader, duck,
+/// shaper, compressor, pan and sends act on the group. A reserved block
+/// below the instruments'.
+pub const MAX_BUSES: usize = 16;
+pub const BUS_CHANNEL_BASE: u16 =
+    crate::physical::INSTRUMENT_CHANNEL_BASE - MAX_BUSES as u16 - 1;
+/// The whole mix (`bus mix`): a strip after the tape and the bus glitch
+/// whose duck and shaper (and fader) ride the finished two-track.
+pub const MIX_CHANNEL: u16 = BUS_CHANNEL_BASE + MAX_BUSES as u16;
+
+/// Map a channel to its group bus, if it is one (the mix is not).
+pub fn bus_for_channel(channel: u16) -> Option<usize> {
+    (BUS_CHANNEL_BASE..BUS_CHANNEL_BASE + MAX_BUSES as u16)
+        .contains(&channel)
+        .then(|| (channel - BUS_CHANNEL_BASE) as usize)
+}
+
+/// The group buses' wiring and this sample's summed inputs.
+#[derive(Default)]
+struct Buses {
+    /// member channel -> index into `chans`
+    of: ChannelMap<usize>,
+    chans: Vec<u16>,
+    acc: Vec<(f32, f32)>,
+}
+
+/// Add one strip's output to the dry mix, or to its bus's input. With no
+/// buses this is the plain sum, in the same order as ever.
+#[inline]
+fn mix_out(buses: &mut Option<Box<Buses>>, ch: u16, l: f32, r: f32, left: &mut f32, right: &mut f32) {
+    if let Some(b) = buses.as_mut() {
+        if let Some(&i) = b.of.get(&ch) {
+            b.acc[i].0 += l;
+            b.acc[i].1 += r;
+            return;
+        }
+    }
+    *left += l;
+    *right += r;
+}
+
 /// One tapped channel's raw stereo output: this sample's running sum and
 /// the last sample's whole one (what a reader gets when the channel has
 /// not rendered yet this sample, so a loop between instruments is one
@@ -1221,6 +1266,11 @@ pub struct VoiceManager {
     /// The glitch insert across the mix bus (unscoped `stutter`,
     /// `reverse`, `tape_stop`), after the tape; None until a song uses it.
     bus_glitch: Option<Box<crate::glitch::Glitch>>,
+    /// Group buses (`bus NAME tracks=...`); None until a song has one.
+    buses: Option<Box<Buses>>,
+    /// `bus mix` set a strip on MIX_CHANNEL: its fader, duck and shaper
+    /// ride the finished mix.
+    mix_strip: bool,
     /// Cross-track routes (xmod.rs); None until a song routes one track
     /// into another.
     routes: Option<Box<crate::xmod::RouteTable>>,
@@ -1325,6 +1375,8 @@ impl VoiceManager {
             song_beat: 0.0,
             beat_step: 120.0 / 60.0 / sample_rate as f64,
             bus_glitch: None,
+            buses: None,
+            mix_strip: false,
             routes: None,
             bus_gran: None,
             bus_spec: None,
@@ -1393,11 +1445,62 @@ impl VoiceManager {
     /// Solo one channel for a stem bounce (None restores the full mix).
     pub fn set_solo(&mut self, channel: Option<u16>) {
         self.solo = channel.map(|c| vec![c]);
+        self.widen_solo();
     }
 
     /// Solo several channels at once (a song's `bounce` of some tracks).
     pub fn set_solo_set(&mut self, channels: Vec<u16>) {
         self.solo = Some(channels);
+        self.widen_solo();
+    }
+
+    /// A soloed bus brings its members (a bus's stem is the group through
+    /// it), and a soloed member brings its bus (a member's stem goes
+    /// through the bus it is mixed on).
+    fn widen_solo(&mut self) {
+        let (Some(solo), Some(b)) = (self.solo.as_mut(), self.buses.as_ref()) else {
+            return;
+        };
+        let asked = solo.clone();
+        for (&member, &i) in b.of.iter() {
+            let bus = b.chans[i];
+            let add = if asked.contains(&bus) {
+                member
+            } else if asked.contains(&member) {
+                bus
+            } else {
+                continue;
+            };
+            if !solo.contains(&add) {
+                solo.push(add);
+            }
+        }
+    }
+
+    /// Mix `members` (track channels) into the group bus on `bus` instead
+    /// of the dry mix; `MIX_CHANNEL` (no members) puts a strip across the
+    /// finished mix. A member already on a bus moves.
+    pub fn set_bus(&mut self, bus: u16, members: &[u16]) {
+        self.strip_mut(bus);
+        if bus == MIX_CHANNEL {
+            self.mix_strip = true;
+            return;
+        }
+        let b = self.buses.get_or_insert_with(Default::default);
+        let i = match b.chans.iter().position(|&c| c == bus) {
+            Some(i) => i,
+            None => {
+                b.chans.push(bus);
+                b.acc.push((0.0, 0.0));
+                b.chans.len() - 1
+            }
+        };
+        for &m in members {
+            if m != bus && bus_for_channel(m).is_none() && m != MIX_CHANNEL {
+                b.of.insert(m, i);
+            }
+        }
+        self.widen_solo();
     }
 
     /// Every track whose sound a new note cut because all the voice cards
@@ -1625,7 +1728,7 @@ impl VoiceManager {
         let build = value != 0.0 || param == P::Reverse;
         let sr = self.sample_rate;
         let spb = 1.0 / self.beat_step;
-        let slot = if channel == 0 {
+        let slot = if channel == 0 || channel == MIX_CHANNEL {
             &mut self.bus_glitch
         } else {
             if !build && self.channel_mix.get(&channel).map_or(true, |m| m.glitch.is_none()) {
@@ -1643,6 +1746,8 @@ impl VoiceManager {
         });
         match param {
             P::Stutter => g.set_stutter(value),
+            P::StutterHalve => g.set_stutter_halve(value),
+            P::TapeStopCurve => g.set_tape_stop_curve(value),
             P::Reverse => g.set_reverse(value),
             P::TapeStop => g.set_tape_stop(value),
             _ => {}
@@ -1909,7 +2014,10 @@ impl VoiceManager {
     pub fn set_channel_param(&mut self, channel: u16, param: crate::song::Param, value: f32) {
         use crate::song::Param as P;
         // The glitch inserts: on the track's strip, or unscoped on the bus
-        if matches!(param, P::Stutter | P::Reverse | P::TapeStop) {
+        if matches!(
+            param,
+            P::Stutter | P::Reverse | P::TapeStop | P::StutterHalve | P::TapeStopCurve
+        ) {
             self.set_glitch(channel, param, value);
             return;
         }
@@ -3056,12 +3164,10 @@ impl VoiceManager {
                     }
                     Some(m) => {
                         let (l, r) = strip_one(m, l, r, &mut sends);
-                        left += l;
-                        right += r;
+                        mix_out(&mut self.buses, ch, l, r, &mut left, &mut right);
                     }
                     None => {
-                        left += l;
-                        right += r;
+                        mix_out(&mut self.buses, ch, l, r, &mut left, &mut right);
                     }
                 }
             }
@@ -3075,8 +3181,7 @@ impl VoiceManager {
                 let (l, r) = std::mem::take(&mut m.voice_sum);
                 if heard {
                     let (l, r) = strip_one(m, l, r, &mut sends);
-                    left += l;
-                    right += r;
+                    mix_out(&mut self.buses, ch, l, r, &mut left, &mut right);
                 } else {
                     strip_one(m, l, r, &mut SendBus::default());
                 }
@@ -3098,8 +3203,7 @@ impl VoiceManager {
                 vox_out,
                 &mut sends,
             );
-            left += vl;
-            right += vr;
+            mix_out(&mut self.buses, VOX_CHANNEL, vl, vr, &mut left, &mut right);
         } else {
             strip_unheard(&mut self.channel_mix, VOX_CHANNEL, vox_out, vox_out);
         }
@@ -3121,8 +3225,7 @@ impl VoiceManager {
                 dr,
                 &mut sends,
             );
-            left += dl;
-            right += dr;
+            mix_out(&mut self.buses, DRUM_CHANNEL, dl, dr, &mut left, &mut right);
         } else {
             strip_unheard(&mut self.channel_mix, DRUM_CHANNEL, dl, dr);
         }
@@ -3134,8 +3237,7 @@ impl VoiceManager {
             }
             if self.solo.as_ref().map_or(true, |s| s.contains(ch)) {
                 let (dl, dr) = strip(&mut self.channel_mix, *ch, dl, dr, &mut sends);
-                left += dl;
-                right += dr;
+                mix_out(&mut self.buses, *ch, dl, dr, &mut left, &mut right);
             } else {
                 strip_unheard(&mut self.channel_mix, *ch, dl, dr);
             }
@@ -3175,8 +3277,7 @@ impl VoiceManager {
                     sr,
                     &mut sends,
                 );
-                left += sl;
-                right += sr;
+                mix_out(&mut self.buses, ch, sl, sr, &mut left, &mut right);
             } else {
                 strip_unheard(&mut self.channel_mix, ch, sl, sr);
             }
@@ -3212,10 +3313,33 @@ impl VoiceManager {
             }
             if self.solo.as_ref().map_or(true, |s| s.contains(&ch)) {
                 let (il, ir) = strip(&mut self.channel_mix, ch, il, ir, &mut sends);
-                left += il;
-                right += ir;
+                mix_out(&mut self.buses, ch, il, ir, &mut left, &mut right);
             } else {
                 strip_unheard(&mut self.channel_mix, ch, il, ir);
+            }
+        }
+
+        // The group buses: each member's strip output summed, through the
+        // bus's own strip, onto the mix (its sends join the members')
+        if let Some(b) = self.buses.as_mut() {
+            for i in 0..b.chans.len() {
+                let ch = b.chans[i];
+                let (l, r) = std::mem::take(&mut b.acc[i]);
+                if !self.taps.is_empty() {
+                    tap_add(&mut self.taps, ch, l, r);
+                }
+                // (a bus never sounds a note, so its fader glides from the
+                // first sample on rather than waiting for one)
+                if let Some(m) = self.channel_mix.get_mut(&ch) {
+                    m.fresh = false;
+                }
+                if self.solo.as_ref().map_or(true, |s| s.contains(&ch)) {
+                    let (l, r) = strip(&mut self.channel_mix, ch, l, r, &mut sends);
+                    left += l;
+                    right += r;
+                } else {
+                    strip_unheard(&mut self.channel_mix, ch, l, r);
+                }
             }
         }
 
@@ -3284,6 +3408,21 @@ impl VoiceManager {
         let (left, right) = match self.bus_body.as_mut() {
             Some(b) => b.process(left, right),
             None => (left, right),
+        };
+        // `bus mix`: the finished mix's own fader, duck and step gate
+        let (left, right) = match self.mix_strip {
+            true => match self.channel_mix.get_mut(&MIX_CHANNEL) {
+                Some(m) => {
+                    m.fresh = false;
+                    let mut g = m.cur_gain * (1.0 - m.duck * m.duck_env);
+                    if let Some(sh) = m.shaper.as_ref() {
+                        g *= sh.1;
+                    }
+                    (left * g, right * g)
+                }
+                None => (left, right),
+            },
+            false => (left, right),
         };
 
         // Master width: scale the side signal of the finished mix, smoothed

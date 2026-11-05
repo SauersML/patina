@@ -394,6 +394,8 @@ const EXCLUDED: &[Param] = &[
     Param::Doppler,
     Param::BodyMix,
     Param::BodyMorph,
+    Param::StutterHalve,
+    Param::TapeStopCurve,
     // Mixer desk (per-track strips, the song's post-effects arrangement
     // trim, a track's own pitch CV) + the song-only chorus insert override
     Param::Output,

@@ -117,7 +117,11 @@ pub fn render_stems(song: &crate::song::Song, dir: &str, format: SampleFormat) -
     // none; every kit track used to share one board and one stem.
     let mut jobs: Vec<(String, u16)> = Vec::new();
     for (name, channel) in &song.tracks {
-        if jobs.iter().any(|(_, k)| k == channel) {
+        // (`bus mix` is the whole mix, not a stem; a group bus's stem is
+        // its tracks through it)
+        if jobs.iter().any(|(_, k)| k == channel)
+            || *channel == crate::voice_manager::MIX_CHANNEL
+        {
             continue;
         }
         jobs.push((name.clone(), *channel));

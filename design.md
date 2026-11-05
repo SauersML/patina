@@ -104,6 +104,14 @@ We will use a layered architecture with clear interfaces between components:
      cards once a sample; plain strips still run per card. Engaged, the
      master stage replaces the tanh soft limit, so its ceiling is the
      true peak
+   - Buses (`bus NAME tracks=...`, voice_manager.rs): a member's strip
+     output adds into its bus's input instead of the dry sum, and after
+     every instrument has rendered each bus runs once through a strip of
+     its own on a reserved channel (BUS_CHANNEL_BASE + i), so every strip
+     insert, lane and duck key works on a group unchanged. Sends tap the
+     members as before. `bus mix` is a strip on MIX_CHANNEL read after
+     the tape and the bus glitch for its fader, duck and shaper only. A
+     song without buses sums exactly as before
    - Cross-track routing (src/xmod.rs): any track's strip signal (after
      its inserts, before its fader) drives another track at audio rate.
      Song syntax, on the driven track: `fm_from=SRC fm=D` (linear FM,
@@ -121,7 +129,9 @@ We will use a layered architecture with clear interfaces between components:
      after the effect returns and before the tape, like a console bus
      compressor printing to cassette. Out by default and bit-identical
      when out; its sidechain listens while out so the meter reads and IN
-     lands on a settled gain
+     lands on a settled gain. comp_ratio is the ratio N:1 (1..20); before
+     dd3d1c8 it was the switch position (0 = 2:1, 1 = 4:1, 2 or more =
+     10:1), so an old song converts 0, 1, 2+ to 2, 4, 10
 
 8. **MIDI Handler**: Processes MIDI input.
    - Uses a custom enum for type-safe MIDI events

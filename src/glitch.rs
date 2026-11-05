@@ -22,6 +22,18 @@
 //                 to tape speed), then silence until it is set back to 0,
 //                 when the music comes back live.
 //
+// Two knobs shape them further:
+//
+//   - stutter_halve H  a roll on its own: while the stutter runs, the
+//                 repeat halves every H beats (1/16 becomes 1/32, then
+//                 1/64 ...), down to a 1/256 note; 0 holds the division.
+//                 `stutter 16` with `stutter_halve 0.5` is two 16ths, four
+//                 32nds, eight 64ths, each stage an eighth note long.
+//   - tape_stop_curve C  the shape of the slowdown, latched when the stop
+//                 engages: the speed falls as (1 - t/T)^C. 1 is the
+//                 constant rate above; 2 drops fast and drags a long tail
+//                 near the bottom; 0.5 holds speed and dies late.
+//
 // Slice and stop lengths follow the song's tempo (beats are quarter notes:
 // a 1/N note is 4/N beats). Every seam, the repeat wrap, a reversed
 // slice's edges, engaging and letting go, is declicked: slice edges with a
@@ -36,6 +48,11 @@
 const MAX_SLICE_S: f32 = 4.0;
 /// Longest tape stop.
 const MAX_STOP_S: f32 = 8.0;
+/// The steepest tape-stop curve (the head falls furthest behind, C/(C+1)
+/// of the stop, at the steepest).
+const MAX_STOP_CURVE: f32 = 4.0;
+/// The finest division a halving roll reaches.
+const MAX_HALVED_DIV: f64 = 256.0;
 /// The switch crossfade, live to effect and back.
 const XFADE_S: f32 = 0.003;
 /// The edge gate on every repeat and reversed slice (at most a quarter of
@@ -98,6 +115,10 @@ impl Switch {
 #[derive(Clone)]
 struct Stutter {
     div: f32,
+    /// Beats per halving (0 = hold the division), and samples since the
+    /// stutter engaged.
+    halve: f32,
+    elapsed: u64,
     slice: Vec<[f32; 2]>,
     rec: usize,
     pos: usize,
@@ -112,6 +133,8 @@ impl Stutter {
     fn new(sr: f32) -> Self {
         Self {
             div: 0.0,
+            halve: 0.0,
+            elapsed: 0,
             slice: vec![[0.0; 2]; (MAX_SLICE_S * sr) as usize],
             rec: 0,
             pos: 0,
@@ -129,6 +152,7 @@ impl Stutter {
             self.rec = 0;
             self.pos = 0;
             self.pass = 0;
+            self.elapsed = 0;
             self.out = Switch::default();
         } else if !on && self.active && !self.out.running() {
             self.out.start(false, xf);
@@ -142,9 +166,16 @@ impl Stutter {
             self.rec += 1;
         }
         if on {
+            // a halving roll doubles the division every `halve` beats
+            let div = if self.halve > 0.0 {
+                let stage = (self.elapsed as f64 / (self.halve as f64 * spb)).floor();
+                (self.div as f64 * stage.exp2()).min(MAX_HALVED_DIV.max(self.div as f64)) as f32
+            } else {
+                self.div
+            };
             // a new length lands at once; after the first pass it can
             // only reach as far as the tape recorded
-            let mut len = slice_len(self.div, spb, cap);
+            let mut len = slice_len(div, spb, cap);
             if self.pass > 0 {
                 len = len.min(self.rec);
             }
@@ -158,6 +189,7 @@ impl Stutter {
         let g = edge_gain(self.pos, self.len, edge, self.pass > 0);
         let wet = [src[0] * g, src[1] * g];
         self.pos += 1;
+        self.elapsed += 1;
         if self.out.running() {
             let y = self.out.mix(x, wet);
             if !self.out.running() {
@@ -252,6 +284,12 @@ impl Reverse {
 #[derive(Clone)]
 struct TapeStop {
     beats: f32,
+    /// The slowdown's curve as set, and as latched when the stop engaged
+    /// (1 = the constant rate, run as it always was).
+    curve: f32,
+    power: f64,
+    /// Samples since it engaged.
+    n: u64,
     buf: Vec<[f32; 2]>,
     /// Samples written since it engaged, the read head, its speed and the
     /// speed it loses per sample.
@@ -267,8 +305,15 @@ impl TapeStop {
     fn new(sr: f32) -> Self {
         Self {
             beats: 0.0,
-            // the head falls behind by half the stop at most
-            buf: vec![[0.0; 2]; (0.5 * MAX_STOP_S * sr) as usize + 8],
+            curve: 1.0,
+            power: 1.0,
+            n: 0,
+            // the head falls behind by C/(C+1) of the stop at most (half
+            // of it at the constant rate)
+            buf: vec![
+                [0.0; 2];
+                (MAX_STOP_CURVE / (MAX_STOP_CURVE + 1.0) * MAX_STOP_S * sr) as usize + 8
+            ],
             count: 0,
             read: 0.0,
             speed: 1.0,
@@ -293,6 +338,8 @@ impl TapeStop {
             self.speed = 1.0;
             let secs = (self.beats as f64 * spb / sr as f64).min(MAX_STOP_S as f64);
             self.decel = 1.0 / (secs * sr as f64).max(1.0);
+            self.power = self.curve as f64;
+            self.n = 0;
             self.out = Switch::default();
         } else if !on && self.active && !self.out.running() {
             self.out.start(false, xf);
@@ -318,7 +365,13 @@ impl TapeStop {
             wet[c] = (((c3 * t + c2) * t + c1) * t + c0) * g;
         }
         self.read += self.speed;
-        self.speed = (self.speed - self.decel).max(0.0);
+        if self.power == 1.0 {
+            self.speed = (self.speed - self.decel).max(0.0);
+        } else {
+            // speed (1 - t/T)^C, t counted in samples since it engaged
+            self.n += 1;
+            self.speed = (1.0 - self.n as f64 * self.decel).max(0.0).powf(self.power);
+        }
         if self.out.running() {
             let y = self.out.mix(x, wet);
             if !self.out.running() {
@@ -378,6 +431,25 @@ impl Glitch {
         }
         let sr = self.sr;
         self.tape.get_or_insert_with(|| Box::new(TapeStop::new(sr))).beats = beats;
+    }
+
+    /// The next stop's slowdown curve: speed (1 - t/T)^`curve`.
+    pub fn set_tape_stop_curve(&mut self, curve: f32) {
+        if !curve.is_finite() {
+            return;
+        }
+        let sr = self.sr;
+        self.tape.get_or_insert_with(|| Box::new(TapeStop::new(sr))).curve =
+            curve.clamp(1.0 / MAX_STOP_CURVE, MAX_STOP_CURVE);
+    }
+
+    /// Halve the beat repeat every `beats` while it runs (0 = hold).
+    pub fn set_stutter_halve(&mut self, beats: f32) {
+        if !beats.is_finite() {
+            return;
+        }
+        let sr = self.sr;
+        self.stutter.get_or_insert_with(|| Box::new(Stutter::new(sr))).halve = beats.max(0.0);
     }
 
     /// The song's tempo, in samples per beat (120 bpm until told).
@@ -561,5 +633,102 @@ mod tests {
         // released: live again after the crossfade
         let k = on + 61000;
         assert_eq!(out[k], tone(k));
+    }
+    /// `tape_stop_curve 2`: the speed falls as (1 - t/T)^2, so the pitch
+    /// is at a quarter, not half, halfway through the stop; a constant
+    /// input reads back as the speed itself (the level follows it).
+    #[test]
+    fn a_curved_tape_stop_falls_as_the_power() {
+        for curve in [2.0f32, 0.5] {
+            let mut g = Glitch::new(SR);
+            g.set_tempo(SPB);
+            g.set_tape_stop_curve(curve);
+            let on = 1000;
+            let mut out = Vec::new();
+            for n in 0..(on + 50000) {
+                if n == on {
+                    g.set_tape_stop(2.0);
+                }
+                out.push(g.process(1.0, 1.0).0);
+            }
+            // T = 2 beats = 48000 samples
+            for u in [0.25f32, 0.5, 0.75] {
+                let k = on + (u * 48000.0) as usize;
+                let want = (1.0 - u).powf(curve);
+                assert!((out[k] - want).abs() < 2e-3, "curve {curve} at {u}: {} vs {want}", out[k]);
+            }
+            assert!(out[on + 48100].abs() < 1e-6, "stopped");
+        }
+    }
+
+    /// The curve is latched when the stop engages, and curve 1 is the
+    /// constant-rate stop exactly.
+    #[test]
+    fn tape_stop_curve_one_is_the_straight_stop() {
+        let run = |set_curve: bool| {
+            let mut g = Glitch::new(SR);
+            g.set_tempo(SPB);
+            if set_curve {
+                g.set_tape_stop_curve(1.0);
+            }
+            (0..30000)
+                .map(|n| {
+                    if n == 500 {
+                        g.set_tape_stop(1.0);
+                    }
+                    g.process(signal(n), signal(n)).0
+                })
+                .collect::<Vec<f32>>()
+        };
+        assert_eq!(run(false), run(true));
+        // a change mid-stop waits for the next stop
+        let mut g = Glitch::new(SR);
+        g.set_tempo(SPB);
+        let mut out = Vec::new();
+        for n in 0..30000 {
+            if n == 500 {
+                g.set_tape_stop(1.0);
+            }
+            if n == 6000 {
+                g.set_tape_stop_curve(3.0);
+            }
+            out.push(g.process(signal(n), signal(n)).0);
+        }
+        assert_eq!(out, run(false));
+    }
+
+    /// `stutter 16` with `stutter_halve 0.5` is a roll: two 16ths, then
+    /// four 32nds, then eight 64ths, each stage an eighth note long, every
+    /// repeat the start of the slice caught when it engaged.
+    #[test]
+    fn a_halving_stutter_rolls_down() {
+        let mut g = Glitch::new(SR);
+        g.set_tempo(SPB);
+        g.set_stutter_halve(0.5);
+        let on = 3000;
+        let mut out = Vec::new();
+        for n in 0..(on + 40000) {
+            if n == on {
+                g.set_stutter(16.0);
+            }
+            out.push(g.process(signal(n), signal(n)).0);
+        }
+        // the eighth-note stages start at on, on + 12000, on + 24000; the
+        // slices are 6000, 3000 and 1500 samples, each read from `on`
+        // (away from the declicked edges)
+        let caught = |k: usize| signal(on + k);
+        for (start, len, count) in [(0usize, 6000usize, 2usize), (12000, 3000, 4), (24000, 1500, 8)] {
+            for rep in 0..count {
+                for k in [200usize, len / 2, len - 300] {
+                    let at = on + start + rep * len + k;
+                    assert!(
+                        (out[at] - caught(k)).abs() < 1e-6,
+                        "stage at {start}, repeat {rep}, offset {k}: {} vs {}",
+                        out[at],
+                        caught(k)
+                    );
+                }
+            }
+        }
     }
 }

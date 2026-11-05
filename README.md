@@ -22,7 +22,7 @@ format for programmatic playback and parameter automation.
 - 📼 A tape-deck sampler: any WAV becomes an instrument on the keys (`track keys sample=tape.wav`) — band-limited windowed-sinc playback (Kaiser β=8.6, kernel stretched by the read speed so varispeed doesn't alias in *either* direction), sustain loops with equal-power crossfades (a Mellotron whose tape never runs out), `chop=N` slice pads mapped chromatically (the MPC workflow), `beats=N` tempo-fitting (break-matching solved at parse), a per-slot resonant ZDF lowpass (the SP/Akai filter-sweep sound), vintage converter emulation (`bits=12 rate=26040` is the SP-1200: band-limited decimation at load, truncation, and a zero-order-hold DAC whose imaging spray is the point), reverse transport, gate/one-shot modes, per-note choke (`mono`), and a live-automatable transport: `smp_pitch` is a varispeed knob (tape-stops on demand), `smp_start` scrubs the needle-drop, `smp_cutoff`/`smp_res` sweep the filter, `smp_gain`/`smp_pan`/`smp_attack`/`smp_release` reshape it mid-song. The heads mix onto the same volt bus as everything else — sampler playback sags the power rail, runs through the fuzz/spring/reverb/chorus/tape chain, and bends with the pitch wheel
 - 🥊 Kick-bass on any voice: a per-note pitch envelope (start, time, curve) diving onto the note, key sync, and an antialiased drive stage (tanh, clip, wavefolder) ahead of the ladder as post-filter; plus a seven-saw supersaw bank and a filtered noise oscillator per card for walls and risers
 - 🫦 Note bends (`C4:2>G3` glides to the target over the note), and the throat: pitch-synchronous grains that move a voice's formants apart from its pitch, so a sampled voice drops an octave without turning into a monster (`formant`, `smp_formant`, `vox_formant`)
-- 💥 Glitch inserts on any track or the whole mix bus: beat repeat from 1/8 to 1/64, reverse in note slices, and tape stop (`stutter`, `reverse`, `tape_stop`)
+- 💥 Glitch inserts on any track, any bus or the whole mix: beat repeat from 1/8 to 1/64 that can halve itself into a roll, reverse in note slices, and a tape stop with a curve (`stutter`, `stutter_halve`, `reverse`, `tape_stop`, `tape_stop_curve`)
 - 🌀 Generative automation lanes: `{expr}` segments of time at control rate, with noise, step sequences and chaotic systems (Lorenz, Rössler, logistic and Hénon maps, a Kuramoto swarm of coupled oscillators, a double pendulum)
 - 🔀 Audio-rate cross-modulation between tracks: any track's signal as another's FM, filter FM or ring modulator, and routed feedback loops between tracks through a delay, a tone filter and a safety limiter (`fm_from=`, `filter_fm_from=`, `ringmod_from=`, `feed_from=`)
 - 🌾 A granular engine on any track or the whole mix bus: a live capture buffer played back as a cloud of grains with size, density, position, pitch and pan scatter, freeze and reverse probability (`gran`, `gran_size`, `gran_freeze`, ...)
@@ -157,7 +157,7 @@ automate vox_mode: 1 during CH1 base 0   # one-line section automation
   - **EQ** `eq_low=` `eq_mid=` `eq_high=` (dB, 0 = out) at `eq_low_freq=` (100 Hz) `eq_mid_freq=` (1 kHz, `eq_mid_q=` 0.7) `eq_high_freq=` (8 kHz) — low shelf, peak, high shelf.
   - **Drive** `dist=` (0–1, 0 = out) through `dist_mode=` 0 tanh · 1 hard clip · 2 foldback (all three antialiased) · 3 bitcrush (16 → 2 bits) · 4 sample-rate reduce (down 7 octaves), blended by `dist_mix=`. The shapers drive up to +36 dB and give half of it back, so they thicken rather than just get louder: a −9 dBFS supersaw chord at `dist=0.5` (tanh) loses 2.3 dB of peak, gains 4.4 dB of RMS, and its crest goes from 14.4 to 7.7 dB. The two lo-fi modes keep the level. The EQ, drive and compressor hear the whole track (a chord, not each note), once a sample.
   - **Fader**, times the **duck** and the **shaper**. `duck=` (depth 0–1: 0.5 = −6 dB) dips the strip on every kick, or on the notes of one track with `duck_from=kick` (`duck_from=beat.BD` keys off one drum voice, or one note, of a track), shaped by `duck_attack=` `duck_hold=` `duck_release=` (seconds). `shape=` is a tempo-synced volume shaper: a curve (`pump` `saw` `ramp` `sine` `square` `tri`, one beat per cycle) or a trance gate (`shape=x.x.xx.x`: `x` open, `.` shut, `0`–`9` ninths, a sixteenth per step), with `shape_beats=` (cycle length), `shape_depth=` and `shape_smooth=` (step edges, seconds).
-  - **Compressor** `comp=` (threshold dBFS, 0 = out; 4:1, 0.1 ms, auto release, auto make-up), voiced by the bus compressor's own knobs on the strip: `comp_ratio=` `comp_attack=` `comp_release=` `comp_makeup=` `comp_mix=` `comp_sc_hpf=` (`automate drums.comp_ratio`; unscoped they turn the bus compressor). `comp_ratio` is the ratio itself, N:1 from 1 to 20 (`comp_ratio=6` is 6:1; the panel's switch has 2, 4 and 10). Before 11-05 it was the switch's position (0, 1, 2 for 2, 4, 10:1): an old song's 0 now clamps to 1 with a warning, and its 1 and 2 are 1:1 and 2:1.
+  - **Compressor** `comp=` (threshold dBFS, 0 = out; 4:1, 0.1 ms, auto release, auto make-up), voiced by the bus compressor's own knobs on the strip: `comp_ratio=` `comp_attack=` `comp_release=` `comp_makeup=` `comp_mix=` `comp_sc_hpf=` (`automate drums.comp_ratio`; unscoped they turn the bus compressor). `comp_ratio` is the ratio itself, N:1 from 1 to 20 (`comp_ratio=6` is 6:1; the panel's switch has 2, 4 and 10). Before dd3d1c8 (11-05) it was the switch's position: 0 = 2:1, 1 = 4:1, 2 or more = 10:1. To convert an old song or patch, write 2 for 0, 4 for 1 and 10 for 2 or more, in `comp_ratio=` options and `automate comp_ratio` lanes alike; unconverted, an old 1 plays 1:1, a 2 plays 2:1, a 4 plays 4:1, and a 0 clamps to 1 with a warning.
   ```
   track kick kit=909
   track bass patch=deepsine gain=1.6 duck=0.7 duck_from=kick duck_hold=0.05 duck_release=0.12
@@ -293,7 +293,7 @@ track wire modal=string modal_excite=2 modal_stretch=0.002 modal_damp=0.2 modal_
 
 ## 💥 Glitch
 
-Three glitch inserts: a beat repeat, a reverser and a tape stop. Automate them on one track (`automate kick.stutter`, on that track's strip) or with no track across the whole mix bus (`automate stutter`, after the tape, so the finished mix catches and stops). Lengths are in notes and beats and follow the tempo lane.
+Three glitch inserts: a beat repeat, a reverser and a tape stop. Automate them on one track (`automate kick.stutter`, on that track's strip), on a bus (`automate music.stutter`) or with no track across the whole mix bus (`automate stutter` or `automate mix.stutter`, after the tape, so the finished mix catches and stops). Lengths are in notes and beats and follow the tempo lane. `stutter_halve H` halves a running repeat every H beats, down to a 1/256 note (`stutter 16` with `stutter_halve 0.5` is two 16ths, four 32nds and eight 64ths, an eighth note each). `tape_stop_curve C` shapes the next stop: the speed falls as (1 − t/T)^C, so 1 is the constant rate and 2 drops fast and drags a long tail (0.25 to 4).
 
 ```
 automate kick.stutter              # the roll into a drop: the kick at beat 12 is
@@ -302,12 +302,31 @@ automate stab.reverse              # the stab backwards, a beat behind
 0 >8 4 >16 0
 automate tape_stop                 # the whole mix winds down over 3 beats
 0 >25 3
+automate tape_stop_curve           # ...front-loaded: speed (1 - t/T)^1.6
+1.6
 ```
 
 - **Beat repeat**: `stutter N` catches the next 1/N note from the moment it reaches N ≥ 1 (8 an eighth, 16 a sixteenth, 64 a 64th, 12 an eighth-note triplet) and repeats it until it returns to 0. The first pass is live, so the repeat keeps the downbeat it caught. Raising N while it runs shortens the repeat on the caught audio.
 - **Reverse**: `reverse N` plays the track backwards in 1/N-note slices, one slice behind, so it sounds the moment it engages. (The tape deck's `reverse` option flips a reel; this flips whatever the strip hears.)
 - **Tape stop**: `tape_stop B` winds the tape down to a halt over B beats at a constant rate, pitch and level falling together, then holds silence until it returns to 0 and the music comes back live.
-- Every seam (each repeat, each reversed slice, switching in and out) is declicked. A song that never touches them renders exactly as before. `songs/glitch.song` is the demo.
+- Every seam (each repeat, each reversed slice, switching in and out) is declicked. A song that never touches them renders exactly as before. `songs/glitch.song` is the demo; `songs/buses.song` rolls and curves them on buses and the mix.
+
+## 🎚️ Buses
+
+`bus NAME tracks=a,b,c` mixes those tracks' strips, after their faders and pans, into one strip of its own. The bus takes every strip option and lane a track takes: `gain=` `pan=` the sends, `duck=` and `duck_from=`, `shape=` (so `shape=xx.x.xx.x.xx....` is a sixteenth-step gate on the group), the EQ, the drive, `comp=`, and the glitch lanes (`automate music.stutter`). The members' own sends still reach the rooms around the bus, as on a console's group, so a gated bus leaves its reverb tails ungated. A track sits on one bus at most; a bus takes tracks, not other buses, and plays no notes. Its stem (`--render-stems`) is the group through it, and a member's stem goes through its bus.
+
+`bus mix` is the whole mix, after the tape and the bus glitch: it takes `gain=`, the duck (`duck=` `duck_from=` and its times) and the shape, so `bus mix shape=xx.x.xx.x.xx.... shape_depth=0` with an `automate mix.shape_depth` lane gates the finished two-track, rooms and all, for one bar. `automate mix.stutter` is the same insert as unscoped `automate stutter`.
+
+```
+bus music tracks=pad,bass,lead duck=0.7 duck_from=kick.BD duck_release=0.07
+bus mix shape=xx.x.xx.x.xx.x.x. shape_depth=0
+automate mix.shape_depth           # gate the whole mix for bar 8
+0 >28 1 >32 0
+automate music.stutter             # roll the group into the drop
+0 >31 16 >32 0
+automate music.stutter_halve
+0.25
+```
 
 ## 🫨 Feel
 
