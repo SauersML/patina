@@ -1,6 +1,9 @@
 //! Measure long-bounce memory with /usr/bin/time -l (macOS) or -v (Linux):
 //! cargo run --release --no-default-features --example render_memory -- 60 /tmp/bounce.wav
-use patina::{render::render_to_wav, song::parse_song_text};
+use patina::{
+    render::{render_to_wav, SampleFormat},
+    song::parse_song_text,
+};
 
 fn main() {
     let args: Vec<_> = std::env::args().collect();
@@ -11,5 +14,5 @@ fn main() {
         "bpm 60\ntail 0\ntrack tone\nC4:0.25\nautomate volume\n>{seconds} 0\n"
     ))
     .expect("benchmark song must parse");
-    render_to_wav(&song, &args[2], true).expect("WAV render failed");
+    render_to_wav(&song, &args[2], true, SampleFormat::Float32).expect("WAV render failed");
 }

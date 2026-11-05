@@ -179,11 +179,29 @@ USAGE:
 
 RENDER OPTIONS:
     --no-normalize   keep the engine's exact gain (--render; stems never normalize)
+    --bits <16|32>   sample format of --render, --render-stems and --say:
+                     32 = float (default, analysis-grade), 16 = PCM with
+                     TPDF dither (half the size, plays anywhere)
 
 ENVIRONMENT:
     PATINA_LANES=N   --render runs its voice cards on N threads (bit-identical)
 
 Song format reference: the header of src/song.rs, and the README.";
+
+/// `--bits 16|32` -> the offline renderers' sample format.
+fn sample_format(args: &[String]) -> Result<patina::render::SampleFormat, String> {
+    match args.iter().position(|a| a == "--bits") {
+        None => Ok(patina::render::SampleFormat::Float32),
+        Some(i) => match args.get(i + 1).map(String::as_str) {
+            Some("32") => Ok(patina::render::SampleFormat::Float32),
+            Some("16") => Ok(patina::render::SampleFormat::Pcm16),
+            other => Err(format!(
+                "--bits takes 16 or 32, got {}",
+                other.unwrap_or("nothing")
+            )),
+        },
+    }
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
@@ -193,6 +211,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{USAGE}");
         return Ok(());
     }
+    let format = sample_format(&args)?;
 
     // `patina --params`: the automatable parameter chart, straight from
     // the single source of truth (song::PARAM_DEFS + Param::range) — the
@@ -232,7 +251,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(String::as_str)
             .unwrap_or("renders/say.wav");
         let song = song::parse_song_text(&say_song(text))?;
-        patina::render::render_to_wav(&song, out, true)?;
+        patina::render::render_to_wav(&song, out, true, format)?;
         return Ok(());
     }
 
@@ -267,7 +286,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let song = song_path.ok_or("--render requires --play <song.song>")?;
         let events = song::load_song_with_patch(song, patch)?;
         let normalize = !args.iter().any(|a| a == "--no-normalize");
-        patina::render::render_to_wav(&events, out, normalize)?;
+        patina::render::render_to_wav(&events, out, normalize, format)?;
         return Ok(());
     }
 
@@ -293,7 +312,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(dir) = stems_path.as_deref() {
         let song = song_path.ok_or("--render-stems requires --play <song.song>")?;
         let song = song::load_song_with_patch(song, patch)?;
-        patina::render::render_stems(&song, dir)?;
+        patina::render::render_stems(&song, dir, format)?;
         return Ok(());
     }
 
