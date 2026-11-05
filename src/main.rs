@@ -159,8 +159,40 @@ fn say_song(text: &str) -> String {
     s
 }
 
+const USAGE: &str = "\
+Patina: analog synth simulator
+
+USAGE:
+    patina                                   open the synth (silent until played)
+    patina --play <song>                     open the synth and play a song file
+    patina --play <tune.mid> --patch <NAME>  play a MIDI file on patches/NAME.patch
+    patina --play <song> --render <out.wav>  bounce a song offline, no audio device
+    patina --play <song> --render-stems <dir>
+                                             one wav per track, soloed through the
+                                             full engine, with a level table
+    patina --play <song> --export-events <out.json>
+                                             the parsed score as timed events
+    patina --say \"HH-AH-L-OW\" [--out <out.wav>]
+                                             speak a phrase through the voice box
+    patina --params                          print every automatable parameter
+    patina --help                            show this message
+
+RENDER OPTIONS:
+    --no-normalize   keep the engine's exact gain (--render; stems never normalize)
+
+ENVIRONMENT:
+    PATINA_LANES=N   --render runs its voice cards on N threads (bit-identical)
+
+Song format reference: the header of src/song.rs, and the README.";
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
+
+    // Help never touches the audio device: it must work on a headless box
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("{USAGE}");
+        return Ok(());
+    }
 
     // `patina --params`: the automatable parameter chart, straight from
     // the single source of truth (song::PARAM_DEFS + Param::range) — the
@@ -266,9 +298,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let host = cpal::default_host();
-    let device = host
-        .default_output_device()
-        .expect("no output device available");
+    let no_device =
+        "no usable audio output device (offline: --render / --render-stems; see --help)";
+    let device = host.default_output_device().ok_or(no_device)?;
 
     println!("Output device: {}", device.name()?);
 
@@ -286,10 +318,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // format wins, not just the first device config that matches any of them
     let mut selected_config = None;
     'search: for &(preferred_format, preferred_rate) in &preferred_formats {
-        for supported_config in device
-            .supported_output_configs()
-            .expect("error querying configs")
-        {
+        for supported_config in device.supported_output_configs().map_err(|_| no_device)? {
             if supported_config.sample_format() == preferred_format
                 && supported_config.min_sample_rate().0 <= preferred_rate
                 && supported_config.max_sample_rate().0 >= preferred_rate
@@ -302,14 +331,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Use the device's first config if no preferred one is available
-    let supported_config = selected_config.unwrap_or_else(|| {
-        device
+    let supported_config = match selected_config {
+        Some(config) => config,
+        None => device
             .supported_output_configs()
-            .expect("error querying configs")
+            .map_err(|_| no_device)?
             .next()
-            .expect("no supported config found")
-            .with_max_sample_rate()
-    });
+            .ok_or(no_device)?
+            .with_max_sample_rate(),
+    };
 
     println!("Selected output config: {:?}", supported_config);
 
@@ -329,9 +359,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
 
             // Try to find a supported format
-            let mut configs = device
-                .supported_output_configs()
-                .expect("error while querying configs");
+            let mut configs = device.supported_output_configs().map_err(|_| no_device)?;
 
             while let Some(config) = configs.next() {
                 let format = config.sample_format();
@@ -365,7 +393,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            panic!("Could not find any usable audio configuration");
+            return Err(no_device.into());
         }
     }
 
