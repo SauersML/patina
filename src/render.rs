@@ -139,18 +139,24 @@ pub fn render_stems(song: &crate::song::Song, dir: &str) -> Result<()> {
             });
         }
     });
+    // A solo bounce mutes the other strips but still plays every voice
+    // (the 64-board pool and its stealing must match the mix), so the
+    // voice peak is the whole song's, identical for every stem: report
+    // it once, not as if it were each stem's own.
     let mut table: Vec<(String, f32, f32, f32)> = Vec::new();
+    let mut song_voices = 0;
     for ((name, key), result) in jobs.iter().zip(results) {
         let (peak, rms, lufs, voices) = result.into_inner().unwrap().expect("every stem ran")?;
         println!(
-            "stem: {}/{}.wav (channel {}), peak concurrent voices: {}/64",
+            "stem: {}/{}.wav (channel {})",
             dir.trim_end_matches('/'),
             name,
-            key,
-            voices
+            key
         );
+        song_voices = song_voices.max(voices);
         table.push((name.clone(), peak, rms, lufs));
     }
+    println!("peak concurrent voices (whole song): {}/64", song_voices);
     println!(
         "\n{:<16} {:>10} {:>10} {:>10}",
         "stem", "peak dBFS", "rms dBFS", "LUFS"
