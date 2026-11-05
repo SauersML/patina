@@ -4,7 +4,8 @@
 #
 #   beats   0-16   INTRO  pad and hats only: still
 #   beats  16-48   KICK   the 909 kick on every beat (0.4286 s apart)
-#   beats  48-80   BASS   + a held sine bass, A1 F1 C2 G1, humming between kicks
+#   beats  48-80   BASS   + a held sine bass, A1 F1 C2 G1: at this mix level its
+#                         hum stays under the perception threshold in the soil
 #   beats  80-88   BREAK  silence
 #   beats  88-120  DROP   the kick at gain 2 (+6 dB), the bass back
 #   beats 120-128  OUTRO  the pad alone
