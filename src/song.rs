@@ -5098,6 +5098,43 @@ mod tests {
         assert!(db.abs() < 0.2, "a near-transparent hold moved the chord {db:+.2} dB");
     }
 
+    /// A strip's EQ on a chord is the plain chord put through that EQ once
+    /// a sample: the filter hears the channel's summed voice cards, not
+    /// each card in turn. Only the master's tanh, 40 dB down, separates the
+    /// two, over the first quarter second (later the supply's load, which
+    /// follows the output level, drifts the voices apart).
+    #[test]
+    fn a_strip_eq_on_a_chord_is_the_eq_run_once_on_the_sum() {
+        use crate::inserts::{Eq3, EqKnob};
+        let take = |opts: &str| -> Vec<(f32, f32)> {
+            let text = format!(
+                "automate reverb_wet\n0\nautomate echo\n0\n\
+                 track p patch=superwall gain=0.1 chorus_send=0 {opts}\n[F3 G#3 C4 F4]:4\n"
+            );
+            render_offline(&parse_song(&text).unwrap(), 48000.0)
+                .take(12_000)
+                .collect()
+        };
+        let plain = take("");
+        let heard = take("eq_low=-12 eq_mid=12 eq_mid_q=2 eq_high=9");
+        let mut eq = Eq3::new(48000.0);
+        eq.set(EqKnob::LowGain, -12.0);
+        eq.set(EqKnob::MidGain, 12.0);
+        eq.set(EqKnob::MidQ, 2.0);
+        eq.set(EqKnob::HighGain, 9.0);
+        let (mut err, mut sig) = (0f64, 0f64);
+        for (&(l, r), &(hl, hr)) in plain.iter().zip(&heard) {
+            let (el, er) = eq.process(l, r);
+            err += ((hl - el) as f64).powi(2) + ((hr - er) as f64).powi(2);
+            sig += (hl as f64).powi(2) + (hr as f64).powi(2);
+        }
+        let db = 10.0 * (err / sig).log10();
+        assert!(
+            sig > 0.0 && db < -50.0,
+            "the chord's EQ is {db:.1} dB off one EQ on the sum"
+        );
+    }
+
     /// The master limiter's ceiling is the bounce's true peak (the DC
     /// blocker runs before it and no tanh after), it lowers a dense loop's
     /// crest, and a threshold first set mid-song lands without a dropout:
