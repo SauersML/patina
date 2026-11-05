@@ -22,8 +22,26 @@
 //                           lowpass (feed_tone, Hz), a DC blocker, the gain
 //                           G and a safety limiter (feed_limit, dBFS). A
 //                           track may feed itself, two tracks each other: a
-//                           loop with gain above 1 rings up to the limiter's
-//                           ceiling and stays there, never past it.
+//                           loop with gain above 1 rings up to just under
+//                           the limiter's ceiling and stays there, never
+//                           past it.
+//
+// Sound: FM'd cards run their oscillators 4x oversampled (voice.rs: the
+// folded lines of a sawtooth swept 0-2x sit about 65 dB under the true
+// ones, against about 40 at the base rate); the ring modulator multiplies
+// at 2x through half-band filters (a product of two tones under 24 kHz
+// stays under 48 kHz, so only sums in the filter's 24-29 kHz transition
+// come back, above 19 kHz). The feed's limiter is a
+// saturator, as a real feedback loop's amplifier is: unity below its knee
+// (-4.4 dB under the ceiling), a smooth tanh shoulder above it, run at 2x
+// so the harmonics a saturated loop makes do not fold and recirculate. A
+// loop with gain over 1 settles into a steady tone in the shoulder. A gain
+// rider ahead of it (instant-attack envelope, gliding gain) keeps the
+// drive at the ceiling at most however high the feed gain (so a loop is
+// rounded, not squared: put a drive on the strip for that), and a last soft
+// guard at the base rate takes the decimator's ringing, so nothing passes
+// the ceiling. Every depth, the tone and the ceiling glide (20 ms); the
+// delay glides like tape.
 //
 // The source signal is the source strip after its inserts, before its fader
 // (and duck, shaper, compressor and pan), so `gain=0` silences a track that
@@ -140,10 +158,15 @@ pub struct StripXmod {
     started: bool,
     /// This sample's FM: the ratio the strip's oscillators run at.
     pub pitch_ratio: f32,
+    /// An FM route drives this strip: its cards run their oscillators
+    /// oversampled (voice.rs), so the sidebands do not alias.
+    pub fm_routed: bool,
     /// This sample's filter FM, octaves.
     pub cutoff_oct: f32,
     /// This sample's ring modulator (bus units); None when not routed.
     ring_m: Option<f32>,
+    /// The ring modulator's 2x oversampling (built with its route).
+    ring_os: Option<Box<RingOs>>,
     /// This sample's routed feed, volts.
     feed_in: (f32, f32),
     feed: Option<Box<FeedPath>>,
@@ -159,8 +182,10 @@ impl Default for StripXmod {
             feed_gain: Knob::default(),
             started: false,
             pitch_ratio: 1.0,
+            fm_routed: false,
             cutoff_oct: 0.0,
             ring_m: None,
+            ring_os: None,
             feed_in: (0.0, 0.0),
             feed: None,
         }
@@ -171,13 +196,19 @@ impl StripXmod {
     /// Open this strip to a route of kind `dest`.
     pub fn enable(&mut self, dest: Dest, sample_rate: f32) {
         match dest {
-            Dest::Ring => self.ring_m = Some(self.ring_m.unwrap_or(0.0)),
+            Dest::Ring => {
+                self.ring_m = Some(self.ring_m.unwrap_or(0.0));
+                if self.ring_os.is_none() {
+                    self.ring_os = Some(Box::new(RingOs::new()));
+                }
+            }
             Dest::Feed => {
                 if self.feed.is_none() {
                     self.feed = Some(Box::new(FeedPath::new(sample_rate)));
                 }
             }
-            Dest::Fm | Dest::FilterFm => {}
+            Dest::Fm => self.fm_routed = true,
+            Dest::FilterFm => {}
         }
     }
 
@@ -201,8 +232,8 @@ impl StripXmod {
                     .get_or_insert_with(|| Box::new(FeedPath::new(sample_rate)));
                 match param {
                     Param::FeedTime => path.set_time(value, fresh),
-                    Param::FeedTone => path.set_tone(value),
-                    _ => path.set_limit(value),
+                    Param::FeedTone => path.set_tone(value, fresh),
+                    _ => path.set_limit(value, fresh),
                 }
             }
             _ => {}
@@ -242,19 +273,58 @@ impl StripXmod {
     }
 
     /// The strip's input stage (volts): the routed feed comes in, then the
-    /// ring modulator multiplies voices and feed together.
+    /// ring modulator multiplies voices and feed together, at twice the
+    /// sample rate (a product's sum frequencies reach twice the highest
+    /// input, so at the base rate they would fold back). A ring-routed
+    /// strip always runs the oversampler, depth 0 included, so its small
+    /// fixed latency never jumps.
     #[inline]
-    pub fn input(&self, l: f32, r: f32) -> (f32, f32) {
-        let (mut l, mut r) = (l + self.feed_in.0, r + self.feed_in.1);
-        if let Some(m) = self.ring_m {
-            let d = self.ring.cur;
-            if d != 0.0 {
-                let k = 1.0 - d + d * m;
-                l *= k;
-                r *= k;
+    pub fn input(&mut self, l: f32, r: f32) -> (f32, f32) {
+        let (l, r) = (l + self.feed_in.0, r + self.feed_in.1);
+        match (self.ring_m, self.ring_os.as_mut()) {
+            (Some(m), Some(os)) => os.process(l, r, m, self.ring.cur),
+            (Some(m), None) => {
+                let k = 1.0 - self.ring.cur + self.ring.cur * m;
+                (l * k, r * k)
             }
+            _ => (l, r),
         }
-        (l, r)
+    }
+}
+
+/// The ring modulator at 2x: signal and modulator up through half-band
+/// interpolators, multiplied, and back down through half-band decimators
+/// (69 dB stopband), so the sum frequencies above Nyquist are filtered,
+/// not folded.
+#[derive(Clone)]
+struct RingOs {
+    up: [crate::tape::Halfband; 3],
+    down: [crate::tape::Halfband; 2],
+    /// Last sample's depth, so it moves in a line across the two steps.
+    d: f32,
+}
+
+impl RingOs {
+    fn new() -> Self {
+        let hb = crate::tape::Halfband::new;
+        Self {
+            up: [hb(), hb(), hb()],
+            down: [hb(), hb()],
+            d: f32::NAN,
+        }
+    }
+
+    #[inline]
+    fn process(&mut self, l: f32, r: f32, m: f32, d: f32) -> (f32, f32) {
+        let d0 = if self.d.is_finite() { self.d } else { d };
+        self.d = d;
+        let (l0, l1) = self.up[0].up(l);
+        let (r0, r1) = self.up[1].up(r);
+        let (m0, m1) = self.up[2].up(m);
+        let dm = 0.5 * (d0 + d);
+        let k0 = 1.0 - dm + dm * m0;
+        let k1 = 1.0 - d + d * m1;
+        (self.down[0].down(l0 * k0, l1 * k1), self.down[1].down(r0 * k0, r1 * k1))
     }
 }
 
@@ -265,9 +335,22 @@ pub fn fm_ratio(depth: f32, m: f32) -> f32 {
     (1.0 + depth * m).max(0.0)
 }
 
+/// The saturator's knee as a fraction of the ceiling (-4.4 dB): the feed
+/// is untouched below it.
+pub const FEED_KNEE: f32 = 0.6;
+/// Where the oversampled shoulder tops out, of the ceiling; the base-rate
+/// guard spans from here to the ceiling.
+const FEED_SHOULDER: f32 = 0.92;
+/// The rider keeps the drive into the shoulder at most this many times
+/// the ceiling.
+const FEED_DRIVE_MAX: f32 = 1.0;
+/// The 2x half-band pair's delay below 4 kHz, base samples: the delay line
+/// reads this much sooner, so a loop's lap stays the set time.
+const FEED_OS_DELAY: f32 = 1.796;
+
 /// A routed feed's path, in bus units: delay, lowpass, DC blocker, gain,
-/// then a peak limiter whose envelope attacks instantly, so nothing it
-/// passes ever exceeds its ceiling.
+/// then the safety limiter: a gain rider, a 2x oversampled soft
+/// saturator and a soft guard at the ceiling, which nothing passes.
 #[derive(Clone)]
 pub struct FeedPath {
     buf: Vec<(f32, f32)>,
@@ -275,15 +358,23 @@ pub struct FeedPath {
     delay: f32,
     cur_delay: f32,
     delay_k: f32,
-    tone_bypass: bool,
+    /// The lowpass coefficient, gliding to `lp_target` (1 = out).
     lp_k: f32,
+    lp_target: f32,
     lp: (f32, f32),
     dc_pole: f32,
     dc_x: (f32, f32),
     dc_y: (f32, f32),
+    /// The ceiling (linear), gliding to `ceiling_target`.
     ceiling: f32,
+    ceiling_target: f32,
+    knob_k: f32,
     env: f32,
     release: f32,
+    gain: f32,
+    gain_k: f32,
+    up: [crate::tape::Halfband; 2],
+    down: [crate::tape::Halfband; 2],
     sample_rate: f32,
 }
 
@@ -297,19 +388,25 @@ impl FeedPath {
             cur_delay: 0.0,
             // a moved delay glides (a tape-like bend), never jumps
             delay_k: crate::smoothing::approach(0.05, sample_rate),
-            tone_bypass: true,
             lp_k: 1.0,
+            lp_target: 1.0,
             lp: (0.0, 0.0),
             // a 10 Hz blocker: no DC can build up around a loop
             dc_pole: 1.0 - std::f32::consts::TAU * 10.0 / sample_rate,
             dc_x: (0.0, 0.0),
             dc_y: (0.0, 0.0),
             ceiling: 0.5,
+            ceiling_target: 0.5,
+            knob_k: crate::smoothing::approach(crate::smoothing::KNOB_SMOOTH_S, sample_rate),
             env: 0.0,
             release: (-1.0 / (0.05 * sample_rate)).exp(),
+            gain: 1.0,
+            gain_k: crate::smoothing::approach(0.0007, sample_rate),
+            up: [crate::tape::Halfband::new(); 2],
+            down: [crate::tape::Halfband::new(); 2],
             sample_rate,
         };
-        p.set_limit(Param::FeedLimit.clamp(-6.0));
+        p.set_limit(Param::FeedLimit.clamp(-6.0), true);
         p
     }
 
@@ -322,16 +419,26 @@ impl FeedPath {
         }
     }
 
-    /// The lowpass corner, Hz (20 kHz and up = out).
-    pub fn set_tone(&mut self, hz: f32) {
-        self.tone_bypass = hz >= 19_999.0;
-        let hz = hz.clamp(1.0, 0.45 * self.sample_rate);
-        self.lp_k = 1.0 - (-std::f32::consts::TAU * hz / self.sample_rate).exp();
+    /// The lowpass corner, Hz (20 kHz and up = out); it glides unless
+    /// `jump` (set before the first sample).
+    pub fn set_tone(&mut self, hz: f32, jump: bool) {
+        self.lp_target = if hz >= 19_999.0 {
+            1.0
+        } else {
+            let hz = hz.clamp(1.0, 0.45 * self.sample_rate);
+            1.0 - (-std::f32::consts::TAU * hz / self.sample_rate).exp()
+        };
+        if jump {
+            self.lp_k = self.lp_target;
+        }
     }
 
-    /// The safety limiter's ceiling, dBFS.
-    pub fn set_limit(&mut self, db: f32) {
-        self.ceiling = 10f32.powf(db / 20.0);
+    /// The safety limiter's ceiling, dBFS; it glides unless `jump`.
+    pub fn set_limit(&mut self, db: f32, jump: bool) {
+        self.ceiling_target = 10f32.powf(db / 20.0);
+        if jump {
+            self.ceiling = self.ceiling_target;
+        }
     }
 
     pub fn ceiling(&self) -> f32 {
@@ -344,7 +451,7 @@ impl FeedPath {
         let n = self.buf.len();
         self.buf[self.w] = x;
         self.cur_delay += (self.delay - self.cur_delay) * self.delay_k;
-        let pos = self.w as f32 - self.cur_delay;
+        let pos = self.w as f32 - (self.cur_delay - FEED_OS_DELAY).max(0.0);
         let base = pos.floor();
         let frac = pos - base;
         let i0 = (base as isize).rem_euclid(n as isize) as usize;
@@ -352,7 +459,8 @@ impl FeedPath {
         let (a, b) = (self.buf[i0], self.buf[i1]);
         let (mut l, mut r) = (a.0 + (b.0 - a.0) * frac, a.1 + (b.1 - a.1) * frac);
         self.w = (self.w + 1) % n;
-        if self.tone_bypass {
+        self.lp_k += (self.lp_target - self.lp_k) * self.knob_k;
+        if self.lp_k >= 0.999_999 {
             self.lp = (l, r);
         } else {
             self.lp.0 += (l - self.lp.0) * self.lp_k;
@@ -370,14 +478,26 @@ impl FeedPath {
             self.reset();
             return (0.0, 0.0);
         }
+        self.ceiling += (self.ceiling_target - self.ceiling) * self.knob_k;
+        let c = self.ceiling;
+        // The rider: an instant-attack peak envelope sets the gain that
+        // keeps the drive within FEED_DRIVE_MAX of the ceiling, and the
+        // gain glides there (no per-sample jumps to buzz)
         let peak = l.abs().max(r.abs());
         self.env = peak.max(self.env * self.release);
-        if self.env > self.ceiling {
-            let g = self.ceiling / self.env;
-            (l * g, r * g)
-        } else {
-            (l, r)
-        }
+        let most = FEED_DRIVE_MAX * c;
+        let target = if self.env > most { most / self.env } else { 1.0 };
+        self.gain += (target - self.gain) * self.gain_k;
+        let g = self.gain.min(1.0);
+        // The saturator at 2x
+        let (knee, top) = (FEED_KNEE * c, FEED_SHOULDER * c);
+        let (l0, l1) = self.up[0].up(l * g);
+        let (r0, r1) = self.up[1].up(r * g);
+        let sat = |x: f32| soft_ceiling(x, knee, top);
+        let l = self.down[0].down(sat(l0), sat(l1));
+        let r = self.down[1].down(sat(r0), sat(r1));
+        // The guard: the decimator rings a little past what it was fed
+        (soft_ceiling(l, top, c), soft_ceiling(r, top, c))
     }
 
     fn reset(&mut self) {
@@ -388,7 +508,23 @@ impl FeedPath {
         self.dc_x = (0.0, 0.0);
         self.dc_y = (0.0, 0.0);
         self.env = 0.0;
+        self.gain = 1.0;
+        self.up = [crate::tape::Halfband::new(); 2];
+        self.down = [crate::tape::Halfband::new(); 2];
     }
+}
+
+/// Unity up to `knee`, then a tanh shoulder that meets `ceiling` only at
+/// infinity: smooth (its slope is continuous at the knee), and nothing it
+/// passes reaches the ceiling.
+#[inline]
+pub fn soft_ceiling(x: f32, knee: f32, ceiling: f32) -> f32 {
+    let a = x.abs();
+    if a <= knee {
+        return x;
+    }
+    let w = (ceiling - knee).max(1e-9);
+    (knee + w * ((a - knee) / w).tanh()).copysign(x)
 }
 
 #[cfg(test)]
@@ -401,26 +537,37 @@ mod tests {
         let mut p = FeedPath::new(sr);
         p.set_time(0.01, true);
         let d = (0.01 * sr) as usize;
-        let mut out = Vec::new();
-        for i in 0..2 * d {
-            let x = if i == 0 { 0.25 } else { 0.0 };
-            out.push(p.process((x, x), 1.0).0);
-        }
-        // the impulse comes out d samples later, at its own size (the DC
-        // blocker's 10 Hz corner takes a hair of it)
-        let (at, peak) = out
-            .iter()
-            .enumerate()
-            .fold((0, 0.0f32), |b, (i, &v)| if v.abs() > b.1.abs() { (i, v) } else { b });
-        assert_eq!(at, d);
-        assert!((peak - 0.25).abs() < 1e-3, "{peak}");
+        // a 1 kHz burst under a Hann window, well below the knee
+        let n = 480;
+        let burst: Vec<f32> = (0..n)
+            .map(|i| {
+                let w = 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / n as f32).cos();
+                0.25 * w * (std::f32::consts::TAU * 1000.0 * i as f32 / sr).sin()
+            })
+            .collect();
+        let out: Vec<f32> = (0..3 * d)
+            .map(|i| {
+                let x = burst.get(i).copied().unwrap_or(0.0);
+                p.process((x, x), 1.0).0
+            })
+            .collect();
+        // it comes out d samples later (the oversampled saturator's own
+        // delay is taken off the line), at its own size
+        let corr = |lag: usize| -> f64 {
+            burst.iter().enumerate().map(|(i, &b)| (b * out[i + lag]) as f64).sum()
+        };
+        let best = (d - 5..d + 6).max_by(|&a, &b| corr(a).partial_cmp(&corr(b)).unwrap()).unwrap();
+        assert_eq!(best, d);
+        let e = |v: &[f32]| v.iter().map(|x| (x * x) as f64).sum::<f64>().sqrt();
+        let ratio = e(&out) / e(&burst);
+        assert!((ratio - 1.0).abs() < 2e-3, "came out at {ratio} of its size");
     }
 
     #[test]
     fn feed_limiter_never_passes_its_ceiling() {
         let sr = 48_000.0;
         let mut p = FeedPath::new(sr);
-        p.set_limit(-6.0);
+        p.set_limit(-6.0, true);
         let ceiling = p.ceiling();
         let mut max = 0.0f32;
         for i in 0..sr as usize {
@@ -429,7 +576,8 @@ mod tests {
             max = max.max(l.abs()).max(r.abs());
         }
         assert!(max <= ceiling * 1.000_001, "{max} over {ceiling}");
-        assert!(max > ceiling * 0.9, "the limiter should ride the ceiling, got {max}");
+        // driven hard, it sits in its shoulder, about a dB under the ceiling
+        assert!(max > ceiling * 0.8, "the limiter should ride the ceiling, got {max}");
     }
 
     #[test]
@@ -437,18 +585,117 @@ mod tests {
         let mut x = StripXmod::default();
         x.enable(Dest::Ring, 48_000.0);
         x.set(Param::XRing, 1.0, 48_000.0);
-        x.begin(0.0);
-        // a source tap whose bus level is 0.5
+        // a source tap whose bus level is 0.5, against a steady 2 V (the
+        // half-band filters settle within a few dozen samples)
         let v = 0.5 / TO_BUS;
-        x.deliver(Dest::Ring, (v, v));
-        let (l, _) = x.input(2.0, 2.0);
-        assert!((l - 1.0).abs() < 1e-6, "{l}");
-        x.set(Param::XRing, 0.5, 48_000.0);
+        let mut steady = |x: &mut StripXmod| {
+            let mut l = 0.0;
+            for _ in 0..200 {
+                x.begin(0.0);
+                x.deliver(Dest::Ring, (v, v));
+                l = x.input(2.0, 2.0).0;
+            }
+            l
+        };
+        let l = steady(&mut x);
+        assert!((l - 1.0).abs() < 1e-5, "{l}");
         let mut y = x.clone();
         y.ring.cur = 0.5;
-        let (l, _) = y.input(2.0, 2.0);
+        y.ring.target = 0.5;
+        let l = steady(&mut y);
         // 2 * (1 - 0.5 + 0.5 * 0.5) = 1.5
-        assert!((l - 1.5).abs() < 1e-6, "{l}");
+        assert!((l - 1.5).abs() < 1e-5, "{l}");
+    }
+
+    /// Windowed (Hann) power of `x` at `f` Hz.
+    fn power_at(x: &[f32], f: f64, sr: f64) -> f64 {
+        let w = std::f64::consts::TAU * f / sr;
+        let (c, mut s1, mut s2) = (2.0 * w.cos(), 0.0f64, 0.0f64);
+        for (i, &v) in x.iter().enumerate() {
+            let hann = 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / x.len() as f64).cos();
+            let s0 = v as f64 * hann + c * s1 - s2;
+            s2 = s1;
+            s1 = s0;
+        }
+        s1 * s1 + s2 * s2 - c * s1 * s2
+    }
+
+    /// 17 kHz times 16 kHz is 1 kHz and 33 kHz; at 48 kHz the 33 kHz line
+    /// would fold to 15 kHz at full size. Multiplied at 2x it is filtered.
+    /// (Products of two tones under 24 kHz reach at most 48 kHz, so 2x is
+    /// enough: only sums between 24 and 28.8 kHz, in the half-band's
+    /// transition, come back, and they land above 19 kHz.)
+    #[test]
+    fn the_ring_modulator_filters_its_sum_tone_instead_of_folding_it() {
+        let sr = 48_000.0f64;
+        let mut x = StripXmod::default();
+        x.enable(Dest::Ring, sr as f32);
+        x.set(Param::XRing, 1.0, sr as f32);
+        let (mut out, mut naive) = (Vec::new(), Vec::new());
+        for i in 0..9600 {
+            let t = i as f64 / sr;
+            let a = (std::f64::consts::TAU * 17_000.0 * t).sin() as f32;
+            let m = (std::f64::consts::TAU * 16_000.0 * t).sin() as f32;
+            x.begin(0.0);
+            x.deliver(Dest::Ring, (m / TO_BUS, m / TO_BUS));
+            let (l, _) = x.input(a, a);
+            if i >= 4800 {
+                out.push(l);
+                naive.push(a * m);
+            }
+        }
+        let rel = |v: &[f32]| 10.0 * (power_at(v, 15_000.0, sr) / power_at(v, 1_000.0, sr)).log10();
+        let (os, raw) = (rel(&out), rel(&naive));
+        assert!(raw > -1.0, "the plain product folds its sum to 15 kHz at full size: {raw:.1} dB");
+        assert!(os < -60.0, "the folded sum tone at {os:.1} dB under the difference tone");
+    }
+
+    /// Below the knee the feed is untouched; driven to the ceiling, the
+    /// saturator's harmonics are made at 2x, so those between 24 and 72
+    /// kHz are filtered instead of folding among the real ones.
+    #[test]
+    fn the_feed_saturator_is_clean_below_its_knee_and_does_not_alias_above_it() {
+        let sr = 48_000.0f64;
+        let tone = |amp: f32, f: f64| -> Vec<f32> {
+            let mut p = FeedPath::new(sr as f32);
+            p.set_limit(-6.0, true);
+            let c = p.ceiling();
+            (0..19_200)
+                .map(|i| {
+                    let x = amp * c * (std::f64::consts::TAU * f * i as f64 / sr).sin() as f32;
+                    p.process((x, x), 1.0).0
+                })
+                .skip(9600)
+                .collect()
+        };
+        // half the ceiling, under the knee: no harmonics at all
+        let quiet = tone(0.5, 1000.0);
+        let fund = power_at(&quiet, 1000.0, sr);
+        for k in 2..=5 {
+            let h = 10.0 * (power_at(&quiet, 1000.0 * k as f64, sr) / fund).log10();
+            assert!(h < -100.0, "harmonic {k} at {h:.1} dB under the knee");
+        }
+        // driven to the ceiling at 7 kHz: the 5th, 7th and 9th harmonics
+        // (35, 49, 63 kHz) would fold to 13, 1 and 15 kHz, none of them a
+        // harmonic of 7 kHz. Against the same curve run at 48 kHz:
+        let hot = tone(1.0, 7000.0);
+        let c = 10f32.powf(-6.0 / 20.0);
+        let plain: Vec<f32> = (9600..19_200)
+            .map(|i| {
+                let x = c * (std::f64::consts::TAU * 7000.0 * i as f64 / sr).sin() as f32;
+                soft_ceiling(x, FEED_KNEE * c, FEED_SHOULDER * c)
+            })
+            .collect();
+        let folded = |v: &[f32]| {
+            let fund = power_at(v, 7000.0, sr);
+            let a: f64 = [13_000.0, 1_000.0, 15_000.0].iter().map(|&f| power_at(v, f, sr)).sum();
+            10.0 * (a / fund).log10()
+        };
+        let third = 10.0 * (power_at(&hot, 21_000.0, sr) / power_at(&hot, 7000.0, sr)).log10();
+        assert!(third > -60.0, "the shoulder should make real harmonics: {third:.1} dB");
+        let (os, base) = (folded(&hot), folded(&plain));
+        assert!(os < -70.0, "folded harmonics at {os:.1} dB");
+        assert!(base > os + 20.0, "a 48 kHz saturator folds far more: {base:.1} vs {os:.1} dB");
     }
 
     // ---- the engine: real tracks driving real tracks ----
@@ -605,6 +852,32 @@ mod tests {
             // and with the depth at 0 there is no sideband at all
             let none = amp(&dry, f) / amp(&dry, fc);
             assert!(none < 1e-3, "k={k} without FM: {none}");
+        }
+    }
+
+    /// A track another track FMs plays on oversampled cards; the
+    /// modulator's own card stays at the base rate.
+    #[test]
+    fn an_fm_routed_track_plays_on_oversampled_cards() {
+        let mut vm = VoiceManager::new(SR, 8);
+        vm.warm_up();
+        vm.set_channel_params(MODULATOR, sine_patch());
+        vm.set_channel_params(CARRIER, sine_patch());
+        vm.add_route(Route { dest: Dest::Fm, src: MODULATOR, dst: CARRIER });
+        vm.note_on_channel(50, 1.0, MODULATOR);
+        vm.note_on_channel(81, 1.0, CARRIER);
+        for _ in 0..64 {
+            vm.render_next();
+        }
+        let playing: Vec<(u16, bool)> = vm
+            .voices
+            .iter()
+            .filter(|v| v.is_active())
+            .map(|v| (v.channel(), v.fm_oversampled()))
+            .collect();
+        assert_eq!(playing.len(), 2, "{playing:?}");
+        for (ch, os) in playing {
+            assert_eq!(os, ch == CARRIER, "channel {ch}");
         }
     }
 

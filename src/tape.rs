@@ -1133,7 +1133,7 @@ impl ScrapeOscillator {
 /// The same structure serves as a 2x interpolator (`up`) and a 2x
 /// decimator (`down`).
 #[derive(Clone, Copy)]
-struct Halfband {
+pub(crate) struct Halfband {
     a: [AllpassSection; 2],
     b: [AllpassSection; 2],
 }
@@ -1156,7 +1156,7 @@ impl AllpassSection {
 }
 
 impl Halfband {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let mk = |c: f32| AllpassSection {
             c,
             x1: 0.0,
@@ -1172,7 +1172,7 @@ impl Halfband {
     /// H(z) = (A(z^2) + z^-1 B(z^2)) / 2: even outputs from the direct
     /// branch, odd outputs from the delayed branch.
     #[inline]
-    fn up(&mut self, x: f32) -> (f32, f32) {
+    pub(crate) fn up(&mut self, x: f32) -> (f32, f32) {
         let mut p = x;
         for s in &mut self.a {
             p = s.process(p);
@@ -1187,7 +1187,7 @@ impl Halfband {
     /// Two high-rate samples in (x0 earlier, x1 later), one low-rate sample
     /// out. The z^-1 on the B branch means it takes the earlier sample.
     #[inline]
-    fn down(&mut self, x0: f32, x1: f32) -> f32 {
+    pub(crate) fn down(&mut self, x0: f32, x1: f32) -> f32 {
         let mut p = x1;
         for s in &mut self.a {
             p = s.process(p);
@@ -1197,6 +1197,15 @@ impl Halfband {
             q = s.process(q);
         }
         0.5 * (p + q)
+    }
+
+    /// Settle every section on a steady input `v` (the decimator then
+    /// puts out `v` at once).
+    pub(crate) fn prime(&mut self, v: f32) {
+        for s in self.a.iter_mut().chain(self.b.iter_mut()) {
+            s.x1 = v;
+            s.y1 = v;
+        }
     }
 }
 

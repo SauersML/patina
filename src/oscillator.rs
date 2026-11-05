@@ -55,7 +55,15 @@ pub struct Oscillator {
     frequency: AtomicU32,
     /// Fixed frequency ratio for unison detune (2^(cents/1200)).
     freq_mult: f32,
+    /// The rate one `step` advances by: the card's sample rate, times the
+    /// oversampling factor while a card runs oversampled.
     sample_rate: f32,
+    /// The card's own sample rate.
+    base_rate: f32,
+    /// The drift walk's step and leak per `step`, rescaled while
+    /// oversampled so the walk keeps its size and speed in seconds.
+    drift_walk_scale: f32,
+    drift_leak: f32,
     waveform: Waveform,
     model: CircuitModel,
     drift: f32,
@@ -119,6 +127,9 @@ impl Oscillator {
             frequency: AtomicU32::new(frequency.to_bits()),
             freq_mult: 1.0,
             sample_rate,
+            base_rate: sample_rate,
+            drift_walk_scale: 1.0,
+            drift_leak: 0.9995,
             waveform: Waveform::Sawtooth,
             model: CircuitModel::Moog,
             drift: 0.0,
@@ -134,6 +145,16 @@ impl Oscillator {
             mix: [0.0; 4],
             last_hz: frequency,
         }
+    }
+
+    /// Step `factor` times a sample from now on (1 = the card's rate): the
+    /// phase, the polyBLEP corrections and the sub take the faster rate,
+    /// the pitch stays put, and the drift walk keeps its size and speed.
+    pub fn set_oversample(&mut self, factor: u32) {
+        let k = factor.max(1) as f32;
+        self.sample_rate = self.base_rate * k;
+        self.drift_walk_scale = if factor > 1 { 1.0 / k.sqrt() } else { 1.0 };
+        self.drift_leak = if factor > 1 { 0.9995f32.powf(1.0 / k) } else { 0.9995 };
     }
 
     /// Set the source-mixer levels [saw, pulse, tri, sine]. Any level
@@ -211,7 +232,8 @@ impl Oscillator {
             CircuitModel::Moog => 1.2e-5,
             CircuitModel::Arp => 0.45e-5,
         };
-        self.drift = (self.drift + (rand01(&mut self.rng) - 0.5) * walk) * 0.9995;
+        self.drift =
+            (self.drift + (rand01(&mut self.rng) - 0.5) * (walk * self.drift_walk_scale)) * self.drift_leak;
         // The 901B's additive-Hz tracking residue (see hz_offset)
         let f_off = match self.model {
             CircuitModel::Moog => self.hz_offset,

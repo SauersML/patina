@@ -78,6 +78,16 @@ We will use a layered architecture with clear interfaces between components:
 6. **LFO (Low Frequency Oscillator)**:
    - Implement various LFO shapes (sine, triangle, square, random)
    - Allow LFO to modulate various parameters (pitch, filter cutoff, etc.)
+   - Generative lanes (src/gen.rs): any automation lane takes `{expr}:D`
+     (an expression for D beats at 128 steps a beat, `@N` for N),
+     `{expr}` alone (to the song's end), or `automate x: {expr} during
+     SECTION`. Expressions read t (seconds), b (beats), s, p and v, with
+     math, cycles, steps, step sequences, noise and chaotic systems that
+     are pure functions of time (Lorenz, Rossler, logistic, Henon,
+     Kuramoto coupled oscillators, double pendulum). They are evaluated
+     at load into ordinary parameter events (a song with a `{` is parsed
+     twice so t follows a tempo lane anywhere in the file); held values
+     send one event; the engine's knob smoothing takes the steps
 
 7. **Effects**: Applies post-processing effects.
    - Implements a trait object-based plugin system for flexibility
@@ -94,6 +104,19 @@ We will use a layered architecture with clear interfaces between components:
      cards once a sample; plain strips still run per card. Engaged, the
      master stage replaces the tanh soft limit, so its ceiling is the
      true peak
+   - Cross-track routing (src/xmod.rs): any track's strip signal (after
+     its inserts, before its fader) drives another track at audio rate.
+     Song syntax, on the driven track: `fm_from=SRC fm=D` (linear FM,
+     f0·(1 + D·m)), `filter_fm_from=SRC filter_fm=D` (D octaves per unit),
+     `ringmod_from=SRC ringmod=D` (times 1 − D + D·m), and
+     `feed_from=SRC feed=G feed_time=S feed_tone=HZ feed_limit=DB` (routed
+     feedback through a delay, a lowpass, a DC blocker and a safety
+     limiter). Routes read their sources one sample late, so any graph,
+     loops included, runs in one pass in any track order. FM'd cards run
+     their oscillators 4x oversampled through half-band decimators; the
+     ring modulator multiplies at 2x; the feed limiter is a gain rider
+     into a 2x-oversampled soft saturator and a soft guard at the
+     ceiling. Songs with no routes build none of it (bit-identical)
    - Mix-bus compressor (src/buscomp.rs): the SSL G-series bus comp,
      after the effect returns and before the tape, like a console bus
      compressor printing to cassette. Out by default and bit-identical

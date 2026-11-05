@@ -1,67 +1,105 @@
-# Cross-mod — 120 bpm, A minor, one minute. A demo of the cross-track
-# routes: tracks driving one another at audio rate, and feeding each other.
+# Copper — 110 bpm, D minor, under a minute. Tracks playing one another:
+# a wire that rings on its own feedback, a bass whose filter is driven by
+# the kick at audio rate, an FM bell, a ring-modulated pad and two leads
+# feeding each other into a drone.
 #
-#   beats  0-32   WIRE   one tone in a loop: the wire track feeds itself
-#                        through a 4.55 ms delay (A3's period), so its
-#                        own harmonics ring on; the loop gain swells past
-#                        1 at beat 24 and the safety limiter holds it
-#   beats 32-64   BELL   a muted modulator 3.5 times the bell's pitch
-#                        FMs it (fm_from=): inharmonic sidebands, the
-#                        index swelling and falling with each phrase
-#   beats 64-96   RING   the pad is ring-modulated by a slow pulse track
-#                        and the bass's cutoff follows the kick at audio
-#                        rate (filter_fm_from=kick)
-#   beats 96-120  KNOT   two tracks feed each other through drive and a
-#                        stutter: a loop that only the limiters hold
+#   beats  0-16   WIRE    plucks through a feedback loop tuned to D3's
+#                         period (feed_time 6.77 ms; the route's one-sample
+#                         read and the tone filter's lag make it 6.81): only
+#                         D3's harmonics ring, like a string; the loop gain
+#                         swells past 1 and the saturator in the feed holds
+#                         it singing
+#   beats 16-48   GROOVE  the bass's cutoff follows the kick's own waveform
+#                         (filter_fm_from=kick), so every kick growls
+#                         through it; a bell melody FM'd by a muted
+#                         modulator 22 semitones up (an inharmonic ratio,
+#                         3.56), its index bright at each bar and decaying
+#   beats 48-64   RING    the drums drop; the pad is ring-modulated by a
+#                         sine line, every partial split into a sum and a
+#                         difference tone
+#   beats 64-88   KNOT    the groove returns under two leads feeding each
+#                         other, one through a drive and one through an EQ:
+#                         the two delays and the loop's own lag add up to
+#                         D2's period, so the knot rings on D under D4 and
+#                         A4; a stutter breaks it at the end
+#   beats 88-96   OUT     the wire alone
 
-bpm 120
-gate 0.95
-tail 2
+bpm 110
+gate 0.9
+tail 3
 
-section WIRE 0..32
-section BELL 32..64
-section RING 64..96
-section KNOT 96..120
+section WIRE 0..16
+section GROOVE 16..48
+section RING 48..64
+section KNOT 64..88
+section OUT 88..96
 
 automate reverb_wet
-0.18
+0.2
 automate reverb_decay
-0.7
+0.72
+automate tape_drive
+0.2
+automate comp_in
+1
+automate comp_threshold
+-16
 
-# --- WIRE: a self-feeding string of one tone
-track wire patch=deepsine vel=0.8 gain=0.22 feed_from=wire feed=0.9 feed_time=0.004545 feed_tone=5000 feed_limit=-9 reverb_send=0.3
-A3:32 R:88
+# --- the wire: a pluck in a loop tuned to D3
+track wire patch=nc-pluck vel=0.8 gain=0.35 feed_from=wire feed=0.96 feed_time=0.0067725 feed_tone=4500 feed_limit=-8 reverb_send=0.25
+(D3:1.5 A4:0.5 D4:1 D5:1)x4
+>OUT D3:6
 automate wire.feed
-0.9 R:16 1.15:8@smooth R:4 0:4@smooth
+0.96 R:8 1.05:5@smooth R:1 0.92:2@smooth >GROOVE 0.85 >OUT 0.985
 
-# --- BELL: a modulator heard only through the bell
-track bellmod patch=deepsine gain=0
->BELL (E6:4 D6:4 C6:4 B5:4)x2
-track bell patch=deepsine vel=0.75 gain=1.6 fm_from=bellmod fm=0 reverb_send=0.4
->BELL (A3:4 G3:4 F3:4 E3:4)x2
-automate bell.fm
-0 >BELL (6:2@smooth 0.5:2@smooth)x8
-
-# --- RING: a pad times a slow pulse, a bass whose filter follows the kick
+# --- the pad, ring-modulated in the breakdown
+track pad patch=softpad vel=0.5 gain=0.6 ringmod_from=ringer ringmod=0 reverb_send=0.4
+>8 [D3 F3 A3 C4 E4]:8
+([D3 F3 A3 C4 E4]:4 [A#2 D3 F3 A3]:4 [G2 A#2 D3 F3 A3]:4 [A2 D3 E3 G3]:2 [A2 C#3 E3 G3]:2)x3
+[D3 F3 A3 C4 E4]:8 [D3 F3 A3 E4]:8
 track ringer patch=deepsine gain=0
->RING (A1:8 E1:8)x2
-track pad patch=aurora vel=0.6 gain=1.2 ringmod_from=ringer ringmod=0 reverb_send=0.3
->RING ([A3 C4 E4]:8 [F3 A3 C4]:8)x2
+>RING A4:4 A#4:4 D5:4 E5:4
 automate pad.ringmod
-0 >RING 1:16@smooth 0.4:16@smooth
-track kick patch=hardkick vel=0.9 gain=0.9
->RING (A1 A1 A1 A1)x8 (A1 A1 A1 A1)x6
-track bass patch=deepsine vel=0.8 gain=0.8 filter_fm_from=kick filter_fm=4
->RING (A1:2 A1:2 C2:2 G1:2)x4 (A1:2 A1:2 C2:2 G1:2)x3
+0 >RING 0.85:8@smooth 0.3:8@smooth 0:1
 
-# --- KNOT: two tracks feeding each other
-track knot_a patch=deepsine vel=0.7 gain=0.3 feed_from=knot_b feed=0 feed_time=0.0071 dist=0.4 pan=-0.5
->KNOT E2:24
-track knot_b patch=deepsine vel=0.7 gain=0.3 feed_from=knot_a feed=0 feed_time=0.0113 feed_tone=2500 eq_mid=6 pan=0.5
->KNOT B2:24
+# --- drums
+track kick patch=hardkick vel=0.9 gain=1.0
+>GROOVE (D1 D1 D1 D1)x8
+>KNOT (D1 D1 D1 D1)x6
+track hats kit=909 len=0.5 gain=0.5
+>GROOVE (R CH R CH R CH R OH)x8 (R R R R R R R OH)x4 (R CH R CH R CH R OH)x6
+track claps kit=hats len=1
+>GROOVE (R CP R CP)x8
+>KNOT (R CP R CP)x6
+
+# --- the bass: its filter follows the kick at audio rate
+track bass patch=sunbass vel=0.85 gain=0.85 filter_fm_from=kick filter_fm=2.5
+>GROOVE (D2:0.75 D2:0.25 R:0.5 D2:0.5 F2:0.5 D2:0.5 C2:0.5 A1:0.5 | A#1:0.75 A#1:0.25 R:0.5 A#1:0.5 D2:0.5 A#1:0.5 A1:0.5 F1:0.5 | G1:0.75 G1:0.25 R:0.5 G1:0.5 A#1:0.5 G1:0.5 F1:0.5 G1:0.5 | A1:0.75 A1:0.25 R:0.5 A1:0.5 C#2:0.5 E2:0.5 G2:0.5 A2:0.5)x2
+>KNOT (D2:0.75 D2:0.25 R:0.5 D2:0.5 F2:0.5 D2:0.5 C2:0.5 A1:0.5 | A#1:0.75 A#1:0.25 R:0.5 A#1:0.5 D2:0.5 A#1:0.5 A1:0.5 F1:0.5 | G1:0.75 G1:0.25 R:0.5 G1:0.5 A#1:0.5 G1:0.5 F1:0.5 G1:0.5 | A1:0.75 A1:0.25 R:0.5 A1:0.5 C#2:0.5 E2:0.5 G2:0.5 A2:0.5)
+(D2:0.75 D2:0.25 R:0.5 D2:0.5 F2:0.5 D2:0.5 C2:0.5 A1:0.5)x2
+
+# --- the bell: FM'd by a muted modulator 22 semitones above every note
+track bellmod patch=deepsine gain=0
+>GROOVE G6:1.5 D#6:0.5 D6:1 C6:1 | D#6:2 G6:1 A#6:1 | C7:1.5 A#6:0.5 G#6:1 G6:1 | D6:3 R:1
+D#6:1 G6:1 A#6:1 C7:1 | G6:1.5 D#6:0.5 D6:1 C6:1 | D7:1.5 C7:0.5 A#6:1 G6:1 | B6:2 D7:2
+>KNOT G6:1.5 D#6:0.5 D6:1 C6:1 | D#6:2 G6:1 A#6:1 | C7:1.5 A#6:0.5 G#6:1 G6:1 | D6:3 R:1
+D#6:1 G6:1 A#6:1 C7:1 | G6:4
+track bell patch=deepsine vel=0.7 gain=0.9 fm_from=bellmod fm=0 reverb_send=0.35 echo_send=0.2
+>GROOVE A4:1.5 F4:0.5 E4:1 D4:1 | F4:2 A4:1 C5:1 | D5:1.5 C5:0.5 A#4:1 A4:1 | E4:3 R:1
+F4:1 A4:1 C5:1 D5:1 | A4:1.5 F4:0.5 E4:1 D4:1 | E5:1.5 D5:0.5 C5:1 A4:1 | C#5:2 E5:2
+>KNOT A4:1.5 F4:0.5 E4:1 D4:1 | F4:2 A4:1 C5:1 | D5:1.5 C5:0.5 A#4:1 A4:1 | E4:3 R:1
+F4:1 A4:1 C5:1 D5:1 | A4:4
+automate bell.fm
+0 >GROOVE (2.6 0.5:4@exp)x8 0 >KNOT (2.6 0.5:4@exp)x6 0
+
+# --- the knot: two leads feeding each other, 6.75 ms each way
+track knot_a patch=glasslead vel=0.6 gain=0.3 feed_from=knot_b feed=0 feed_time=0.0067465 feed_tone=3000 dist=0.35 pan=-0.6
+>KNOT D4:24
+track knot_b patch=nc-lead vel=0.6 gain=0.3 feed_from=knot_a feed=0 feed_time=0.0067465 feed_tone=2500 eq_mid=4 pan=0.6
+>KNOT A4:24
 automate knot_a.feed
-0 >KNOT 1.4:8@smooth R:12 0:4@smooth
+0 >KNOT 1.25:8@smooth R:12 0:4@smooth
 automate knot_b.feed
-0 >KNOT 1.4:8@smooth R:12 0:4@smooth
+0 >KNOT 1.25:8@smooth R:12 0:4@smooth
 automate knot_b.stutter
-0 >112 16 >116 32 >118 0
+0 >84 8 >86 16 >87 0

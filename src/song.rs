@@ -211,7 +211,7 @@
 //   frequencies), log (fast start), smooth (S-curve), step (jump at the end).
 //
 //   Generative segments (gen.rs): `{expr}:D` follows an expression for D
-//   beats at control rate (32 steps a beat; `{expr}:D@N` takes N), and
+//   beats at control rate (128 steps a beat; `{expr}:D@N` takes N), and
 //   `{expr}` alone runs to the end of the song (the lane's last token).
 //   It may open a lane, or follow any token; the next token starts from
 //   its last value. It reads the clock: t (seconds, through the tempo
@@ -447,6 +447,11 @@ use crate::voice_manager::{ParamValues, VoiceManager};
 
 // Automation curves are sampled at this many points per beat
 const AUTOMATION_STEPS_PER_BEAT: f64 = 32.0;
+/// A generative segment's default control rate. Fine enough that the
+/// engine's 21 ms knob smoothing leaves no zipper under a fast lane (the
+/// staircase sits at 256 Hz at 120 bpm, 30 dB down through the
+/// smoother); a value that holds across steps sends one event, not many.
+const GEN_STEPS_PER_BEAT: f64 = 128.0;
 
 /// The score clock may deliberately enter audio-rate territory so a repeated
 /// figure can accelerate continuously into a pitched blur. This is a song-DSL
@@ -2703,7 +2708,7 @@ fn parse_song_pass(text: &str, gen: &mut GenClock) -> Result<Song, String> {
                             err(format!("unknown section '{}' (define it above)", sname))
                         })?;
                         if let Some(expr) = gen_value {
-                            let seg = GenSegment { start: a, dur: Some(b - a), rate: AUTOMATION_STEPS_PER_BEAT };
+                            let seg = GenSegment { start: a, dur: Some(b - a), rate: GEN_STEPS_PER_BEAT };
                             let (points, warn) = seg
                                 .run(expr, param, base, gen)
                                 .map_err(|m| err(format!("{}: {}", expr, m)))?;
@@ -3742,7 +3747,7 @@ impl GenSegment {
                 }
                 n
             }
-            None => AUTOMATION_STEPS_PER_BEAT,
+            None => GEN_STEPS_PER_BEAT,
         };
         Ok(Self { start, dur, rate })
     }
@@ -3849,7 +3854,11 @@ impl GenSegment {
             if !x.is_finite() {
                 return Err(format!("is {} at beat {}", x, b));
             }
-            out.push((b, x as f32));
+            // a held value is one event (both ends always land)
+            let x = x as f32;
+            if k == 0 || k == steps || out.last().map_or(true, |&(_, y)| y != x) {
+                out.push((b, x));
+            }
         }
         Ok(out)
     }
@@ -6327,12 +6336,12 @@ mod tests {
         )
         .unwrap();
         let pts = lane(&song, Param::Cutoff, channel_of(&song, "lead"));
-        // the start value, 8 beats at 32 steps a beat (both ends), then the
-        // ramp from the expression's last value
+        // the start value, 8 beats at 128 steps a beat (both ends), then
+        // the ramp from the expression's last value
         let gen: Vec<_> = pts.iter().filter(|(t, _)| (2.0..=6.0).contains(t)).collect();
-        assert_eq!(gen.len(), 8 * 32 + 1);
+        assert_eq!(gen.len(), 8 * 128 + 1);
         for (k, &&(t, v)) in gen.iter().enumerate() {
-            let beat = 4.0 + k as f64 / 32.0;
+            let beat = 4.0 + k as f64 / 128.0;
             assert!((t - beat * 0.5).abs() < 1e-9);
             let want = 1000.0 + 500.0 * (std::f64::consts::TAU * (beat - 4.0) / 4.0).sin();
             assert!((v as f64 - want).abs() < 1e-3, "beat {beat}: {v} vs {want}");
@@ -6387,8 +6396,11 @@ mod tests {
         assert!(end > 11.5 && end <= 12.0, "ends at {end} s");
         assert!(cut.iter().all(|&(_, v)| (500.0..=3500.0).contains(&v)));
         let res = lane(&a, Param::Resonance, lead);
+        // the map takes a new value each quarter beat; a held value sends
+        // one event, so beats 8..12 carry about sixteen
         let inside: Vec<_> = res.iter().filter(|(t, _)| (4.0..6.0).contains(t)).collect();
-        assert!(inside.len() > 100 && inside.iter().all(|&&(_, v)| (0.5..=0.9).contains(&v)));
+        assert!((15..=20).contains(&inside.len()), "{} events", inside.len());
+        assert!(inside.iter().all(|&&(_, v)| (0.5..=0.9).contains(&v)));
         assert_eq!(res.last().unwrap(), &(6.0, 0.0), "base comes back at the section's end");
     }
 
@@ -6431,6 +6443,63 @@ mod tests {
         let off = song.events.iter().find(|e| matches!(e.kind, EventKind::NoteOff { .. })).unwrap();
         // 4 beats at 120 then about 4 at 180 (the gate's gap aside)
         assert!((off.time - (2.0 + 4.0 * 60.0 / 180.0)).abs() < 0.12, "note off at {}", off.time);
+    }
+
+    /// Every route at its extreme at once: FM 16 from a loud saw onto a
+    /// resonant saw, filter FM 8 octaves, a full ring modulator, and two
+    /// tracks feeding each other at gain 2 with no delay through full
+    /// drive and a 12 dB treble boost. Nothing goes non-finite and the mix
+    /// stays bounded (the feeds' own ceilings are xmod.rs's tests).
+    #[test]
+    fn every_route_at_its_extreme_stays_finite_and_bounded() {
+        let song = parse_song(
+            "track src vel=1 gain=0\nC3:4\n\
+             track a fm_from=src fm=16 filter_fm_from=src filter_fm=8 \
+             ringmod_from=src ringmod=1 feed_from=b feed=2 feed_time=0 dist=1 eq_high=12\nC4:4\n\
+             track b filter_fm_from=a filter_fm=-8 feed_from=a feed=2 \
+             feed_time=0 feed_limit=0 dist=1\nG4:4\n\
+             automate src.waveform\n2\nautomate a.waveform\n2\nautomate b.waveform\n2\n\
+             automate a.resonance\n4\nautomate b.resonance\n4\n",
+        )
+        .unwrap();
+        let mut peak = 0.0f32;
+        for (l, r) in render_offline(&song, 48_000.0) {
+            assert!(l.is_finite() && r.is_finite());
+            peak = peak.max(l.abs()).max(r.abs());
+        }
+        assert!(peak > 0.01 && peak < 4.0, "peak {peak}");
+    }
+
+    /// A fast lane on a track's gain (a 4 Hz sine at 120 bpm) moves in
+    /// 1/128-beat steps: the staircase would put sidebands 256 Hz either
+    /// side of the tone, and the knob smoothing leaves them far below the
+    /// lane's own 4 Hz sidebands.
+    #[test]
+    fn a_fast_generative_lane_leaves_no_zipper() {
+        let song = parse_song(
+            "bpm 120\ntrack a patch=deepsine vel=0.8\nA4:12\nautomate a.gain\n\
+             {1 + 0.5 * sine(b * 2)}:12\n",
+        )
+        .unwrap();
+        let sr = 48_000.0f64;
+        let x: Vec<f32> = render_offline(&song, sr as f32).map(|(l, r)| 0.5 * (l + r)).collect();
+        let seg = &x[(1.0 * sr) as usize..(5.0 * sr) as usize];
+        let at = |f: f64| {
+            let w = std::f64::consts::TAU * f / sr;
+            let (c, mut s1, mut s2) = (2.0 * w.cos(), 0.0f64, 0.0f64);
+            for (i, &v) in seg.iter().enumerate() {
+                let hann = 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / seg.len() as f64).cos();
+                let s0 = v as f64 * hann + c * s1 - s2;
+                s2 = s1;
+                s1 = s0;
+            }
+            s1 * s1 + s2 * s2 - c * s1 * s2
+        };
+        let carrier = at(440.0);
+        let am = 10.0 * (at(444.0) / carrier).log10();
+        let zipper = 10.0 * (at(440.0 + 256.0).max(at(440.0 - 256.0)) / carrier).log10();
+        assert!(am > -20.0, "the lane's own sidebands should be strong: {am:.1} dB");
+        assert!(zipper < -65.0, "zipper sidebands at {zipper:.1} dB");
     }
 
     #[test]

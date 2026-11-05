@@ -794,7 +794,7 @@ fn strip_one(m: &mut ChannelMix, l: f32, r: f32, sends: &mut SendBus) -> (f32, f
     let (mut l, mut r) = (l, r);
     // A routed feed comes in and the ring modulator multiplies, ahead of
     // every insert (xmod.rs)
-    if let Some(x) = m.xmod.as_ref() {
+    if let Some(x) = m.xmod.as_mut() {
         (l, r) = x.input(l, r);
     }
     // The glitch insert comes first, so everything on the strip (EQ,
@@ -855,6 +855,8 @@ struct CardIn {
     cutoff_mod: f32,
     pwm_mod: f32,
     bleed: f32,
+    /// Another track FMs this card's track: its oscillators oversample.
+    fm_os: bool,
 }
 
 /// The per-sample values every card shares.
@@ -875,6 +877,7 @@ fn run_card(voice: &mut Voice, input: CardIn, shared: &CardShared) -> Option<(f3
     if voice.skip_if_idle() {
         return None;
     }
+    voice.set_fm_oversample(input.fm_os);
     Some(voice.render_next(
         shared.noise,
         input.pitch_mult,
@@ -2643,6 +2646,7 @@ impl VoiceManager {
                     channel.modulation
                 });
             // FM and filter FM from another track, this sample
+            let mut fm_os = false;
             if self.routes.is_some() {
                 if let Some(x) = self
                     .channel_mix
@@ -2651,6 +2655,7 @@ impl VoiceManager {
                 {
                     pitch_mult *= x.pitch_ratio;
                     cutoff_mod += x.cutoff_oct;
+                    fm_os = x.fm_routed;
                 }
             }
             self.card_in[i] = CardIn {
@@ -2658,6 +2663,7 @@ impl VoiceManager {
                 cutoff_mod,
                 pwm_mod,
                 bleed: deltas[(i + n - 1) % n.max(1)] * CROSSTALK,
+                fm_os,
             };
         }
         let shared = CardShared {

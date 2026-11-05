@@ -59,6 +59,39 @@ pub(crate) fn smoothing_coef(tau_seconds: f32, sample_rate: f32) -> f32 {
     (1.0 - (-1.0 / (tau_seconds * sample_rate)).exp()).clamp(0.0, 1.0)
 }
 
+/// How many oscillator steps a sample a card under cross-track FM takes.
+const FM_OS: usize = 4;
+
+/// The oversampled oscillator block's state (`Voice::set_fm_oversample`).
+#[derive(Clone)]
+struct FmOversample {
+    on: bool,
+    /// Last sample's pitch multiplier (NaN until the first sample).
+    prev_pitch: f32,
+    /// The exponential-FM mean tracker's coefficient per oversampled step.
+    fm_mean_k: f32,
+    down1: crate::tape::Halfband,
+    down2: crate::tape::Halfband,
+}
+
+impl FmOversample {
+    fn new(fm_mean_k: f32) -> Self {
+        Self {
+            on: true,
+            prev_pitch: f32::NAN,
+            fm_mean_k: 1.0 - (1.0 - fm_mean_k).powf(1.0 / FM_OS as f32),
+            down1: crate::tape::Halfband::new(),
+            down2: crate::tape::Halfband::new(),
+        }
+    }
+
+    fn prime(&mut self, v: f32) {
+        self.prev_pitch = f32::NAN;
+        self.down1.prime(v);
+        self.down2.prime(v);
+    }
+}
+
 pub struct Voice {
     pub oscs: [Oscillator; 3],
     circuit: CircuitModel,
@@ -142,6 +175,9 @@ pub struct Voice {
     /// Its tracking coefficient for `FM_MEAN_TAU_S` at this rate.
     fm_mean_k: f32,
     prev_osc2: f32,
+    /// Cross-track FM (xmod.rs) runs the oscillators and mixer 4x
+    /// oversampled; None until a card plays a track another track FMs.
+    fm_os: Option<Box<FmOversample>>,
     /// Hard sync, 2600-style: VCO1 masters VCO2's ramp reset.
     sync_on: bool,
     /// Ring modulator: (o1 * o2) / PROGRAM_V, the ARP manual's literal
@@ -285,6 +321,7 @@ impl Voice {
             fm_mean: 1.0,
             fm_mean_k: smoothing_coef(FM_MEAN_TAU_S, sample_rate),
             prev_osc2: 0.0,
+            fm_os: None,
             sync_on: false,
             ring_amount: 0.0,
             ring_leak,
@@ -814,83 +851,21 @@ impl Voice {
             pitch_mult
         };
 
-        // The voice's coupling graph is acyclic (every stage buffered, as
-        // the schematics show), so integrating stages in topological order
-        // with midpoint-averaged couplings IS the coherent-system solve.
-        // Osc 1 steps first (its wrap this sample masters osc 2's sync);
-        // the FM coupling into osc 1 therefore uses osc 2's previous
-        // sample — the one-sample transport of the sync/FM pair, chosen so
-        // the sync reset lands at its exact sub-sample position.
-        let fm_mult = if self.fm_amount > 1e-4 {
-            let raw = (self.fm_amount * self.prev_osc2 * 2.0).exp2();
-            // Exponential FM is not pitch-neutral: any DC in the modulator
-            // (a non-50% pulse) shifts the note wholesale, and even a
-            // zero-mean modulator reads sharp on average (E[2^x] > 1).
-            // Track the multiplier's slow mean (tau FM_MEAN_TAU_S) and
-            // divide it out: the audio-rate sidebands — the TIMBRE — pass
-            // through, the tuning stays put. The coefficient is derived
-            // from the rate, or the tracker would follow twice as much of
-            // the modulator at 96 kHz and cancel real FM movement.
-            self.fm_mean += (raw - self.fm_mean) * self.fm_mean_k;
-            raw / self.fm_mean.max(1e-3)
-        } else {
-            self.fm_mean = 1.0;
-            1.0
+        // Cross-track FM sweeps the cores across the spectrum at audio rate,
+        // so their sidebands would fold back off the Nyquist frequency:
+        // such a card runs this block 4x oversampled and decimates
+        let core = match self.fm_os.take() {
+            Some(mut os) if os.on => {
+                let core = self.oversampled_core(&mut os, pitch_mult, pulse_width);
+                self.fm_os = Some(os);
+                core
+            }
+            os => {
+                self.fm_os = os;
+                self.osc_core(pitch_mult, pulse_width, self.fm_mean_k, self.sample_rate)
+            }
         };
-        // Every core always steps (phase, drift and sync stay exactly as if
-        // heard); only the output stages of a converter nobody can hear are
-        // skipped. Osc 2 is heard through its level, the FM bus, or the ring
-        // modulator; osc 3 only through its level; the sub only through its.
-        let o1 = self.oscs[0].step(
-            self.common_drift,
-            pitch_mult * fm_mult,
-            pulse_width,
-            None,
-            true,
-            self.sub_level > 0.0,
-        );
-        let sync = if self.sync_on {
-            self.oscs[0].wrap_frac()
-        } else {
-            None
-        };
-        // The supersaw bank rides oscillator 1's exact frequency and
-        // crossfades in over its wave
-        let o1 = if self.supersaw_amt > 0.0 {
-            let bank = self.supersaw.render(
-                self.oscs[0].last_hz(),
-                self.sample_rate,
-                self.supersaw_detune,
-                self.supersaw_mix,
-            );
-            o1 + (bank - o1) * self.supersaw_amt
-        } else {
-            o1
-        };
-        let o1 = if self.osc1_level != 1.0 {
-            o1 * self.osc1_level
-        } else {
-            o1
-        };
-        let o2_heard =
-            self.osc_level[0] > 0.0 || self.fm_amount > 1e-4 || self.ring_amount > 1e-4;
-        let o2 = self.oscs[1].step(self.common_drift, pitch_mult, pulse_width, sync, o2_heard, false);
-        let o3_heard = self.osc_level[1] > 0.0;
-        let o3 = self.oscs[2].step(self.common_drift, pitch_mult, pulse_width, None, o3_heard, false);
-        self.prev_osc2 = (o2 / (0.9 * PROGRAM_V)).clamp(-1.0, 1.0);
-
-        // Ring modulator (ARP: "the product of the two input voltages
-        // divided by 5" — PROGRAM_V, since we carry volts), with this
-        // unit's carrier leakage after the null trim
-        let mut osc_mix = o1 + o2 * self.osc_level[0] + o3 * self.osc_level[1];
-        if self.ring_amount > 1e-4 {
-            let ring = o1 * o2 / PROGRAM_V + self.ring_leak.0 * o1 + self.ring_leak.1 * o2;
-            osc_mix = osc_mix * (1.0 - self.ring_amount) + ring * 2.4 * self.ring_amount;
-        }
-
-        // Volts everywhere: the mixer sums program-level signals into the
-        // VCF's summing junction
-        let osc = osc_mix * MIXER_GAIN + self.oscs[0].sub() * self.sub_level * 0.9 + noise + bleed;
+        let osc = core + noise + bleed;
         let osc = if self.noise_osc.active() {
             osc + self.noise_osc.render()
         } else {
@@ -939,6 +914,143 @@ impl Voice {
         let sample = filtered * (amp_env * vel_gain + VCA_FLOOR) * self.unison_gain;
 
         (sample * self.pan_l, sample * self.pan_r)
+    }
+
+    /// The oscillators, ring modulator and mixer for one step at
+    /// `pitch_mult` (volts at the VCF's summing junction, before noise and
+    /// crosstalk).
+    #[inline]
+    fn osc_core(&mut self, pitch_mult: f32, pulse_width: f32, fm_mean_k: f32, rate: f32) -> f32 {
+        // The voice's coupling graph is acyclic (every stage buffered, as
+        // the schematics show), so integrating stages in topological order
+        // with midpoint-averaged couplings IS the coherent-system solve.
+        // Osc 1 steps first (its wrap this sample masters osc 2's sync);
+        // the FM coupling into osc 1 therefore uses osc 2's previous
+        // sample — the one-sample transport of the sync/FM pair, chosen so
+        // the sync reset lands at its exact sub-sample position.
+        let fm_mult = if self.fm_amount > 1e-4 {
+            let raw = (self.fm_amount * self.prev_osc2 * 2.0).exp2();
+            // Exponential FM is not pitch-neutral: any DC in the modulator
+            // (a non-50% pulse) shifts the note wholesale, and even a
+            // zero-mean modulator reads sharp on average (E[2^x] > 1).
+            // Track the multiplier's slow mean (tau FM_MEAN_TAU_S) and
+            // divide it out: the audio-rate sidebands — the TIMBRE — pass
+            // through, the tuning stays put. The coefficient is derived
+            // from the rate, or the tracker would follow twice as much of
+            // the modulator at 96 kHz and cancel real FM movement.
+            self.fm_mean += (raw - self.fm_mean) * fm_mean_k;
+            raw / self.fm_mean.max(1e-3)
+        } else {
+            self.fm_mean = 1.0;
+            1.0
+        };
+        // Every core always steps (phase, drift and sync stay exactly as if
+        // heard); only the output stages of a converter nobody can hear are
+        // skipped. Osc 2 is heard through its level, the FM bus, or the ring
+        // modulator; osc 3 only through its level; the sub only through its.
+        let o1 = self.oscs[0].step(
+            self.common_drift,
+            pitch_mult * fm_mult,
+            pulse_width,
+            None,
+            true,
+            self.sub_level > 0.0,
+        );
+        let sync = if self.sync_on {
+            self.oscs[0].wrap_frac()
+        } else {
+            None
+        };
+        // The supersaw bank rides oscillator 1's exact frequency and
+        // crossfades in over its wave
+        let o1 = if self.supersaw_amt > 0.0 {
+            let bank = self.supersaw.render(
+                self.oscs[0].last_hz(),
+                rate,
+                self.supersaw_detune,
+                self.supersaw_mix,
+            );
+            o1 + (bank - o1) * self.supersaw_amt
+        } else {
+            o1
+        };
+        let o1 = if self.osc1_level != 1.0 {
+            o1 * self.osc1_level
+        } else {
+            o1
+        };
+        let o2_heard =
+            self.osc_level[0] > 0.0 || self.fm_amount > 1e-4 || self.ring_amount > 1e-4;
+        let o2 = self.oscs[1].step(self.common_drift, pitch_mult, pulse_width, sync, o2_heard, false);
+        let o3_heard = self.osc_level[1] > 0.0;
+        let o3 = self.oscs[2].step(self.common_drift, pitch_mult, pulse_width, None, o3_heard, false);
+        self.prev_osc2 = (o2 / (0.9 * PROGRAM_V)).clamp(-1.0, 1.0);
+
+        // Ring modulator (ARP: "the product of the two input voltages
+        // divided by 5" — PROGRAM_V, since we carry volts), with this
+        // unit's carrier leakage after the null trim
+        let mut osc_mix = o1 + o2 * self.osc_level[0] + o3 * self.osc_level[1];
+        if self.ring_amount > 1e-4 {
+            let ring = o1 * o2 / PROGRAM_V + self.ring_leak.0 * o1 + self.ring_leak.1 * o2;
+            osc_mix = osc_mix * (1.0 - self.ring_amount) + ring * 2.4 * self.ring_amount;
+        }
+
+        // Volts everywhere: the mixer sums program-level signals into the
+        // VCF's summing junction
+        osc_mix * MIXER_GAIN + self.oscs[0].sub() * self.sub_level * 0.9
+    }
+
+    /// `osc_core` four times a sample, the pitch moving in a straight line
+    /// across them (the cores step at four times the rate while
+    /// `set_fm_oversample` holds), down through two half-band stages:
+    /// sidebands up to four times the Nyquist frequency are filtered away
+    /// instead of folding back.
+    fn oversampled_core(&mut self, os: &mut FmOversample, pitch_mult: f32, pulse_width: f32) -> f32 {
+        let prev = if os.prev_pitch.is_finite() {
+            os.prev_pitch
+        } else {
+            pitch_mult
+        };
+        os.prev_pitch = pitch_mult;
+        let mut sub = [0.0f32; FM_OS];
+        for (j, x) in sub.iter_mut().enumerate() {
+            let pm = prev + (pitch_mult - prev) * (j + 1) as f32 / FM_OS as f32;
+            *x = self.osc_core(pm, pulse_width, os.fm_mean_k, self.sample_rate * FM_OS as f32);
+        }
+        let a = os.down1.down(sub[0], sub[1]);
+        let b = os.down1.down(sub[2], sub[3]);
+        os.down2.down(a, b)
+    }
+
+    /// Whether this card plays a track another track FMs (xmod.rs): its
+    /// oscillators then run oversampled. The decimators start settled on
+    /// the card's last output, so turning it on does not click.
+    pub fn set_fm_oversample(&mut self, on: bool) {
+        let last = self.prev_prefilter;
+        match self.fm_os.as_mut() {
+            Some(os) if os.on != on => {
+                os.on = on;
+                if on {
+                    os.prime(last);
+                }
+            }
+            Some(_) => return,
+            None if on => {
+                let mut os = Box::new(FmOversample::new(self.fm_mean_k));
+                os.prime(last);
+                self.fm_os = Some(os);
+            }
+            None => return,
+        }
+        for o in &mut self.oscs {
+            o.set_oversample(if on { FM_OS as u32 } else { 1 });
+        }
+    }
+
+    /// Whether this card's oscillators are running oversampled.
+    #[cfg(test)]
+    pub(crate) fn fm_oversampled(&self) -> bool {
+        self.fm_os.as_ref().map_or(false, |o| o.on)
     }
 
     pub fn set_filter_cutoff(&mut self, cutoff: f32) {
@@ -1359,5 +1471,127 @@ mod tests {
             (by_vel / two_octaves - 1.0).abs() < 0.02,
             "vel_filter 4 at full velocity should open two octaves: {by_vel} vs {two_octaves}"
         );
+    }
+
+    /// The voice's oscillator block (all three cores, the mixer and the
+    /// sub) under cross-track FM, at the base rate and oversampled: a
+    /// sawtooth at C6 swept 0 to 2x by a sine at twice its pitch. (power
+    /// at the lines folded back off Nyquist, power at the harmonics.)
+    fn core_alias_power(oversample: bool) -> (f64, f64) {
+        let sr = 48_000.0f32;
+        let mut v = Voice::new(sr, 0);
+        v.set_waveform(Waveform::Sawtooth);
+        v.set_osc_level(1, 0.0);
+        v.set_osc_level(2, 0.0);
+        v.trigger(84, 1.0, 0, None);
+        let neutral = SubstrateState {
+            pitch_mult: 1.0,
+            cutoff_oct: 0.0,
+        };
+        for _ in 0..4800 {
+            v.render_next(0.0, 1.0, 0.0, 0.0, neutral, 0.0);
+        }
+        let fc = v.oscs[0].last_hz() as f64;
+        let mut os = FmOversample::new(v.fm_mean_k);
+        if oversample {
+            for o in &mut v.oscs {
+                o.set_oversample(FM_OS as u32);
+            }
+        }
+        let n = 4800;
+        let x: Vec<f32> = (0..4 * n)
+            .map(|i| {
+                let m = (std::f64::consts::TAU * 2.0 * fc * i as f64 / sr as f64).sin() as f32;
+                let pm = crate::xmod::fm_ratio(1.0, m);
+                if oversample {
+                    v.oversampled_core(&mut os, pm, 0.5)
+                } else {
+                    let (k, rate) = (v.fm_mean_k, v.sample_rate);
+                    v.osc_core(pm, 0.5, k, rate)
+                }
+            })
+            .collect();
+        let goertzel = |seg: &[f32], f: f64| -> f64 {
+            let w = std::f64::consts::TAU * f / sr as f64;
+            let (c, mut s1, mut s2) = (2.0 * w.cos(), 0.0f64, 0.0f64);
+            for (i, &v) in seg.iter().enumerate() {
+                let hann = 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / seg.len() as f64).cos();
+                let s0 = v as f64 * hann + c * s1 - s2;
+                s2 = s1;
+                s1 = s0;
+            }
+            s1 * s1 + s2 * s2 - c * s1 * s2
+        };
+        let nyq = sr as f64 / 2.0;
+        let (mut alias, mut true_lines) = (0.0, 0.0);
+        for seg in x.chunks(n).skip(1) {
+            for k in 1..=(18_000.0 / fc) as usize {
+                true_lines += goertzel(seg, k as f64 * fc);
+            }
+            // fold every line up to 8x Nyquist back into the band
+            for k in 1..=(8.0 * nyq / fc) as usize {
+                let f = k as f64 * fc;
+                let folded = ((f + nyq).rem_euclid(sr as f64) - nyq).abs();
+                if f > nyq && folded > 40.0 && folded < 18_000.0 {
+                    alias += goertzel(seg, folded);
+                }
+            }
+        }
+        (alias, true_lines)
+    }
+
+    /// Cross-track FM sweeps the oscillators far past Nyquist. Run 4x
+    /// oversampled through the half-band decimators, the folded lines sit
+    /// over 60 dB under the true ones; at the base rate they are about
+    /// 40 dB down.
+    #[test]
+    fn cross_track_fm_is_oversampled_so_its_sidebands_do_not_fold_back() {
+        let db = |(a, s): (f64, f64)| 10.0 * (a / s).log10();
+        let (os, raw) = (db(core_alias_power(true)), db(core_alias_power(false)));
+        assert!(os < -60.0, "oversampled FM aliases at {os:.1} dB");
+        assert!(raw > os + 20.0, "the base rate should be far worse: {raw:.1} vs {os:.1} dB");
+    }
+
+    /// Turning the oversampler on mid-note neither clicks nor moves the
+    /// note: the decimators start on the last output, and a held note's
+    /// level and pitch match the base-rate path's.
+    #[test]
+    fn switching_a_card_to_oversampled_fm_keeps_its_note_and_level() {
+        let sr = 48_000.0f32;
+        let neutral = SubstrateState {
+            pitch_mult: 1.0,
+            cutoff_oct: 0.0,
+        };
+        let run = |on: bool| -> (Vec<f32>, f32) {
+            let mut v = Voice::new(sr, 0);
+            v.set_waveform(Waveform::Sawtooth);
+            v.set_filter_cutoff(2000.0);
+            v.trigger(57, 1.0, 0, None);
+            let mut out = Vec::new();
+            let mut jump = 0.0f32;
+            let mut last = 0.0f32;
+            for i in 0..24_000 {
+                if i == 12_000 {
+                    v.set_fm_oversample(on);
+                }
+                let y = v.render_next(0.0, 1.0, 0.0, 0.0, neutral, 0.0).0;
+                if (11_990..12_010).contains(&i) {
+                    jump = jump.max((y - last).abs());
+                }
+                last = y;
+                out.push(y);
+            }
+            (out, jump)
+        };
+        let (raw, _) = run(false);
+        let (os, jump) = run(true);
+        let rms = |x: &[f32]| (x.iter().map(|v| (v * v) as f64).sum::<f64>() / x.len() as f64).sqrt();
+        let typical = raw[6000..12_000].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        assert!(jump <= typical * 1.5, "switching on clicked: step {jump} vs {typical}");
+        let level = 20.0 * (rms(&os[14_400..]) / rms(&raw[14_400..])).log10();
+        assert!(level.abs() < 0.2, "level moved {level:.2} dB");
+        // the same pitch: zero crossings over the last quarter second
+        let ups = |x: &[f32]| x.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count() as i64;
+        assert!((ups(&os[12_000..]) - ups(&raw[12_000..])).abs() <= 1);
     }
 }
